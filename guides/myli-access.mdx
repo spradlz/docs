@@ -1,0 +1,101 @@
+---
+title: "Myli Access Guide"
+description: "How Myli reads and writes HouseLoop CRM data on every layer."
+---
+
+## Overview
+
+Every CRM action Myli takes goes through this REST API. No direct DB queries.
+No UI automation. Pure API calls — same as any integration partner would use.
+
+## What Myli Can Do
+
+| Action | Endpoint |
+|---|---|
+| Find a lead by name/email/phone | `GET /api/leads/search?q=Jane` |
+| Get all leads in a pipeline stage | `GET /api/leads?criteria=[...]` |
+| Create a new lead | `POST /api/leads` |
+| Move a lead to a new stage | `PATCH /api/leads/{id}` |
+| Create a task for a lead | `POST /api/tasks` |
+| Complete a task | `PATCH /api/tasks/{id}` with `{ status: "done" }` |
+| Create a calendar event | `POST /api/calendar/events` |
+| Send an email template | `POST /api/email/send-template` |
+| Get all pipeline stages | `GET /api/stages` |
+| Get all lookup data at once | `GET /api/options` |
+
+## Myli's Auth Pattern
+
+Myli uses a **service session** — a long-lived cookie set at startup.
+In production, set the `HL_MYLI_TOKEN` env var and the API will accept it
+as a `Bearer` token in lieu of a user cookie.
+
+```bash
+# Example: Myli moves a lead to "Appointment Set"
+curl -X PATCH https://crm.houseloop.ai/api/leads/f40c91f1-... \
+  -H "Authorization: Bearer $HL_MYLI_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"stage_id": "7c8cba84-..."}'
+```
+
+## Common Patterns
+
+### Find a lead and move their stage
+
+```bash
+# 1. Search for the lead
+LEAD=$(curl "https://crm.houseloop.ai/api/leads/search?q=Jane+Smith" | jq '.leads[0].id')
+
+# 2. Get pipeline stages to find the target stage ID
+STAGES=$(curl "https://crm.houseloop.ai/api/stages")
+
+# 3. Move the lead
+curl -X PATCH "https://crm.houseloop.ai/api/leads/$LEAD" \
+  -H "Content-Type: application/json" \
+  -d "{\"stage_id\": \"$TARGET_STAGE_ID\"}"
+```
+
+### Create a follow-up task
+
+```bash
+curl -X POST https://crm.houseloop.ai/api/tasks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Call back — expressed interest in 3br listings",
+    "lead_id": "f40c91f1-...",
+    "due_at": "2026-05-20T10:00:00Z"
+  }'
+```
+
+### Load all dropdown data in one call
+
+```bash
+# Returns stages, sources, tags, users — everything needed for filter panels
+curl https://crm.houseloop.ai/api/options
+```
+
+## Filter Criteria Format
+
+The `GET /api/leads` endpoint accepts a `criteria` query param (JSON-encoded array of conditions):
+
+```json
+[
+  { "fieldKey": "stage", "operator": "include", "itemIds": ["fc1972f1-..."] },
+  { "fieldKey": "assigned_to", "operator": "include", "itemIds": ["user-uuid"] }
+]
+```
+
+**Available fieldKeys:** `name`, `email`, `phone`, `stage`, `source`, `assigned_to`, `tag`, `lead_score`, `last_communication`, `created_at`, `open_tasks`, `overdue_tasks`
+
+**Available operators:** `contains`, `not_contains`, `is_empty`, `is_not_empty`, `include`, `exclude`, `gt`, `lt`, `gte`, `lte`, `within_last`, `older_than`
+
+## Enterprise Readiness Checklist
+
+- [x] Every UI action has an API endpoint
+- [x] All IDs are UUIDs (stable, no sequential exposure)
+- [x] All endpoints return `{ ok: true/false, ... }` consistently
+- [x] Auth is session-cookie OR Bearer token
+- [x] Stage transitions are logged (metrics stay live)
+- [x] Soft deletes only — leads are never permanently destroyed via API
+- [ ] Rate limiting (coming)
+- [ ] Webhook events (coming)
+- [ ] API key management UI (coming)

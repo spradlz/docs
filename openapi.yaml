@@ -1,0 +1,1437 @@
+openapi: 3.1.0
+info:
+  title: HouseLoop CRM API
+  version: 1.0.0
+  description: |
+    The complete REST API for HouseLoop CRM. Every UI action has a corresponding
+    endpoint. Myli uses these to read and write CRM data on every layer.
+  contact:
+    name: HouseLoop Engineering
+    url: https://houseloop.ai
+
+servers:
+  - url: http://localhost:3020/api
+    description: Local development
+  - url: https://crm.houseloop.ai/api
+    description: Production
+
+security:
+  - sessionCookie: []
+
+tags:
+  - name: Leads
+    description: Contacts in the pipeline
+  - name: Stages
+    description: Pipeline stages (Buyer + Seller pipelines)
+  - name: Lead Sources
+    description: Where leads originate
+  - name: Tags
+    description: Labels applied to leads
+  - name: Tasks
+    description: Follow-up tasks linked to leads
+  - name: Email Templates
+    description: Saved email bodies for campaigns
+  - name: Email Audiences
+    description: Segmented lead lists for email campaigns
+  - name: Email Campaigns
+    description: Bulk email send campaigns
+  - name: Text Templates
+    description: Saved SMS/iMessage message bodies
+  - name: Calendar Events
+    description: Appointments and calendar entries
+  - name: Team
+    description: CRM user accounts
+  - name: Smart Filters
+    description: Saved lead filter sets
+  - name: Options
+    description: Lookup data for dropdowns (stages, sources, tags, users)
+  - name: Auth
+    description: Session management
+
+paths:
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in with email + password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "200":
+          description: Session cookie set, user returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkUser"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: End the current session
+      responses:
+        "200":
+          description: Session cleared
+
+  /leads:
+    get:
+      tags: [Leads]
+      summary: List leads (with optional advanced filter)
+      parameters:
+        - name: criteria
+          in: query
+          schema: { type: string }
+        - name: sf
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: List of leads + total count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  leads:
+                    type: array
+                    items: { $ref: "#/components/schemas/Lead" }
+                  total: { type: integer }
+
+    post:
+      tags: [Leads]
+      summary: Create a lead
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLeadBody"
+      responses:
+        "200":
+          description: Lead created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  id: { type: string, format: uuid }
+        "409":
+          description: Email already exists
+
+  /leads/search:
+    get:
+      tags: [Leads]
+      summary: Fuzzy search leads by name, email, or phone
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20 }
+      responses:
+        "200":
+          description: Matching leads
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  leads:
+                    type: array
+                    items: { $ref: "#/components/schemas/LeadSummary" }
+
+  /leads/bulk:
+    post:
+      tags: [Leads]
+      summary: Bulk operations on leads
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action, ids]
+              properties:
+                action:
+                  type: string
+                  enum: [delete, assign_stage, assign_user, add_tag]
+                ids:
+                  type: array
+                  items: { type: string, format: uuid }
+                stage_id: { type: string, format: uuid }
+                user_id: { type: string, format: uuid }
+                tag_id: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Bulk action applied
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  affected: { type: integer }
+
+  /leads/{id}:
+    patch:
+      tags: [Leads]
+      summary: Update a lead
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                first_name: { type: string }
+                last_name: { type: string }
+                name: { type: string }
+                email: { type: string, format: email }
+                phone: { type: string }
+                source: { type: string }
+                source_id: { type: string, format: uuid, nullable: true }
+                assigned_user_id: { type: string, format: uuid, nullable: true }
+                lead_score: { type: integer }
+                pipeline_id: { type: string, format: uuid, nullable: true }
+                stage_id: { type: string, format: uuid, nullable: true }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      tags: [Leads]
+      summary: Soft-delete a lead (move to Trash)
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/OkId"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /stages:
+    get:
+      tags: [Stages]
+      summary: List stages for a pipeline
+      parameters:
+        - name: pipelineId
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Stages with metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  stages:
+                    type: array
+                    items: { $ref: "#/components/schemas/Stage" }
+
+    post:
+      tags: [Stages]
+      summary: Create a stage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 60 }
+                color: { type: string }
+                icon: { type: string }
+                is_active: { type: boolean, default: true }
+                pipelineId: { type: string, format: uuid }
+      responses:
+        "201":
+          $ref: "#/components/responses/OkStage"
+        "409":
+          description: Stage name already exists in this pipeline
+
+    patch:
+      tags: [Stages]
+      summary: Bulk reorder stages
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [order]
+              properties:
+                order:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id: { type: string, format: uuid }
+                      position: { type: integer }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /stages/{id}:
+    patch:
+      tags: [Stages]
+      summary: Update a stage
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 60 }
+                color: { type: string }
+                icon: { type: string }
+                is_active: { type: boolean }
+      responses:
+        "200":
+          $ref: "#/components/responses/OkStage"
+
+    delete:
+      tags: [Stages]
+      summary: Delete a stage
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reassign_to: { type: string, format: uuid }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "409":
+          description: Stage has leads and reassign_to was not provided
+
+  /lead-sources:
+    get:
+      tags: [Lead Sources]
+      summary: List lead sources
+      responses:
+        "200":
+          description: All active lead sources
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  sources:
+                    type: array
+                    items: { $ref: "#/components/schemas/LeadSource" }
+
+    post:
+      tags: [Lead Sources]
+      summary: Create a lead source
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                key: { type: string }
+                color: { type: string }
+                source_type: { type: string }
+                default_stage_id: { type: string, format: uuid, nullable: true }
+                is_active: { type: boolean, default: true }
+      responses:
+        "201":
+          $ref: "#/components/responses/OkId"
+
+  /lead-sources/{id}:
+    patch:
+      tags: [Lead Sources]
+      summary: Update a lead source
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                color: { type: string }
+                default_stage_id: { type: string, format: uuid, nullable: true }
+                is_active: { type: boolean }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+    delete:
+      tags: [Lead Sources]
+      summary: Delete a lead source
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /tags:
+    get:
+      tags: [Tags]
+      summary: List all tags
+      responses:
+        "200":
+          description: Tags
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  tags:
+                    type: array
+                    items: { $ref: "#/components/schemas/Tag" }
+
+    post:
+      tags: [Tags]
+      summary: Create a tag
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 60 }
+                color: { type: string }
+      responses:
+        "201":
+          $ref: "#/components/responses/OkId"
+
+  /tags/{id}:
+    patch:
+      tags: [Tags]
+      summary: Update a tag
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                color: { type: string }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+    delete:
+      tags: [Tags]
+      summary: Delete a tag
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /tasks:
+    get:
+      tags: [Tasks]
+      summary: List tasks
+      parameters:
+        - name: lead_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema: { type: string, enum: [open, done] }
+        - name: overdue
+          in: query
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: Tasks
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  tasks:
+                    type: array
+                    items: { $ref: "#/components/schemas/Task" }
+
+    post:
+      tags: [Tasks]
+      summary: Create a task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, lead_id]
+              properties:
+                title: { type: string }
+                lead_id: { type: string, format: uuid }
+                due_at: { type: string, format: date-time }
+                assigned_user_id: { type: string, format: uuid }
+                notes: { type: string }
+      responses:
+        "201":
+          $ref: "#/components/responses/OkId"
+
+  /tasks/{id}:
+    patch:
+      tags: [Tasks]
+      summary: Update a task
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                status: { type: string, enum: [open, done] }
+                due_at: { type: string, format: date-time }
+                notes: { type: string }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+    delete:
+      tags: [Tasks]
+      summary: Delete a task
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /email/templates:
+    get:
+      tags: [Email Templates]
+      summary: List email templates
+      parameters:
+        - name: category
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Email templates
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  templates:
+                    type: array
+                    items: { $ref: "#/components/schemas/EmailTemplate" }
+
+    post:
+      tags: [Email Templates]
+      summary: Create an email template
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                category: { type: string }
+                subject: { type: string }
+                key: { type: string }
+                template_body: { type: string }
+      responses:
+        "201":
+          $ref: "#/components/responses/OkId"
+
+  /email/templates/{id}:
+    patch:
+      tags: [Email Templates]
+      summary: Update an email template
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                category: { type: string }
+                subject: { type: string }
+                template_body: { type: string }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+    delete:
+      tags: [Email Templates]
+      summary: Delete an email template
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /email/send-template:
+    post:
+      tags: [Email Templates]
+      summary: Send an email template to a lead
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [template_id, lead_id]
+              properties:
+                template_id: { type: string, format: uuid }
+                lead_id: { type: string, format: uuid }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /email/audiences:
+    get:
+      tags: [Email Audiences]
+      summary: List email audiences
+      responses:
+        "200":
+          description: Audiences
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  audiences:
+                    type: array
+                    items: { $ref: "#/components/schemas/EmailAudience" }
+
+    post:
+      tags: [Email Audiences]
+      summary: Create an email audience
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                description: { type: string }
+                rules_json: { type: object }
+      responses:
+        "201":
+          $ref: "#/components/responses/OkId"
+
+  /email/audiences/{id}:
+    get:
+      tags: [Email Audiences]
+      summary: Get an audience
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Audience detail
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  audience: { $ref: "#/components/schemas/EmailAudience" }
+
+    patch:
+      tags: [Email Audiences]
+      summary: Update an audience
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description: { type: string }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+    delete:
+      tags: [Email Audiences]
+      summary: Delete an audience
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /email/audiences/{id}/members:
+    get:
+      tags: [Email Audiences]
+      summary: List audience members
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Members
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  members:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        lead_id: { type: string, format: uuid }
+                        name: { type: string }
+                        email: { type: string }
+
+    post:
+      tags: [Email Audiences]
+      summary: Add or remove audience members
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                add: { type: array, items: { type: string, format: uuid } }
+                remove: { type: array, items: { type: string, format: uuid } }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /email/campaigns:
+    get:
+      tags: [Email Campaigns]
+      summary: List campaigns
+      responses:
+        "200":
+          description: Campaigns
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  campaigns:
+                    type: array
+                    items: { $ref: "#/components/schemas/EmailCampaign" }
+
+    post:
+      tags: [Email Campaigns]
+      summary: Create a campaign
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCampaignBody"
+      responses:
+        "201":
+          $ref: "#/components/responses/OkId"
+
+  /email/campaigns/{id}:
+    get:
+      tags: [Email Campaigns]
+      summary: Get a campaign
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Campaign detail
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  campaign: { $ref: "#/components/schemas/EmailCampaignDetail" }
+
+    patch:
+      tags: [Email Campaigns]
+      summary: Update a campaign
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCampaignBody"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+    delete:
+      tags: [Email Campaigns]
+      summary: Delete a campaign
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /email/campaigns/{id}/send:
+    post:
+      tags: [Email Campaigns]
+      summary: Send a campaign
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /text-templates:
+    get:
+      tags: [Text Templates]
+      summary: List text templates
+      parameters:
+        - name: category
+          in: query
+          schema: { type: string }
+        - name: visibility
+          in: query
+          schema: { type: string, enum: [public, private] }
+      responses:
+        "200":
+          description: Text templates
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  templates:
+                    type: array
+                    items: { $ref: "#/components/schemas/TextTemplate" }
+
+    post:
+      tags: [Text Templates]
+      summary: Create a text template
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, body]
+              properties:
+                name: { type: string }
+                body: { type: string }
+                category: { type: string }
+                visibility: { type: string, enum: [public, private], default: public }
+      responses:
+        "201":
+          $ref: "#/components/responses/OkId"
+
+  /text-templates/{id}:
+    patch:
+      tags: [Text Templates]
+      summary: Update a text template
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                body: { type: string }
+                category: { type: string }
+                visibility: { type: string, enum: [public, private] }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+    delete:
+      tags: [Text Templates]
+      summary: Delete a text template
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /calendar/events:
+    get:
+      tags: [Calendar Events]
+      summary: List calendar events
+      parameters:
+        - name: lead_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: Calendar events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  events:
+                    type: array
+                    items: { $ref: "#/components/schemas/CalendarEvent" }
+
+    post:
+      tags: [Calendar Events]
+      summary: Create a calendar event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCalendarEventBody"
+      responses:
+        "201":
+          $ref: "#/components/responses/OkId"
+
+  /calendar/events/{id}:
+    get:
+      tags: [Calendar Events]
+      summary: Get a calendar event
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Calendar event
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  event: { $ref: "#/components/schemas/CalendarEvent" }
+
+    patch:
+      tags: [Calendar Events]
+      summary: Update a calendar event
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCalendarEventBody"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+    delete:
+      tags: [Calendar Events]
+      summary: Delete a calendar event
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /team/users:
+    get:
+      tags: [Team]
+      summary: List team members
+      responses:
+        "200":
+          description: Users
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  users:
+                    type: array
+                    items: { $ref: "#/components/schemas/User" }
+
+    post:
+      tags: [Team]
+      summary: Invite a team member
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, full_name, role]
+              properties:
+                email: { type: string, format: email }
+                full_name: { type: string }
+                role: { type: string, enum: [admin, agent, viewer] }
+      responses:
+        "201":
+          $ref: "#/components/responses/OkId"
+
+  /team/users/{id}:
+    get:
+      tags: [Team]
+      summary: Get a team member
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: User
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  user: { $ref: "#/components/schemas/User" }
+
+    patch:
+      tags: [Team]
+      summary: Update a team member
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                full_name: { type: string }
+                role: { type: string, enum: [admin, agent, viewer] }
+                is_active: { type: boolean }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /smart-filters:
+    get:
+      tags: [Smart Filters]
+      summary: List saved filter sets
+      responses:
+        "200":
+          description: Smart filters
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  filters:
+                    type: array
+                    items: { $ref: "#/components/schemas/SmartFilter" }
+
+    post:
+      tags: [Smart Filters]
+      summary: Save a filter set
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, criteria]
+              properties:
+                name: { type: string }
+                criteria:
+                  type: array
+                  items: { type: object }
+      responses:
+        "201":
+          $ref: "#/components/responses/OkId"
+
+  /smart-filters/{id}:
+    patch:
+      tags: [Smart Filters]
+      summary: Update a saved filter
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                criteria: { type: array, items: { type: object } }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+    delete:
+      tags: [Smart Filters]
+      summary: Delete a saved filter
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /options:
+    get:
+      tags: [Options]
+      summary: Get all lookup data
+      responses:
+        "200":
+          description: Lookup data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  stages:
+                    type: array
+                    items: { $ref: "#/components/schemas/Stage" }
+                  sources:
+                    type: array
+                    items: { $ref: "#/components/schemas/LeadSource" }
+                  tags:
+                    type: array
+                    items: { $ref: "#/components/schemas/Tag" }
+                  users:
+                    type: array
+                    items: { $ref: "#/components/schemas/User" }
+
+components:
+
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: hl_session
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    Ok:
+      description: Success
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              ok: { type: boolean, example: true }
+
+    OkId:
+      description: Created / success with returned ID
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              ok: { type: boolean, example: true }
+              id: { type: string, format: uuid }
+
+    OkUser:
+      description: Authenticated user
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              ok: { type: boolean }
+              user: { $ref: "#/components/schemas/User" }
+
+    OkStage:
+      description: Stage
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              ok: { type: boolean }
+              stage: { $ref: "#/components/schemas/Stage" }
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              ok: { type: boolean, example: false }
+              error: { type: string, example: not_found }
+
+    Unauthorized:
+      description: Not authenticated
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              ok: { type: boolean, example: false }
+              error: { type: string, example: unauthorized }
+
+  schemas:
+
+    Lead:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        first_name: { type: string }
+        last_name: { type: string }
+        name: { type: string }
+        email: { type: string, format: email }
+        phone: { type: string }
+        source: { type: string }
+        source_id: { type: string, format: uuid, nullable: true }
+        stage_id: { type: string, format: uuid, nullable: true }
+        stage_name: { type: string, nullable: true }
+        stage_color: { type: string, nullable: true }
+        pipeline_id: { type: string, format: uuid, nullable: true }
+        assigned_user_id: { type: string, format: uuid, nullable: true }
+        assigned_user_name: { type: string, nullable: true }
+        lead_score: { type: integer }
+        last_communication_at: { type: string, format: date-time, nullable: true }
+        open_task_count: { type: integer }
+        overdue_task_count: { type: integer }
+        next_task_due_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    LeadSummary:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        email: { type: string, format: email }
+        phone: { type: string }
+
+    CreateLeadBody:
+      type: object
+      required: [first_name, last_name]
+      properties:
+        first_name: { type: string }
+        last_name: { type: string }
+        email: { type: string, format: email }
+        phone: { type: string }
+        source: { type: string }
+        stage_id: { type: string, format: uuid, nullable: true }
+
+    Stage:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        position: { type: integer }
+        color: { type: string, nullable: true }
+        icon: { type: string }
+        is_active: { type: boolean }
+        is_terminal: { type: boolean }
+        people: { type: integer }
+        days_avg: { type: number, nullable: true }
+        conversion: { type: number, nullable: true }
+
+    LeadSource:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        key: { type: string }
+        color: { type: string, nullable: true }
+        source_type: { type: string }
+        default_stage_id: { type: string, format: uuid, nullable: true }
+        default_stage_name: { type: string, nullable: true }
+        is_active: { type: boolean }
+        total_leads: { type: integer }
+
+    Tag:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        color: { type: string, nullable: true }
+        lead_count: { type: integer }
+
+    Task:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        lead_id: { type: string, format: uuid }
+        status: { type: string, enum: [open, done] }
+        due_at: { type: string, format: date-time, nullable: true }
+        assigned_user_id: { type: string, format: uuid, nullable: true }
+        notes: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    EmailTemplate:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        key: { type: string, nullable: true }
+        category: { type: string, nullable: true }
+        subject: { type: string, nullable: true }
+        body: { type: string, nullable: true }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    EmailAudience:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        member_count: { type: integer }
+        campaign_count: { type: integer }
+        rules_json: { type: object, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    EmailCampaign:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        type:
+          type: string
+          enum: [listing_alert, open_house, market_report, outreach_sequence, one_time_blast]
+        status:
+          type: string
+          enum: [draft, scheduled, sending, sent, cancelled]
+        audience_id: { type: string, format: uuid, nullable: true }
+        template_id: { type: string, format: uuid, nullable: true }
+        subject: { type: string, nullable: true }
+        scheduled_at: { type: string, format: date-time, nullable: true }
+        notes: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    EmailCampaignDetail:
+      allOf:
+        - $ref: "#/components/schemas/EmailCampaign"
+        - type: object
+          properties:
+            audience_name: { type: string, nullable: true }
+            audience_member_count: { type: integer, nullable: true }
+            template_name: { type: string, nullable: true }
+            template_body: { type: string, nullable: true }
+            template_subject: { type: string, nullable: true }
+            template_category: { type: string, nullable: true }
+
+    CreateCampaignBody:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        type:
+          type: string
+          enum: [listing_alert, open_house, market_report, outreach_sequence, one_time_blast]
+        status:
+          type: string
+          enum: [draft, scheduled, sending, sent, cancelled]
+          default: draft
+        audience_id: { type: string, format: uuid, nullable: true }
+        template_id: { type: string, format: uuid, nullable: true }
+        subject: { type: string }
+        notes: { type: string }
+        scheduled_at: { type: string, format: date-time }
+
+    TextTemplate:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        body: { type: string }
+        category: { type: string, nullable: true }
+        visibility: { type: string, enum: [public, private] }
+        created_at: { type: string, format: date-time }
+
+    CalendarEvent:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        lead_id: { type: string, format: uuid, nullable: true }
+        start_at: { type: string, format: date-time }
+        end_at: { type: string, format: date-time }
+        location: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+        google_event_id: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    CreateCalendarEventBody:
+      type: object
+      required: [title, start_at, end_at]
+      properties:
+        title: { type: string }
+        lead_id: { type: string, format: uuid, nullable: true }
+        start_at: { type: string, format: date-time }
+        end_at: { type: string, format: date-time }
+        location: { type: string }
+        notes: { type: string }
+
+    SmartFilter:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        criteria:
+          type: array
+          items: { type: object }
+        created_at: { type: string, format: date-time }
+
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        full_name: { type: string }
+        email: { type: string, format: email }
+        role: { type: string, enum: [admin, agent, viewer] }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
