@@ -267,6 +267,52 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /leads/{id}/stream:
+    get:
+      tags: [Leads]
+      summary: Server-Sent Events stream for a single lead's real-time activity
+      description: |
+        Long-lived `text/event-stream` connection. The lead detail page subscribes
+        to this on mount; new iMessage / SMS messages and BlueBubbles typing
+        indicators arrive without polling.
+
+        **Event types**
+
+        | event    | data payload                                                      | emitted when                              |
+        |----------|-------------------------------------------------------------------|-------------------------------------------|
+        | `ready`  | `{ leadId }`                                                      | immediately after the stream opens        |
+        | `message`| `BbEvent` row (`bb_guid`, `direction`, `handle`, `body`, …)       | new row written to `hl_bb_events`         |
+        | `typing` | `{ display: boolean }`                                            | BB Private API typing-indicator received  |
+
+        A keep-alive comment (`:\n\n`) is sent every 25 seconds so proxies don't
+        idle-close the stream. Closing the EventSource cleanly tears down the
+        in-process subscriber bucket.
+
+        **Runtime:** Node.js (`runtime = 'nodejs'`). Edge runtime kills long-lived
+        streams.
+
+        **Scaling:** single-process in-memory broker (no Redis). When horizontal
+        scaling is needed, swap `lib/bbBroker.ts` for a Redis pub/sub fan-out.
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: SSE stream opened
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: |
+                  event: ready
+                  data: {"leadId":"01HXY…"}
+
+                  event: message
+                  data: {"id":"abc","bb_guid":"abc","direction":"inbound","handle":"+14074038088","body":"hi","received_at":"2026-05-19T17:42:00.000Z"}
+
+                  event: typing
+                  data: {"display":true}
+        "401": { description: Unauthorized (missing session cookie) }
+
   /leads/{id}/pipeline:
     post:
       tags: [Leads]
@@ -2439,6 +2485,31 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/Ok"
+
+  /bb/typing:
+    post:
+      tags: [iMessage (BlueBubbles)]
+      summary: Show/clear the typing indicator on the lead's iPhone
+      description: |
+        Forwards to the BlueBubbles Private API at
+        `POST /api/v1/chat/{chat_guid}/typing` with `method: 'private-api'`.
+        Lead sees three iOS-style dots while `display=true` is held. Best-effort —
+        BB occasionally drops stop events; the client also auto-clears after 5s.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chat_guid, display]
+              properties:
+                chat_guid: { type: string, example: "iMessage;-;+14074038088" }
+                display:   { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "401": { description: Unauthorized }
+        "502": { description: BlueBubbles unreachable or rejected the request }
+        "503": { description: BlueBubbles not configured }
 
   # ── PHONE (Twilio) ──────────────────────────────────────────────────────────
 
