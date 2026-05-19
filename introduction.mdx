@@ -5,7 +5,7 @@ description: "The complete API for HouseLoop CRM — Myli-accessible on every la
 
 ## Overview
 
-HouseLoop CRM is built API-first. Every action you can take in the UI has a corresponding REST endpoint. This means Myli (and any integration) can do everything a human operator can.
+HouseLoop CRM is built API-first. Every action you can take in the UI has a corresponding REST endpoint, which means Myli (and any integration partner) can do everything a human operator can.
 
 **Base URL**
 ```
@@ -13,24 +13,33 @@ http://localhost:3020/api       (local dev)
 https://crm.houseloop.ai/api    (production)
 ```
 
-**Authentication:** All endpoints require a valid session cookie (from `/api/auth/login`) or a service API key in the `Authorization: Bearer <key>` header.
+**Authentication:** All endpoints require a valid session cookie (set by `POST /api/auth/login`) unless explicitly marked otherwise (webhooks, public health checks, OAuth callbacks).
 
-## Resources
+## What's in the API
 
-| Resource | Description |
+| Domain | Highlights |
 |---|---|
-| [Leads](/api-reference/leads/list) | Contacts in the pipeline |
-| [Stages](/api-reference/stages/list) | Pipeline stages (Buyer + Seller) |
-| [Lead Sources](/api-reference/lead-sources) | Where leads come from |
-| [Tags](/api-reference/tags) | Labels applied to leads |
-| [Tasks](/api-reference/tasks) | Follow-up tasks |
-| [Email Templates](/api-reference/email/templates-list) | Saved email bodies |
-| [Email Audiences](/api-reference/email/audiences-list) | Lists / segments |
-| [Email Campaigns](/api-reference/email/campaigns-list) | Bulk send campaigns |
-| [Text Templates](/api-reference/messaging/text-templates-list) | Saved SMS/iMessage bodies |
-| [Calendar Events](/api-reference/calendar/events-list) | Appointments |
-| [Team Users](/api-reference/team/users-list) | CRM user accounts |
-| [Smart Filters](/api-reference/smart-filters) | Saved lead filter sets |
+| **Leads** | List + filter + search · create with full payload · update any field · move pipeline · append notes · soft-delete · bulk ops |
+| **Pipeline** | 13-stage Buyer + Seller pipelines · per-pipeline membership · stage transitions logged |
+| **Calendar & Appointments** | Schedule + sync · type-driven stage auto-advance · disposition with `outcome` + notes · forward-only rule · Google Calendar export |
+| **Email — Outbound** | Templates · static + smart lists · campaigns · per-template send · one-off send |
+| **Email — Integration** | Per-user Gmail OAuth · signature management · CAN-SPAM compliance · team status · Instantly warmup health |
+| **Email — Infrastructure** | Org sending inboxes (purpose-segmented) · Instantly + Resend provider config |
+| **Messaging — Text Templates** | Saved SMS/iMessage bodies |
+| **Messaging — iMessage** | BlueBubbles send + history + thread (real iMessage via Mac host) |
+| **Phone (Twilio)** | Per-user dialer assignment · SMS send · voice/SMS webhooks · provider config |
+| **Team** | Users · roles · admin emulation |
+| **Notifications** | Per-user channels (email, SMS, push, telegram, slack) + per-event preferences |
+| **Profile** | Current user read + edit |
+| **Smart Filters** | Saved lead filter sets |
+| **Lookups (Settings)** | Lead sources · tags · stages · appointment types · options bundle |
+| **System** | DB health |
+
+## Big rules (read before you build)
+
+- **Appointment disposition law** — scheduling certain types auto-advances stage; certain outcomes auto-advance further. Forward-only. See [GT_HOUSELOOP_CRM_APPOINTMENT_DISPOSITION_V1](https://github.com/spradlz/BossLoop-Gold/blob/houseloop-app/GT/GT%20-%20ACTIVE/GT_HOUSELOOP_CRM_APPOINTMENT_DISPOSITION_V1.md) for the locked spec.
+- **Myli access** — Myli authenticates via the same session cookie or a service token and can call every endpoint. Mark mutations from Myli with `marked_by: 'myli'` (where supported) so the audit trail distinguishes her actions.
+- **Two pipelines, one lead** — a lead can be on Buyer + Seller simultaneously. Use `POST /leads/{id}/pipeline` (not `PATCH /leads/{id}`) when you want to move the lead within one pipeline only.
 
 ## Quick Start
 
@@ -38,17 +47,38 @@ https://crm.houseloop.ai/api    (production)
 ```bash Create a Lead
 curl -X POST http://localhost:3020/api/leads \
   -H "Content-Type: application/json" \
-  -d '{"first_name":"Jane","last_name":"Smith","email":"jane@example.com","phone":"5555550100","source":"Website"}'
+  -d '{
+    "first_name": "Jane",
+    "last_name":  "Smith",
+    "email":      "jane@example.com",
+    "phone":      "5555550100",
+    "source_id":  "<uuid>",
+    "assigned_user_id": "<uuid>",
+    "stage_id":   "<uuid>",
+    "note":       "Met at open house"
+  }'
 ```
 
-```bash List Leads
-curl http://localhost:3020/api/leads
-```
-
-```bash Update a Stage
-curl -X PATCH http://localhost:3020/api/leads/{id} \
+```bash Disposition an Appointment (Myli)
+curl -X PATCH http://localhost:3020/api/appointments/{id}/outcome \
   -H "Content-Type: application/json" \
-  -d '{"stage_id":"<stage-uuid>"}'
+  -d '{
+    "outcome": "listing_signed",
+    "outcome_notes": "Signed at $450k, 6-month term. Photos Wednesday.",
+    "marked_by": "myli"
+  }'
+```
+
+```bash Schedule a First Buyer Appointment (auto-advances stage)
+curl -X POST http://localhost:3020/api/calendar/events \
+  -H "Content-Type: application/json" \
+  -d '{
+    "lead_id": "<uuid>",
+    "title":   "Buyer Consultation — Jane Smith",
+    "type":    "first_buyer_appointment",
+    "starts_at": "2026-05-21T15:00:00Z",
+    "ends_at":   "2026-05-21T16:00:00Z"
+  }'
 ```
 </CodeGroup>
 
@@ -56,7 +86,12 @@ curl -X PATCH http://localhost:3020/api/leads/{id} \
 
 - **REST + JSON** — all requests/responses are JSON
 - **UUIDs** — all IDs are UUID v4
-- **Timestamps** — ISO 8601 (`2026-05-16T23:45:00Z`)
-- **Soft deletes** — leads are never hard-deleted from the DB; they get `deleted_at`
+- **Timestamps** — ISO 8601 (`2026-05-18T23:45:00Z`)
+- **Soft deletes** — leads are never hard-deleted; they get `deleted_at` and `status='trash'`
 - **Pagination** — list endpoints support `?limit=` and `?offset=` (default limit: 500)
-- **Error format** — `{ ok: false, error: "reason" }` with appropriate HTTP status
+- **Error format** — `{ ok: false, error: "reason" }` with appropriate HTTP status (400 / 401 / 403 / 404 / 409 / 422 / 500 / 502 / 503)
+- **Forward-only stage advance** — automatic stage moves driven by appointment events never drag a lead backward. Manual stage clicks bypass this rule.
+
+## Live endpoint count
+
+As of 2026-05-18, the live API surface is **82 endpoints** across 18 tags. Every one is specified in `openapi.yaml`. If you find a UI action without a corresponding endpoint, file it in [API Gap Audit](/guides/gaps-audit).

@@ -31,8 +31,6 @@ tags:
     description: Follow-up tasks linked to leads
   - name: Email Templates
     description: Saved email bodies for campaigns
-  - name: Email Audiences
-    description: Segmented lead lists for email campaigns
   - name: Email Campaigns
     description: Bulk email send campaigns
   - name: Text Templates
@@ -47,8 +45,32 @@ tags:
     description: Lookup data for dropdowns (stages, sources, tags, users)
   - name: Auth
     description: Session management
+  - name: Profile
+    description: Current user profile read + edit
+  - name: Notifications
+    description: Per-user notification channel + preference config
+  - name: Email Integration
+    description: Per-user Gmail OAuth, outbound send, signatures, compliance
+  - name: Email Infrastructure
+    description: Org-wide sending inboxes + Instantly/Resend provider config
+  - name: Email Lists
+    description: Static + smart segmentation of leads (replaces legacy "Email Audiences")
+  - name: Calendar Integration
+    description: Per-user Google Calendar OAuth, sync, settings
+  - name: iMessage (BlueBubbles)
+    description: iMessage send + history via BlueBubbles bridge on Camp David
+  - name: Phone
+    description: Twilio dialer assignments, SMS send, voice/SMS webhooks
+  - name: System
+    description: Operational health endpoints
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PATHS
+# ─────────────────────────────────────────────────────────────────────────────
 
 paths:
+
+  # ── AUTH ────────────────────────────────────────────────────────────────────
 
   /auth/login:
     post:
@@ -82,16 +104,23 @@ paths:
         "200":
           description: Session cleared
 
+  # ── LEADS ───────────────────────────────────────────────────────────────────
+
   /leads:
     get:
       tags: [Leads]
       summary: List leads (with optional advanced filter)
+      description: |
+        Returns up to 500 leads. Pass `criteria` (JSON-encoded FilterCondition[]) to apply
+        advanced filters, or `sf` (smart-filter UUID) to load a saved filter set.
       parameters:
         - name: criteria
           in: query
+          description: JSON-encoded array of FilterCondition objects
           schema: { type: string }
         - name: sf
           in: query
+          description: Smart-filter UUID — loads saved criteria and runs the same query
           schema: { type: string, format: uuid }
       responses:
         "200":
@@ -101,7 +130,7 @@ paths:
               schema:
                 type: object
                 properties:
-                  ok: { type: boolean }
+                  ok: { type: boolean, example: true }
                   leads:
                     type: array
                     items: { $ref: "#/components/schemas/Lead" }
@@ -138,6 +167,7 @@ paths:
           in: query
           required: true
           schema: { type: string }
+          description: Search term
         - name: limit
           in: query
           schema: { type: integer, default: 20 }
@@ -158,6 +188,8 @@ paths:
     post:
       tags: [Leads]
       summary: Bulk operations on leads
+      description: |
+        Supported actions: `delete` (soft-delete), `assign_stage`, `assign_user`, `add_tag`.
       requestBody:
         required: true
         content:
@@ -190,6 +222,9 @@ paths:
     patch:
       tags: [Leads]
       summary: Update a lead
+      description: |
+        Update any lead field. When `stage_id` changes, a `hl_stage_transitions` row
+        is written — this powers the days_avg and conversion metrics on the Stages page.
       parameters:
         - $ref: "#/components/parameters/Id"
       requestBody:
@@ -209,7 +244,11 @@ paths:
                 assigned_user_id: { type: string, format: uuid, nullable: true }
                 lead_score: { type: integer }
                 pipeline_id: { type: string, format: uuid, nullable: true }
-                stage_id: { type: string, format: uuid, nullable: true }
+                stage_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+                  description: Move the lead to this stage. Pass null to clear.
       responses:
         "200":
           $ref: "#/components/responses/Ok"
@@ -219,6 +258,7 @@ paths:
     delete:
       tags: [Leads]
       summary: Soft-delete a lead (move to Trash)
+      description: Sets `deleted_at` and `status='trash'`. The row is recoverable.
       parameters:
         - $ref: "#/components/parameters/Id"
       responses:
@@ -227,13 +267,198 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /leads/{id}/pipeline:
+    post:
+      tags: [Leads]
+      summary: Move a lead to a specific stage within one pipeline
+      description: |
+        Upserts `hl_lead_pipeline_memberships` for `(lead_id, pipeline_id)` so the lead's
+        Buyer pipeline state can change independently of their Seller pipeline state.
+        A `hl_stage_transitions` row is written when the stage actually changes (skipped
+        for self-transitions).
+
+        Used by the stage stepper + Buyer/Seller chip dropdown in the lead detail header.
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pipeline_id, stage_id]
+              properties:
+                pipeline_id: { type: string, format: uuid }
+                stage_id:
+                  type: string
+                  format: uuid
+                  description: "Must belong to pipeline_id (validated server-side)"
+      responses:
+        "200":
+          description: Stage updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  pipeline_id: { type: string, format: uuid }
+                  stage_id: { type: string, format: uuid }
+                  from_stage_id: { type: string, format: uuid, nullable: true }
+        "400":
+          description: "stage_id does not belong to pipeline_id"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /leads/{id}/notes:
+    post:
+      tags: [Leads]
+      summary: Append a note to a lead
+      description: |
+        Inserts a `hl_notes` row with `entity_type='lead'`, `entity_id=<lead>`,
+        `source='lead_detail_action'`. Author is resolved from the session cookie.
+        Notes appear in the lead detail timeline's Notes tab.
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string, description: "Note body — trimmed; must be non-empty" }
+      responses:
+        "200":
+          description: Note created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  id: { type: string, format: uuid }
+                  created_at: { type: string, format: date-time }
+        "422":
+          description: "Note body is required"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── APPOINTMENT DISPOSITION ────────────────────────────────────────────────
+
+  /appointment-types:
+    get:
+      tags: [Calendar Events]
+      summary: List active appointment types
+      description: |
+        Read from `hl_appointment_types` in `sort_order`. Drives the scheduler
+        dropdown in `CreateEventModal`. Some types carry a `stage_advance_to_stage_id`
+        — scheduling those types advances the lead's pipeline membership.
+      responses:
+        "200":
+          description: Active appointment types
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  types:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        key: { type: string, example: "first_buyer_appointment" }
+                        label: { type: string, example: "First Buyer Appointment" }
+                        color: { type: string, nullable: true }
+                        sort_order: { type: integer }
+
+  /appointments/{id}/outcome:
+    patch:
+      tags: [Calendar Events]
+      summary: Disposition an appointment (Myli + UI)
+      description: |
+        Writes `hl_appointments.outcome`, `outcome_notes`, `outcome_at`, `outcome_by`.
+        Auto-bumps `status` (no_show, cancelled, rescheduled, completed) only when
+        the appointment is still `scheduled` — manual statuses are never clobbered.
+
+        **Auto-advance:** if the outcome row has a non-null
+        `stage_advance_to_stage_id`, the lead's pipeline membership for that
+        stage's pipeline is bumped FORWARD ONLY. A `hl_stage_transitions` row
+        is written with `reason='appointment outcome: <outcome key>'`.
+
+        Outcome behavior is pre-seeded — `met_with_customer_first` advances
+        Buyer → "1st Appointment Met", `met_with_customer_showing` advances
+        Buyer → "Showing Homes", `listing_signed` advances Seller → "Listing
+        Agreement", `listing_not_signed` advances nothing (UI shows a
+        nurture/junk/DNC hint banner instead).
+
+        Outcomes are filtered in the UI by appointment type via
+        `hl_appointment_outcomes.valid_for_types` (JSONB array, NULL = all types).
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                outcome:
+                  type: string
+                  nullable: true
+                  description: "Outcome key from hl_appointment_outcomes — or null to clear"
+                outcome_notes:
+                  type: string
+                  nullable: true
+                  description: "Freeform feedback. Auto-clears when outcome is cleared."
+                marked_by:
+                  type: string
+                  enum: [user, myli]
+                  description: "Pass 'myli' from the agent runtime; defaults to session user."
+      responses:
+        "200":
+          description: Outcome saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  appointment:
+                    type: object
+                    properties:
+                      id: { type: string, format: uuid }
+                      outcome: { type: string, nullable: true }
+                      outcome_notes: { type: string, nullable: true }
+                      outcome_at: { type: string, format: date-time, nullable: true }
+                      outcome_by: { type: string, nullable: true }
+                      status: { type: string }
+                  stage_advanced:
+                    type: object
+                    nullable: true
+                    description: "Populated when outcome triggered a stage move; null otherwise"
+                    properties:
+                      pipeline_id: { type: string, format: uuid }
+                      stage_id: { type: string, format: uuid }
+                      from_stage_id: { type: string, format: uuid, nullable: true }
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: "Unknown outcome key OR neither outcome nor outcome_notes supplied"
+
+  # ── STAGES ──────────────────────────────────────────────────────────────────
+
   /stages:
     get:
       tags: [Stages]
       summary: List stages for a pipeline
+      description: Returns stages with live metrics (people count, avg days, conversion %).
       parameters:
         - name: pipelineId
           in: query
+          description: Pipeline UUID. Defaults to the pipeline marked `is_default`.
           schema: { type: string, format: uuid }
       responses:
         "200":
@@ -260,10 +485,10 @@ paths:
               required: [name]
               properties:
                 name: { type: string, maxLength: 60 }
-                color: { type: string }
-                icon: { type: string }
+                color: { type: string, description: "Hex color from the allowed palette" }
+                icon: { type: string, description: "Lucide icon name" }
                 is_active: { type: boolean, default: true }
-                pipelineId: { type: string, format: uuid }
+                pipelineId: { type: string, format: uuid, description: "Defaults to default pipeline" }
       responses:
         "201":
           $ref: "#/components/responses/OkStage"
@@ -312,10 +537,15 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/OkStage"
+        "409":
+          description: Name already taken in this pipeline
 
     delete:
       tags: [Stages]
       summary: Delete a stage
+      description: |
+        If leads are currently on this stage, you must supply `reassign_to`
+        (a stage UUID in the same pipeline). The leads are moved before deletion.
       parameters:
         - $ref: "#/components/parameters/Id"
       requestBody:
@@ -324,12 +554,17 @@ paths:
             schema:
               type: object
               properties:
-                reassign_to: { type: string, format: uuid }
+                reassign_to:
+                  type: string
+                  format: uuid
+                  description: Move leads to this stage before deleting
       responses:
         "200":
           $ref: "#/components/responses/Ok"
         "409":
           description: Stage has leads and reassign_to was not provided
+
+  # ── LEAD SOURCES ────────────────────────────────────────────────────────────
 
   /lead-sources:
     get:
@@ -337,7 +572,7 @@ paths:
       summary: List lead sources
       responses:
         "200":
-          description: All active lead sources
+          description: All active lead sources with total_leads count
           content:
             application/json:
               schema:
@@ -360,7 +595,7 @@ paths:
               required: [name]
               properties:
                 name: { type: string }
-                key: { type: string }
+                key: { type: string, description: "Machine-readable identifier" }
                 color: { type: string }
                 source_type: { type: string }
                 default_stage_id: { type: string, format: uuid, nullable: true }
@@ -398,11 +633,15 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/Ok"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── TAGS ────────────────────────────────────────────────────────────────────
 
   /tags:
     get:
       tags: [Tags]
-      summary: List all tags
+      summary: List all tags with lead counts
       responses:
         "200":
           description: Tags
@@ -454,12 +693,14 @@ paths:
 
     delete:
       tags: [Tags]
-      summary: Delete a tag
+      summary: Delete a tag (detaches from all leads)
       parameters:
         - $ref: "#/components/parameters/Id"
       responses:
         "200":
           $ref: "#/components/responses/Ok"
+
+  # ── TASKS ───────────────────────────────────────────────────────────────────
 
   /tasks:
     get:
@@ -538,6 +779,8 @@ paths:
         "200":
           $ref: "#/components/responses/Ok"
 
+  # ── EMAIL TEMPLATES ─────────────────────────────────────────────────────────
+
   /email/templates:
     get:
       tags: [Email Templates]
@@ -545,6 +788,7 @@ paths:
       parameters:
         - name: category
           in: query
+          description: Filter by category (listing_alert, open_house, market_report, etc.)
           schema: { type: string }
       responses:
         "200":
@@ -573,11 +817,13 @@ paths:
                 name: { type: string }
                 category: { type: string }
                 subject: { type: string }
-                key: { type: string }
-                template_body: { type: string }
+                key: { type: string, description: "Unique machine key. Optional." }
+                template_body: { type: string, description: "HTML body" }
       responses:
         "201":
           $ref: "#/components/responses/OkId"
+        "409":
+          description: Template key already exists
 
   /email/templates/{id}:
     patch:
@@ -627,126 +873,7 @@ paths:
         "200":
           $ref: "#/components/responses/Ok"
 
-  /email/audiences:
-    get:
-      tags: [Email Audiences]
-      summary: List email audiences
-      responses:
-        "200":
-          description: Audiences
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  ok: { type: boolean }
-                  audiences:
-                    type: array
-                    items: { $ref: "#/components/schemas/EmailAudience" }
-
-    post:
-      tags: [Email Audiences]
-      summary: Create an email audience
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [name]
-              properties:
-                name: { type: string }
-                description: { type: string }
-                rules_json: { type: object }
-      responses:
-        "201":
-          $ref: "#/components/responses/OkId"
-
-  /email/audiences/{id}:
-    get:
-      tags: [Email Audiences]
-      summary: Get an audience
-      parameters:
-        - $ref: "#/components/parameters/Id"
-      responses:
-        "200":
-          description: Audience detail
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  ok: { type: boolean }
-                  audience: { $ref: "#/components/schemas/EmailAudience" }
-
-    patch:
-      tags: [Email Audiences]
-      summary: Update an audience
-      parameters:
-        - $ref: "#/components/parameters/Id"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                name: { type: string }
-                description: { type: string }
-      responses:
-        "200":
-          $ref: "#/components/responses/Ok"
-
-    delete:
-      tags: [Email Audiences]
-      summary: Delete an audience
-      parameters:
-        - $ref: "#/components/parameters/Id"
-      responses:
-        "200":
-          $ref: "#/components/responses/Ok"
-
-  /email/audiences/{id}/members:
-    get:
-      tags: [Email Audiences]
-      summary: List audience members
-      parameters:
-        - $ref: "#/components/parameters/Id"
-      responses:
-        "200":
-          description: Members
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  ok: { type: boolean }
-                  members:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        lead_id: { type: string, format: uuid }
-                        name: { type: string }
-                        email: { type: string }
-
-    post:
-      tags: [Email Audiences]
-      summary: Add or remove audience members
-      parameters:
-        - $ref: "#/components/parameters/Id"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                add: { type: array, items: { type: string, format: uuid } }
-                remove: { type: array, items: { type: string, format: uuid } }
-      responses:
-        "200":
-          $ref: "#/components/responses/Ok"
+  # ── EMAIL CAMPAIGNS ─────────────────────────────────────────────────────────
 
   /email/campaigns:
     get:
@@ -781,7 +908,7 @@ paths:
   /email/campaigns/{id}:
     get:
       tags: [Email Campaigns]
-      summary: Get a campaign
+      summary: Get a campaign (with audience + template details)
       parameters:
         - $ref: "#/components/parameters/Id"
       responses:
@@ -812,7 +939,7 @@ paths:
 
     delete:
       tags: [Email Campaigns]
-      summary: Delete a campaign
+      summary: Delete a campaign (any status)
       parameters:
         - $ref: "#/components/parameters/Id"
       responses:
@@ -822,12 +949,14 @@ paths:
   /email/campaigns/{id}/send:
     post:
       tags: [Email Campaigns]
-      summary: Send a campaign
+      summary: Trigger a campaign send
       parameters:
         - $ref: "#/components/parameters/Id"
       responses:
         "200":
           $ref: "#/components/responses/Ok"
+
+  # ── TEXT TEMPLATES ──────────────────────────────────────────────────────────
 
   /text-templates:
     get:
@@ -865,7 +994,7 @@ paths:
               required: [name, body]
               properties:
                 name: { type: string }
-                body: { type: string }
+                body: { type: string, description: "Message text. Supports {{first_name}}, {{last_name}}, {{agent_name}} merge tags." }
                 category: { type: string }
                 visibility: { type: string, enum: [public, private], default: public }
       responses:
@@ -902,6 +1031,8 @@ paths:
         "200":
           $ref: "#/components/responses/Ok"
 
+  # ── CALENDAR EVENTS ─────────────────────────────────────────────────────────
+
   /calendar/events:
     get:
       tags: [Calendar Events]
@@ -931,7 +1062,21 @@ paths:
 
     post:
       tags: [Calendar Events]
-      summary: Create a calendar event
+      summary: Create a calendar event (appointment) with optional stage auto-advance
+      description: |
+        Inserts a row into `hl_appointments`. If the user has Google Calendar export
+        enabled, also creates the event in Google Calendar and stores the ID.
+
+        **Schedule-driven stage advance:** if the chosen `type` has a non-null
+        `stage_advance_to_stage_id` in `hl_appointment_types`, the lead's pipeline
+        membership is bumped FORWARD ONLY. As of 2026-05-18:
+
+        - `type='first_buyer_appointment'` → Buyer · "1st Appointment Set"
+        - `type='listing_appointment'`     → Seller · "Appointment Set"
+        - all other types → no advance
+
+        Transitions are logged in `hl_stage_transitions` with
+        `reason='appointment scheduled: <type>'`.
       requestBody:
         required: true
         content:
@@ -940,7 +1085,23 @@ paths:
               $ref: "#/components/schemas/CreateCalendarEventBody"
       responses:
         "201":
-          $ref: "#/components/responses/OkId"
+          description: Appointment created (with optional stage_advanced + google_event_id)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  google_event_id: { type: string, nullable: true }
+                  google_sync_error: { type: string, nullable: true }
+                  stage_advanced:
+                    type: object
+                    nullable: true
+                    description: "Populated when type triggered a stage move; null otherwise"
+                    properties:
+                      pipeline_id: { type: string, format: uuid }
+                      stage_id: { type: string, format: uuid }
+                      from_stage_id: { type: string, format: uuid, nullable: true }
 
   /calendar/events/{id}:
     get:
@@ -982,6 +1143,8 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/Ok"
+
+  # ── TEAM ────────────────────────────────────────────────────────────────────
 
   /team/users:
     get:
@@ -1054,6 +1217,8 @@ paths:
         "200":
           $ref: "#/components/responses/Ok"
 
+  # ── SMART FILTERS ───────────────────────────────────────────────────────────
+
   /smart-filters:
     get:
       tags: [Smart Filters]
@@ -1085,6 +1250,7 @@ paths:
                 name: { type: string }
                 criteria:
                   type: array
+                  description: Array of FilterCondition objects
                   items: { type: object }
       responses:
         "201":
@@ -1118,10 +1284,15 @@ paths:
         "200":
           $ref: "#/components/responses/Ok"
 
+  # ── OPTIONS (LOOKUP DATA) ───────────────────────────────────────────────────
+
   /options:
     get:
       tags: [Options]
-      summary: Get all lookup data
+      summary: Get all lookup data for filter dropdowns
+      description: |
+        Returns stages, lead sources, tags, and users in one call.
+        Use this to populate filter panel dropdowns without making 4 separate requests.
       responses:
         "200":
           description: Lookup data
@@ -1143,6 +1314,1340 @@ paths:
                   users:
                     type: array
                     items: { $ref: "#/components/schemas/User" }
+
+  # ── AUTH (additional endpoints) ─────────────────────────────────────────────
+
+  /auth/google:
+    get:
+      tags: [Auth]
+      summary: Start Google sign-in (302 redirect)
+      description: |
+        Generates a Google OAuth URL with `openid email profile` scopes and
+        302-redirects the browser. Set `next` cookie before redirecting to
+        return the user to their original page after `/auth/google/callback`.
+      responses:
+        "302":
+          description: Redirect to Google consent screen
+
+  /auth/google/callback:
+    get:
+      tags: [Auth]
+      summary: Google OAuth callback (exchange code → session)
+      description: |
+        Google redirects here after consent. Exchanges `code` for tokens,
+        verifies the email is in `hl_users`, mints a session cookie, and
+        302-redirects to the `next` URL (or `/dashboard` if none).
+      parameters:
+        - { name: code,  in: query, schema: { type: string } }
+        - { name: state, in: query, schema: { type: string } }
+        - { name: error, in: query, schema: { type: string } }
+      responses:
+        "302":
+          description: Redirect after sign-in (success or `?auth=denied` on error)
+
+  /auth/sso:
+    get:
+      tags: [Auth]
+      summary: Short-lived SSO token redemption
+      description: |
+        Used by Lee's SSO bridge — accepts a one-time `t` token from the
+        identity service, swaps it for a session cookie, redirects to `/dashboard`.
+      parameters:
+        - { name: t, in: query, required: true, schema: { type: string } }
+      responses:
+        "302":
+          description: Redirect with session cookie set
+        "401":
+          description: Invalid or expired token
+
+  /auth/setup:
+    get:
+      tags: [Auth]
+      summary: Detect first-run state
+      description: Returns `{ needs_setup: true }` when `hl_users` is empty.
+      responses:
+        "200":
+          description: Setup state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  needs_setup: { type: boolean }
+    post:
+      tags: [Auth]
+      summary: Create the first admin user
+      description: |
+        Only succeeds when `hl_users` is empty. Creates an admin user from the
+        provided email + password and mints their session.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, full_name]
+              properties:
+                email:     { type: string, format: email }
+                password:  { type: string, format: password }
+                full_name: { type: string }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "409":
+          description: Setup already complete (users exist)
+
+  /auth/emulate:
+    delete:
+      tags: [Auth]
+      summary: Exit emulation mode
+      description: |
+        Clears the emulation overlay cookie and restores the underlying
+        admin session. Pairs with `POST /team/users/{id}/emulate`.
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  # ── PROFILE ─────────────────────────────────────────────────────────────────
+
+  /profile:
+    get:
+      tags: [Profile]
+      summary: Get current user's full profile row
+      responses:
+        "200":
+          description: Profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  user: { $ref: "#/components/schemas/User" }
+    patch:
+      tags: [Profile]
+      summary: Update editable profile fields
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                full_name:        { type: string }
+                avatar_url:       { type: string, nullable: true }
+                phone:            { type: string, nullable: true }
+                signature_html:   { type: string, nullable: true }
+                timezone:         { type: string }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  # ── NOTIFICATIONS ───────────────────────────────────────────────────────────
+
+  /notification-channels:
+    get:
+      tags: [Notifications]
+      summary: List configured notification channels
+      description: Channels = Email + SMS + Push + Telegram + Slack with per-channel enabled flag.
+      responses:
+        "200":
+          description: Channels
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  channels:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        kind:    { type: string, example: "email" }
+                        target:  { type: string, nullable: true }
+                        enabled: { type: boolean }
+    put:
+      tags: [Notifications]
+      summary: Replace the full channels array
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                channels:
+                  type: array
+                  items: { type: object }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /notification-preferences:
+    get:
+      tags: [Notifications]
+      summary: Get the current user's per-event notification preferences
+      responses:
+        "200":
+          description: Preferences
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  preferences: { type: object }
+    put:
+      tags: [Notifications]
+      summary: Save the current user's notification preferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                preferences: { type: object }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  # ── TEAM (additional) ───────────────────────────────────────────────────────
+
+  /team/users/{id}/emulate:
+    post:
+      tags: [Team]
+      summary: Start emulating another user (admin only)
+      description: |
+        Sets an emulation overlay cookie that makes subsequent requests appear
+        to come from `{id}`. The underlying admin session is preserved.
+        End emulation with `DELETE /auth/emulate`.
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "403":
+          description: Caller is not an admin
+
+  # ── TASKS (additional) ──────────────────────────────────────────────────────
+
+  /tasks/bulk:
+    post:
+      tags: [Tasks]
+      summary: Bulk complete / dismiss / delete tasks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [task_ids, action]
+              properties:
+                task_ids:
+                  type: array
+                  items: { type: string, format: uuid }
+                action:
+                  type: string
+                  enum: [complete, dismiss, delete]
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  # ── SYSTEM ──────────────────────────────────────────────────────────────────
+
+  /db-health:
+    get:
+      tags: [System]
+      summary: Database health check
+      description: |
+        Returns `{ ok: true, db: 'reachable' }` when the Postgres pool can
+        execute `SELECT 1`. Used by Railway + uptime monitors.
+      security: []
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  db: { type: string }
+        "503":
+          description: DB unreachable
+
+  # ── EMAIL INTEGRATION ───────────────────────────────────────────────────────
+
+  /email/auth/connect:
+    get:
+      tags: [Email Integration]
+      summary: Start Gmail OAuth (302 redirect)
+      description: |
+        Generates a Google OAuth URL with Gmail send + signature scopes.
+        `inbox_id` ties the resulting tokens to a specific
+        `hl_sending_inboxes` row (set when connecting an org inbox);
+        `login_hint` pre-fills the Google account email.
+      parameters:
+        - { name: inbox_id,   in: query, schema: { type: string, format: uuid } }
+        - { name: login_hint, in: query, schema: { type: string, format: email } }
+      responses:
+        "302":
+          description: Redirect to Google consent
+
+  /email/auth/callback:
+    get:
+      tags: [Email Integration]
+      summary: Gmail OAuth callback (exchange code → tokens)
+      description: |
+        Google redirects here after Gmail consent. Stores refresh + access
+        tokens on the user's row (or the inbox row when `state.inbox_id` is set)
+        and redirects to `/settings/email?status=connected`.
+      parameters:
+        - { name: code,  in: query, schema: { type: string } }
+        - { name: state, in: query, schema: { type: string } }
+        - { name: error, in: query, schema: { type: string } }
+      responses:
+        "302":
+          description: Redirect after Gmail connect
+
+  /email/status:
+    get:
+      tags: [Email Integration]
+      summary: Connection status for the current user (or a specific inbox)
+      parameters:
+        - { name: inbox_id, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:         { type: boolean }
+                  connected:  { type: boolean }
+                  email:      { type: string, nullable: true }
+                  expires_at: { type: string, format: date-time, nullable: true }
+
+  /email/disconnect:
+    delete:
+      tags: [Email Integration]
+      summary: Revoke Gmail token + clear connection state
+      parameters:
+        - { name: inbox_id, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /email/send:
+    post:
+      tags: [Email Integration]
+      summary: Send a one-off email via the user's connected Gmail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to, subject, body_html]
+              properties:
+                lead_id:   { type: string, format: uuid, nullable: true }
+                to:        { type: string, format: email }
+                cc:        { type: array, items: { type: string, format: email } }
+                bcc:       { type: array, items: { type: string, format: email } }
+                subject:   { type: string }
+                body_html: { type: string }
+                from_inbox_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+                  description: "Override the default sender — pass a hl_sending_inboxes row id"
+      responses:
+        "200":
+          description: Sent (Gmail message id returned)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:         { type: boolean }
+                  message_id: { type: string }
+
+  /email/senders:
+    get:
+      tags: [Email Integration]
+      summary: List eligible senders for a campaign
+      description: |
+        Returns the set of `hl_sending_inboxes` rows that are warmed-up
+        + authorized for the given `campaign_type`. The campaign editor
+        feeds this into the "Send From" dropdown.
+      parameters:
+        - { name: campaign_type, in: query, required: true, schema: { type: string, enum: [outreach, nurture, transactional, alerts, marketing] } }
+      responses:
+        "200":
+          description: Eligible senders
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  senders:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:    { type: string, format: uuid }
+                        email: { type: string, format: email }
+                        label: { type: string }
+                        warmed_up: { type: boolean }
+
+  /email/settings:
+    patch:
+      tags: [Email Integration]
+      summary: Update per-user sync + domain-filter preferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sync_enabled:        { type: boolean }
+                domain_filter:       { type: array, items: { type: string } }
+                inbound_to_inbox:    { type: boolean }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /email/signature:
+    get:
+      tags: [Email Integration]
+      summary: Fetch saved signature for the connected Gmail account
+      parameters:
+        - { name: inbox_id, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Signature
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:        { type: boolean }
+                  signature: { type: string, nullable: true }
+    post:
+      tags: [Email Integration]
+      summary: Save / update the signature
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [signature]
+              properties:
+                signature: { type: string }
+                inbox_id:  { type: string, format: uuid, nullable: true }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /email/signature/import:
+    post:
+      tags: [Email Integration]
+      summary: Pull the user's existing Gmail signature via the Gmail API
+      description: |
+        Reads the `sendAs` resource from Gmail Users API and copies the HTML
+        into `hl_users.signature_html`. Idempotent — call again to refresh.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                inbox_id: { type: string, format: uuid, nullable: true }
+      responses:
+        "200":
+          description: Imported
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:        { type: boolean }
+                  signature: { type: string }
+
+  /email/compliance:
+    get:
+      tags: [Email Integration]
+      summary: Read CAN-SPAM compliance config (footer, address, etc.)
+      responses:
+        "200":
+          description: Config
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:                 { type: boolean }
+                  business_name:      { type: string }
+                  business_address:   { type: string }
+                  unsubscribe_url:    { type: string, format: uri }
+                  footer_html:        { type: string }
+    patch:
+      tags: [Email Integration]
+      summary: Update compliance config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                business_name:    { type: string }
+                business_address: { type: string }
+                unsubscribe_url:  { type: string, format: uri }
+                footer_html:      { type: string }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /email/team:
+    get:
+      tags: [Email Integration]
+      summary: Per-user email connection status across the team
+      description: |
+        Returns each `hl_users` row with their Gmail connection state, last
+        sync time, and inbox assignment — drives the Team Email settings table.
+      responses:
+        "200":
+          description: Team email roster
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  team:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        user_id:    { type: string, format: uuid }
+                        full_name:  { type: string }
+                        email:      { type: string, format: email }
+                        connected:  { type: boolean }
+                        last_sync:  { type: string, format: date-time, nullable: true }
+
+  /email/warmup-status:
+    get:
+      tags: [Email Integration]
+      summary: Live warmup health for all sending inboxes (via Instantly.ai)
+      description: |
+        Fans out to Instantly's API and returns aggregated warmup score,
+        sent count, replied count, spam count per inbox.
+      responses:
+        "200":
+          description: Warmup snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  inboxes:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        inbox_id:    { type: string, format: uuid }
+                        email:       { type: string, format: email }
+                        warmup_score: { type: number }
+                        sent:         { type: integer }
+                        replied:      { type: integer }
+                        spam:         { type: integer }
+
+  # ── EMAIL INFRASTRUCTURE ────────────────────────────────────────────────────
+
+  /email/infrastructure/inboxes:
+    get:
+      tags: [Email Infrastructure]
+      summary: List all org sending inboxes with OAuth status
+      responses:
+        "200":
+          description: Inboxes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  inboxes:
+                    type: array
+                    items: { $ref: "#/components/schemas/SendingInbox" }
+    post:
+      tags: [Email Infrastructure]
+      summary: Add a new sending inbox (no OAuth yet — connect via /email/auth/connect)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, label, purpose]
+              properties:
+                email:   { type: string, format: email }
+                label:   { type: string, example: "Outreach inbox 1" }
+                purpose:
+                  type: string
+                  enum: [outreach, nurture, transactional, alerts, marketing]
+                plan:
+                  type: string
+                  description: "Instantly plan tag (free/growth/scale) or 'native' for non-Instantly inboxes"
+      responses:
+        "201":
+          $ref: "#/components/responses/OkId"
+
+  /email/infrastructure/inboxes/{id}:
+    patch:
+      tags: [Email Infrastructure]
+      summary: Update inbox label / purpose / plan
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label:   { type: string }
+                purpose:
+                  type: string
+                  enum: [outreach, nurture, transactional, alerts, marketing]
+                plan:    { type: string }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+    delete:
+      tags: [Email Infrastructure]
+      summary: Remove an inbox (custom inboxes only — system inboxes are protected)
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "403":
+          description: Refusal — inbox is system-managed
+
+  /email/infrastructure/instantly:
+    get:
+      tags: [Email Infrastructure]
+      summary: Instantly.ai connection status (key fingerprint only — never the full key)
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:        { type: boolean }
+                  connected: { type: boolean }
+                  fingerprint: { type: string, nullable: true }
+    post:
+      tags: [Email Infrastructure]
+      summary: Store + verify Instantly API key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [api_key]
+              properties:
+                api_key: { type: string }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "401":
+          description: Key rejected by Instantly
+    delete:
+      tags: [Email Infrastructure]
+      summary: Remove stored Instantly config
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /email/infrastructure/resend:
+    get:
+      tags: [Email Infrastructure]
+      summary: Resend connection status
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:        { type: boolean }
+                  connected: { type: boolean }
+    post:
+      tags: [Email Infrastructure]
+      summary: Store + verify Resend API key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [api_key]
+              properties:
+                api_key: { type: string }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+    delete:
+      tags: [Email Infrastructure]
+      summary: Remove stored Resend config
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  # ── EMAIL LISTS (replaces legacy "Email Audiences") ─────────────────────────
+
+  /email/lists:
+    get:
+      tags: [Email Lists]
+      summary: List static + smart lists
+      parameters:
+        - { name: type,  in: query, schema: { type: string, enum: [static, smart] } }
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+      responses:
+        "200":
+          description: Lists
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  lists:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:    { type: string, format: uuid }
+                        name:  { type: string }
+                        type:  { type: string, enum: [static, smart] }
+                        size:  { type: integer }
+    post:
+      tags: [Email Lists]
+      summary: Create a static or smart list
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, type]
+              properties:
+                name: { type: string }
+                type: { type: string, enum: [static, smart] }
+                criteria:
+                  type: array
+                  description: "FilterCondition[] for smart lists; omitted for static"
+                  items: { type: object }
+      responses:
+        "201":
+          $ref: "#/components/responses/OkId"
+
+  /email/lists/{id}:
+    get:
+      tags: [Email Lists]
+      summary: Get a list with its criteria + member count
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: List
+    patch:
+      tags: [Email Lists]
+      summary: Rename or rewrite criteria
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:     { type: string }
+                criteria: { type: array, items: { type: object } }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+    delete:
+      tags: [Email Lists]
+      summary: Delete a list (drops `hl_email_list_members` rows)
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /email/lists/{id}/members:
+    get:
+      tags: [Email Lists]
+      summary: List current members (static lists) or resolved leads (smart)
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Members
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  leads:
+                    type: array
+                    items: { $ref: "#/components/schemas/Lead" }
+    post:
+      tags: [Email Lists]
+      summary: Add lead IDs to a static list
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lead_ids]
+              properties:
+                lead_ids:
+                  type: array
+                  items: { type: string, format: uuid }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+    delete:
+      tags: [Email Lists]
+      summary: Remove a single lead from a static list
+      parameters:
+        - $ref: "#/components/parameters/Id"
+        - { name: lead_id, in: query, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  # ── CALENDAR INTEGRATION ────────────────────────────────────────────────────
+
+  /calendar/auth/connect:
+    get:
+      tags: [Calendar Integration]
+      summary: Start Google Calendar OAuth (302 redirect)
+      description: |
+        Generates a Google OAuth URL with calendar scopes.
+        Agents connect their PERSONAL Google account (no `hd` restriction).
+        Uses `x-forwarded-host` + `x-forwarded-proto` to derive redirect_uri
+        (Railway terminates SSL internally — `req.nextUrl.origin` is unreliable).
+      responses:
+        "302":
+          description: Redirect to Google consent
+
+  /calendar/auth/callback:
+    get:
+      tags: [Calendar Integration]
+      summary: Google Calendar OAuth callback
+      description: |
+        Exchanges code for tokens, fetches the Google account email,
+        upserts `hl_calendar_connections` for the CRM user, redirects to
+        `/settings/calendar`.
+      parameters:
+        - { name: code,  in: query, schema: { type: string } }
+        - { name: state, in: query, schema: { type: string } }
+        - { name: error, in: query, schema: { type: string } }
+      responses:
+        "302":
+          description: Redirect after connect
+
+  /calendar/settings:
+    get:
+      tags: [Calendar Integration]
+      summary: Connection state + Google calendar list (for import/export pickers)
+      responses:
+        "200":
+          description: Settings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:               { type: boolean }
+                  connected:        { type: boolean }
+                  account_email:    { type: string, nullable: true }
+                  import_calendar:  { type: string, nullable: true }
+                  export_calendar:  { type: string, nullable: true }
+                  sync_enabled:     { type: boolean }
+                  calendars:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:      { type: string }
+                        summary: { type: string }
+                        primary: { type: boolean }
+    patch:
+      tags: [Calendar Integration]
+      summary: Update import/export calendar selection + sync toggle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                import_calendar_id: { type: string, nullable: true }
+                export_calendar_id: { type: string, nullable: true }
+                import_enabled:     { type: boolean }
+                export_enabled:     { type: boolean }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+    delete:
+      tags: [Calendar Integration]
+      summary: Disconnect — drops the connection row + clears event linkage
+      description: |
+        ON DELETE CASCADE drops `hl_calendar_events`. Sets `calendar_event_id`
+        and `calendar_provider` to NULL on appointments that were synced
+        to Google (the appointments themselves stay).
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /calendar/sync:
+    post:
+      tags: [Calendar Integration]
+      summary: Trigger an incremental import from Google Calendar
+      description: |
+        Pulls events using `nextSyncToken`. Falls back to a full sync if the
+        token expires (HTTP 410). Full sync covers -30 to +60 days.
+      responses:
+        "200":
+          description: Sync result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:           { type: boolean }
+                  imported:     { type: integer }
+                  updated:      { type: integer }
+                  deleted:      { type: integer }
+                  full_sync:    { type: boolean }
+
+  # ── iMESSAGE (BlueBubbles) ──────────────────────────────────────────────────
+
+  /bluebubbles:
+    get:
+      tags: [iMessage (BlueBubbles)]
+      summary: BlueBubbles server health + webhook list
+      description: |
+        Hits the BlueBubbles bridge on Camp David (`BB_URL`) and returns
+        connection state, message + attachment totals, and registered webhooks.
+      responses:
+        "200":
+          description: BlueBubbles health
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:                { type: boolean }
+                  connected:         { type: boolean }
+                  server_url:        { type: string }
+                  message_count:     { type: integer, nullable: true }
+                  attachment_count:  { type: integer, nullable: true }
+                  webhooks:
+                    type: array
+                    items: { type: object }
+
+  /bb/send:
+    post:
+      tags: [iMessage (BlueBubbles)]
+      summary: Send an iMessage via BlueBubbles
+      description: |
+        Forwards to `${BB_URL}/api/v1/message/text`. `from_handle` selects the
+        sending identity when multiple iMessage handles are configured on the host.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to, message]
+              properties:
+                to:          { type: string, description: "iMessage address — phone (E.164) or apple id email" }
+                message:     { type: string }
+                lead_id:     { type: string, format: uuid, nullable: true, description: "Link the send to a lead (writes hl_bb_events row)" }
+                from_handle: { type: string, nullable: true, description: "Sender handle override; defaults to bb/settings preferred handle" }
+      responses:
+        "200":
+          description: Sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:   { type: boolean }
+                  guid: { type: string }
+        "400":
+          description: Missing required fields
+        "502":
+          description: BlueBubbles unreachable
+
+  /bb/inbound:
+    post:
+      tags: [iMessage (BlueBubbles)]
+      summary: BlueBubbles webhook — inbound iMessage delivery
+      description: |
+        BlueBubbles posts here for `new-message` and `updated-message` events.
+        Inserts/updates `hl_bb_events`. Bearer auth via `?password=` query (set
+        when registering the webhook). Inbound is dual-routed to PA + HouseLoop —
+        the handler attributes per-lead by phone match.
+      security: []
+      parameters:
+        - { name: password, in: query, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                type: { type: string, example: "new-message" }
+                data: { type: object }
+      responses:
+        "200":
+          description: Acknowledged
+        "401":
+          description: Password mismatch
+
+  /bb/history:
+    get:
+      tags: [iMessage (BlueBubbles)]
+      summary: Paginated inbound + outbound history (system-wide)
+      parameters:
+        - { name: page,  in: query, schema: { type: integer, default: 1, minimum: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, minimum: 10, maximum: 100 } }
+      responses:
+        "200":
+          description: History page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  page: { type: integer }
+                  total: { type: integer }
+                  events:
+                    type: array
+                    items: { type: object }
+
+  /bb/thread:
+    get:
+      tags: [iMessage (BlueBubbles)]
+      summary: Conversation thread for one lead
+      parameters:
+        - { name: lead_id, in: query, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Messages oldest→newest
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  messages:
+                    type: array
+                    items: { type: object }
+
+  /bb/daily-stats:
+    get:
+      tags: [iMessage (BlueBubbles)]
+      summary: Today + 7-day outbound rollup (brand-bucketed)
+      description: |
+        Buckets outbound messages by date + brand (houseloop / placedagent / other),
+        returns today's totals + 7-day rolling average, and the daily limit configured
+        on the host.
+      responses:
+        "200":
+          description: Daily stats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  date:            { type: string, format: date }
+                  total_outbound:  { type: integer }
+                  unique_handles:  { type: array, items: { type: string } }
+                  new_handles:     { type: array, items: { type: string } }
+                  today:           { type: object }
+                  week:            { type: array, items: { type: object } }
+                  week_avg_unique: { type: number }
+                  brand_breakdown: { type: object }
+                  daily_limit:     { type: integer }
+
+  /bb/settings:
+    get:
+      tags: [iMessage (BlueBubbles)]
+      summary: Get preferred send handle + available handles
+      responses:
+        "200":
+          description: Settings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:               { type: boolean }
+                  preferred_handle: { type: string, nullable: true }
+                  available:        { type: array, items: { type: string } }
+    post:
+      tags: [iMessage (BlueBubbles)]
+      summary: Set the preferred send handle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [handle]
+              properties:
+                handle: { type: string, description: "An identity from /bb/settings.available" }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  # ── PHONE (Twilio) ──────────────────────────────────────────────────────────
+
+  /phone/provider:
+    get:
+      tags: [Phone]
+      summary: Twilio connection status (no secret leakage)
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:         { type: boolean }
+                  connected:  { type: boolean }
+                  account_sid_tail: { type: string, nullable: true }
+    post:
+      tags: [Phone]
+      summary: Save + verify Twilio credentials
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [account_sid, auth_token]
+              properties:
+                account_sid: { type: string }
+                auth_token:  { type: string }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "401":
+          description: Twilio rejected the credentials
+    delete:
+      tags: [Phone]
+      summary: Remove stored Twilio credentials
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /phone/settings:
+    get:
+      tags: [Phone]
+      summary: Current user's phone assignment + per-user settings
+      responses:
+        "200":
+          description: Settings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:          { type: boolean }
+                  number:      { type: string, nullable: true }
+                  forward_to:  { type: string, nullable: true }
+                  voicemail_enabled: { type: boolean }
+    patch:
+      tags: [Phone]
+      summary: Update the current user's phone settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                forward_to:        { type: string, nullable: true }
+                voicemail_enabled: { type: boolean }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /phone/dialers:
+    get:
+      tags: [Phone]
+      summary: All users with their dialer assignment (admin view)
+      responses:
+        "200":
+          description: Dialers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  dialers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        user_id:           { type: string, format: uuid }
+                        full_name:         { type: string }
+                        twilio_number:     { type: string, nullable: true }
+                        is_default:        { type: boolean }
+                        messaging_service: { type: string, nullable: true }
+    post:
+      tags: [Phone]
+      summary: Assign a Twilio phone number to a user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id, twilio_number]
+              properties:
+                user_id:           { type: string, format: uuid }
+                twilio_number:     { type: string, description: "E.164 — must already exist on the Twilio account" }
+                messaging_service: { type: string, nullable: true }
+                is_default:        { type: boolean }
+      responses:
+        "201":
+          $ref: "#/components/responses/OkId"
+
+  /phone/dialers/{id}:
+    patch:
+      tags: [Phone]
+      summary: Update assignment config (messaging service / forwarding / default)
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                messaging_service: { type: string, nullable: true }
+                call_forward_to:   { type: string, nullable: true }
+                is_default:        { type: boolean }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+    delete:
+      tags: [Phone]
+      summary: Release the assignment (number stays on Twilio account)
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /phone/dialers/{id}/configure-webhooks:
+    post:
+      tags: [Phone]
+      summary: Wire Twilio webhooks for this dialer
+      description: |
+        Calls Twilio's number-update endpoint to set Voice URL + SMS URL to
+        our `/phone/webhooks/voice` and `/phone/webhooks/sms` endpoints.
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /phone/sms/send:
+    post:
+      tags: [Phone]
+      summary: Send an SMS via the user's assigned Twilio number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to, body]
+              properties:
+                to:      { type: string, description: "E.164" }
+                body:    { type: string, maxLength: 1600 }
+                lead_id: { type: string, format: uuid, nullable: true }
+      responses:
+        "200":
+          description: Sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:          { type: boolean }
+                  message_sid: { type: string }
+
+  /phone/webhooks/sms:
+    post:
+      tags: [Phone]
+      summary: Twilio inbound SMS webhook
+      description: Receives Twilio-form-encoded SMS payloads; writes inbound row + attributes by phone.
+      security: []
+      responses:
+        "200":
+          description: TwiML acknowledgement
+
+  /phone/webhooks/voice:
+    post:
+      tags: [Phone]
+      summary: Twilio inbound voice webhook
+      description: |
+        Receives Twilio voice webhooks; emits TwiML for forwarding or voicemail
+        based on the assigned user's `forward_to` setting.
+      security: []
+      responses:
+        "200":
+          description: TwiML response
+
+# ─────────────────────────────────────────────────────────────────────────────
+# COMPONENTS
+# ─────────────────────────────────────────────────────────────────────────────
 
 components:
 
@@ -1255,14 +2760,30 @@ components:
 
     CreateLeadBody:
       type: object
-      required: [first_name, last_name]
+      required: [first_name, last_name, email]
       properties:
         first_name: { type: string }
         last_name: { type: string }
         email: { type: string, format: email }
-        phone: { type: string }
-        source: { type: string }
-        stage_id: { type: string, format: uuid, nullable: true }
+        phone: { type: string, description: "Stored as digits-only; UI formats as (407) 403-8088" }
+        stage_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: "Omit to auto-assign position 0 of the default pipeline"
+        source_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: "FK to hl_lead_sources — sets the lead's origin (Indeed, Zillow, Referral, etc.)"
+        assigned_user_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: "FK to hl_users — initial owner. Leave null to keep the lead unassigned."
+        note:
+          type: string
+          description: "If non-empty, also inserts a hl_notes row tied to the lead with source='lead_creation'"
 
     Stage:
       type: object
@@ -1274,9 +2795,9 @@ components:
         icon: { type: string }
         is_active: { type: boolean }
         is_terminal: { type: boolean }
-        people: { type: integer }
-        days_avg: { type: number, nullable: true }
-        conversion: { type: number, nullable: true }
+        people: { type: integer, description: "Current leads in this stage" }
+        days_avg: { type: number, nullable: true, description: "Average days leads spend here" }
+        conversion: { type: number, nullable: true, description: "% that moved forward" }
 
     LeadSource:
       type: object
@@ -1321,17 +2842,6 @@ components:
         subject: { type: string, nullable: true }
         body: { type: string, nullable: true }
         is_active: { type: boolean }
-        created_at: { type: string, format: date-time }
-
-    EmailAudience:
-      type: object
-      properties:
-        id: { type: string, format: uuid }
-        name: { type: string }
-        description: { type: string, nullable: true }
-        member_count: { type: integer }
-        campaign_count: { type: integer }
-        rules_json: { type: object, nullable: true }
         created_at: { type: string, format: date-time }
 
     EmailCampaign:
@@ -1387,7 +2897,7 @@ components:
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
-        body: { type: string }
+        body: { type: string, description: "Supports {{first_name}}, {{last_name}}, {{agent_name}} merge tags" }
         category: { type: string, nullable: true }
         visibility: { type: string, enum: [public, private] }
         created_at: { type: string, format: date-time }
@@ -1434,4 +2944,21 @@ components:
         email: { type: string, format: email }
         role: { type: string, enum: [admin, agent, viewer] }
         is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    SendingInbox:
+      type: object
+      description: |
+        A configured org-level sending inbox (Gmail-connected). Used by
+        campaigns + transactional sends. `purpose` segregates warming +
+        deliverability — never use an `outreach` inbox for transactional mail.
+      properties:
+        id:        { type: string, format: uuid }
+        email:     { type: string, format: email }
+        label:     { type: string }
+        purpose:   { type: string, enum: [outreach, nurture, transactional, alerts, marketing] }
+        plan:      { type: string, description: "Instantly plan tag or 'native'" }
+        connected: { type: boolean }
+        warmup_active: { type: boolean }
+        warmup_score:  { type: number, nullable: true }
         created_at: { type: string, format: date-time }

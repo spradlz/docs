@@ -12,8 +12,10 @@ This doc is the enforcement layer. If it's in the UI but not in this doc's
 
 | UI Action | API Endpoint |
 |---|---|
-| Create a lead | `POST /api/leads` |
-| Move lead to stage | `PATCH /api/leads/{id}` |
+| Create a lead (full payload: first_name, last_name, email, phone, stage_id, source_id, assigned_user_id, note) | `POST /api/leads` |
+| Update a lead (any field — first_name, last_name, name, email, phone, source, source_id, assigned_user_id, lead_score, stage_id, pipeline_id) | `PATCH /api/leads/{id}` |
+| Move a lead to a specific stage within one pipeline (Buyer/Seller) | `POST /api/leads/{id}/pipeline` |
+| Add a note to a lead | `POST /api/leads/{id}/notes` |
 | Soft-delete a lead | `DELETE /api/leads/{id}` |
 | Bulk delete / stage / tag leads | `POST /api/leads/bulk` |
 | Search leads | `GET /api/leads/search` |
@@ -41,8 +43,10 @@ This doc is the enforcement layer. If it's in the UI but not in this doc's
 | Send a campaign | `POST /api/email/campaigns/{id}/send` |
 | Create a text template | `POST /api/text-templates` |
 | Edit/delete a text template | `PATCH/DELETE /api/text-templates/{id}` |
-| Create a calendar event | `POST /api/calendar/events` |
+| Create a calendar event (with type-driven stage auto-advance) | `POST /api/calendar/events` |
 | Edit/delete a calendar event | `PATCH/DELETE /api/calendar/events/{id}` |
+| List appointment types (for the scheduler dropdown) | `GET /api/appointment-types` |
+| Disposition an appointment + advance lead stage (Myli + UI) | `PATCH /api/appointments/{id}/outcome` |
 | Invite a team member | `POST /api/team/users` |
 | Update team member role | `PATCH /api/team/users/{id}` |
 | Get all lookup data | `GET /api/options` |
@@ -56,7 +60,6 @@ that blocks Myli and any integration partner.
 
 | UI Action | Missing Endpoint | DB Table |
 |---|---|---|
-| Add a note to a lead | `POST /api/leads/{id}/notes` | `hl_notes` |
 | List notes for a lead | `GET /api/leads/{id}/notes` | `hl_notes` |
 | Get message history for a lead | `GET /api/leads/{id}/messages` | `hl_messages` |
 | List appointments for a lead | `GET /api/leads/{id}/appointments` | `hl_appointments` |
@@ -65,8 +68,8 @@ that blocks Myli and any integration partner.
 
 | UI Feature | Missing Endpoint | Notes |
 |---|---|---|
-| Appointment Types CRUD | `/api/appointment-types` | Sidebar shows this page but no route exists |
-| Appointment Outcomes CRUD | `/api/appointment-outcomes` | Same |
+| Appointment Types CRUD (POST/PATCH/DELETE) | `POST /api/appointment-types` etc. | Read-only GET exists; writes still TODO |
+| Appointment Outcomes CRUD | `/api/appointment-outcomes` | No route — outcomes are seeded via migration only |
 | Business Hours | `/api/business-hours` | Sidebar item, no route |
 | Forms / Websites | `/api/forms` | Sidebar item, no route |
 | Outbound Webhooks | `/api/webhooks` | Sidebar "Webhooks" item — no management API |
@@ -81,11 +84,33 @@ that blocks Myli and any integration partner.
 | Notification preferences | API exists (`/api/notification-preferences`) but not documented |
 | Profile update | API exists (`/api/profile`) but not documented |
 
+## OpenAPI Coverage — CLOSED ✅
+
+As of 2026-05-18 all 82 live endpoints are specified in
+`apps/houseloop-crm/docs/openapi.yaml`. The previous 49-endpoint gap (BB,
+calendar auth, email infrastructure, phone, auth helpers, notifications,
+profile, system) has been backfilled. Verify with:
+
+```bash
+# live endpoints
+find apps/houseloop-crm/app/api -name route.ts | wc -l
+
+# documented paths
+grep -cE "^  /[a-z]" apps/houseloop-crm/docs/openapi.yaml
+```
+
+These should match (modulo the live-endpoint counter including duplicate
+methods on a single path). If you add a new `route.ts`, add the spec to
+`openapi.yaml` in the same commit — the pre-commit hook does NOT enforce
+this yet, so do it manually.
+
 ## Next Build Order
 
-1. Add `GET/POST /api/leads/{id}/notes`
-2. Add `GET /api/leads/{id}/messages`
-3. Add `GET /api/leads/{id}/appointments`
-4. Add Appointment Types/Outcomes CRUD
-5. Add Webhooks management
-6. Document Profile and Notifications endpoints
+1. **API coverage sprint** — backfill OpenAPI specs for the 50+ undocumented
+   endpoints listed above (multi-hour, dedicated session)
+2. Add `GET /api/leads/{id}/notes` (write path exists; read needs a route)
+3. Add `GET /api/leads/{id}/messages`
+4. Add `GET /api/leads/{id}/appointments`
+5. Add Appointment Types/Outcomes write CRUD
+6. Add Webhooks management
+7. Build out the Lead Detail 3-lane view (Phase 2 — Map, market activity stats)
