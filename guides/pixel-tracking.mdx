@@ -1,114 +1,98 @@
 ---
 title: "Website Pixel Tracking"
-description: "Install the tracking pixel on your website to capture visitors and link anonymous activity to leads."
+description: "HouseLoop's first-party tracking pixel — capture visitor behavior on your site and link anonymous activity to leads. No third party."
 ---
 
-The HouseLoop pixel tracks page views, property views, and form activity on
-your public website, then links anonymous sessions to a lead the moment the
-visitor identifies (sign-up / login). Manage it in the CRM under
-**Settings → Website → Pixel Tracking**.
+The HouseLoop pixel is **first-party**: it tracks page views, property views, and
+high-intent actions on houseloop.ai, then POSTs them to **your own** CRM ingest
+(`/api/pixel/track`) — the data lands in your database, never a third party. When a
+visitor identifies (sign-up / login), all of their prior anonymous activity links to
+their lead automatically. Manage it in the CRM under **Settings → Website → Pixel
+Tracking**, and view per-lead activity on the lead-detail **Homes** and **Requests** tabs.
 
-## 1. Install the pixel
+## How it flows
 
-Paste this into the `<head>` of every page on your site. The tracking code is
-unique to your account — copy yours from the Pixel Tracking page (the snippet
-there is pre-filled with your real ID).
-
-```html
-<!-- Sure Send CRM Pixel -->
-<script>
-(function(w,t,c){w['SureSendPixel']=c;(w[c]=w[c]||function(){
-(w[c].q=w[c].q||[]).push(arguments);}),(w[c].t=1*new Date());
-var s=document.createElement('script');
-s.async=1;s.src=t;
-document.head.appendChild(s);
-})(window,"https://suresend.ai/pixel/SS-XXXXXXXXXX.js","ssPixel");
-window.ssPixel("init", "SS-XXXXXXXXXX");
-window.ssPixel("track", "pageview");
-</script>
-<!-- End Sure Send CRM Pixel -->
+```
+houseloop.ai            CRM ingest                       CRM lead detail
+hl-pixel  ──fires──▶  POST /api/pixel/track  ──▶  hl_pixel_event  ──▶  Homes / Requests feed
+hlIdentify(email)        (identity-stitch by email)
 ```
 
-Once installed, every page load fires a `pageview` event. You'll see them
-appear in **Recent Activity** within seconds.
+## 1. Install
+
+On houseloop.ai the pixel is **built in** (`HlPixelInit` in the app layout) — it mints
+an anonymous `visitor_id`, fires `page_view` on every route, and POSTs to the CRM. There
+is no snippet to paste. To fire events from your own code, import the helpers:
+
+```ts
+import { hlTrack, hlIdentify } from "@/lib/pixel/hl-pixel";
+
+hlTrack("page_view", { payload: { path: location.pathname } });
+```
 
 ## 2. Identify logged-in users
 
-After a visitor logs in or signs up, call `identify` with their email. This
-links every anonymous page view from that browser session to the lead's
-contact record.
+After login/signup, call `hlIdentify` with the user's email. This links every prior
+anonymous event from that browser to the lead's record (matched by email).
 
-```html
-<script>
-window.ssPixel("identify", {
-  email: "user@example.com",   // Required
-  name:  "John Doe",           // Optional
-  phone: "+1-555-123-4567"     // Optional
-});
-</script>
+```ts
+hlIdentify({ email: user.email, name: user.name });
 ```
 
 <Note>
-Place the `identify` call on pages that render only after authentication, and
-pass the **actual** logged-in user's email from your system — not the example.
+Call this once after authentication with the **actual** logged-in user's email. On
+houseloop.ai it fires automatically via `HlPixelIdentify` after NextAuth hydrates.
 </Note>
 
 ## 3. Track property views
 
-On property detail pages, fire a `property_view` event with the listing
-details. `mlsNumber` is required for the CRM to match the view to a property.
+Fired automatically on every listing detail page (`HlPropertyTrack`). To fire manually:
 
-```js
-ssPixel('track', 'property_view', {
-  mlsNumber:    '12345',
-  street:       '123 Main St',
-  city:         'San Francisco',
-  state:        'CA',
-  zipCode:      '94102',
-  price:        850000,
-  propertyType: 'Condo',
-  bedrooms:     '2',
-  bathrooms:    '2',
-  squareFeet:   '1200',
-  lotSize:      '0.25',
-  forRent:      false
+```ts
+hlTrack("property_view", {
+  mls_number: "12345",
+  property: {
+    street: "123 Main St", city: "Olathe", state: "KS", zip: "66061",
+    price: 765000, beds: 4, baths: 4, sqft: 2920,
+    propertyType: "Single Family Residence", photo: "https://…",
+  },
 });
 ```
 
-### Available fields
+The CRM derives a **repeat-view count** per lead + home (the "viewed N×" badge in the feed).
 
-| Field | Type | Notes |
-|---|---|---|
-| `mlsNumber` | string | **Required** for property matching |
-| `street`, `city`, `state`, `zipCode` | string | Property address |
-| `price` | number | Asking price |
-| `propertyType` | string | e.g. "House", "Condo", "Townhouse" |
-| `bedrooms`, `bathrooms` | string | Counts |
-| `squareFeet` | string | Property square footage |
-| `lotSize` | string | Lot size in acres |
-| `forRent` | boolean | `true` for rentals |
+## 4. Event catalog
 
-## 4. Verify it's working
+| Event | Fires when |
+| --- | --- |
+| `page_view` | Any page / route change (auto) |
+| `property_view` | Listing detail page (auto) |
+| `save_home` / `unsave_home` | Visitor saves / unsaves a listing |
+| `like_home` | Visitor likes a listing |
+| `share_home` | Visitor shares a listing |
+| `tour_request` | Visitor requests a tour (carries email → identifies the lead) |
+| `saved_search` | Visitor saves a search |
+| `account_created` / `login` | Sign-up / login |
+| `cta_click` | Visitor clicks a tracked CTA |
 
-1. Turn on **Debug Mode** in Pixel Tracking → Tracking Settings.
-2. Visit a property page on your site.
-3. Open the browser console (F12) and look for `Sure Send Pixel` log lines.
-4. Confirm the view shows up under **Recent Activity** in the CRM.
+New event types are just new strings passed to `hlTrack` — no schema change required.
 
-## Tracking settings
+## 5. View the activity
 
-| Setting | What it does |
-|---|---|
-| **Enable Pixel Tracking** | Master switch — page views and visitor activity |
-| **Form Capture** | Auto-captures form submissions |
-| **Call to Action** | Shows a CTA on property pages |
-| **Debug Mode** | Console logging for testing |
+- **CRM lead detail → Homes tab:** the lead's property events (viewed / saved / liked /
+  shared) — each card shows photo, price, address, beds/baths, timestamp, a repeat-view
+  badge, and a **View Property Details** link.
+- **CRM lead detail → Requests tab:** high-intent actions (tour requests, saved searches).
+- **Settings → Website → Pixel Tracking:** live event counts + recent activity across all visitors.
 
-## HouseLoop.ai (reference install)
+<Note>
+All behavioral data stays in your HouseLoop database (`hl_pixel_event`). The pixel does
+not send anything to any third-party tracking service.
+</Note>
 
-The HouseLoop public site already runs this pixel. For reference, the install
-lives in:
+## Reference (houseloop.ai)
 
-- `apps/houseloop-web/app/layout.tsx` — `<head>` install + `pageview`
-- `components/listing/SureSendPropertyTrack.tsx` — `property_view` on listing pages
-- `components/site/SureSendIdentify.tsx` — `identify` after NextAuth login
+- `apps/houseloop-web/lib/pixel/hl-pixel.ts` — the pixel client (`hlTrack` / `hlIdentify`)
+- `components/pixel/HlPixelInit` · `HlPixelIdentify` · `HlPropertyTrack` — auto-fire components
+- `apps/houseloop-crm/app/api/pixel/track` — ingest → `hl_pixel_event`
+- `apps/houseloop-crm/components/leads/detail/PixelFeedStream.tsx` — the lead-detail feed
