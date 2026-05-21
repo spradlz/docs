@@ -1,0 +1,56 @@
+---
+title: "Leads Table"
+description: "The all-leads table — Sierra-style structured system columns (Phone/Email Status, Visits, Registered, Listings, Alerts, Agent Action, Tasks) that all read from one aggregation."
+---
+
+The `/leads` table is the operator's command center. Every column is a real,
+DB-backed metric — **nothing is hardcoded** — and every metric comes from a
+**single aggregation** in `lib/leads-query.ts`, not per-cell fetches. Columns are
+toggleable via the **Columns** panel; the system columns are on by default.
+
+## The one source of truth
+
+All per-lead metrics are computed in one `SELECT` (`BASE_SELECT` in
+`lib/leads-query.ts`) over the CRM tables plus the first-party
+[pixel](/guides/pixel-tracking) events:
+
+| Column | Source |
+|---|---|
+| **Lead Information** (name · phone · location) | `hl_leads` + `hl_lead_addresses` (primary) |
+| **Phone Status** (calls / texts) | `hl_calls` count + `hl_messages` (sms/imessage) |
+| **Email Status** (emails / last) | `hl_messages` channel = `email` |
+| **Visits** (count + last) | `hl_pixel_event` `page_view`, de-duped by distinct day |
+| **Registered** (when + source) | `hl_leads.created_at` + `source` |
+| **Listings** (views / saved / $) | `hl_pixel_event` `property_view` / net `save_home` / `property_payload.price` |
+| **Alerts** (e-Alerts) | `hl_pixel_event` `saved_search` |
+| **Agent Action** (what · when · who) | most-recent of outbound message / note / task / appointment, via `LEFT JOIN LATERAL` |
+| **Tasks / Activities** | `hl_tasks` (open count / next due) |
+
+When a metric has no data source yet (market reports, alert unsubscribes), the
+cell renders an **honest 0** — it is never faked.
+
+## Agent Action — what & who
+
+Agent Action reads the most recent real action against the lead through a
+`LATERAL` union over outbound messages, notes, tasks, and appointments. It shows
+the verb + relative time + **who** did it. The actor is derived honestly from
+`hl_messages.actor_role`, `hl_notes.source`, and `hl_tasks/appointments.created_by`
+— so a system/automation action reads "HouseLoop System" and a human action reads
+the agent's name. Never fabricated.
+
+## Layout system
+
+- **Icon chips** — every column uses one shared round icon chip sized by the
+  `--hl-stat-chip-size` token (the "cannon"), so all icons match and line up.
+- **Proportional growth** — `ColumnDef.grow` (fr weight) lets columns expand at
+  different rates as the table widens (Agent Action grows far faster than Visits)
+  instead of every column growing equally.
+- **Full width** — the page opts into `<PageShell wide>` (`.hl-page-inner--wide`)
+  to lift the global 1400px content cap so the table fills the browser.
+- **Truncation** — every metric value clips with an ellipsis when its column is
+  too narrow; no cell can ever bleed into its neighbor.
+
+## Relative time
+
+All relative timestamps use minutes / hours / days only — never "about", never
+months or years (a 400-day-old lead reads "400 days ago"). Times are Central.
