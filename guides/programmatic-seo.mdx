@@ -1,0 +1,53 @@
+---
+title: "Programmatic SEO (Listing Pages)"
+description: "How HouseLoop builds a Zillow-style web of indexable pages — geo/facet saved-search pages + every individual active & sold listing as its own URL — with full MLS/IDX compliance."
+---
+
+HouseLoop's organic-search engine: a programmatic web of indexable pages covering counties → cities →
+zips → neighborhoods → individual listings, plus facet/saved-search pages (bedroom, price, amenity,
+type). It's an **active for-sale product first** — every page has a **For Sale / Recently Sold toggle**
+(same as the main search), and each toggle state is its own indexable URL. Master plan:
+`GT/GT - ACTIVE/GT_HOUSELOOP_SEO_SLURRY_PRD.md`.
+
+## Coverage
+8 Core Heartland counties (Jackson, Johnson, Clay, Cass, Platte, Wyandotte, Leavenworth, Miami) →
+all real cities → top-10 neighborhoods/city → all zips → every active + sold listing. ≈360–375K
+indexable URLs.
+
+## Page anatomy
+1. Breadcrumb (State › County › City › Zip › Neighborhood) — `BreadcrumbList` JSON-LD.
+2. H1 + intro + result count; For Sale / Recently Sold toggle.
+3. Filter bar + sort; ≤500 result cards (Heartland §12.3m); map (later).
+4. Bottom directory block — nearby cities / neighborhoods / zips + "Other {City} Topics" facets,
+   with average home values. This internal link graph is what makes the SEO compound.
+5. Compliance footer (see below).
+
+## URL scheme
+- Geo: `/{state}/{county}/{city}/{zip}`; sold variant appends `/sold`.
+- Neighborhood: `/{…city}/n/{slug}`; facet: `/{…city}/{facet}` (`/3-bedroom`, `/homes-under-300k`, `/pool`, `/condos`).
+- Listing detail: active `/listings/{slug}/{hlid}`; sold `/sold/{slug}/{hlid}`.
+- Address autocomplete: typing an address surfaces the individual listing → its unique page.
+
+## Data
+- `hl_geo` taxonomy (state/county/city/zip/neighborhood + counts + avg value), refreshed nightly.
+- Active = live cache; sold = `ListingHistory` (426K archive).
+- **Photos archived to Cloudflare R2** — Repliers purges sold photos within hours, so we copy pixels
+  to our own storage at ingest (active) + a one-time sweep. ~$3.40/mo, $0 egress.
+- ISR: top geos pre-rendered, long tail generated on first crawl.
+
+## MLS/IDX compliance (Heartland §12.3 — every page, non-negotiable)
+- **Sold price never displayed**; **sold-only** off-market (no expired/withdrawn/cancelled).
+- **≤500 results per search.**
+- Per-state Heartland MO+KS disclosure + DMCA notice + "Based on information submitted to the MLS GRID
+  as of {datetime}" + "some listings excluded".
+- Per-listing brokerage + MLS# + "courtesy of Heartland MLS as distributed by MLS GRID" + logo;
+  one-letter status code + legend; "last updated" date; 12-hour refresh.
+- No seller PII; honor seller address-withhold; same-brand site; no framing.
+
+## Sitemap
+Sitemap index → ≤50K-URL child sitemaps (sold ×~8, active, cities, zips, neighborhoods, facets).
+Submitted to Google Search Console.
+
+## Build phases
+P0 geo taxonomy → P1 photo archival (urgent) → P2 sold detail pages → P3 geo index pages →
+P4 facet + market/values → P5 internal links + breadcrumbs → P6 sitemap + JSON-LD + GSC.
