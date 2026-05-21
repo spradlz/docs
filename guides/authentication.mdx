@@ -23,17 +23,36 @@ curl -b cookies.txt https://crm.houseloop.ai/api/leads
 Users can also log in via Google. Redirect to `GET /api/auth/google` and the
 callback at `GET /api/auth/google/callback` sets the session cookie.
 
-## Service Token (Myli / Integrations)
+## Machine Auth — `x-hl-internal-secret` (Myli, AI agents, automation)
 
-For server-to-server calls (Myli, webhooks, automation scripts), pass a
-`Bearer` token in the `Authorization` header:
+**Anything a human can do in the CRM, an AI or backend job can do too.** Trusted
+server-to-server callers — Myli, the scheduled-action executor, internal jobs,
+and AI agents — authenticate by sending the `x-hl-internal-secret` header instead
+of a browser session cookie. It opens **every** endpoint a logged-in human can hit.
 
 ```bash
+# The secret lives in the credential vault as HL_INTERNAL_SECRET (server-only,
+# never exposed to a browser). Read it from .env / the vault, then:
 curl https://crm.houseloop.ai/api/leads \
-  -H "Authorization: Bearer $HL_SERVICE_TOKEN"
+  -H "x-hl-internal-secret: $HL_INTERNAL_SECRET"
+
+# Writes work identically — e.g. recolor an appointment type:
+curl -X PATCH https://crm.houseloop.ai/api/appointment-types/$ID \
+  -H "x-hl-internal-secret: $HL_INTERNAL_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"color": "#3B82F6"}'
 ```
 
-Service tokens are set in the `HL_SERVICE_TOKEN` env var on the CRM server.
+The middleware (`middleware.ts`) checks `req.headers['x-hl-internal-secret']`
+against the `HL_INTERNAL_SECRET` env var. If it matches, the session-cookie
+redirect is bypassed and the request proceeds. This is the canonical path for
+agents — do **not** look for an `Authorization: Bearer` scheme; the CRM does not
+use one.
+
+<Warning>
+`HL_INTERNAL_SECRET` is a master key — one header opens write access to every
+endpoint. Keep it server-side only. Never ship it to a browser or commit it.
+</Warning>
 
 ## Errors
 

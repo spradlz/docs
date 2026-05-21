@@ -17,6 +17,7 @@ servers:
 
 security:
   - sessionCookie: []
+  - internalSecret: []
 
 tags:
   - name: Leads
@@ -63,6 +64,16 @@ tags:
     description: Twilio dialer assignments, SMS send, voice/SMS webhooks
   - name: System
     description: Operational health endpoints
+  - name: Appointments
+    description: Appointment outcomes, their stage-advance rules, and appointment types
+  - name: SISU Transactions
+    description: HouseLoop Transactions (the SISU replacement) — deals, commission forms/certification, brokerage settings, reporting
+  - name: Pixel
+    description: First-party behavioral pixel — public event ingest plus CRM-side event feeds and health stats
+  - name: Scheduled Actions
+    description: Future-dated lead actions (text/email/internal) executed by Inngest; created by CRM users or Myli
+  - name: Website Integration
+    description: Public-site touchpoints — tokenized lead-intake and registration/gating settings
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PATHS
@@ -1410,7 +1421,7 @@ paths:
     get:
       tags: [Auth]
       summary: Detect first-run state
-      description: Returns `{ needs_setup: true }` when `hl_users` is empty.
+      description: "Returns `{ needs_setup: true }` when `hl_users` is empty."
       responses:
         "200":
           description: Setup state
@@ -2716,6 +2727,1255 @@ paths:
         "200":
           description: TwiML response
 
+
+  # ── APPOINTMENTS (outcomes, rules, types) ───────────────────────────────────
+
+  /appointment-outcomes:
+    get:
+      tags: [Appointments]
+      summary: List appointment outcomes (active, or all when scope=admin)
+      parameters:
+        - name: scope
+          in: query
+          required: false
+          schema: { type: string, enum: [admin] }
+          description: "admin → all rows with in_use_count + rules_count; default → active only"
+      responses:
+        "200":
+          description: Outcomes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  outcomes:
+                    type: array
+                    items: { type: object }
+    post:
+      tags: [Appointments]
+      summary: Create an appointment outcome
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label: { type: string, maxLength: 60 }
+                color: { type: string }
+                icon: { type: string, nullable: true }
+                valid_for_types:
+                  type: array
+                  items: { type: string }
+                  nullable: true
+                stage_advance_to_stage_id: { type: string, format: uuid, nullable: true }
+                is_default: { type: boolean }
+                is_active: { type: boolean }
+      responses:
+        "201":
+          description: Created outcome
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  outcome: { type: object }
+    patch:
+      tags: [Appointments]
+      summary: Bulk reorder appointment outcomes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [order]
+              properties:
+                order:
+                  type: array
+                  items:
+                    type: object
+                    required: [id, sort_order]
+                    properties:
+                      id: { type: string, format: uuid }
+                      sort_order: { type: integer }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /appointment-outcomes/{id}:
+    patch:
+      tags: [Appointments]
+      summary: Update an appointment outcome
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string, maxLength: 60 }
+                color: { type: string, nullable: true }
+                icon: { type: string, nullable: true }
+                valid_for_types:
+                  type: array
+                  items: { type: string }
+                  nullable: true
+                stage_advance_to_stage_id: { type: string, format: uuid, nullable: true }
+                is_active: { type: boolean }
+                is_default: { type: boolean }
+      responses:
+        "200":
+          description: Updated outcome
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  outcome: { type: object }
+        "404":
+          description: Not found
+    delete:
+      tags: [Appointments]
+      summary: Delete an appointment outcome (409 if in use)
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "404":
+          description: Not found
+        "409":
+          description: Outcome is in use; deactivate instead
+
+  /appointment-outcomes/{id}/rules:
+    get:
+      tags: [Appointments]
+      summary: List stage-advance rules for an outcome (ordered, first-match-wins)
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Rules
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  rules:
+                    type: array
+                    items: { type: object }
+    post:
+      tags: [Appointments]
+      summary: Create a stage-advance rule for an outcome
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target_stage_id]
+              properties:
+                match_appt_type_key: { type: string, nullable: true }
+                match_current_stage_id: { type: string, format: uuid, nullable: true }
+                target_stage_id: { type: string, format: uuid }
+      responses:
+        "201":
+          description: Created rule
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  rule: { type: object }
+    patch:
+      tags: [Appointments]
+      summary: Bulk reorder rules for an outcome
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [order]
+              properties:
+                order:
+                  type: array
+                  items:
+                    type: object
+                    required: [id, sort_order]
+                    properties:
+                      id: { type: string, format: uuid }
+                      sort_order: { type: integer }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /appointment-outcomes/{id}/rules/{ruleId}:
+    patch:
+      tags: [Appointments]
+      summary: Update one stage-advance rule
+      parameters:
+        - $ref: "#/components/parameters/Id"
+        - name: ruleId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                match_appt_type_key: { type: string, nullable: true }
+                match_current_stage_id: { type: string, format: uuid, nullable: true }
+                target_stage_id: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Updated rule
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  rule: { type: object }
+        "404":
+          description: Not found
+    delete:
+      tags: [Appointments]
+      summary: Delete one stage-advance rule
+      parameters:
+        - $ref: "#/components/parameters/Id"
+        - name: ruleId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+
+  /appointment-types/{id}:
+    patch:
+      tags: [Appointments]
+      summary: Update an appointment type (system rows allow only color/icon)
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string, maxLength: 60 }
+                color: { type: string, nullable: true }
+                icon: { type: string, nullable: true }
+                default_duration_minutes: { type: integer, nullable: true }
+                stage_advance_to_stage_id: { type: string, format: uuid, nullable: true }
+                is_active: { type: boolean }
+      responses:
+        "200":
+          description: Updated type
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  type: { type: object }
+        "404":
+          description: Not found
+    delete:
+      tags: [Appointments]
+      summary: Delete an appointment type (409 if system or in use)
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "404":
+          description: Not found
+        "409":
+          description: System-protected or in use; deactivate instead
+
+  # ── EMAIL INFRASTRUCTURE (instantly sync) ───────────────────────────────────
+
+  /email/infrastructure/instantly/sync:
+    post:
+      tags: [Email Infrastructure]
+      summary: Sync sending inboxes from the Instantly account list
+      responses:
+        "200":
+          description: Sync result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  synced: {}
+        "400":
+          description: Instantly not configured
+        "502":
+          description: Instantly API error
+
+  # ── INNGEST (server-to-server function serving) ─────────────────────────────
+
+  /inngest:
+    get:
+      tags: [System]
+      summary: Inngest serve endpoint (introspection)
+      description: Server-to-server function-serving endpoint for Inngest (app id houseloop-crm). Not for direct client use.
+      responses:
+        "200":
+          description: Inngest function metadata
+    post:
+      tags: [System]
+      summary: Inngest serve endpoint (function invocation)
+      description: Inngest calls back into this URL to execute registered functions.
+      responses:
+        "200":
+          description: Function run accepted
+    put:
+      tags: [System]
+      summary: Inngest serve endpoint (function registration)
+      description: Inngest function registration / sync handshake.
+      responses:
+        "200":
+          description: Registration acknowledged
+
+  # ── WEBSITE INTEGRATION ──────────────────────────────────────────────────────
+
+  /integrations/website/lead-intake:
+    post:
+      tags: [Website Integration]
+      summary: Inbound website lead capture (per-source API token)
+      description: "Auth via x-houseloop-intake-secret header (SHA-256 hashed, matched to a lead source). UPSERTs hl_leads by email and appends a touchpoint."
+      parameters:
+        - name: x-houseloop-intake-secret
+          in: header
+          required: true
+          schema: { type: string }
+          description: Per-source plaintext API token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+                firstName: { type: string }
+                lastName: { type: string }
+                phone: { type: string }
+                action: { type: string, description: "e.g. google_signin, saved_home, showing_request" }
+      responses:
+        "200":
+          description: Lead upserted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  lead_id: { type: string, format: uuid }
+                  created: { type: boolean }
+        "400":
+          description: Invalid JSON or missing/invalid email
+        "401":
+          description: Missing, unknown, or inactive token
+
+  /integrations/website/registration-settings:
+    get:
+      tags: [Website Integration]
+      summary: Get public-site registration/gating settings (falls back to defaults)
+      responses:
+        "200":
+          description: Registration settings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ppc_min_detail_views_for_registration: { type: integer }
+                  ppc_photo_gating_enabled: { type: boolean }
+                  social_phone_requirement: { type: string, enum: [required, optional, hidden] }
+                  phone_required_on_showing_request: { type: boolean }
+                  international_phone_allowed: { type: boolean }
+                  denote_required_fields: { type: boolean }
+    put:
+      tags: [Website Integration]
+      summary: Patch registration/gating settings (whitelisted keys only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ppc_min_detail_views_for_registration: { type: integer, minimum: 0 }
+                ppc_photo_gating_enabled: { type: boolean }
+                social_phone_requirement: { type: string, enum: [required, optional, hidden] }
+                phone_required_on_showing_request: { type: boolean }
+                international_phone_allowed: { type: boolean }
+                denote_required_fields: { type: boolean }
+      responses:
+        "200":
+          description: Merged settings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  settings: { type: object }
+        "400":
+          description: Invalid JSON
+
+  # ── LEAD SOURCES (intake token) ──────────────────────────────────────────────
+
+  /lead-sources/{id}/api-token:
+    post:
+      tags: [Lead Sources]
+      summary: Generate (rotate) a lead source intake API token
+      description: Returns the plaintext token EXACTLY ONCE; only the SHA-256 hash + last4 are persisted. Regenerating invalidates the previous token. For the houseloop.ai source, the token is also pushed to the houseloop-web Railway service.
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Newly issued token (shown once)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  token: { type: string }
+                  last4: { type: string }
+                  source_name: { type: string }
+                  source_key: { type: string }
+                  pushed_to_railway:
+                    type: object
+                    properties:
+                      attempted: { type: boolean }
+                      ok: { type: boolean }
+                      error: { type: string }
+        "400":
+          description: Missing id
+        "404":
+          description: Source not found
+
+  # ── LEADS (single metrics row) ───────────────────────────────────────────────
+
+  /leads/{id}/metrics:
+    get:
+      tags: [Leads]
+      summary: Get a single lead's aggregate metric row (same shape as the leads list)
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Lead row
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  lead: { type: object }
+        "401":
+          description: Unauthorized
+        "404":
+          description: Lead not found
+
+  # ── NOTIFICATIONS ────────────────────────────────────────────────────────────
+
+  /notifications:
+    get:
+      tags: [Notifications]
+      summary: List the current user's notifications (newest first) + unread count
+      parameters:
+        - name: filter
+          in: query
+          required: false
+          schema: { type: string, enum: [all, unread] }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 30 }
+      responses:
+        "200":
+          description: Notifications
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  items:
+                    type: array
+                    items: { type: object }
+                  unread: { type: integer }
+        "401":
+          description: Unauthorized
+
+  /notifications/{id}/read:
+    post:
+      tags: [Notifications]
+      summary: Mark one notification read
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "401":
+          description: Unauthorized
+
+  /notifications/lead-badges:
+    get:
+      tags: [Notifications]
+      summary: Get per-lead unread notification counts by category
+      parameters:
+        - name: lead_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Category counts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  requests: { type: integer }
+                  homes: { type: integer }
+                  texts: { type: integer }
+        "400":
+          description: lead_id required
+        "401":
+          description: Unauthorized
+    post:
+      tags: [Notifications]
+      summary: Mark a lead's notifications in one category read (clear the badge)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lead_id, category]
+              properties:
+                lead_id: { type: string, format: uuid }
+                category: { type: string, enum: [requests, homes, texts] }
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          description: lead_id and valid category required
+        "401":
+          description: Unauthorized
+
+  /notifications/read-all:
+    post:
+      tags: [Notifications]
+      summary: Mark all of the current user's notifications read
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "401":
+          description: Unauthorized
+
+  /notifications/stream:
+    get:
+      tags: [Notifications]
+      summary: Server-Sent Events stream of notifications for the current user
+      description: Long-lived text/event-stream. Emits a `ready` event on connect, then one frame per new notification, with periodic heartbeat comments.
+      responses:
+        "200":
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "401":
+          description: Unauthorized
+
+  /notifications/unread-count:
+    get:
+      tags: [Notifications]
+      summary: Cheap unread notification count for the bell badge
+      responses:
+        "200":
+          description: Unread count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  unread: { type: integer }
+        "401":
+          description: Unauthorized
+
+  # ── PIXEL (first-party behavioral tracking) ──────────────────────────────────
+
+  /pixel/events:
+    get:
+      tags: [Pixel]
+      summary: List a lead's first-party behavioral events + per-MLS view counts
+      parameters:
+        - name: lead_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 200, maximum: 500 }
+      responses:
+        "200":
+          description: Events and view counts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  events:
+                    type: array
+                    items: { type: object }
+                  view_counts:
+                    type: object
+                    additionalProperties: { type: integer }
+        "400":
+          description: lead_id required
+
+  /pixel/stats:
+    get:
+      tags: [Pixel]
+      summary: Global first-party pixel health (event/visitor counts + recent activity)
+      responses:
+        "200":
+          description: Pixel stats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  events_today: { type: integer }
+                  events_week: { type: integer }
+                  visitors_week: { type: integer }
+                  identified_leads: { type: integer }
+                  recent:
+                    type: array
+                    items: { type: object }
+
+  /pixel/track:
+    post:
+      tags: [Pixel]
+      summary: Public first-party pixel ingest (anonymous browser events)
+      description: "Public, unauthenticated, CORS-gated endpoint. The hl-pixel on houseloop.ai POSTs visitor events; stitches anonymous visitors to leads by email. event_type 'identify' stitches identity without logging an event."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [visitor_id, event_type]
+              properties:
+                visitor_id: { type: string }
+                event_type: { type: string }
+                email: { type: string, format: email, nullable: true }
+                mls_number: { type: string, nullable: true }
+                property: { type: object, nullable: true }
+                payload: { type: object, nullable: true }
+                occurred_at: { type: string, format: date-time, nullable: true }
+      responses:
+        "200":
+          description: Ingest result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  identified: { type: boolean }
+        "400":
+          description: Invalid JSON or missing visitor_id/event_type
+    options:
+      tags: [Pixel]
+      summary: CORS preflight for the public pixel endpoint
+      responses:
+        "204":
+          description: CORS headers
+
+  # ── SCHEDULED ACTIONS ────────────────────────────────────────────────────────
+
+  /scheduled-actions:
+    get:
+      tags: [Scheduled Actions]
+      summary: List scheduled actions (by lead, or global by scope)
+      description: Auth via CRM session cookie or x-hl-internal-secret header.
+      parameters:
+        - name: lead_id
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: scope
+          in: query
+          required: false
+          schema: { type: string, enum: [pending, history, all] }
+          description: Used for the global list when lead_id is omitted
+      responses:
+        "200":
+          description: Scheduled actions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  actions:
+                    type: array
+                    items: { type: object }
+        "401":
+          description: Unauthorized
+    post:
+      tags: [Scheduled Actions]
+      summary: Create a scheduled action
+      description: Auth via CRM session cookie (actor_type user) or x-hl-internal-secret header (actor_type myli).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lead_id, action_type, payload, scheduled_for]
+              properties:
+                lead_id: { type: string, format: uuid }
+                action_type: { type: string, enum: [text, email, internal] }
+                channel: { type: string, nullable: true }
+                payload: { type: object }
+                scheduled_for: { type: string, format: date-time }
+                actor_type: { type: string }
+                actor_user_id: { type: string, nullable: true }
+                scheduled_by_name: { type: string, nullable: true }
+                source: { type: string }
+                workflow_run_id: { type: string, nullable: true }
+                requires_review: { type: boolean }
+      responses:
+        "200":
+          description: Created action
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  action: { type: object }
+        "400":
+          description: Invalid body or missing required field
+        "401":
+          description: Unauthorized
+        "422":
+          description: scheduled_for must be in the future
+
+  /scheduled-actions/{id}/cancel:
+    post:
+      tags: [Scheduled Actions]
+      summary: Cancel a pending scheduled action
+      description: Auth via CRM session cookie or x-hl-internal-secret header. Marks the action cancelled; the Inngest executor bails when it reloads a non-pending row.
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Cancelled action
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  action: { type: object }
+        "400":
+          description: id required
+        "401":
+          description: Unauthorized
+        "404":
+          description: Not found or not pending
+
+  # ── SISU TRANSACTIONS (HouseLoop Transactions) ───────────────────────────────
+
+  /sisu-transactions:
+    get:
+      tags: [SISU Transactions]
+      summary: List transactions (paginated) with a rollup summary
+      parameters:
+        - name: year
+          in: query
+          required: false
+          schema: { type: string }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string }
+        - name: agent
+          in: query
+          required: false
+          schema: { type: string }
+        - name: type
+          in: query
+          required: false
+          schema: { type: string }
+        - name: brokerage_id
+          in: query
+          required: false
+          schema: { type: integer }
+        - name: page
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 10, maximum: 200, default: 100 }
+      responses:
+        "200":
+          description: Transactions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  transactions:
+                    type: array
+                    items: { type: object }
+                  summary: { type: object }
+                  total: { type: integer }
+                  page: { type: integer }
+                  limit: { type: integer }
+    post:
+      tags: [SISU Transactions]
+      summary: Create a transaction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agent, address, status]
+              properties:
+                agent: { type: string }
+                client_first_name: { type: string }
+                client_last_name: { type: string }
+                client_phone: { type: string }
+                client_email: { type: string }
+                address: { type: string }
+                transaction_type: { type: string }
+                status: { type: string }
+                transaction_amount: { type: number }
+                gci: { type: number }
+                signed_date: { type: string, format: date }
+                under_contract_date: { type: string, format: date }
+                closed_date: { type: string, format: date }
+                forecasted_close_date: { type: string, format: date }
+                lead_source: { type: string }
+                lead_type: { type: string }
+                notes: { type: string }
+                houseloop_lead_id: { type: integer }
+                brokerage_id: { type: integer }
+      responses:
+        "200":
+          description: Created transaction
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  transaction: { type: object }
+        "400":
+          description: agent, address, status required
+
+  /sisu-transactions/{id}:
+    patch:
+      tags: [SISU Transactions]
+      summary: Update editable transaction fields (id is an integer key)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                brokerage_id: { type: integer }
+                status: { type: string }
+                transaction_amount: { type: number }
+                gci: { type: number }
+                signed_date: { type: string, format: date }
+                under_contract_date: { type: string, format: date }
+                closed_date: { type: string, format: date }
+                forecasted_close_date: { type: string, format: date }
+                notes: { type: string }
+                agent: { type: string }
+                address: { type: string }
+                client_first_name: { type: string }
+                client_last_name: { type: string }
+                transaction_type: { type: string }
+                representing: { type: string }
+                second_client_first_name: { type: string }
+                second_client_last_name: { type: string }
+                escrow_number: { type: string }
+                paid_date: { type: string, format: date }
+                lead_source: { type: string }
+                lead_type: { type: string }
+                commission_pct: { type: number }
+                team: { type: string }
+                tc: { type: string }
+                title_company: { type: string }
+                mortgage_company: { type: string }
+                home_inspection_company: { type: string }
+                home_warranty_company: { type: string }
+                insurance_company: { type: string }
+      responses:
+        "200":
+          description: Updated transaction
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  transaction: { type: object }
+        "404":
+          description: Not found
+
+  /sisu-transactions/{id}/commission:
+    get:
+      tags: [SISU Transactions]
+      summary: Get a transaction's commission form (auto-creates a default on first read)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Form, adjustments, splits, and computed math
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  form: { type: object }
+                  adjustments:
+                    type: array
+                    items: { type: object }
+                  splits:
+                    type: array
+                    items: { type: object }
+                  computed: { type: object, nullable: true }
+        "400":
+          description: Invalid id
+        "404":
+          description: Transaction not found
+    put:
+      tags: [SISU Transactions]
+      summary: Atomically save a commission form (form + adjustments + splits)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                form: { type: object }
+                adjustments:
+                  type: array
+                  items: { type: object }
+                splits:
+                  type: array
+                  items: { type: object }
+                actor: { type: string }
+      responses:
+        "200":
+          description: Saved form with recomputed math
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  form: { type: object }
+                  adjustments:
+                    type: array
+                    items: { type: object }
+                  splits:
+                    type: array
+                    items: { type: object }
+                  computed: { type: object, nullable: true }
+        "400":
+          description: Invalid id
+
+  /sisu-transactions/{id}/commission/certify:
+    post:
+      tags: [SISU Transactions]
+      summary: Certify (or uncertify) a commission form
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                actor: { type: string }
+                uncertify: { type: boolean }
+      responses:
+        "200":
+          description: Updated form
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  form: { type: object }
+        "400":
+          description: Invalid id
+        "404":
+          description: Commission form not found — save it first
+
+  /sisu-transactions/brokerage-settings:
+    get:
+      tags: [SISU Transactions]
+      summary: Get brokerage commission settings (one brokerage, or all active)
+      parameters:
+        - name: brokerage_id
+          in: query
+          required: false
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Brokerage settings (or list when brokerage_id omitted)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  brokerages:
+                    type: array
+                    items: { type: object }
+                  brokerage: { type: object }
+        "400":
+          description: invalid brokerage_id
+        "404":
+          description: not found
+    put:
+      tags: [SISU Transactions]
+      summary: Atomically replace one section of a brokerage's settings (legacy = read-only)
+      parameters:
+        - name: brokerage_id
+          in: query
+          required: true
+          schema: { type: integer }
+        - name: section
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [tiers, exp_fees, flat_fee_defaults, referral_sources, adjustment_categories, monthly_marketing, default_split_pct, logo_url]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value: {}
+      responses:
+        "200":
+          description: Updated settings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  settings: { type: object }
+        "400":
+          description: invalid brokerage_id, section, or missing value
+        "403":
+          description: brokerage is legacy and read-only
+        "404":
+          description: brokerage not found
+    post:
+      tags: [SISU Transactions]
+      summary: Create a new brokerage with default settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slug, name]
+              properties:
+                slug: { type: string }
+                name: { type: string }
+                license_state: { type: string }
+                parent_brand: { type: string }
+                managing_broker: { type: string }
+                logo_url: { type: string }
+      responses:
+        "200":
+          description: Created brokerage id
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  id: { type: integer }
+        "400":
+          description: slug + name required
+
+  /sisu-transactions/exp-grid/email:
+    post:
+      tags: [SISU Transactions]
+      summary: Email the rendered EXP Grid HTML to the internal team
+      description: Auth via CRM session cookie or x-hl-internal-secret header. Sends from a connected Google account (default admin@houseloop.ai).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [recipients, html]
+              properties:
+                recipients:
+                  type: array
+                  items: { type: string, format: email }
+                address: { type: string }
+                html: { type: string }
+                from_email: { type: string, format: email }
+      responses:
+        "200":
+          description: Sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  gmail_message_id: { type: string }
+                  recipients:
+                    type: array
+                    items: { type: string }
+                  from_email: { type: string }
+        "400":
+          description: invalid_json, no valid recipients, or html required
+        "401":
+          description: Unauthorized
+        "422":
+          description: from_email not connected or token refresh failed
+        "502":
+          description: Gmail send failed
+
+  /sisu-transactions/hl-leads:
+    get:
+      tags: [SISU Transactions]
+      summary: List HouseLoop CRM leads (or one expanded lead) for the transaction Add flow
+      parameters:
+        - name: id
+          in: query
+          required: false
+          schema: { type: integer }
+          description: When provided, returns a single expanded lead for prefill
+      responses:
+        "200":
+          description: Leads (or one lead)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  leads:
+                    type: array
+                    items: { type: object }
+                  lead: { type: object }
+        "404":
+          description: lead not found
+
+  /sisu-transactions/summary:
+    get:
+      tags: [SISU Transactions]
+      summary: Year-scoped transaction KPIs, monthly chart, and agent breakdown
+      parameters:
+        - name: year
+          in: query
+          required: false
+          schema: { type: integer }
+        - name: brokerage_id
+          in: query
+          required: false
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  kpis: { type: object }
+                  monthlyChart:
+                    type: array
+                    items: { type: object }
+                  agentBreakdown:
+                    type: array
+                    items: { type: object }
+                  availableYears:
+                    type: array
+                    items: { type: integer }
+                  availableAgents:
+                    type: array
+                    items: { type: string }
 # ─────────────────────────────────────────────────────────────────────────────
 # COMPONENTS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2727,6 +3987,20 @@ components:
       type: apiKey
       in: cookie
       name: hl_session
+      description: |
+        Browser session. A human logs in at POST /api/auth/login and receives
+        the signed `hl_session` cookie. Used by the CRM web UI.
+    internalSecret:
+      type: apiKey
+      in: header
+      name: x-hl-internal-secret
+      description: |
+        Machine-to-machine auth. Any trusted backend caller (Myli, the
+        scheduled-action executor, internal jobs, AI agents) may send the
+        `x-hl-internal-secret` header instead of a session cookie to call any
+        endpoint a human can. The secret is server-only (never reaches a
+        browser) and is stored in the credential vault as HL_INTERNAL_SECRET.
+        This is how an AI does everything a logged-in human can do.
 
   parameters:
     Id:
