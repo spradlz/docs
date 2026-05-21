@@ -1,0 +1,111 @@
+---
+title: "Notifications"
+description: "How the HouseLoop CRM notification system works — the hl_notification spine, the bell, multi-channel delivery (in-app / SMS / email), and the event catalog."
+---
+
+The CRM notification system is built on **one append table, `hl_notification`**. Every event
+(a lead changes stage, a lead texts in, a lead likes a home) writes a row. The topbar **bell**
+reads it, the lead-detail **dock badges** count it, and a **delivery dispatcher** reads the
+recipient's preferences and fires SMS / email. Add a new notification type by passing a new
+`event_key` — no schema change.
+
+## How it flows
+
+```
+event source                     spine                         surfaces
+stage change / inbound text  ──▶  createNotification()  ──▶  hl_notification row
+lead likes/saves a home                                        │
+                                                               ├─▶ bell (unread count + dropdown)
+                                                               ├─▶ lead-detail dock badges
+                                                               └─▶ dispatcher → SMS / email (per prefs)
+```
+
+## 1. Write a notification
+
+Everything goes through one helper — `lib/notifications/create.ts`:
+
+```ts
+import { createNotification } from "@/lib/notifications/create";
+
+await createNotification({
+  recipientUserId,            // hl_users.id — who gets it
+  eventKey: "stage_changed",  // matches the notification_prefs keys
+  title: "Jane Doe moved to Showing Homes",
+  body: null,                 // optional secondary line
+  leadId,                     // optional — links the notification to a lead
+  entityType: "lead",
+  payload: { to_stage_id, stage_name },
+});
+```
+
+It inserts the `hl_notification` row, then fires delivery (best-effort, off the request path).
+Pass `inAppOnly: true` to skip SMS/email and only surface in the bell.
+
+## 2. Data model
+
+- **`hl_notification`** — append log. `recipient_user_id`, `event_key`, `title`, `body`,
+  `lead_id` (soft link, `SET NULL` on lead delete), `entity_type` / `entity_id`, `payload` JSONB,
+  `channels_sent` (`sms` / `email` actually delivered), `seen_at`, `read_at`, `created_at`.
+- Migration: `apps/houseloop-crm/db/migrations/0045_hl_notification.sql`.
+- **Preferences** live on `hl_users.data` JSONB: `notification_prefs` (`{ eventKey: { email, sms } }`)
+  and `notification_channels` (`[{ type: 'sms'|'email', value }]`). Managed in **Settings →
+  Notifications**.
+
+## 3. Read it (API)
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /api/notifications?filter=all\|unread` | the user's notifications + unread count |
+| `GET /api/notifications/unread-count` | cheap unread count (bell badge) |
+| `POST /api/notifications/[id]/read` | mark one read |
+| `POST /api/notifications/read-all` | mark all read |
+| `GET  /api/notifications/lead-badges?lead_id=` | per-lead unread counts by category (requests / homes / texts) |
+| `POST /api/notifications/lead-badges` | mark a lead category read (clears the dock badge) |
+
+All session-gated. The bell (`components/notifications/NotificationBell.tsx`) polls the unread
+count every 20s and refreshes instantly on window focus.
+
+## 4. Delivery (the dispatcher)
+
+`lib/notifications/dispatch.ts` reads the recipient's `notification_prefs[eventKey]` +
+`notification_channels` and sends what's enabled:
+
+- **SMS** via the shared `sendSms()` core (`lib/phone/send-sms.ts`, Twilio).
+- **Email** via `sendViaGmail()` from the first connected sending inbox.
+
+It's best-effort — per-channel failures are swallowed and never break ingest. Channels that
+delivered are recorded on `hl_notification.channels_sent`. (Configurable sender selection +
+templates are on the roadmap.)
+
+## 5. Event catalog
+
+| Event key | Fires when | Wired |
+| --- | --- | --- |
+| `stage_changed` | a lead's pipeline stage changes | ✅ |
+| `lead_assigned` | a lead is assigned to a user | ✅ |
+| `new_message` | a lead texts/emails in (any number/channel) | ✅ (BlueBubbles inbound) |
+| `tour_request` | a lead requests a tour on the website | ✅ (pixel) |
+| `home_liked` / `home_saved` / `home_shared` | lead likes/saves/shares a listing | ✅ (pixel) |
+| `contact_form` | lead submits the website contact form | type ready, fire-point pending |
+| `saved_search` | lead saves a search | type ready, fire-point pending |
+| `collaborator_added` / `team_invite` | collaborator/team events | type ready, trigger pending |
+| `gmail_disconnected` / `bb_disconnected` | a connection drops | type ready, trigger pending |
+
+Website-activity events (`tour_request`, `home_*`) are routed to the **lead's owner**
+(`hl_leads.assigned_user_id`) from the pixel ingest (`app/api/pixel/track`). Inbound texts
+notify the owner from `app/api/bb/inbound`.
+
+## 6. Where it surfaces
+
+- **Topbar bell** — floating icon, red unread badge, dropdown (All / Unread, "Mark all read",
+  "View all notifications" → `/notifications`).
+- **Lead-detail dock badges** — the Requests / Homes / Texts icons show red unread counts
+  (`CenterLane.tsx`), cleared when you open that tab.
+- **Settings → Notifications** — per-event email/SMS toggles, notification channels, a "Lead
+  Website Activity" section, and System Alerts.
+
+<Note>
+To add a brand-new notification: pick an `event_key`, add it to the `DEFAULTS` in
+`app/api/notification-preferences/route.ts` (+ the dispatcher's `PREF_DEFAULTS`), add a row to
+the settings page `SECTIONS`, then call `createNotification` from wherever the event happens.
+</Note>
