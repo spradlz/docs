@@ -1,0 +1,76 @@
+---
+title: "Sold Data & Price History"
+description: "How HouseLoop sources sold listings and full price history from Repliers — the live per-listing history fetch, the ListingHistory sold-comps backfill, and the Repliers pagination gotcha."
+---
+
+HouseLoop shows two kinds of sold data, both sourced from **Repliers** (the Heartland MLS IDX feed):
+
+1. **Price history on a listing detail page** — every PRIOR sale of that address, rendered live.
+2. **The sold-comps universe** — every Heartland sold listing back to 2016, stored in the `ListingHistory` table (foundation for the future sold map / sold search / SEO sold pages).
+
+Sold **prices are never displayed** (Heartland IDX rule) — the UI shows `—` for the sold figure and only ever shows the publicly-listed **asking** price.
+
+## 1. Price history (prior sales) — live per listing
+
+Every Repliers single-listing GET (`GET /listings/{mlsNumber}`) returns a `history[]`
+array: every prior MLS record for that address (Sale/Lease, list price, sold price,
+list date, and the real **close date** at `timestamps.closedDate`).
+
+```
+detail page (server)                       Repliers
+getPriceHistoryViaRepliers(mls) ──▶ GET /listings/{mls}?fields=history
+  │                                  → history[] (prior sales, back to 2016)
+  ▼
+<PriceHistory listing={l} history={priceHistory} />
+  → merges current-listing lifecycle + prior sales, newest-first
+```
+
+- Function: `getPriceHistoryViaRepliers(mlsNumber)` in `lib/listings/providers/repliers.ts`.
+  Cached daily (`next: { revalidate: 86400 }`). Maps `history[]` → `PriceHistoryEntry[]`.
+- `soldDate` = `timestamps.closedDate` (the actual close), **not** the entry's own
+  `soldDate` field (which is the contract date).
+- Floored at **2016-01-01**. Sale records only (no leases).
+- Renders in `components/listing/PriceHistory.tsx`. Dates are parsed date-only
+  (`iso.slice(0,10)`) to avoid a UTC-midnight → Central off-by-one.
+
+No storage or backfill is needed for this — it works for every listing, including
+brand-new ones, because Repliers builds `history[]` dynamically per request.
+
+## 2. Sold-comps universe — the `ListingHistory` backfill
+
+For a sold **map / search / SEO**, the per-listing live fetch isn't enough — you can't
+query or map data that only exists as a per-page call. So the full sold universe is
+stored in the `ListingHistory` table (one row per sold transaction).
+
+- **Source:** `GET /listings?status=U&lastStatus=Sld&minSoldDate=2016-01-01&boardId=157`
+  — **426,595** Heartland sold listings as of 2026-05.
+- **Script:** `apps/houseloop-web/scripts/backfill-listing-history.ts`
+  - Resumable + idempotent (preloads existing `mlsId`s and skips them).
+  - Lean rows: address, prices, dates, beds/baths/sqft, lat/lng, primary photo, brokerage.
+  - `soldDate` = `timestamps.closedDate`. `listingStatus = "sold"`.
+  - Non-destructive (INSERT only).
+
+```bash
+# verify a slice first (known record + page-1 sample + read-back)
+U="<prod db url>" REPLIERS_API_KEY=... npx tsx scripts/backfill-listing-history.ts --verify
+# full run
+U="<prod db url>" REPLIERS_API_KEY=... npx tsx scripts/backfill-listing-history.ts
+# resume / dry-run
+... --start-page 50      ... --max-pages 1 --dry-run
+```
+
+<Warning>
+**Repliers pagination gotcha.** Repliers paginates with **`pageNum`** and
+**`resultsPerPage`** — **not** `page` / `pageSize`. The latter are silently ignored:
+the API returns **page 1 every time** (and `pageSize` defaults to 100). A backfill that
+uses `page`/`pageSize` will fetch the same 100 rows on every page and — if it dedupes by
+key — **skip everything**. Always use `pageNum` + `resultsPerPage`, plus a `sortBy`
+(e.g. `createdOnDesc`) so pages are stable and non-overlapping.
+</Warning>
+
+## SEO sold pages (held)
+
+Turning the 426K sold rows into individually-indexed public pages (one per address,
+marked "Sold", in the sitemap) is a planned build, **held pending an MLS/IDX compliance
+check** — some MLSes restrict permanent public indexing of sold listings. Do not point
+Googlebot at sold pages until that's confirmed.
