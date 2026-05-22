@@ -1,6 +1,6 @@
 ---
 title: "Leads Table"
-description: "The all-leads table — Sierra-style structured system columns (Phone/Email Status, Visits, Registered, Listings, Alerts, Agent Action, Tasks) that all read from one aggregation."
+description: "The all-leads table — Sierra-style structured system columns (Phone/Email Status, Registered, Requests, Visits, Listings, Alerts, Agent Action, Tasks) that all read from one aggregation, with per-user unread alerts."
 ---
 
 The `/leads` table is the operator's command center. Every column is a real,
@@ -14,13 +14,17 @@ All per-lead metrics are computed in one `SELECT` (`BASE_SELECT` in
 `lib/leads-query.ts`) over the CRM tables plus the first-party
 [pixel](/guides/pixel-tracking) events:
 
+Column order (left → right): **Phone Status · Email Status · Registered ·
+Requests · Visits · Listings · Alerts · Agent Action · Tasks**.
+
 | Column | Source |
 |---|---|
 | **Lead Information** (name · phone · location) | `hl_leads` + `hl_lead_addresses` (primary) |
-| **Phone Status** (calls / texts) | `hl_calls` count + `hl_messages` (sms/imessage) |
+| **Phone Status** (calls / texts) | `hl_calls` count + texts from BOTH `hl_bb_events` (BlueBubbles iMessage, by `lead_id`) and `hl_inbound_messages` (Twilio SMS, matched by normalized phone) |
 | **Email Status** (emails / last) | `hl_messages` channel = `email` |
-| **Visits** (count + last) | `hl_pixel_event` `page_view`, de-duped by distinct day |
 | **Registered** (when + source) | `hl_leads.created_at` + `source` |
+| **Requests** (tour/showing requests) | `hl_notification` `tour_request` / `saved_search` / `contact_form` — count + last request time |
+| **Visits** (count + last) | `hl_pixel_event` `page_view`, de-duped by distinct day |
 | **Listings** (views / saved / $) | `hl_pixel_event` `property_view` / net `save_home` / `property_payload.price` |
 | **Alerts** (e-Alerts) | `hl_pixel_event` `saved_search` |
 | **Agent Action** (what · when · who) | most-recent of outbound message / note / task / appointment, via `LEFT JOIN LATERAL` |
@@ -28,6 +32,31 @@ All per-lead metrics are computed in one `SELECT` (`BASE_SELECT` in
 
 When a metric has no data source yet (market reports, alert unsubscribes), the
 cell renders an **honest 0** — it is never faked.
+
+## Unread alerts (mission control)
+
+The **red icon-chip badge means UNREAD for the current user** — not the total
+(the total lives in the label underneath). Unread is computed per-user in the
+same aggregation against `hl_notification` (`read_at IS NULL`, scoped to the
+session user via the `userP` bind):
+
+| Badge | Event keys | Status |
+|---|---|---|
+| **Texts** unread | `new_message` | Live |
+| **Requests** unread | `tour_request` / `saved_search` / `contact_form` | Live |
+| **Calls** unread | — | Pending Gate 5 (Twilio voice ingest) |
+| **Emails** unread | — | Pending Gate 5 (inbound-email ingest) |
+
+**Clear-on-open:** opening a lead `POST`s `/api/notifications/lead-badges`
+with `category: 'all'`, marking that lead's notifications read so its badges
+clear. Calls/Emails light up once inbound call-logging + email ingestion land.
+
+## Clickable metric icons
+
+Every metric chip is a link to that lead's detail with the matching iPad panel
+pre-opened: `/leads/[id]?tab=<Tab>` (Calls→Calls, Texts→Texts, Email→Emails,
+Requests→Requests, Listings/Visits→Homes, Registered/Agent Action→All). The
+page validates `?tab` server-side against the `ActivityTab` union.
 
 ## Agent Action — what & who
 
