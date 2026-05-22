@@ -1,0 +1,86 @@
+---
+title: "AI Smart Home Search"
+description: "The conversational natural-language home search on houseloop.ai. A visitor describes their dream home in plain English; we extract structured filters with gpt-4o-mini, run the real Heartland-clamped listings search, and return the match count plus a deep link into the gallery. Every conversation is logged for the lead."
+---
+
+**AI Smart Home Search** lets a visitor type what they want in natural language
+("homes with a white kitchen and an in-ground pool in Overland Park") instead of
+clicking filters. It's reached from the **"Search smarter, powered by AI"** row at
+the top of the search dropdown, which opens a chat modal.
+
+## How it works
+
+1. The modal sends the running conversation to `POST /api/search/nlp`.
+2. **gpt-4o-mini** (server-side — the API key never reaches the browser) reads the
+   chat and returns structured filters plus a conversational reply, deciding when it
+   has enough to search (`ready`).
+3. When ready, we map those filters onto our standard `/listings` URL params and run
+   the **real** DB search to get the live match count. The hard **Core-Heartland
+   8-county clamp is always applied** — the AI can never escape coverage.
+4. The reply comes back as "Great! I found 102 homes matching … Tap to view them
+   all." with a **View N homes** button that deep-links into the gallery.
+
+<Note>
+The engine is our own **gpt-4o-mini**, not Repliers NLP. Repliers' NLP is an
+Advanced-plan feature that returns 403 on our key until the vendor enables the flag;
+a mapper for its output (`repliersNlpToHouseloopParams`) is already built so it can be
+wired as a second engine when enabled. Using our own model means full control of the
+prompt and the ability to handle descriptive terms (e.g. "white kitchen") as keywords.
+</Note>
+
+## Endpoint
+
+`POST https://houseloop.ai/api/search/nlp`
+
+**Request**
+
+```json
+{
+  "messages": [{ "role": "user", "content": "3 bed homes in Overland Park under 500k" }],
+  "conversationId": "optional — reuse to continue a conversation"
+}
+```
+
+**Response (ready to search)**
+
+```json
+{
+  "ok": true,
+  "ready": true,
+  "reply": "Great! I found 102 homes matching homes in Overland Park under $500k. Tap to view them all.",
+  "count": 102,
+  "url": "/listings?city=Overland Park&maxPrice=500000",
+  "filters": { "cities": ["Overland Park"], "maxPrice": 500000, "...": "..." },
+  "conversationId": "ff71a4f0-…"
+}
+```
+
+When the model needs more detail it returns `{ ok: true, ready: false, reply: "…clarifying question…" }`
+and no URL. Beds/baths are treated as minimums ("3 bed" = 3+). Descriptive features we
+can't structure go into a keyword (`q`) match.
+
+## Conversation storage
+
+Every turn is persisted (best-effort — a storage failure never blocks search) to the
+`hl_ai_search_conversation` table:
+
+| Column | Purpose |
+|---|---|
+| `sessionId` | The `hl_session` cookie — anonymous visitor ("pixel"). Set for logged-out users. |
+| `userId` | Set when signed in, or **backfilled** on the visitor's next signed-in turn under the same cookie. |
+| `leadId` | Loose reference to the CRM lead (the "saved in their thread" case). |
+| `messages` | Full transcript `[{role, content, url?, count?}]`. |
+| `lastFilters` / `lastUrl` / `lastCount` | The most recent structured filters, deep link, and match count. |
+
+**Backfill:** when an anonymous visitor later creates an account, their prior
+conversations (matched by `hl_session` cookie) are linked to the new `userId`, so the
+lead's full search history follows them into their profile.
+
+## Source
+
+| Piece | File (`apps/houseloop-web`) |
+|---|---|
+| Chat modal + entry row | `components/site/AiSearchModal.tsx`, `components/site/SearchAutocomplete.tsx` |
+| Route (gpt-4o-mini + count + persistence) | `app/api/search/nlp/route.ts` |
+| Filter mappers | `lib/search/nlp-map.ts` |
+| Storage model | `prisma/schema.prisma` → `AiSearchConversation` (`hl_ai_search_conversation`) |
