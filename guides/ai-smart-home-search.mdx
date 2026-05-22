@@ -1,32 +1,47 @@
 ---
 title: "AI Smart Home Search"
-description: "The conversational natural-language home search on houseloop.ai. A visitor describes their dream home in plain English; we extract structured filters with gpt-4o-mini, run the real Heartland-clamped listings search, and return the match count plus a deep link into the gallery. Every conversation is logged for the lead."
+description: "Conversational natural-language home search on houseloop.ai. A visitor describes their dream home in plain English; our chat (gpt-4o-mini) runs the conversation, Repliers NLP powers the actual search (true structured filters + AI photo image-search), and we return badged matches plus a deep link into the gallery. Every conversation is logged for the lead."
 ---
 
-**AI Smart Home Search** lets a visitor type what they want in natural language
+**AI Smart Home Search** lets a visitor type what they want in plain language
 ("homes with a white kitchen and an in-ground pool in Overland Park") instead of
-clicking filters. It's reached from the **"Search smarter, powered by AI"** row at
-the top of the search dropdown, which opens a chat modal.
+clicking filters. Entry points: the **"AI Search"** item in the top nav, the
+gradient **"AI Search"** button beside the hero search bar, and the **"Search
+smarter with AI"** row in the search dropdown — all open one chat modal.
 
-## How it works
+## How it works (hybrid: our chat UX, Repliers' search engine)
 
 1. The modal sends the running conversation to `POST /api/search/nlp`.
-2. **gpt-4o-mini** (server-side — the API key never reaches the browser) reads the
-   chat and returns structured filters plus a conversational reply, deciding when it
-   has enough to search (`ready`).
-3. When ready, we map those filters onto our standard `/listings` URL params and run
-   the **real** DB search to get the live match count. The hard **Core-Heartland
-   8-county clamp is always applied** — the AI can never escape coverage.
-4. The reply comes back as "Great! I found 102 homes matching … Tap to view them
-   all." with a **View N homes** button that deep-links into the gallery.
+2. **gpt-4o-mini** (server-side — the key never reaches the browser) runs the
+   *conversation*: a friendly reply + deciding when there's enough to search (`ready`).
+3. When ready, the search is powered by **Repliers NLP** (`POST https://api.repliers.io/nlp`):
+   - **Structured filters** — "pool" → `swimmingPool=not:null`, "3 bed under 600k" →
+     `minBeds=3&maxPrice=600000`, city, etc.
+   - **AI image search** — descriptive/visual features ("white kitchen") are matched
+     against the listing **PHOTOS** (semantic image embedding), not the text.
+   - We run the returned query, map each `mlsNumber` to our `hl_heartlandmls_<n>` hlid,
+     and hydrate from our cache (**Core-Heartland 8-county clamp applied for free** —
+     non-Heartland listings drop out).
+4. **Matched-photo lead** — on image searches Repliers re-orders each listing's photos
+   so the matched shot (the pool, the white kitchen) is first; we lead the card with it.
+5. The reply comes back with the match count and a **View N homes** button that
+   deep-links into the gallery (matches pinned + badged "AI Match" via `aimatch=`).
 
 <Note>
-The engine is our own **gpt-4o-mini**, not Repliers NLP. Repliers' NLP is an
-Advanced-plan feature that returns 403 on our key until the vendor enables the flag;
-a mapper for its output (`repliersNlpToHouseloopParams`) is already built so it can be
-wired as a second engine when enabled. Using our own model means full control of the
-prompt and the ability to handle descriptive terms (e.g. "white kitchen") as keywords.
+**Repliers NLP is LIVE and primary** (enabled in the Repliers developer portal under
+the API key's "Enable NLP" toggle + an OpenAI key on the account). It bills that
+OpenAI key per search. If Repliers returns nothing, the route **falls back** to our
+own matcher — a **gpt-4o** re-rank (reads listing descriptions; rejects "white quartz
+countertops" ≠ white kitchen, "pool table"/"community pool" ≠ private pool) plus a
+graceful partial-match fallback ("couldn't find both X and Y — here are N with a Y").
 </Note>
+
+## Private vs HOA amenities
+
+Repliers separates the home's OWN features from the neighborhood's:
+`details.swimmingPool` ("In Ground") = a **private** pool; `condominium.amenities`
+containing `"Pool"` = an **HOA/community** pool. A home can have both. (Pool matching
+trusts the structured field — the pool image-embedding is too flat to filter on.)
 
 ## Endpoint
 
@@ -36,7 +51,7 @@ prompt and the ability to handle descriptive terms (e.g. "white kitchen") as key
 
 ```json
 {
-  "messages": [{ "role": "user", "content": "3 bed homes in Overland Park under 500k" }],
+  "messages": [{ "role": "user", "content": "homes with a pool in Overland Park" }],
   "conversationId": "optional — reuse to continue a conversation"
 }
 ```
@@ -47,40 +62,32 @@ prompt and the ability to handle descriptive terms (e.g. "white kitchen") as key
 {
   "ok": true,
   "ready": true,
-  "reply": "Great! I found 102 homes matching homes in Overland Park under $500k. Tap to view them all.",
-  "count": 102,
-  "url": "/listings?city=Overland Park&maxPrice=500000",
-  "filters": { "cities": ["Overland Park"], "maxPrice": 500000, "...": "..." },
+  "reply": "I found 24 homes matching homes with a pool in Overland Park — plus 6 more nearby you might like.",
+  "count": 30,
+  "matchCount": 24,
+  "aiMatchHlids": ["hl_heartlandmls_2619637", "..."],
+  "url": "/listings?city=Overland Park&aimatch=hl_heartlandmls_2619637,...",
+  "listings": [{ "hlid": "...", "photo": "https://cdn.repliers.io/<matched photo>", "...": "..." }],
   "conversationId": "ff71a4f0-…"
 }
 ```
 
-When the model needs more detail it returns `{ ok: true, ready: false, reply: "…clarifying question…" }`
-and no URL. Beds/baths are treated as minimums ("3 bed" = 3+). Descriptive features we
-can't structure go into a keyword (`q`) match.
+`GET /api/search/nlp/history` returns the visitor's recent searches (History dropdown).
 
 ## Conversation storage
 
-Every turn is persisted (best-effort — a storage failure never blocks search) to the
-`hl_ai_search_conversation` table:
+Every turn persists (best-effort) to `hl_ai_search_conversation` (`sessionId` = the
+`hl_session` cookie; `userId` set/backfilled on sign-in; `messages`, `lastFilters`,
+`lastUrl`, `lastCount`). Anonymous threads link to the account on the next signed-in turn.
 
-| Column | Purpose |
+## Source (`apps/houseloop-web`)
+
+| Piece | File |
 |---|---|
-| `sessionId` | The `hl_session` cookie — anonymous visitor ("pixel"). Set for logged-out users. |
-| `userId` | Set when signed in, or **backfilled** on the visitor's next signed-in turn under the same cookie. |
-| `leadId` | Loose reference to the CRM lead (the "saved in their thread" case). |
-| `messages` | Full transcript `[{role, content, url?, count?}]`. |
-| `lastFilters` / `lastUrl` / `lastCount` | The most recent structured filters, deep link, and match count. |
+| Chat modal + entry points | `components/site/AiSearchModal.tsx`, `AiSearchButton.tsx`, `Header.tsx` (HeaderAiSearchLink), `SearchAutocomplete.tsx` |
+| Route (chat + Repliers hybrid + gpt-4o fallback + persistence) | `app/api/search/nlp/route.ts` |
+| Repliers NLP lib | `lib/listings/repliers-nlp.ts` |
+| History endpoint | `app/api/search/nlp/history/route.ts` |
+| Storage model | `prisma/schema.prisma` → `AiSearchConversation` |
 
-**Backfill:** when an anonymous visitor later creates an account, their prior
-conversations (matched by `hl_session` cookie) are linked to the new `userId`, so the
-lead's full search history follows them into their profile.
-
-## Source
-
-| Piece | File (`apps/houseloop-web`) |
-|---|---|
-| Chat modal + entry row | `components/site/AiSearchModal.tsx`, `components/site/SearchAutocomplete.tsx` |
-| Route (gpt-4o-mini + count + persistence) | `app/api/search/nlp/route.ts` |
-| Filter mappers | `lib/search/nlp-map.ts` |
-| Storage model | `prisma/schema.prisma` → `AiSearchConversation` (`hl_ai_search_conversation`) |
+See also: **Coming Soon** guide (early-access listings the AI surfaces pre-market).
