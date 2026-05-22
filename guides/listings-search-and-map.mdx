@@ -1,0 +1,130 @@
+---
+title: "Listings Search & Map API"
+description: "The public houseloop.ai read endpoints Myli (or any client) can call to search listings, drive the map, read the home shelves, and power location autocomplete. All GET, all driven by one shared query envelope."
+---
+
+These are the **public website** read APIs served from `https://houseloop.ai/api`
+(distinct from the CRM API at `crm.houseloop.ai/api`). They are read-only `GET`
+endpoints — no auth required — backed by the live Heartland MLS listing cache.
+
+Every search surface (the `/listings` page, the map, the home shelves, this API)
+shares **one query envelope**: the same URL params mean the same thing everywhere.
+No presets, no magic flags — every filter is explicit in the URL.
+
+## Base URL
+
+```
+https://houseloop.ai/api      # production
+http://localhost:3001/api     # local dev
+```
+
+## The query envelope (shared by every endpoint)
+
+| Param | Meaning | Example |
+|---|---|---|
+| `city` | City name (comma-list for multi) | `city=Overland Park` |
+| `state` | State abbr | `state=KS` |
+| `zip` | ZIP (comma-list) | `zip=66085` |
+| `boardId` | MLS board (Heartland = `157`) | `boardId=157` |
+| `sort` | **Sort order — a SORT, not a filter.** Persists across filter changes. | `sort=newest` |
+| `minPrice` / `maxPrice` | Price band | `minPrice=400000` |
+| `minBeds` / `minBaths` | Bed / bath floor | `minBeds=3` |
+| `style` | Heartland style discriminator | `style=Single Family Residence` |
+| `minAcres` / `maxAcres` | Lot size band | `minAcres=2` |
+| `bbox` | Viewport `W,S,E,N` (map endpoints) | `bbox=-94.8,38.8,-94.5,39.1` |
+| `limit` | Page size (search caps at 100) | `limit=24` |
+| `page` | 1-based page | `page=1` |
+
+**Sort values:** `newest` (MLS list date desc), `viewsDesc` (most viewed),
+`priceAsc`, `priceDesc`, `bedsDesc`, `bathsDesc`, `sqftDesc`, `lotsizeDesc`,
+`priceDropDesc`, `recentlySold`. Default is `newest` when no `sort` is pinned.
+
+<Note>
+**Sort vs. filter (locked 2026-05-21):** `sort` orders results top-to-bottom and
+**persists** as you add or remove location filters. Location (`city`/`zip`) is a
+removable filter. So "most viewed homes in Overland Park" = `?city=Overland Park&state=KS&sort=viewsDesc`;
+drop the city and you get the most-viewed homes across the whole metro, same sort.
+</Note>
+
+## GET /api/listings/search
+
+Full search. URL params → envelope → results.
+
+```bash
+curl "https://houseloop.ai/api/listings/search?city=Overland%20Park&state=KS&sort=newest&limit=24"
+```
+
+Returns an array of `Listing` objects (price, address, beds/baths/sqft, photos,
+status, `mlsListedAt`) plus engagement stats (views, reactions, shares, saves)
+batched per listing. Default `limit` 24, max 100.
+
+## GET /api/listings/count
+
+Just the total for a query — cheap, no rows.
+
+```bash
+curl "https://houseloop.ai/api/listings/count?city=Leawood&state=KS"
+# → { "totalCount": 312 }
+```
+
+## GET /api/listings/map
+
+Markers for the current map viewport. Takes the **same envelope** plus map params,
+so the map mirrors the list exactly (a 194-result search plots those 194).
+
+| Param | Meaning |
+|---|---|
+| `bbox` | Viewport `W,S,E,N` to restrict markers |
+| `zoom` | Current map zoom (decides clusters vs. pins) |
+| `mode` | Force `clusters` or `pins` |
+| `bounds=1` | **Fit mode** — skip markers, return the bounding box of the whole filtered set |
+
+**Marker mode** (default):
+
+```bash
+curl "https://houseloop.ai/api/listings/map?city=Leawood&state=KS&bbox=-94.7,38.9,-94.5,39.0&zoom=13"
+# → { "ok": true, "mode": "pins", "total": 312, "pins": [ { hlid, lat, lng, listPrice, status, isNew, street, city, beds, baths, sqft, photo, brokerage }, … ] }
+```
+
+**Fit mode** (`bounds=1`) — used to auto-zoom the map to encompass every result
+when entering map view (Zillow behavior), so a metro-scattered search frames all
+of its homes instead of only the few in the default viewport:
+
+```bash
+curl "https://houseloop.ai/api/listings/map?city=Leawood&state=KS&bounds=1"
+# → { "ok": true, "total": 312, "bounds": { "north": 39.01, "south": 38.90, "east": -94.55, "west": -94.69 } }
+```
+
+## GET /api/home
+
+The composed home page: the ordered shelves + inspiration links. Cached 5 min.
+
+```bash
+curl "https://houseloop.ai/api/home"
+# → { "shelves": [ { slug, title, href, items: Listing[], display }, … ], "inspiration": {…} }
+```
+
+**Shelf model (locked 2026-05-21):** each shelf is the **12 newest-listed homes**
+in its filter, in order — new listings push in at the front, the oldest drops off.
+Shelves: `all-kc-metro` ("All Homes In KC Metro"), per-city rows
+(`overland-park`, `leawood`, …), and `acreage`. The hero carousel has its own
+composer. Shelves are DB-config (`hl_home_shelf` table, seeded from
+`prisma/seed/home-shelves.ts`) — not hardcoded.
+
+## GET /api/locations/autocomplete
+
+Typeahead for the search bar. `q` must be ≥ 3 chars.
+
+```bash
+curl "https://houseloop.ai/api/locations/autocomplete?q=overland"
+# → { addresses, cities, counties, neighborhoods, schoolDistricts, schools }
+```
+
+## GET /api/listings/{hlid}
+
+A single listing by HouseLoop id, including the full `photos.all` gallery and
+price `history`.
+
+```bash
+curl "https://houseloop.ai/api/listings/HL-123456"
+```
