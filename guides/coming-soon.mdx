@@ -1,0 +1,57 @@
+---
+title: "Coming Soon Listings"
+description: "How HouseLoop detects and surfaces Coming Soon (pre-market) listings — including the lastStatus=Cs signal that makes it work, the filter, and the card pill."
+---
+
+**Coming Soon** listings are homes that have entered the MLS but aren't yet active
+on the open market. Surfacing them early lets buyers see (and act on) homes —
+including high-end pool homes — **before** they're fully listed.
+
+## The signal: `lastStatus = "Cs"`
+
+This is the part that's easy to get wrong. A Coming Soon listing in Repliers/Heartland
+looks like this:
+
+```json
+{ "status": "A", "lastStatus": "Cs", "standardStatus": "Active" }
+```
+
+- `status` is **A** (the high-level active flag) — so it does NOT come through as a
+  distinct top-level status.
+- `standardStatus` reads **"Active"**, NOT "Coming Soon" — so keying off `standardStatus`
+  **never** identifies a coming-soon home.
+- The reliable signal is **`lastStatus === "Cs"`**.
+
+<Warning>
+Do **not** detect Coming Soon via `standardStatus`. It reads "Active" for these
+listings. The previous implementation did this, which is why Coming Soon never
+populated — ~110 coming-soon homes in Overland Park alone were stored as plain
+"active". Always use `lastStatus = "Cs"`.
+</Warning>
+
+## How we pull + tag it
+
+1. **Ingest** (`lib/listings/providers/repliers.ts`): `mapStatus()` returns
+   `"coming_soon"` when `lastStatus === "Cs"` (checked before the `status==="A"` →
+   active fallthrough). `lastStatus` is in the Repliers `fields` request.
+2. **Query** (`translateStatuses()`): the `comingSoon` status group pins
+   `lastStatus=Cs` (coming-soon homes live in `status=A`).
+3. **Cache**: `/listings` reads our cache (`searchFromDb`); Repliers is the write
+   source (Inngest `listing-cache-sync` + webhooks + backfill). A re-ingest is needed
+   to flip pre-existing rows from `active` → `coming_soon` (the hourly delta sync only
+   catches updated rows).
+
+## In the UI
+
+- **Filter:** the `/listings` Filters panel has a **Coming Soon** status button
+  (`?status=...,comingSoon`), independent multi-select alongside For Sale and Sold.
+- **Pill:** Coming Soon listings render a **"Coming Soon"** pill on the card (it's a
+  status pill — nothing else stacks with it, since the home can't be toured yet).
+- **AI search:** coming-soon homes also surface in AI Smart Home Search results when
+  they match (e.g. a pre-market pool home), giving early access.
+
+## Note on thin data
+
+Coming Soon listings are often light on photos/description (3 photos, no description)
+because they're pre-market. That's expected — not a data error. The amenity flags
+(e.g. `swimmingPool`) are still accurate (verified against satellite imagery).
