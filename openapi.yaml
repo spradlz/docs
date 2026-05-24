@@ -3431,6 +3431,202 @@ paths:
         "204":
           description: CORS headers
 
+  /pixel/analytics:
+    get:
+      tags: [Pixel]
+      summary: Website analytics — human metrics + SEO-crawler breakdown
+      description: "CRM-session gated. Gap-filled daily time series + totals + top pages from hl_pixel_event/hl_pixel_visitor. Human metrics exclude classified bots (is_bot); the `crawler` block reports SEO/AI-bot crawl activity (Googlebot, GoogleOther, GPTBot, ClaudeBot, …). Powers /settings/website/analytics."
+      parameters:
+        - in: query
+          name: days
+          schema: { type: integer, default: 30, minimum: 1, maximum: 365 }
+          description: Window size in days (1–365).
+      responses:
+        "200":
+          description: Analytics payload
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  range_days: { type: integer }
+                  totals:
+                    type: object
+                    description: Per-metric totals, human-only.
+                    properties:
+                      page_views: { type: integer }
+                      unique_visitors: { type: integer }
+                      identified_leads: { type: integer }
+                      form_submissions: { type: integer }
+                      property_views: { type: integer }
+                      active_sessions: { type: integer }
+                  series:
+                    type: object
+                    description: "metric → array of {date, value}, gap-filled to one point per day."
+                  top_pages:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        path: { type: string }
+                        count: { type: integer }
+                  crawler:
+                    type: object
+                    description: SEO/AI-bot crawl activity for the same window.
+                    properties:
+                      total_hits: { type: integer }
+                      distinct_bots: { type: integer }
+                      series: { type: array, items: { type: object } }
+                      by_bot:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            bot_name: { type: string }
+                            hits: { type: integer }
+                            visitors: { type: integer }
+                            last_seen: { type: string, format: date-time }
+                      top_pages: { type: array, items: { type: object } }
+        "401":
+          description: Unauthorized (no CRM session)
+
+  /run-log:
+    get:
+      tags: [System]
+      summary: Run Log feed — crons, comms, website activity, IDX, AI search
+      description: "CRM-session gated. One timeline across six lanes (`view`). Lanes: all · comms (email/text/call/notification) · website (pixel behavior) · idx (Repliers listing data) · ai (LLM calls with model/cost/tokens) · system (background crons)."
+      parameters:
+        - { in: query, name: view, schema: { type: string, enum: [all, comms, website, idx, ai, system], default: all } }
+        - { in: query, name: app, schema: { type: string }, description: "Filter system rows by app (houseloop-crm | houseloop-app)." }
+        - { in: query, name: status, schema: { type: string, enum: [running, success, failed] } }
+        - { in: query, name: channel, schema: { type: string, enum: [email, imessage, sms, call, notification] } }
+        - { in: query, name: fn, schema: { type: string }, description: "Per-job drill-down (ILIKE)." }
+        - { in: query, name: q, schema: { type: string }, description: Search label/preview. }
+        - { in: query, name: before, schema: { type: string, format: date-time }, description: "Cursor — rows older than this ts." }
+        - { in: query, name: limit, schema: { type: integer, default: 100, maximum: 200 } }
+      responses:
+        "200":
+          description: Feed page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  rows: { type: array, items: { type: object } }
+                  summary:
+                    type: object
+                    properties:
+                      total: { type: integer }
+                      failed: { type: integer }
+                  nextCursor: { type: string, nullable: true }
+        "401":
+          description: Unauthorized (no CRM session)
+
+  # ── WEBSITE / AI SEARCH (houseloop.ai public endpoints) ───────────────────────
+  # These live on the public site (houseloop.ai), NOT the CRM host — hence the
+  # path-level server override. Each fires a cross-app Inngest event the CRM
+  # records: /search/* → houseloop/ai-search.event (Run Log AI lane, w/ token cost);
+  # /repliers/webhook → houseloop/idx.event (Run Log IDX lane, w/ address).
+
+  /search/nlp:
+    servers:
+      - url: https://houseloop.ai/api
+        description: HouseLoop public site
+    post:
+      tags: [Website Integration]
+      summary: AI conversational home search
+      description: "Public. Sends the running chat; gpt-4o-mini extracts filters + decides `ready`, then a layered engine answers (vision catalog → Repliers NLP → gpt-4o re-rank). Token usage + USD cost (this turn + any re-rank) ship on houseloop/ai-search.event → CRM Run Log AI Search lane."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [messages]
+              properties:
+                messages:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      role: { type: string, enum: [user, assistant] }
+                      content: { type: string }
+                conversationId: { type: string, nullable: true }
+      responses:
+        "200":
+          description: Assistant turn (+ listings when ready)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  ready: { type: boolean }
+                  reply: { type: string }
+                  count: { type: integer, nullable: true }
+                  matchCount: { type: integer, nullable: true }
+                  aiKeyword: { type: string, nullable: true }
+                  listings: { type: array, items: { type: object } }
+                  conversationId: { type: string }
+
+  /search/classify:
+    servers:
+      - url: https://houseloop.ai/api
+        description: HouseLoop public site
+    post:
+      tags: [Website Integration]
+      summary: Search-bar routing (filtered vs AI)
+      description: "Public. gpt-4o-mini routes a query: maps fully to the six filter facets → `normal` + params; any feature/amenity beyond them → `ai`. Logs model/tokens/cost to the Run Log AI Search lane."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [q]
+              properties:
+                q: { type: string }
+      responses:
+        "200":
+          description: Routing decision
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  intent: { type: string, enum: [normal, ai] }
+                  params: { type: object, nullable: true }
+
+  /repliers/webhook:
+    servers:
+      - url: https://houseloop.ai/api
+        description: HouseLoop public site
+    post:
+      tags: [Website Integration]
+      summary: Repliers IDX webhook → cache + Run Log
+      description: "Public (Repliers-called). listing.created/updated/deleted → cache upsert, price-history, sold/off-market archive + R2 photo save. Fires houseloop/idx.event (with formatted address) → CRM Run Log IDX Feed lane."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Repliers listing event (event + listing.mlsNumber).
+      responses:
+        "200":
+          description: Processing result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  event: { type: string }
+                  mls: { type: string }
+                  actions: { type: array, items: { type: string } }
+
   # ── SCHEDULED ACTIONS ────────────────────────────────────────────────────────
 
   /scheduled-actions:

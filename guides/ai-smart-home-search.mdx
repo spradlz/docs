@@ -228,4 +228,24 @@ Every turn persists (best-effort) to `hl_ai_search_conversation` (`sessionId` = 
 `hl_session` cookie; `userId` set/backfilled on sign-in; `messages`, `lastFilters`,
 `lastUrl`, `lastCount`). Anonymous threads link to the account on the next signed-in turn.
 
+## Cost & observability (CRM Run Log → AI Search lane)
+
+Every AI call is logged with its real cost. `/api/search/nlp` and `/api/search/classify`
+read OpenAI's `usage` and accrue tokens + USD across **both** model calls in a turn —
+the `gpt-4o-mini` conversation/classify turn **and** any `gpt-4o` re-rank — priced per
+model (4o-mini `$0.15`/`$0.60`, 4o `$2.50`/`$10.00` per 1M in/out). The web fires a
+cross-app Inngest event:
+
+```
+houseloop/ai-search.event
+  { kind, query, model, prompt_tokens, completion_tokens, total_tokens,
+    cost_usd, result_count, status, duration_ms }
+```
+
+The CRM consumer (`ai-call-log`) writes one `hl_run_log` row (`source='ai-search'`).
+It surfaces in the **CRM Run Log → AI Search** lane (`GET /api/run-log?view=ai`) as
+`model · $cost · tokens · results`, e.g. `gpt-4o-mini · $0.000189 · 888 tokens · 24 results`.
+The monthly market-report LLM (Claude Sonnet) shares this lane. See the **Run Log** /
+**API Reference** for the endpoint shapes.
+
 See also: **Coming Soon** guide (early-access listings the AI surfaces pre-market).
