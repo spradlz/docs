@@ -75,16 +75,27 @@ so the map mirrors the list exactly (a 194-result search plots those 194).
 | Param | Meaning |
 |---|---|
 | `bbox` | Viewport `W,S,E,N` to restrict markers |
-| `zoom` | Current map zoom (decides clusters vs. pins) |
-| `mode` | Force `clusters` or `pins` |
+| `zoom` | Current map zoom (informational; passed through) |
 | `bounds=1` | **Fit mode** — skip markers, return the bounding box of the whole filtered set |
+| `only` / `aimatch` | CSV of AI-match `hlid`s → those pins come back flagged `aiMatch:true` |
 
-**Marker mode** (default):
+**Marker mode** (default — `mode:"pins"`, **no clustering, ever**):
 
 ```bash
 curl "https://houseloop.ai/api/listings/map?city=Leawood&state=KS&bbox=-94.7,38.9,-94.5,39.0&zoom=13"
-# → { "ok": true, "mode": "pins", "total": 312, "pins": [ { hlid, lat, lng, listPrice, status, isNew, street, city, beds, baths, sqft, photo, brokerage }, … ] }
+# → { "ok": true, "mode": "pins", "total": 312,
+#      "pins": [ { hlid, lat, lng, listPrice, status, isNew, aiMatch, street, city, beds, baths, sqft, photo, brokerage }, … ] }
 ```
+
+<Note>
+**`total` vs. `pins.length` (locked 2026-05-24):** `total` is the **full** count of
+homes matching the query within the `bbox` — this is the honest number the list view
+shows. `pins` is **capped at 50 markers per viewport** (`MAX_MAP_PINS`): dots are
+stride-sampled across the set, AI-match pills are always kept. So the UI renders a
+"{pins.length} of {total}" results pill (e.g. "46 of 312"). The map is never a 2,000-pin
+blob; zoom in → the bbox shrinks → fewer homes → eventually every home is shown.
+Clustering is **banned** — individual house markers at every zoom.
+</Note>
 
 **Fit mode** (`bounds=1`) — used to auto-zoom the map to encompass every result
 when entering map view (Zillow behavior), so a metro-scattered search frames all
@@ -93,6 +104,40 @@ of its homes instead of only the few in the default viewport:
 ```bash
 curl "https://houseloop.ai/api/listings/map?city=Leawood&state=KS&bounds=1"
 # → { "ok": true, "total": 312, "bounds": { "north": 39.01, "south": 38.90, "east": -94.55, "west": -94.69 } }
+```
+
+<Note>
+**Search-as-you-move (client behavior, 2026-05-24):** in map/split view the client pushes
+the live viewport `bbox` into the URL on every pan/zoom, so the list **and** the result
+count re-scope to exactly what's on screen — `bbox` → `geo.bbox` flows through the same
+shared envelope into the search `WHERE`. The map renders **dots** by default and flips
+markers to compact **price pills** by pixel-spacing (never stacked); at a ~5mi frame every
+marker becomes a pill. AI-search matches always render as ✨ pills. Full UI spec:
+`GT_HOUSELOOP_MAP_VIEW.md §0`.
+</Note>
+
+## GET /api/geo/place-boundary
+
+The Census TIGER named-place outline drawn around a searched city (single `city` + KS/MO).
+TIGERweb proxy with a 30-day cache; silently degrades to no outline if the place isn't found.
+
+```bash
+curl "https://houseloop.ai/api/geo/place-boundary?name=Overland%20Park&state=KS"
+# → { "ok": true, "geometry": { "type": "MultiPolygon", "coordinates": [ … ] } }
+# bogus place → { "ok": false }
+```
+
+## GET /api/search/classify
+
+Intent classifier that routes the search bar. Legacy/deterministic search handles only the
+six facets (location, home type, status, beds, baths, price); **anything beyond** (features /
+amenities like "white kitchen", "pool", "open floor plan") routes to AI Smart Home Search.
+No regex — an LLM (gpt-4o-mini) classifies. See the [AI Smart Home Search](/guides/ai-smart-home-search)
+guide for the AI side.
+
+```bash
+curl "https://houseloop.ai/api/search/classify?q=homes%20with%20a%20white%20kitchen%20in%20Overland%20Park"
+# → { "mode": "ai", "params": { … } }     # plain "overland park" → { "mode": "normal", … }
 ```
 
 ## GET /api/home
