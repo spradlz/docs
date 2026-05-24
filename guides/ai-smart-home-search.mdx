@@ -1,60 +1,150 @@
 ---
 title: "AI Smart Home Search"
-description: "Conversational natural-language home search on houseloop.ai. A visitor describes their dream home in plain English; our chat (gpt-4o-mini) runs the conversation, Repliers NLP powers the actual search (true structured filters + AI photo image-search), and we return badged matches plus a deep link into the gallery. Every conversation is logged for the lead."
+description: "Conversational natural-language home search on houseloop.ai. A visitor describes their dream home in plain English; our chat (gpt-4o-mini) runs the conversation and a LAYERED search engine answers it — superlative questions get a direct answer, descriptive features match a pre-computed AI vision catalog of the listing photos, and everything else falls back to Repliers NLP. Every conversation is logged for the lead."
 ---
 
 **AI Smart Home Search** lets a visitor type what they want in plain language
-("homes with a white kitchen and an in-ground pool in Overland Park") instead of
-clicking filters. Entry points: the **"AI Search"** item in the top nav, the
-gradient **"AI Search"** button beside the hero search bar, and the **"Search
-smarter with AI"** row in the search dropdown — all open one chat modal.
+("homes with a white kitchen and an in-ground pool in Overland Park", "what's the
+most expensive home in Overland Park") instead of clicking filters. Entry points:
+the **"AI Search"** item in the top nav, the gradient **"AI Search"** button beside
+the hero search bar, and the **"Search smarter with AI"** row in the search dropdown
+— all open one chat modal.
 
-## How it works (hybrid: our chat UX, Repliers' search engine)
+## How it works (our chat UX, a layered search engine)
 
 1. The modal sends the running conversation to `POST /api/search/nlp`.
 2. **gpt-4o-mini** (server-side — the key never reaches the browser) runs the
-   *conversation*: a friendly reply + deciding when there's enough to search (`ready`).
-3. When ready, the search is powered by **Repliers NLP** (`POST https://api.repliers.io/nlp`):
-   - **Structured filters** — "pool" → `swimmingPool=not:null`, "3 bed under 600k" →
-     `minBeds=3&maxPrice=600000`, city, etc.
-   - **AI image search** — descriptive/visual features ("white kitchen") are matched
-     against the listing **PHOTOS** (semantic image embedding), not the text.
-   - We run the returned query, map each `mlsNumber` to our `hl_heartlandmls_<n>` hlid,
-     and hydrate from our cache (**Core-Heartland 8-county clamp applied for free** —
-     non-Heartland listings drop out).
-4. **Matched-photo lead** — on image searches Repliers re-orders each listing's photos
-   so the matched shot (the pool, the white kitchen) is first; we lead the card with it.
-5. The reply comes back with the match count and a **View N homes** button that
-   deep-links into the gallery (matches pinned + badged "AI Match" via `aimatch=`).
+   *conversation*: a friendly reply + structured filter extraction + deciding when
+   there's enough to search (`ready`). All descriptive phrases ("white kitchen",
+   "floor-to-ceiling fireplace", "green exterior") are routed into `filters.keywords`.
+3. When `ready`, the search resolves through a **fixed layer order** — the first
+   layer that can handle the query wins:
+
+<Steps>
+  <Step title="Superlative answer">
+    If the query carries a sort ("most expensive / cheapest / biggest / most beds"),
+    we **answer the question** instead of dumping a list. See [Superlative answers](#superlative-answers).
+  </Step>
+  <Step title="Vision-tag match (PRIMARY for tagged metros)">
+    Descriptive features match our **pre-computed AI vision catalog** of each
+    listing's photos — instant SQL, photo-verified, exact. See [Vision Catalog](#vision-catalog).
+    If the metro has no vision tags yet, this layer is skipped.
+  </Step>
+  <Step title="Repliers NLP (untagged fallback)">
+    `POST https://api.repliers.io/nlp` extracts true structured filters + runs
+    Repliers' own AI image search. Used where we haven't vision-tagged yet.
+  </Step>
+  <Step title="gpt-4o re-rank (last backstop)">
+    Reads listing descriptions and rejects false positives ("white quartz
+    countertops" ≠ white kitchen, "pool table" / "community pool" ≠ private pool).
+  </Step>
+</Steps>
+
+4. The reply comes back with the match count, a `listings` array (preview cards),
+   and a **View N homes** URL that deep-links into the gallery (matches pinned +
+   badged "AI Match" via `aimatch=`).
+
+<a id="vision-catalog" />
+## Vision Catalog (the primary matcher)
+
+At ingest, **gpt-4o-mini** (vision, low detail, up to 16 photos) reads each listing's
+photos ONCE against a controlled matrix of **50+ buyer-searchable features** and caches
+the result in the `Listing.visionTags` JSON column. Descriptive search then becomes
+**instant SQL** — no per-query LLM, no Repliers round-trip.
+
+**What it catalogs:**
+
+| Group | Features |
+|---|---|
+| Kitchen | white kitchen, cabinet color, countertop material + color, island, backsplash, appliance finish, double oven |
+| Baths | freestanding tub, frameless/European glass shower, double vanity, tiled shower |
+| Floors | hardwood, tile, carpet, main-living floor |
+| Fireplace | present, two-story / floor-to-ceiling, material |
+| Ceilings / windows | tall/vaulted ceilings, beams, floor-to-ceiling windows, natural light (0–10) |
+| Walls / trim | wall color, white trim, accent wall, shiplap / board-and-batten |
+| Hardware | finish (black/gold/nickel/bronze), black door handles, statement lighting |
+| Layout | open floor plan, finished basement, main-floor primary, office, mudroom |
+| Exterior | color, material, **roof material + color** |
+| Pool | **private pool (vision-verified)**, pool_type |
+| Outdoor / lot | covered patio, deck, outdoor kitchen, fire pit, fenced yard, big backyard, mature trees, corner lot, landscaping (0–10), garage car count, curb appeal (0–10) |
+| Overall | modern, luxury (0–10), condition, primary style |
+| Catch-all | `notable_features[]` — anything else worth noting (wine cellar, sport court…) |
+
+**Matching** (`lib/listings/vision-search.ts`): query keywords map to tag conditions,
+plus dynamic color/material matching reads a "&lt;color&gt; &lt;surface&gt;" pair out of the
+keywords ("green exterior", "gray cabinets", "black roof", "granite counters"). Returns
+the exact listings matching EVERY requested feature, with pill labels.
 
 <Note>
-**Repliers NLP is LIVE and primary** (enabled in the Repliers developer portal under
-the API key's "Enable NLP" toggle + an OpenAI key on the account). It bills that
-OpenAI key per search. If Repliers returns nothing, the route **falls back** to our
-own matcher — a **gpt-4o** re-rank (reads listing descriptions; rejects "white quartz
-countertops" ≠ white kitchen, "pool table"/"community pool" ≠ private pool) plus a
-graceful partial-match fallback ("couldn't find both X and Y — here are N with a Y").
+**Cost / scale:** ~$0.006 per listing (image cost is fixed by photo count + low detail;
+adding catalog fields only grows output tokens — essentially free). The live DB is
+~6,500 active + coming-soon listings ≈ **$40 one-time** full backfill, then pennies/day
+on new ingests. Backfill is city-scoped:
+`npx tsx --env-file=.env.local scripts/vision-backfill.ts "<City>"`. As of 2026-05-24,
+**Overland Park is the tagged test metro** (410 listings); full-DB backfill is pending.
 </Note>
 
-## Private vs HOA amenities
+<Warning>
+**Direction is NOT vision.** "Front door faces east" isn't in the photos — it comes
+from lat/long + parcel geometry / the MLS `DirectionFaces` field, handled as a separate
+structured pass (not yet built).
+</Warning>
 
-Repliers separates the home's OWN features from the neighborhood's:
-`details.swimmingPool` ("In Ground") = a **private** pool; `condominium.amenities`
-containing `"Pool"` = an **HOA/community** pool. A home can have both. (Pool matching
-trusts the structured field — the pool image-embedding is too flat to filter on.)
+<a id="superlative-answers" />
+## Superlative answers
 
-## Endpoint
+When the query carries a sort, the engine **answers the question** (Zach's rule: "if I
+ask a question it should answer it — not 24 matching + 455 more nearby").
 
-`POST https://houseloop.ai/api/search/nlp`
+- **Singular** ("the most expensive **home**") → leads with ONE home: a short
+  narration citing its real facts (price, sqft, subdivision, garage, days-on-market)
+  plus its vision standouts (pool, floor-to-ceiling windows, fireplace, mature trees),
+  a soft CTA, then offers up to 10 more.
+- **Plural** ("most expensive **homes**") → returns the sorted list.
+- Cards (lead + up to 10) come back under `listings`; `url = /listings?sort=<sortKey>`.
+  No "AI Match" badges — it's a sort, not a feature match.
+
+> *"The most expensive home in Overland Park right now is 16916 Bond Street, listed at
+> $3,875,000 and it's been on the market for just 7 days. This 8,914 sqft single-family
+> residence in Mills Ranch features a private in-ground pool, floor-to-ceiling windows,
+> and soaring ceilings... Check it out and let me know what you think! Here are 10 other
+> top homes too."*
+
+## Private vs HOA amenities (vision-verified)
+
+A home's OWN pool is separated from the neighborhood's. **Pool is vision-verified:**
+`visionTags.pool_type = "private"` only when the model SEES a pool in the home's own
+yard. Community/HOA pools (`condominium.amenities` contains "Pool") are tagged
+`"community"` and never match a private-pool query. This replaced trusting the
+structured `swimmingPool` flag, which mis-flagged condos with HOA pools as private.
+(OP backfill: private 12 · community 200 · none 198.)
+
+## Coming Soon
+
+The AI surfaces early-access listings (`status: A`, `lastStatus: "Cs"`) the same as
+active homes. See the **Coming Soon** guide for the data signal and the card pill.
+
+---
+
+## Endpoints
+
+### `POST /api/search/nlp`
+
+Runs one conversational turn. Returns a reply and, when `ready`, the search results.
 
 **Request**
 
 ```json
 {
-  "messages": [{ "role": "user", "content": "homes with a pool in Overland Park" }],
-  "conversationId": "optional — reuse to continue a conversation"
+  "messages": [{ "role": "user", "content": "whats the most expensive home in overland park" }],
+  "conversationId": "optional — reuse to continue a thread"
 }
 ```
+
+| Field | Type | Notes |
+|---|---|---|
+| `messages` | `{role:"user"\|"assistant", content:string}[]` | Required. The running conversation (last ~16 turns). |
+| `conversationId` | `string` | Optional. Reuse to continue + persist one thread. |
 
 **Response (ready to search)**
 
@@ -62,32 +152,80 @@ trusts the structured field — the pool image-embedding is too flat to filter o
 {
   "ok": true,
   "ready": true,
-  "reply": "I found 24 homes matching homes with a pool in Overland Park — plus 6 more nearby you might like.",
-  "count": 30,
-  "matchCount": 24,
-  "aiMatchHlids": ["hl_heartlandmls_2619637", "..."],
-  "url": "/listings?city=Overland Park&aimatch=hl_heartlandmls_2619637,...",
-  "listings": [{ "hlid": "...", "photo": "https://cdn.repliers.io/<matched photo>", "...": "..." }],
-  "conversationId": "ff71a4f0-…"
+  "reply": "The most expensive home in Overland Park right now is 16916 Bond Street...",
+  "count": 320,
+  "matchCount": 12,
+  "aiMatchHlids": ["hl_heartlandmls_2619637"],
+  "aiAll": false,
+  "url": "/listings?sort=priceDesc",
+  "filters": { "cities": ["Overland Park"], "sort": "priceDesc", "keywords": [] },
+  "listings": [
+    { "hlid": "hl_heartlandmls_2619637", "href": "/...", "photo": "https://cdn.repliers.io/...",
+      "price": 3875000, "beds": 5, "baths": 6, "sqft": 8914, "address": "16916 Bond Street, Overland Park",
+      "aiMatch": true, "keyword": "Pool" }
+  ],
+  "broadened": false,
+  "conversationId": "ff71a4f0-..."
 }
 ```
 
-`GET /api/search/nlp/history` returns the visitor's recent searches (History dropdown).
+| Field | Type | Notes |
+|---|---|---|
+| `ready` | `boolean` | `false` = clarifying question only (no results yet). |
+| `reply` | `string` | The assistant turn (superlative narration, match summary, or question). |
+| `count` | `number` | Total matches behind the result set. |
+| `matchCount` | `number?` | AI-confirmed exact feature matches (vision/re-rank paths). |
+| `aiMatchHlids` | `string[]` | Confirmed hlids, AI-ranked — pinned + badged on `/listings`. |
+| `aiAll` | `boolean` | `true` when every returned result genuinely matches the feature. |
+| `url` | `string` | Deep link into the gallery (carries `aimatch=` / `sort=` / `only=`). |
+| `listings` | `card[]` | Preview cards (the result rows). **Cards live here, not under `cards`.** |
+| `conversationId` | `string` | Echo it back to continue the thread. |
 
-## Conversation storage
+### `GET /api/search/nlp/history`
 
-Every turn persists (best-effort) to `hl_ai_search_conversation` (`sessionId` = the
-`hl_session` cookie; `userId` set/backfilled on sign-in; `messages`, `lastFilters`,
-`lastUrl`, `lastCount`). Anonymous threads link to the account on the next signed-in turn.
+Returns the visitor's recent AI-search threads (newest-first) for the History dropdown.
+Scoped by `userId` (if signed in) or the `hl_session` cookie. No body.
+
+```json
+{ "ok": true, "conversations": [
+  { "conversationId": "ff71a4f0-...", "title": "most expensive home in overland park",
+    "lastCount": 320, "lastUrl": "/listings?sort=priceDesc", "updatedAt": "2026-05-24T..." }
+] }
+```
+
+### `POST /api/search/classify`
+
+Routes the traditional search bar: decides whether free-text is a deterministic
+6-facet search (city/zip/beds/baths/price/home-type) or needs the AI brain. Returns
+canonical facets when deterministic, or `{ ai: true }` to hand off to the modal.
+
+```json
+// request
+{ "q": "3 bed under 600k in olathe" }
+// response (deterministic)
+{ "ok": true, "ai": false, "params": "city=Olathe&minBeds=3&maxPrice=600000" }
+// response (needs AI)
+{ "ok": true, "ai": true }
+```
 
 ## Source (`apps/houseloop-web`)
 
 | Piece | File |
 |---|---|
 | Chat modal + entry points | `components/site/AiSearchModal.tsx`, `AiSearchButton.tsx`, `Header.tsx` (HeaderAiSearchLink), `SearchAutocomplete.tsx` |
-| Route (chat + Repliers hybrid + gpt-4o fallback + persistence) | `app/api/search/nlp/route.ts` |
-| Repliers NLP lib | `lib/listings/repliers-nlp.ts` |
+| Route (chat + layered engine + persistence) | `app/api/search/nlp/route.ts` |
+| Vision catalog — tagger | `lib/listings/vision-tags.ts` |
+| Vision catalog — matcher | `lib/listings/vision-search.ts` |
+| Vision catalog — backfill | `scripts/vision-backfill.ts` |
+| Repliers NLP lib (fallback) | `lib/listings/repliers-nlp.ts` |
+| Bar router | `app/api/search/classify/route.ts` |
 | History endpoint | `app/api/search/nlp/history/route.ts` |
-| Storage model | `prisma/schema.prisma` → `AiSearchConversation` |
+| Storage model | `prisma/schema.prisma` → `AiSearchConversation`, `Listing.visionTags` |
+
+## Conversation storage
+
+Every turn persists (best-effort) to `hl_ai_search_conversation` (`sessionId` = the
+`hl_session` cookie; `userId` set/backfilled on sign-in; `messages`, `lastFilters`,
+`lastUrl`, `lastCount`). Anonymous threads link to the account on the next signed-in turn.
 
 See also: **Coming Soon** guide (early-access listings the AI surfaces pre-market).
