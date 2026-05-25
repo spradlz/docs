@@ -3495,12 +3495,13 @@ paths:
     get:
       tags: [System]
       summary: Run Log feed — crons, comms, website activity, IDX, AI search
-      description: "CRM-session gated. One timeline across six lanes (`view`). Lanes: all · comms (email/text/call/notification) · website (pixel behavior) · idx (Repliers listing data) · ai (LLM calls with model/cost/tokens) · system (background crons)."
+      description: "CRM-session gated. One timeline across six lanes (`view`). Every row carries a deterministic `category` flag (the single source of truth for its lane), surfaced as the Type column. Lanes/categories: all · comms=`communication` (email/text/call/notification) · website=`website_activity` (pixel behavior; supports a Humans/Bots lens via `audience`) · idx=`idx_feed` (Repliers listing data) · ai=`ai_search` (LLM calls with model/cost/tokens) · system=`background_job` (other crons)."
       parameters:
         - { in: query, name: view, schema: { type: string, enum: [all, comms, website, idx, ai, system], default: all } }
         - { in: query, name: app, schema: { type: string }, description: "Filter system rows by app (houseloop-crm | houseloop-app)." }
         - { in: query, name: status, schema: { type: string, enum: [running, success, failed] } }
-        - { in: query, name: channel, schema: { type: string, enum: [email, imessage, sms, call, notification] } }
+        - { in: query, name: channel, schema: { type: string, enum: [email, imessage, sms, call, notification] }, description: "Filter comms rows by channel." }
+        - { in: query, name: audience, schema: { type: string, enum: [human, bot] }, description: "Website Activity only — real visitors vs. SEO crawlers (hl_pixel_visitor.is_bot)." }
         - { in: query, name: fn, schema: { type: string }, description: "Per-job drill-down (ILIKE)." }
         - { in: query, name: q, schema: { type: string }, description: Search label/preview. }
         - { in: query, name: before, schema: { type: string, format: date-time }, description: "Cursor — rows older than this ts." }
@@ -3514,7 +3515,26 @@ paths:
                 type: object
                 properties:
                   ok: { type: boolean }
-                  rows: { type: array, items: { type: object } }
+                  rows:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        kind: { type: string, enum: [run, comm, web], description: "Underlying record type." }
+                        category: { type: string, enum: [communication, website_activity, idx_feed, ai_search, background_job], description: "Deterministic lane flag (the Type column). Computed once server-side; tabs filter on this." }
+                        id: { type: string }
+                        app: { type: string }
+                        source: { type: string }
+                        fn: { type: string, nullable: true }
+                        label: { type: string }
+                        preview: { type: string, nullable: true }
+                        status: { type: string, enum: [running, success, failed] }
+                        trigger: { type: string, nullable: true }
+                        channel: { type: string, nullable: true }
+                        direction: { type: string, enum: [inbound, outbound], nullable: true }
+                        lead_id: { type: string, nullable: true }
+                        ts: { type: string, format: date-time }
+                        finished_at: { type: string, format: date-time, nullable: true }
                   summary:
                     type: object
                     properties:

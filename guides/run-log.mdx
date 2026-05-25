@@ -1,0 +1,75 @@
+---
+title: "Run Log"
+description: "One real-time timeline of everything happening across HouseLoop — communications, website activity, IDX listing events, AI search calls, and background jobs — each row tagged with an explicit category."
+---
+
+The **Run Log** (CRM → **Run Log**, API `GET /api/run-log`) is HouseLoop's single
+observability timeline. Every meaningful event — an inbound email, a home viewed on the
+website, a Repliers listing update, an AI search, a nightly cron — lands here in real time,
+and **each row carries one explicit `category` flag** that decides which tab it belongs to.
+
+## The six tabs
+
+Each tab is just a filter on the row's own `category`:
+
+| Tab | `category` | What lands here |
+|---|---|---|
+| **All** | _(everything)_ | The full timeline, newest first. |
+| **Communications** | `communication` | Person-to-person: email (sent + inbound), iMessage, SMS, calls, message notifications. |
+| **Website Activity** | `website_activity` | First-party pixel behavior on houseloop.ai — homes Viewed / Liked / Saved / Shared and tour requests, each with the street address. Has a **Humans / Bots** lens. |
+| **IDX Feed** | `idx_feed` | Listing data from Repliers — new listings, price changes, sold/off-market, plus listing-data jobs (cache sync, catalog backfill, neighborhood stats). |
+| **AI Search** | `ai_search` | Request-time LLM calls — AI search, search routing, re-rank, market-report narration. Shows `model · $cost · tokens · results`. |
+| **Background Jobs** | `background_job` | Every other Inngest cron (engagement stats, scheduled actions, capture, Gmail watch renewal). |
+
+The **Type** column shows the flag on every row, so the categorization is always visible —
+never guessed at render time.
+
+## How it works
+
+- **One source of truth.** The category is computed **once, server-side**, from the event's
+  origin (its kind + source + which registered Inngest function produced it) and stored on the
+  row. The UI and the tabs only ever read that column — they never re-derive it.
+- **Real-time, no polling.** New events stream in over Server-Sent Events. A Postgres
+  `LISTEN/NOTIFY` bus fires on insert (pixel events, emails, calls, texts, listing events), so
+  the feed and the lead page update within ~1–2s with no refresh.
+- **Cross-app bridges.** `houseloop-web` (the public site, separate database) can't write the
+  CRM directly, so it emits Inngest events the CRM records:
+  - `houseloop/ai-search.event` → AI Search lane (with token cost).
+  - `houseloop/idx.event` → IDX Feed lane (with the listing address).
+  - All other Inngest functions are auto-captured via `function.finished`/`failed`.
+
+## Filtering
+
+<ParamField query="view" type="string" default="all">
+  `all` · `comms` · `website` · `idx` · `ai` · `system`. Selects the tab (category).
+</ParamField>
+<ParamField query="audience" type="string">
+  Website Activity only — `human` or `bot`. Splits real visitors from SEO crawlers
+  (Googlebot, GoogleOther, AI scrapers) classified at pixel ingest.
+</ParamField>
+<ParamField query="status" type="string">
+  `running` · `success` · `failed` (job rows).
+</ParamField>
+<ParamField query="channel" type="string">
+  `email` · `imessage` · `sms` · `call` · `notification` (communication rows).
+</ParamField>
+<ParamField query="q" type="string">Free-text search across label + preview.</ParamField>
+<ParamField query="before" type="string">Cursor — return rows older than this timestamp (pagination).</ParamField>
+
+### Example
+
+```bash
+# Inbound + outbound communications only
+curl 'https://crm.houseloop.ai/api/run-log?view=comms' -H 'Cookie: <crm session>'
+
+# Website activity from real humans (crawlers excluded)
+curl 'https://crm.houseloop.ai/api/run-log?view=website&audience=human' -H 'Cookie: <crm session>'
+```
+
+Each row returns its `category`, `status`, `label`, `preview`, `ts`, and (for leads) `lead_id`.
+See the [Run Log API reference](/api-reference) for the full schema.
+
+<Note>
+The Run Log is CRM-session gated (it returns `401` without a valid session). It is a
+read-only timeline — there are no row actions or bulk operations.
+</Note>
