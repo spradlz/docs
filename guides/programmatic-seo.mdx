@@ -1,53 +1,94 @@
 ---
-title: "Programmatic SEO (Listing Pages)"
-description: "How HouseLoop builds a Zillow-style web of indexable pages — geo/facet saved-search pages + every individual active & sold listing as its own URL — with full MLS/IDX compliance."
+title: "Programmatic SEO — overview"
+description: "How HouseLoop builds a Zillow-style web of indexable pages — every active listing, plus county / city / zip / neighborhood landing pages — with full MLS/IDX compliance."
 ---
 
-HouseLoop's organic-search engine: a programmatic web of indexable pages covering counties → cities →
-zips → neighborhoods → individual listings, plus facet/saved-search pages (bedroom, price, amenity,
-type). It's an **active for-sale product first** — every page has a **For Sale / Recently Sold toggle**
-(same as the main search), and each toggle state is its own indexable URL. Master plan:
-`GT/GT - ACTIVE/GT_HOUSELOOP_SEO_SLURRY_PRD.md`.
+HouseLoop's organic-search engine is a programmatic web of indexable pages: every active
+listing as its own readable URL, plus a directory tree of **county → city → zip → neighborhood**
+landing pages. Every page is server-rendered from live inventory, carries Schema.org
+structured data, and is listed in the sitemap so Google can discover it.
+
+This page is the map. Two companion pages go deeper:
+
+<CardGroup cols={2}>
+  <Card title="How pages are built & rendered" icon="layer-group" href="/guides/seo-pages-and-rendering">
+    The one shared results page, the dynamic SEO block, the geo routes, the sitemap, and how to add a new page.
+  </Card>
+  <Card title="SEO background jobs" icon="clock" href="/guides/seo-background-jobs">
+    The nightly cron that computes neighborhood prices, and how its runs land in the Run Log.
+  </Card>
+</CardGroup>
+
+## What's live today
+
+| Surface | URL shape | Status |
+|---|---|---|
+| Individual listing | `/listings/{address-slug}/{hlid}/` | **Live** — readable slug, JSON-LD, canonical, OG/Twitter |
+| County landing | `/{state}/{county}` | **Live** |
+| City landing | `/{state}/{county}/{city}` | **Live** |
+| Zip landing | `/{state}/{county}/{city}/{zip}` | **Live** |
+| Neighborhood landing | `/{state}/{county}/{city}/n/{slug}` | **Live** — first-class indexed page (SEO Slurry v2) |
+| Sitemap + robots | `/sitemap.xml`, `/robots.txt` | **Live** — chunked, every active listing + the full geo tree |
+
+The `/n/` prefix on neighborhoods is deliberate — it avoids colliding with the `[zip]`
+segment one level up.
 
 ## Coverage
-8 Core Heartland counties (Jackson, Johnson, Clay, Cass, Platte, Wyandotte, Leavenworth, Miami) →
-all real cities → top-10 neighborhoods/city → all zips → every active + sold listing. ≈360–375K
-indexable URLs.
 
-## Page anatomy
-1. Breadcrumb (State › County › City › Zip › Neighborhood) — `BreadcrumbList` JSON-LD.
-2. H1 + intro + result count; For Sale / Recently Sold toggle.
-3. Filter bar + sort; ≤500 result cards (Heartland §12.3m); map (later).
-4. Bottom directory block — nearby cities / neighborhoods / zips + "Other {City} Topics" facets,
-   with average home values. This internal link graph is what makes the SEO compound.
-5. Compliance footer (see below).
+The 8 Core Heartland counties (Jackson, Johnson, Clay, Cass, Platte, Wyandotte, Leavenworth,
+Miami) → every real city → top ~20 neighborhoods per city → every zip → every active listing.
+The directory tree comes from one taxonomy file; see
+[How pages are built & rendered](/guides/seo-pages-and-rendering#the-geo-taxonomy).
+
+## Page anatomy (geo + neighborhood pages)
+
+1. **H1** — `"{Place}, {ST} Real Estate & Homes For Sale"` (Zillow phrasing, one line).
+2. **Result count + sort**, filter bar, listing cards, map toggle.
+3. **Breadcrumb trail** — `For Sale: Kansas • Johnson County • Overland Park` at the top of the SEO block (`BreadcrumbList` JSON-LD).
+4. **The SEO section** — the full Zillow-style block, rendered dynamically by `LocationSeo`:
+   Find a Home You'll Love (amenity) · Select Property Type · Popular Searches ·
+   Nearby City Homes ($) · Neighborhood Homes ($) · Homes by Zip ($) · Estimate Sale
+   Proceeds · More to Explore (price bands). Each section has its own icon. This internal
+   link graph is what makes the SEO compound.
+5. **Compliance footer** (see below).
+
+## Compliance — non-negotiable
+
+<Warning>
+**Sold prices are NEVER displayed.** MLS GRID's IDX rule and our Heartland license forbid it.
+Every average dollar figure shown on any page (city / zip / neighborhood) is the **average
+ACTIVE list price**. Sold data may be used to *rank* (e.g. to pick the top neighborhoods),
+but it is never shown as a price.
+</Warning>
+
+- Per-page Heartland MO/KS disclosure: "Listings courtesy of Heartland MLS, distributed by MLS GRID."
+- Per-listing brokerage + MLS# + "courtesy of Heartland MLS as distributed by MLS GRID."
+- No seller PII; honor address-withhold; same-brand site; no framing.
+- Dynamic filtered search URLs (`/listings?minPrice=…`) are **not** indexed — only the clean
+  canonical landing pages are.
 
 ## URL scheme
-- Geo: `/{state}/{county}/{city}/{zip}`; sold variant appends `/sold`.
-- Neighborhood: `/{…city}/n/{slug}`; facet: `/{…city}/{facet}` (`/3-bedroom`, `/homes-under-300k`, `/pool`, `/condos`).
-- Listing detail: active `/listings/{slug}/{hlid}`; sold `/sold/{slug}/{hlid}`.
-- Address autocomplete: typing an address surfaces the individual listing → its unique page.
 
-## Data
-- `hl_geo` taxonomy (state/county/city/zip/neighborhood + counts + avg value), refreshed nightly.
-- Active = live cache; sold = `ListingHistory` (426K archive).
-- **Photos archived to Cloudflare R2** — Repliers purges sold photos within hours, so we copy pixels
-  to our own storage at ingest (active) + a one-time sweep. ~$3.40/mo, $0 egress.
-- ISR: top geos pre-rendered, long tail generated on first crawl.
+```
+Listing detail   /listings/{address-slug}/{hlid}/        e.g. /listings/4607-olive-st-kansas-city-mo-64130/hl_heartlandmls_2614865/
+County           /{state}/{county}                       e.g. /kansas/johnson-county
+City             /{state}/{county}/{city}                e.g. /kansas/johnson-county/overland-park
+Zip              /{state}/{county}/{city}/{zip}           e.g. /kansas/johnson-county/overland-park/66210
+Neighborhood     /{state}/{county}/{city}/n/{slug}        e.g. /kansas/johnson-county/overland-park/n/wild-horse
+```
 
-## MLS/IDX compliance (Heartland §12.3 — every page, non-negotiable)
-- **Sold price never displayed**; **sold-only** off-market (no expired/withdrawn/cancelled).
-- **≤500 results per search.**
-- Per-state Heartland MO+KS disclosure + DMCA notice + "Based on information submitted to the MLS GRID
-  as of {datetime}" + "some listings excluded".
-- Per-listing brokerage + MLS# + "courtesy of Heartland MLS as distributed by MLS GRID" + logo;
-  one-letter status code + legend; "last updated" date; 12-hour refresh.
-- No seller PII; honor seller address-withhold; same-brand site; no framing.
+Legacy `/listings/{hlid}/` is a permanent 301 to the canonical readable URL, so every link
+Google already crawled keeps its equity.
 
-## Sitemap
-Sitemap index → ≤50K-URL child sitemaps (sold ×~8, active, cities, zips, neighborhoods, facets).
-Submitted to Google Search Console.
+## Roadmap (not yet shipped)
 
-## Build phases
-P0 geo taxonomy → P1 photo archival (urgent) → P2 sold detail pages → P3 geo index pages →
-P4 facet + market/values → P5 internal links + breadcrumbs → P6 sitemap + JSON-LD + GSC.
+- **Recently-sold detail pages** + `/sold/...` URLs (sold-only, off-market, never priced).
+- **Facet landing pages** as standalone indexed URLs (`/3-bedroom`, `/homes-under-300k`, `/pool`, `/condos`).
+- **Photo archival to Cloudflare R2** for sold listings (Repliers purges sold photos within hours).
+- **Google Search Console** URL Inspection push for new listings; per-listing image sitemap.
+- Flip listing detail pages off `force-dynamic` → ISR (`revalidate`) for crawl-budget efficiency.
+
+## Source of truth
+
+- Ground truth: `GT/GT - ACTIVE/GT_HOUSELOOP_SEO.md` + `GT_HOUSELOOP_MASTER.md` (§6 index).
+- Full v2 spec: `GT/GT - Pending/GT_HOUSELOOP_SEO_SLURRY_V2_PRD.md`.
