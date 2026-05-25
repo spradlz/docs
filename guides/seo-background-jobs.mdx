@@ -1,0 +1,94 @@
+---
+title: "SEO background jobs"
+description: "The nightly Inngest cron that prices neighborhoods for the SEO pages, how it stays MLS-compliant, and how its runs surface in the CRM Run Log under IDX Feed."
+---
+
+The SEO pages show an **average price next to each neighborhood, city, and zip link**. Those
+figures are not computed at request time — they're precomputed nightly by a background job and
+cached, so the pages stay fast and the numbers stay consistent across the whole site.
+
+## The job — `geo-neighborhood-stats`
+
+| Field | Value |
+|---|---|
+| Inngest function id | `geo-neighborhood-stats` |
+| File | `apps/houseloop-web/lib/inngest/functions/geo-neighborhood-stats.ts` |
+| Schedule | `0 8 * * *` (08:00 UTC ≈ **3:00 AM Central**) |
+| Manual trigger | event `geo-neighborhood-stats/manual.run` |
+| Writes | `hl_geo_neighborhood_stats` (Prisma model `GeoNeighborhoodStat`) |
+| Read by | `getNeighborhoodValues()` → `LocationSeo` neighborhood links |
+
+### What it does
+
+For each city, it ranks that city's neighborhoods by `(active + sold-last-12-months)` listing
+count, keeps the **top ~20**, and stores the **average active list price** for each. The table
+is fully replaced every run — it's a derived cache, so the job is idempotent.
+
+```sql
+SELECT city, state, neighborhood,
+       COUNT(*) FILTER (WHERE status = 'active')                                AS active,
+       COUNT(*) FILTER (WHERE status = 'sold' AND "soldDate" >= NOW() - INTERVAL '365 days') AS sold12,
+       ROUND(AVG("listPrice") FILTER (WHERE status = 'active'))                 AS avg_active
+FROM "Listing"
+GROUP BY city, state, neighborhood
+HAVING <has any active or recent-sold>
+```
+
+The slug for each neighborhood is derived in JS with `geoSlug()` so it matches the taxonomy
+(the `neighborhoodSlug` column isn't backfilled on the listing cache). A neighborhood with zero
+active listings stores `avgValue = null` and links **without** a price.
+
+<Warning>
+**Compliance hard-stop.** Sold price is **never selected** in this query — sold listings are
+only *counted*, to rank neighborhoods by activity. The stored and displayed dollar figure is
+strictly the **average active list price**. This is the MLS GRID IDX rule.
+</Warning>
+
+## How runs show up in the Run Log
+
+The job does **not** emit a manual event. The CRM's capture function
+(`houseloop-crm` → `capture-fn.ts`) auto-subscribes to every Inngest
+`function.finished` / `function.failed` and writes the run to `hl_run_log`. The
+**IDX Feed** grouping comes from registering this function as `category: 'idx'` in the CRM's
+`lib/run-log/inngest-registry.ts`:
+
+```ts
+{
+  slug: 'houseloop-geo-neighborhood-stats',
+  fnId: 'geo-neighborhood-stats',
+  name: 'Geo — Neighborhood avg-value cache (SEO)',
+  trigger: 'Nightly cron (0 8 * * *) · geo-neighborhood-stats/manual.run',
+  category: 'idx',   // listing-data-derived SEO stats → IDX Feed
+}
+```
+
+Hand-rolling a `houseloop/idx.event` from the job would double-log — don't. The run's return
+value (`{ cities, neighborhoods, withPrice, durationMs }`) is what the auto-capture records.
+See the [Run Log guide](/guides/run-log) for the lane model.
+
+<Note>
+This is why the job lands under **IDX Feed**, not **Background Jobs** — it's listing-data-derived.
+The categorization contract is owned by the Run Log infra (Adam); coordinate any change there.
+</Note>
+
+## Operating the job
+
+```bash
+# After ANY houseloop-web deploy that adds/changes an Inngest function, re-register:
+curl -X PUT https://houseloop.ai/api/inngest
+
+# Manual run / first populate (Inngest event key):
+curl -X POST "https://inn.gs/e/$INNGEST_EVENT_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"geo-neighborhood-stats/manual.run","data":{}}'
+```
+
+Verify the result by checking `hl_geo_neighborhood_stats` row count (or the IDX Feed lane in
+the CRM Run Log for the latest run + duration).
+
+## Related jobs
+
+- **Geo taxonomy refresh** — `scripts/build-geo-taxonomy.ts` regenerates the county/city/zip/
+  neighborhood tree (and each node's avg active value) that the routes + sitemap walk.
+- Engagement, IDX listing events, and other crons live in the
+  [Run Log](/guides/run-log) — each tagged with its own category.
