@@ -1,33 +1,35 @@
-> **First-time setup**: Customize this file for your project. Prompt the user to customize this file for their project.
-> For Mintlify product knowledge (components, configuration, writing standards),
-> install the Mintlify skill: `npx skills add https://mintlify.com/docs`
-
 # Documentation project instructions
 
 ## About this project
 
-- This is a documentation site built on [Mintlify](https://mintlify.com)
-- Pages are MDX files with YAML frontmatter
-- Configuration lives in `docs.json`
-- Run `mint dev` to preview locally
-- Run `mint broken-links` to check links
+- This is the **HouseLoop** developer documentation site, built on [Mintlify](https://mintlify.com).
+- It is published at **houseloop.mintlify.app** from the `spradlz/docs` GitHub repo (`main` branch is the source of truth).
+- Pages are MDX files with YAML frontmatter (`title`, `description`). Configuration + navigation live in `docs.json`.
+- **Only document what is already deployed and live.** If a feature isn't shipped, it doesn't belong here yet.
+
+## How agents edit these docs
+
+Agents do NOT clone this repo by hand. Use the BossLoop docs tool (it owns clone → write → push):
+
+- MCP tools: `mcp__docs__docs_list`, `docs_read`, `docs_write`, `docs_delete`, `docs_publish`, `docs_status`.
+- Or the CLI: `node tools/docs/mintlify-docs.mjs <list|read|write|delete|publish|status>`.
+
+Flow: read the current page → write the full updated MDX → `publish` (commits + pushes to `main` → Mintlify deploys in ~1-2 min). New page = also add its entry to `docs.json` nav.
 
 ## Terminology
 
-{/* Add product-specific terms and preferred usage */}
-{/* Example: Use "workspace" not "project", "member" not "user" */}
+- Use **HouseLoop** (one word, capital H and L).
+- Use "lead" not "contact"; "Run Log" (capitalized) for the operational run feed; "listing" not "property record".
 
 ## Style preferences
 
-{/* Add any project-specific style rules below */}
-
-- Use active voice and second person ("you")
-- Keep sentences concise — one idea per sentence
-- Use sentence case for headings
-- Bold for UI elements: Click **Settings**
-- Code formatting for file names, commands, paths, and code references
+- Active voice, second person ("you").
+- One idea per sentence; keep it concise.
+- Sentence case for headings.
+- Bold for UI elements: Click **Settings**.
+- Code formatting for file names, commands, paths, and code references.
 
 ## Content boundaries
 
-{/* Define what should and shouldn't be documented */}
-{/* Example: Don't document internal admin features */}
+- Document live, shipped behavior only — no roadmap or unreleased features.
+- Don't document internal agent infrastructure (comms, scrapers, credentials).
