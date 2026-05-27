@@ -1,0 +1,159 @@
+---
+title: "Team Members & Communications"
+description: "How each HouseLoop team member gets their own identity across email, calendar, phone (SMS/voice), and iMessage — every connection bound to the user, resolved by session, never shared. Plus per-user number provisioning and A2P 10DLC compliance."
+---
+
+Every HouseLoop team member — human or AI agent (e.g. **Myli**) — is a row in `hl_users`
+and owns a dedicated set of communication channels. The governing rule:
+
+<Note>
+**A channel connection is owned by a `user_id`, never guessed.** Email, calendar,
+phone, and iMessage each bind to the member's `hl_users.id`. The API resolves "whose
+inbox/number is this?" from the **logged-in session**, not from a cookie or a global
+default. Logged in as admin → you see admin's channels; logged in as Myli → Myli's.
+</Note>
+
+## The identity model
+
+| Channel | Table | Bound to user via |
+|---|---|---|
+| **Email (Gmail)** | `hl_oauth_connections` | `user_id` (real Google OAuth tokens + `signature`) |
+| **Calendar (Google)** | `hl_calendar_connections` | `user_id` (tokens, sync flags, `sync_token`) |
+| **Phone (SMS + Voice)** | `hl_dialer_assignments` | `user_id` → `phone_number` + `messaging_service_sid` |
+| **iMessage** | `hl_imessage_assignments` | `user_id` → `bb_address` |
+
+A member is configured entirely from **CRM → My Team → their profile**. The same
+endpoints power both the profile and the dedicated settings pages (Email Settings,
+Phone Provider) — they are one configuration, not two.
+
+### Why there is no cookie
+
+The personal-inbox resolver (`resolveEmailAccount`, `lib/email/personal-account.ts`)
+keys on `user_id = session.id` for the default path, and on `?email=<member>` for admin
+God-mode (gated **admin-or-self**). There is no `hl_email_account` cookie — a cookie let
+one account's connect flow leak into another browser's session, so it was removed. The
+OAuth callback stamps `user_id` at connect time by matching the consented mailbox to the
+`hl_users` row with that email.
+
+## Email
+
+<Steps>
+  <Step title="Connect">
+    Real Google OAuth via `GET /api/email/auth/connect` (admin-on-behalf passes
+    `?login_hint=<member>`). The callback stores refresh + access tokens in
+    `hl_oauth_connections` keyed to the member's `user_id`.
+  </Step>
+  <Step title="Signature">
+    Stored per connection (`hl_oauth_connections.signature`, HTML). Edit it in the
+    **rich WYSIWYG editor** (formatting, lists, links, **insert image / headshot**,
+    merge fields, plus **Import from Gmail**). Configure it from the profile — not Gmail.
+  </Step>
+  <Step title="Send">
+    `POST /api/email/send` with `{ lead_id, subject, body_html, from_email }`. The
+    endpoint is the **single authority** that appends the **sender's** signature
+    (`append_signature` defaults on) — so the UI composer, Myli's automation, and direct
+    API calls all produce the same signed message tied to the FROM account.
+  </Step>
+</Steps>
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/email/status` | Connection status for the session user (or `?email=` admin/self) |
+| `GET/POST /api/email/signature` | Read / save the sender's signature |
+| `POST /api/email/signature/import` | Pull the existing Gmail signature |
+| `PATCH /api/email/settings` | Sync + domain-filter preferences |
+| `POST /api/email/send` | Send a tokenized email; appends the sender's signature |
+| `DELETE /api/email/disconnect` | Disconnect the personal inbox |
+
+Sends are logged to `hl_email_send_log`; inbound email lands via Gmail poll / Pub/Sub.
+
+## Phone: SMS + Voice (Twilio)
+
+Each member sends from **their own number** — the caller ID the client sees. There is no
+router that "picks a number." `sendSms` (`lib/phone/send-sms.ts`) sends
+`From = <the member's number>` **and** `MessagingServiceSid = <the A2P campaign service>`
+together: the explicit `From` preserves per-user caller ID, the service applies the
+approved 10DLC campaign so US carriers deliver.
+
+<Warning>
+Sending from a bare US long code **without** the campaign-registered Messaging Service
+fails at the carrier with **error 30034 / 30024**. The number must be attached to a
+Messaging Service that holds an **APPROVED brand + VERIFIED campaign**. `From + service`
+is the deliverable, FUB/Salesforce-style pattern.
+</Warning>
+
+### A2P 10DLC — once for the business, then per number
+
+| Layer | Frequency | Where |
+|---|---|---|
+| **Brand** (the business identity) | Once | Twilio A2P `BrandRegistrations` → status `APPROVED` |
+| **Campaign** (messaging use case) | Once | A2P `Usa2p` under a Messaging Service → status `VERIFIED` |
+| **Each number** | Per number | Attach to the campaign's Messaging Service → inherits approval |
+
+`messaging_service_sid` is stored in `hl_settings.phone_provider` and sent with every SMS.
+
+### Provisioning a number — "Get a New Phone Number"
+
+The SureSend-style picker is in two places, both backed by the same flow:
+
+- **Phone Provider → Assigned Numbers → "Get a New Phone Number"** — buys a number into
+  the account pool.
+- **Managed Dialers → member row → "Get a new number"** — buys **and** assigns it to that
+  member in one step.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/phone/numbers/search?areaCode=&contains=` | List purchasable Twilio numbers (SMS + Voice) |
+| `POST /api/phone/numbers/provision` | Buy the number, set SMS+Voice webhooks, attach to the A2P campaign, optionally write the dialer assignment (`{ phone_number, user_id? }`) |
+| `POST /api/phone/sms/send` | Send `{ to, message, lead_id, from_number }` — adds the campaign service automatically |
+| `POST /api/phone/dialers` · `PATCH /api/phone/dialers/[id]` | Assign / configure a member's number |
+
+Inbound SMS arrives at `POST /api/phone/webhooks/sms` and is stored in
+`hl_inbound_messages`.
+
+## iMessage (BlueBubbles)
+
+A member's iMessage handle lives in `hl_imessage_assignments.bb_address`.
+
+- **Send:** `POST /api/bb/send` with `{ to, message, lead_id, from_handle }`.
+- **Inbound:** `POST /api/bb/inbound` — both directions write to `hl_bb_events` keyed by
+  `lead_id`, so the full conversation threads onto the lead.
+
+Unlike SMS, iMessage is data-based (Apple ID) and is **not** subject to A2P 10DLC.
+
+## Calendar (Google) — two-way sync
+
+Bound per member in `hl_calendar_connections` (import + export toggles).
+
+<Steps>
+  <Step title="Outbound (CRM → Google)">
+    `POST /api/calendar/events` creates an `hl_appointments` row and, if the member's
+    connection has export enabled, pushes it to **their** Google Calendar. Pass
+    `guest_emails` + `send_invite: true` to email a calendar invite to the lead — the
+    lead becomes an attendee on the event.
+  </Step>
+  <Step title="Inbound (Google → CRM)">
+    `POST /api/calendar/sync?userId=<member>` runs an incremental import (via
+    `sync_token`). Events created directly in Google appear in
+    `GET /api/calendar/events` as `source: "google"` (rendered green); CRM-native
+    appointments render blue. De-dup keeps an event the CRM pushed from showing twice.
+  </Step>
+</Steps>
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/calendar/events?start=&end=&view=personal\|team` | Merged appointments + tasks + Google events |
+| `POST /api/calendar/events` | Create an appointment, push to Google, optionally invite guests |
+| `POST /api/calendar/sync?userId=` | Incremental inbound import from Google |
+| `PATCH /api/calendar/settings` | Import/export calendar selection + sync toggle |
+
+## Onboarding a new member — checklist
+
+1. Create the member in **My Team** (`hl_users`).
+2. **Email:** connect their Gmail (real OAuth) → set their signature in the editor.
+3. **Phone:** **Get a New Phone Number** → pick an area code → Choose (buys + registers
+   under A2P + assigns). Their SMS now delivers from their own caller ID.
+4. **Calendar:** connect Google Calendar → enable import + export.
+5. **iMessage:** assign their `bb_address` under iMessage settings (optional).
+
+Every channel is now theirs, isolated, and compliant.
