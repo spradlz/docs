@@ -1,0 +1,165 @@
+---
+title: "Multi-User Architecture"
+description: "How session, ownership, audit, and access levels are enforced across the HouseLoop CRM."
+---
+
+> **Status: LIVE on `crm.houseloop.ai` as of 2026-05-28.**
+> Phases 1–3 of the Multi-User PRD are deployed. The legacy `hl_users.role` column drop is queued as a separate atomic follow-up.
+
+## The model in one sentence
+
+> **The UI knows who you are. The DATABASE knows what you did to whom.**
+
+Every mutating API route reads the session, decides whether the actor is allowed
+to touch the row, stamps the row with `updated_by`/`owner_user_id`/`actor_*`,
+and writes one `hl_audit_log` row per successful change. The only exceptions
+are **webhooks** (intentionally sessionless: `bb/inbound`, `phone/webhooks/*`,
+`email/webhook`, `integrations/website/lead-intake`, `auth/google/callback`,
+`inngest`) and a small set of admin-config GETs.
+
+## Vocabulary (important — used to be confusing)
+
+| You see | What it is | Where it lives |
+|---|---|---|
+| **Access** dropdown (Owner / Admin / Member) | `hl_users.access_level` (formerly `hl_users.role`, migration 0062) | hl_users |
+| **Type** dropdown (Human / AI Agent) | `hl_users.type` | hl_users |
+| **Roles** band (AI ISA, Showing Partner, …) | `hl_member_role` ↔ `hl_role` | join + lookup |
+
+`access_level` is the *privilege level* (can you administer the team?).
+"Roles" are the *jobs* a member has (which configures persona, tools, docs).
+They are independent.
+
+## Session + auth primitives
+
+`apps/houseloop-crm/lib/auth.ts` exports four helpers. Every mutating route
+uses at least two.
+
+```ts
+// "Must be logged in" — 401 if not.
+const session = await requireSession();
+
+// "Must be admin/owner" — 403 if not. Admin bypasses ownership.
+const session = await requireAdmin();
+
+// "Must own this row, OR be admin" — 403/404.
+await requireOwnerOf({
+  table: 'hl_leads',
+  id: leadId,
+  session,
+  ownerCol: 'assigned_user_id',   // optional, defaults to 'owner_user_id'
+});
+
+// Fire-and-forget audit row. Never throws.
+await auditWrite({
+  actor: session,
+  action: 'leads.update',
+  target_t: 'hl_leads',
+  target_id: leadId,
+  diff: { lead_score: [null, 88] },
+});
+```
+
+`getEffectiveSession()` resolves the *emulated* user if an admin is acting "as"
+another team member via `/api/team/users/[id]/emulate`. Use it instead of
+`getSession()` when you care about the effective actor for an action.
+
+## Audit log
+
+`hl_audit_log` — one row per successful mutation.
+
+```
+id          BIGSERIAL PK
+actor_id    UUID NOT NULL → hl_users.id
+action      TEXT NOT NULL   -- 'leads.update' | 'team.user.access_level_change' | ...
+target_t    TEXT            -- 'hl_leads' | 'hl_users' | ...
+target_id   TEXT            -- the row id (UUID stringified)
+diff        JSONB           -- { "access_level": ["admin","agent"] }
+at          TIMESTAMPTZ NOT NULL DEFAULT now()
+request_id  TEXT
+```
+
+Indexed on `(actor_id, at DESC)` and `(target_t, target_id, at DESC)`.
+
+**Read it at `crm.houseloop.ai/settings/audit`** — admin-only. Filters by
+action and target table; paginated 50 per page.
+
+Programmatic read: `GET /api/audit?limit=50&offset=0&action=leads.&target_t=hl_leads`
+returns `{ ok, rows, total, limit, offset }`.
+
+## Ownership columns (migration 0060)
+
+| Table | New column(s) | Notes |
+|---|---|---|
+| `hl_leads` | `owner_user_id`, `created_by`, `updated_by` | ownership predicate currently uses existing `assigned_user_id` (`requireOwnerOf({ table:'hl_leads', ownerCol:'assigned_user_id' })`); `owner_user_id` is reserved for future use |
+| `hl_notes` | `created_by`, `updated_by` | also dual-writes the existing `author_user_id` for backwards compat |
+| `hl_tasks` | `owner_user_id`, `created_by_uuid`, `updated_by` | legacy `created_by` was TEXT storing literal `'user'` — useless; new `created_by_uuid` is the truth |
+| `hl_appointments` | `owner_user_id`, `created_by_uuid`, `updated_by` | same pattern as tasks |
+| `hl_email_send_log` | `sent_by_user_id` | |
+| `hl_inbound_emails` | `user_id` | inbox owner reference |
+| `hl_stage_transitions` | `actor_user_id` | who moved the lead |
+| `hl_lead_pipeline_memberships` | `moved_by`, `updated_by` | |
+
+## Access guards by surface
+
+| Surface | Who can read | Who can mutate | Self-edit rule |
+|---|---|---|---|
+| `/api/leads/[id]` PATCH/DELETE | logged-in | owner (`assigned_user_id`) OR admin | n/a |
+| `/api/leads/[id]/notes` POST | logged-in | logged-in (stamps author) | n/a |
+| `/api/team/users` POST | n/a | **admin only** | n/a |
+| `/api/team/users/[id]` PATCH | self OR admin | admin (for privilege fields) | **admin cannot change their OWN `access_level`** — must ask another admin (server-side silent strip; UI also disables) |
+| `/api/team/users/[id]/roles/[roleId]` PATCH | n/a | **admin only** | n/a |
+| `/api/team/roles` POST | n/a | **admin only** | n/a |
+| `/api/audit` GET | n/a | **admin only** | n/a |
+
+## Auto-save (Member Editor)
+
+`/settings/team/agents/[id]` is the canonical example of how to wire auto-save
+without losing the explicit Save button:
+
+```ts
+const [dirty, setDirty] = useState(false);
+const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+useEffect(() => {
+  if (!agent || !dirty) return;
+  if (saveTimer.current) clearTimeout(saveTimer.current);
+  saveTimer.current = setTimeout(() => { void save(); }, 600);
+  return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
+}, [dirty, /* watched fields */]);
+
+// patch() now also sets dirty:true; save() resets it to false on success.
+```
+
+The route already returns `{ ok: true, noop: true }` when nothing actually
+changed (no diff = no PATCH/audit row), so auto-save fires safely on every
+local state tick.
+
+## Migrations
+
+| # | What | Status |
+|---|---|---|
+| 0060 | Big-8 audit columns | applied |
+| 0061 | `hl_audit_log` table | applied |
+| 0062 | `hl_users.access_level` (dual-write with `role`) | applied |
+| 0063 | drop `hl_users.role` | **pending** — 10 callsites still read `u.role` directly; queued as a separate atomic follow-up |
+
+## Extending: how to add a new mutating route
+
+```ts
+import { requireSession, requireOwnerOf, auditWrite, toResponse } from '@/lib/auth';
+
+export async function PATCH(req, { params }) {
+  try {
+    const session = await requireSession();
+    await requireOwnerOf({ table: 'hl_<table>', id, session });
+    const body = await req.json();
+    // …do the write, capture before/after for diff…
+    await auditWrite({ actor: session, action: '<table>.update', target_t: 'hl_<table>', target_id: id, diff });
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    return toResponse(err);
+  }
+}
+```
+
+That's the whole pattern. Every new mutating route should follow it.
