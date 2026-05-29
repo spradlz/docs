@@ -94,3 +94,62 @@ After any `houseloop-web` deploy that changes routes or the sitemap, the change 
 next request — no extra step. Only **Inngest function** changes need the re-register step (see
 [SEO background jobs](/guides/seo-background-jobs#operating-the-job)).
 </Note>
+
+
+## Market Trends hero on every variant (2026-05-29)
+
+Every geo page — county, city, zip, neighborhood, **and every property-type / status / facet
+variant** (Single Family, Townhouse, Condo, Open Houses, Coming Soon, etc.) — renders the same
+8-card Market Trends hero from `hl_geo_market_stats`:
+
+```
+Homes for sale · Median sale price · Sold (last 12 mo) · Sale $/sqft
+Sell-to-list   · Days to offer     · Coming soon       · Under contract
+```
+
+The hero anchors at `<section id="market-trends">` in `components/geo/GeoSeoContent.tsx`.
+
+### Don't strip liveReport on facet pages
+
+There was a long-standing bug at `components/geo/LocationSeo.tsx` line 157:
+
+```ts
+if (facet) liveReport = null;  // ❌ NEVER do this
+```
+
+That truncated every facet/variant page (Single Family, Open Houses, Coming Soon, etc.) to a
+4-card stub and dropped the median sold / sell-to-list / days-to-offer block — even though the
+data was already populated in `hl_geo_market_stats`. **The fix is to always render `liveReport`
+when it exists.** Facet-scoped active counts still flow through `getEnvelopeStats(query)` for
+the cards below the hero; the city baseline shows above. Headline copy still includes the facet
+("Overland Park, KS Single Family Residence Homes Market Trends") so the variant context is
+preserved visually.
+
+### Heartland §15 compliance — aggregate sold IS permitted
+
+The footer disclaimer must say:
+
+> *Aggregate market statistics from Heartland MLS · as of {date} · per-address sold prices
+> excluded per Heartland §12.3(b).*
+
+Do **not** render legacy phrasing like "sale prices are not displayed, per Heartland MLS rules"
+as a blanket guard — that was wrong copy. Heartland §15 explicitly permits aggregate sold
+display at neighborhood / zip / city / county / property-type level. Only **per-address** sold
+price is restricted, and that's only relevant to `app/home/[slug]/page.tsx` (the per-house
+detail).
+
+### Citation deep-links from listing detail
+
+The listing detail page's Offer Insights + Market Estimate widgets cite their source with a
+deep-link to the geo SEO page. All source URLs append `#market-trends` so the click scrolls
+straight to the 8-card hero instead of dumping the user at the top:
+
+```
+/kansas/johnson-county/overland-park#market-trends                   ← city scope
+/kansas/johnson-county/overland-park/n/mills-farm#market-trends      ← neighborhood scope
+/missouri/jackson-county/blue-springs/64015#market-trends            ← zip scope
+/missouri/jackson-county#market-trends                               ← county scope
+```
+
+The constant lives in `lib/listings/resolve-market-stats.ts` (`MARKET_TRENDS_ANCHOR`). The
+section has `scroll-mt-32` so the heading is visible below the sticky header.
