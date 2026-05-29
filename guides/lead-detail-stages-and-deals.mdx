@@ -1,0 +1,220 @@
+---
+title: "Lead Detail — Stages, Deals, and the Audit Trail"
+description: "How stage transitions on the lead detail page capture pending and closed deals, handle regressions, and write the audit log."
+---
+
+The lead detail page (`/leads/[id]`) is where you move a buyer or seller
+through your pipeline. Some transitions are special — Under Contract,
+Closed, regressions out of either — because they touch revenue and need
+clean, recoverable records. This guide explains exactly what each
+transition does, what database row it writes, and how the engagement
+feed surfaces the result.
+
+## The two stage-mover surfaces
+
+Both surfaces fire the SAME modals. Use whichever feels natural — the
+behavior is identical.
+
+1. **Navy header chip dropdown** — the "Buyer · Stage Name" chip in the
+   top-right of the lead's navy card. Click → dropdown lists every active
+   stage with its icon. Lives in
+   `apps/houseloop-crm/components/leads/detail/PipelineChipDropdown.tsx`.
+2. **Inline horizontal stepper** — the row of pipeline node circles in
+   the center column. Click any node to jump straight to that stage.
+   Lives in `apps/houseloop-crm/components/leads/detail/CenterLane.tsx`
+   (`PipelineStepperRow`).
+
+Whichever you click, the same intercept logic decides what modal (if
+any) pops before the stage actually commits.
+
+## The intercept matrix
+
+| Current stage | Target stage | Modal flow |
+|---------------|--------------|------------|
+| Anything | Under Contract | **DealMilestoneModal** (capture pending) → commit |
+| Anything | Closed | **DealMilestoneModal** (capture closed) → commit |
+| Under Contract | Under Contract (same) | DealMilestoneModal (edit pending) |
+| Under Contract | Closed | DealMilestoneModal (capture closed) — no Lost prompt; that's progression forward |
+| Under Contract | Any earlier stage | **PendingLostModal** ("did you lose this?") → commit |
+| Closed | Closed (same) | DealMilestoneModal (edit closed) |
+| **Closed → Under Contract** | | **ClosedExitModal** ("new transaction or correcting?") **chains** → DealMilestoneModal → commit |
+| Closed | Any other stage | **ClosedExitModal** → commit |
+| Anything else | Anything else | Plain commit, no modal |
+
+Same-stage clicks on Under Contract / Closed pop the deal modal in
+"edit" mode so you can update the captured price/commission/closing date
+without dragging the lead through a stage change.
+
+## DealMilestoneModal — capturing a pending or closed
+
+Pops when entering or editing Under Contract / Closed.
+
+Fields:
+- **Property address** (pre-fills from the most recent prior deal)
+- **Property price** (numeric)
+- **Commission**: `%` or `$` toggle, default `3%`
+- **Zillow paid** (optional dollar amount — Zillow Flex referral fee)
+- **Closing date** (date picker)
+- **Notes** (free text)
+
+On save: inserts an `hl_lead_deals` row with the computed `gross_gci`,
+`agent_net` (gross − zillow_paid), and `srg_net` (mirrors agent_net for
+now). Then the stage commits.
+
+## PendingLostModal — regressing out of Under Contract
+
+Pops when the lead is at Under Contract and you click any earlier stage.
+
+Modal asks: "Did you lose this transaction, or are you just regressing
+the stage?"
+
+- **"No, just regressing"** → stage commits, no deal change. The original
+  pending row stays as history.
+- **"Yes, mark as LOST"** → inserts a NEW `hl_lead_deals` row with
+  `milestone='fell_through'`, carrying the prior pending's address +
+  price + closing date, plus your optional reason. Then the stage
+  commits.
+
+Press Enter inside the reason textarea to submit "Yes, lost it" (Shift+Enter
+for a newline).
+
+## ClosedExitModal — moving out of Closed
+
+Pops when the lead is at Closed and you click any non-Closed stage.
+
+### When there IS a live closed deal on record:
+- Shows the current closed transaction card (address, price, agent net,
+  closing date)
+- Three buttons: **Cancel** / **Correcting this one** (red outline) /
+  **New transaction** (blue)
+- **"Correcting this one"** PATCHes the closed row to `voided_at = now()`
+  with your optional reason. The audit trail keeps the row; dashboard
+  rollups filter `voided_at IS NULL`. Then the stage commits.
+- **"New transaction"** keeps the closed row as history (the lead is
+  re-engaging on a new house). Then the stage commits.
+- Press Enter inside the reason textarea to submit "Correcting".
+
+### When the closed deal was already voided (or never existed):
+- The modal automatically switches to **"just proceed"** mode with a
+  plain-English explanation: *"This lead is at the Closed stage but
+  there is no active closed deal on record — it was voided previously.
+  Press Proceed to move the stage forward."*
+- Two buttons: **Cancel** / **Proceed** (blue)
+- Correcting is hidden entirely (there's nothing to correct).
+
+### Closed → Under Contract is special — it chains
+
+When you go from Closed straight to Under Contract, two modals fire in
+sequence:
+
+1. **ClosedExitModal** asks "new transaction or correcting?"
+2. After you pick → **DealMilestoneModal** automatically pops to capture
+   the new pending property
+3. Save the pending → stage commits to Under Contract
+
+This is so you can recover from a fat-finger close AND start a new
+pending in one flow.
+
+## hl_lead_deals — the deal record
+
+Migration `0069_hl_lead_deals.sql` + `0070_hl_lead_deals_voiding.sql`.
+
+| Column | Purpose |
+|--------|---------|
+| `id` | UUID PK |
+| `lead_id` | FK to hl_leads |
+| `stage_id` | The stage the lead was at when the milestone was captured |
+| `milestone` | `'under_contract'` \| `'closed'` \| `'fell_through'` |
+| `property_address` | Free-text address as entered |
+| `property_price` | Numeric, the contract price |
+| `commission_type` | `'percent'` (default) \| `'flat'` |
+| `commission_value` | Numeric — `%` when type='percent', `$` when 'flat'. Default `3` |
+| `closing_date` | Date |
+| `zillow_paid` | Dollar referral fee paid to Zillow Flex (nullable) |
+| `agent_net` | Computed: `gross_gci - zillow_paid` |
+| `srg_net` | Mirrors `agent_net` for now |
+| `notes` | Free text |
+| `recorded_at`, `recorded_by_user_id` | Audit |
+| `voided_at`, `voided_by_user_id`, `void_reason` | Soft-delete (Phase 2 of the design) |
+
+**Dashboard rollups must filter `voided_at IS NULL`.** Voided rows
+are kept for the audit trail; they should never show up in totals.
+
+## Pending + Closed in the engagement feed
+
+The lead's Homes tab (the `PixelFeedStream`) merges `hl_lead_deals` rows
+into the same event stream that shows view / like / save / forward /
+tour-request / contact engagement.
+
+Two new filter pills next to All / Views / Likes / Saves / Forwards /
+Tour requests / Contacts:
+
+- **Pending** (navy, FileSignature icon) — surfaces
+  `deal_under_contract` and `deal_fell_through` rows
+- **Closed** (gold, KeyRound icon) — surfaces `deal_closed` rows
+
+Each deal renders as its own card:
+- Accent-tinted icon tile (navy / gold / red for fell-through)
+- Address + price line at the top
+- Body row: `Commission 3% · GCI $13,500 · Zillow $4,725 · Agent net
+  $8,775 · Closed Oct 14, 2026`
+- Italic notes below
+- **Voided** deals render at 65% opacity with a red `VOIDED — <reason>`
+  chip so corrections stay visible in the audit trail without inflating
+  totals
+
+## The audit log
+
+Every stage move and every deal milestone writes a human-readable row
+to `hl_audit_log` via `lib/audit/write.ts → writeAudit()`.
+
+| Action | Summary example |
+|--------|-----------------|
+| `leads.stage_change` | `Moved Test Lead from "Showing Homes" to "Under Contract"` |
+| `deals.under_contract` | `Pending deal for Test Lead: 123 Main St @ $350,000 · GCI $10,500` |
+| `deals.closed` | `Closed deal for Test Lead: 123 Main St @ $350,000 · GCI $10,500` |
+| `deals.closed_voided` | `Voided closed deal for Test Lead: 123 Main St @ $350,000 — mistake` |
+
+The audit log page (`/settings/audit`) shows:
+- A pill in the ACTION column with a human label ("Stage changed",
+  "Pending deal recorded", "Voided closed deal")
+- A single-line SUMMARY column with `overflow: hidden` + ellipsis so
+  long rows can't spill into adjacent columns. Hover the row to see the
+  full text in a tooltip.
+
+The Audit Log is reachable both from the Team Settings page and as a
+top-level item in the left sidebar under **Team Settings → Audit Log**.
+
+## API endpoints
+
+| Method | Path | What it does |
+|--------|------|--------------|
+| POST | `/api/leads/[id]/pipeline` | Move a lead to a stage; writes `leads.stage_change` audit |
+| POST | `/api/leads/[id]/deal` | Insert a new deal milestone; writes `deals.<milestone>` audit |
+| PATCH | `/api/leads/[id]/deal` | Void the most recent live deal of a milestone (body: `{action:'void_latest', milestone, reason?}`); writes `deals.<milestone>_voided` audit |
+| GET | `/api/leads/[id]/deal` | List all deal milestones for the lead (newest first, includes voided) |
+
+## Component file map
+
+```
+apps/houseloop-crm/
+├── lib/
+│   └── audit/
+│       └── write.ts                          ← writeAudit() helper
+├── app/
+│   ├── api/leads/[id]/
+│   │   ├── pipeline/route.ts                  ← stage_change writes
+│   │   └── deal/route.ts                      ← POST + PATCH + GET deals
+│   ├── (crm)/settings/audit/page.tsx          ← ACTION_LABELS + SUMMARY column
+│   └── components/Sidebar/Sidebar.tsx         ← Audit Log nav link
+├── components/leads/detail/
+│   ├── PipelineChipDropdown.tsx               ← navy chip intercept
+│   ├── CenterLane.tsx (PipelineStepperRow)    ← inline stepper intercept
+│   ├── DealMilestoneModal.tsx                 ← capture/edit pending or closed
+│   ├── PendingLostModal.tsx                   ← regression out of UC
+│   ├── ClosedExitModal.tsx                    ← exit Closed (or just-proceed mode)
+│   └── PixelFeedStream.tsx                    ← Pending + Closed pills + deal cards
+└── db/migrations/
+    ├── 0069_hl_lead_deals.sql                 ← deal-milestones table
+    └── 0070_hl_lead_deals_voiding.sql         ← voided_at + void_reason
+```
