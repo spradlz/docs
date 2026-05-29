@@ -1,0 +1,198 @@
+---
+title: "Listing Detail Page"
+description: "How the HouseLoop listing detail page works — Offer Insights, Market Estimate, Tax, Schools, HOA/Community, and mobile layout."
+---
+
+Every listing on HouseLoop has a detail page at `/listings/{address-slug}/{hlid}/`. This page
+documents the data-driven sections added in the May 2026 marathon: Offer Insights v3, Market
+Estimate v3, the Tax card, Schools, and the HOA/Community rollup.
+
+## Page composition
+
+The root component is `components/listing/ListingDetail.tsx`. All sections below the hero
+are composed in this order on **desktop**:
+
+1. Hero (photos + address + price)
+2. Property facts (beds/baths/sqft/lot)
+3. About (public remarks)
+4. Features (interior / exterior / parking / community)
+5. Offer Insights
+6. Market Estimate
+7. HOA / Community
+8. Schools
+9. Tax
+10. Price history
+
+**Mobile reorders sections 5-6 to appear directly after About**, before features and downstream
+detail blocks. Section nav pills are desktop-only; mobile relies on native scroll.
+
+---
+
+## Offer Insights
+
+**Component:** `components/listing/OfferInsights.tsx`
+**Source:** `lib/listings/resolve-market-stats.ts` -> `lib/listings/market-bands.ts`
+
+Offer Insights gives buyers a market-context band for the listing's price relative to recent
+sold comps. It renders four pills (Strong / Solid / Fair / Weak) plus a Zillow-parity
+probability blurb.
+
+### How bands are computed
+
+The resolver `resolveMarketStats(hlid)` walks a proximity ladder:
+
+```
+neighborhood (>= 10 sold)  ->  zip (>= 30)  ->  city (>= 50)  ->  county (floor)
+```
+
+It reads from `hl_geo_market_stats` (daily) and `hl_geo_neighborhood_stats` (nightly). The
+`sellToListPct` at the matched level feeds `deriveBandsFromRatio()`:
+
+| Band | Label | Mobile label | Probability copy |
+|---|---|---|---|
+| `competitive` | Very Competitive | **Strong** | "Over 90% chance of a winning offer" |
+| `moderate` | Competitive | **Solid** | "70 to 90% chance" |
+| `soft` | Somewhat Competitive | **Fair** | "50 to 70% chance" |
+| `buyers` | Buyer's Market | **Weak** | "Under 50% chance" |
+
+<Note>
+Mobile pill labels are 6 characters or fewer (`Strong / Solid / Fair / Weak`) — the longer semantic
+slugs live only in code for analytics stability. Do **not** display `Competitive` / `Moderate`
+on mobile; they truncate at 8 characters on small screens.
+</Note>
+
+### Architecture constraint — client-safe split
+
+`deriveBandsFromRatio()` and all band types live in `lib/listings/market-bands.ts`. This file
+has **no Node.js imports** (no Prisma, no `pg`, no `fs`). The component imports from here;
+the server route imports from `resolve-market-stats.ts`. This split is required because
+Railway's Next.js build fails if any `"use client"` component transitively reaches `pg`
+(which pulls `tls` / `net` into the client bundle).
+
+### Probability blurb
+
+The static text under the pills is **not LLM-generated**. It reads directly from a
+`PROBABILITY_COPY` lookup keyed to the band slug. Cost: $0. Speed: 0ms.
+
+### Source citation
+
+The bottom of the widget cites the geo page as its data source:
+
+```
+"Data from {level} market report · {date}"  ->  /kansas/johnson-county/overland-park#market-trends
+```
+
+The `#market-trends` anchor scrolls the geo page to the 8-card Market Trends hero. The
+constant `MARKET_TRENDS_ANCHOR` in `resolve-market-stats.ts` holds the fragment string so it
+cannot silently drift from the actual section `id`.
+
+---
+
+## Market Estimate
+
+**Component:** `components/listing/ListingDetail.tsx` (`<MarketEstimateBlock>`)
+**Source:** `lib/listings/resolve-market-stats.ts`
+
+The Market Estimate block shows the listing's context within its local market and provides a
+"Compare nearby" link to the geo page.
+
+- **Median price** — pulled from the same proximity-ladder result as Offer Insights.
+- **Price vs. median** — the listing's list price expressed as `+X%` or `-X%` relative to the
+  local median sold price.
+- **Compare-nearby deep-link** — links to the geo page at `#market-trends` (same anchor as
+  the Offer Insights citation).
+
+Prices are displayed as **full numbers** (`$1,160,000`), never compact (`$1.16M`). Mobile
+uses `text-hl-subhead`; desktop `md:text-hl-h2`.
+
+---
+
+## Tax
+
+**Component:** inline card in `ListingDetail.tsx`
+**Source:** `Listing.annualTaxAmount` (Prisma column, adapter `raw.TaxAnnualAmount`)
+
+The Tax card shows the most recently reported annual property tax for the listing.
+
+```
+Annual tax   $4,891 / year   (source: MLS — may not reflect current assessment)
+```
+
+- Column `annualTaxAmount` is populated by the listing-catalog Inngest function from
+  `raw.TaxAnnualAmount` on every sync.
+- A backfill event (`listing-catalog-backfill/run`) refreshes all ~15K active listings.
+  Coverage rises from near-zero to ~80%+ as the backfill completes.
+- Listings with no tax data omit the card entirely (no "N/A" placeholder).
+
+---
+
+## Schools
+
+**Component:** inline card in `ListingDetail.tsx`
+**Source:** stub from listing data (school district field + nearby school lookup)
+
+The Schools card shows the listing's school district and up to three assigned schools:
+
+```
+School District   Blue Valley USD 229
+Elementary        Wolf Creek Elementary
+Middle            Harmony Middle
+High              Blue Valley High
+```
+
+School data is populated from the `Listing` record's school district field plus a geo-based
+school match. Coverage is ~46% at launch, improving to ~80%+ after the listing-catalog
+backfill propagates. Listings with no school data omit the card.
+
+---
+
+## HOA / Community
+
+**Component:** inline card in `ListingDetail.tsx`
+**Source:** `hl_geo_neighborhood_stats.amenities` (nightly Inngest job)
+
+The HOA/Community card shows subdivision-level amenities aggregated from active listings in
+the same subdivision. Amenities displayed: Pool, Tennis, Clubhouse, Gated, Exercise Room,
+Walking Trails (plus any others from the `amenities` JSONB column).
+
+```
+Community   Mills Farm  ·  Pool  ·  Tennis  ·  Clubhouse  ·  Gated
+```
+
+- **0ms render cost** — data comes from `hl_geo_neighborhood_stats` (nightly batch), not a
+  real-time Repliers fetch.
+- **Render-time fallback** — if the nightly row is missing, a UNION query builds the amenity
+  set on-demand from active `Listing` records in the same subdivision.
+- HOA fee, if available, is shown from `Listing.associationFee` + `associationFeeFrequency`
+  (adapter: `raw.AssociationFeeFrequency` normalizes the display string).
+
+The nightly job is `lib/inngest/functions/geo-neighborhood-stats.ts`. Its runs are visible
+in the CRM Run Log under the "Geo / SEO" category.
+
+---
+
+## Key files
+
+| File | Role |
+|---|---|
+| `components/listing/ListingDetail.tsx` | Page composition + `<MarketEstimateBlock>` |
+| `components/listing/OfferInsights.tsx` | 4-pill Offer Insights widget |
+| `lib/listings/resolve-market-stats.ts` | Server resolver (Prisma, band computation) |
+| `lib/listings/market-bands.ts` | Client-safe band types + `deriveBandsFromRatio()` |
+| `lib/inngest/functions/geo-neighborhood-stats.ts` | Nightly HOA/amenity + sellToList job |
+| `prisma/schema.prisma` | `hl_geo_neighborhood_stats` model (lines 1131-1158) |
+
+---
+
+## KCRAR is retired
+
+The legacy `hl_market_snapshot` table (KCRAR data) is **no longer read** on the listing
+detail page. All market context comes from `hl_geo_market_stats` (daily) and
+`hl_geo_neighborhood_stats` (nightly). `hl_market_snapshot` remains in the DB for sold
+archive purposes but the listing page never queries it.
+
+<Warning>
+Do **not** add `hl_market_snapshot` reads back to `ListingDetail.tsx` or
+`resolve-market-stats.ts`. If you need historical sold comps, read from `ListingHistory`
+(the Repliers backfill) instead.
+</Warning>
