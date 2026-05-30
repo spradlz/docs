@@ -1,0 +1,114 @@
+---
+title: "Saved Search Alerts"
+description: "How HouseLoop's saved search alert engine works — architecture, email delivery, Inngest crons, and the Listing query model."
+---
+
+When a buyer saves a search on `houseloop.ai`, the HouseLoop alert engine sends them a
+first-look email immediately, then continues sending on their chosen schedule (instant
+hourly checks, daily at 8am CT, or weekly on Mondays). Everything runs through Inngest
+and Resend — no manual triggers, no polling crons you manage.
+
+## How it flows
+
+```
+/listings → [Save Search]
+      │
+      ▼
+POST /api/saved-searches          ← creates the SavedSearch row
+      │
+      ├──▶ direct HTTP call to /api/saved-searches/alert   ← immediate first-look email
+      │
+      └──▶ Inngest crons fire on schedule for subsequent alerts
+```
+
+## The alert endpoint
+
+`POST /api/saved-searches/alert` is an internal endpoint callable by the creation flow
+and by Inngest. Body: `{ savedSearchId, sinceDate?, cap? }`.
+
+**What it does:**
+
+1. Loads the `SavedSearch` row + the owner's email via JOIN on `User`.
+2. Skips if the search is inactive, has no delivery email, or the user has no email.
+3. Builds a Postgres query against the `Listing` table using `searchCriteria` fields:
+   `city`, `state`, `zip`, `minPrice`, `maxPrice`, `beds`, `baths`. `sinceDate` narrows
+   to listings published after that timestamp (used for the hourly instant check).
+4. Resolves cover photos from the `Listing.photos` column (stored as
+   `[{ url: string, order: number }]` — first item after ascending sort by order is the
+   cover; the `{ primary, all, count }` shape is also handled).
+5. Sends via **Resend** FROM `HouseLoop <updates@houseloop.ai>` using the
+   `savedSearchAlertHtml` / `savedSearchAlertSubject` templates.
+6. Updates `SavedSearch.lastAlertSentAt`, `lastMatchCount`, and `totalMatchesSeen`.
+
+<Note>
+The alert always queries our **own Listing table** (centerbeam DB), not Repliers live.
+This means results reflect our cached MLS data — photos, prices, and status are as
+current as our last Repliers sync.
+</Note>
+
+## Inngest cron functions
+
+All four functions live in
+`apps/houseloop-web/lib/inngest/functions/saved-search-alert.ts`.
+
+| Function ID | Trigger | Audience |
+| --- | --- | --- |
+| `saved-search-on-create` | event `houseloop/saved-search.created` | fires on save — first-look email |
+| `saved-search-instant-check` | `0 * * * *` (hourly) | `alertFrequency = 'instant'` searches |
+| `saved-search-daily-alert` | `0 13 * * *` (8am CT daily) | `alertFrequency = 'daily'` |
+| `saved-search-weekly-alert` | `0 13 * * 1` (Mon 8am CT) | `alertFrequency = 'weekly'` |
+
+<Note>
+The `saved-search-on-create` Inngest event is a fallback path. The creation route
+(`POST /api/saved-searches`) fires the alert via a direct HTTP call to
+`/api/saved-searches/alert` immediately — it does not wait for Inngest to pick up the event.
+</Note>
+
+## SavedSearch data model
+
+```prisma
+model SavedSearch {
+  id               String    @id @default(cuid())
+  userId           String
+  name             String
+  searchCriteria   Json      // { city, state, zip, minPrice, maxPrice, beds, baths, ... }
+  searchUrl        String    // e.g. "/listings?city=Olathe&minPrice=400000"
+  alertFrequency   String    @default("instant")  // instant | daily | weekly | never
+  deliveryEmail    String?
+  deliveryPush     Boolean   @default(false)
+  isActive         Boolean   @default(true)
+  lastAlertSentAt  DateTime?
+  lastMatchCount   Int       @default(0)
+  totalMatchesSeen Int       @default(0)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+}
+```
+
+## Buyer-facing flow on `/listings`
+
+1. Buyer clicks **Save Search** in the FilterBar.
+2. If signed out: `SignInModal` opens with `context: { type: "save-search" }` and
+   `nextUrl` containing `?postAuthSave=1`. After auth, they land back on `/listings` and
+   `SaveSearchButton` auto-pops the save modal.
+3. Save modal: name (auto-populated from URL params), frequency (Instant / Daily / Never),
+   Copy Link, Save.
+4. `POST /api/saved-searches` → first-look email fires immediately.
+5. User is redirected to `/saved-searches` to manage their searches.
+
+## Email template
+
+`apps/houseloop-web/lib/email/saved-search-alert.ts` (Benji). The template shows:
+- Search name + total match count in the header
+- Up to 8 listing cards: photo, address, price, beds/baths/sqft, "fresh" badge if listed
+  in the last 24 hours
+- A **View all N homes** CTA linking to the `searchUrl`
+- Unsubscribe link → `houseloop.ai/settings/saved-searches`
+
+## Reference
+
+- `apps/houseloop-web/app/api/saved-searches/route.ts` — create / list
+- `apps/houseloop-web/app/api/saved-searches/alert/route.ts` — alert send (internal)
+- `apps/houseloop-web/app/api/saved-searches/[id]/route.ts` — update / delete
+- `apps/houseloop-web/lib/inngest/functions/saved-search-alert.ts` — all four cron fns
+- `apps/houseloop-web/lib/email/saved-search-alert.ts` — email template
