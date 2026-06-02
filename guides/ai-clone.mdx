@@ -17,7 +17,9 @@ clone, that resolves to **Zach**. Everything the clone does uses the human's ide
 
 - **Texts** send from the human's dialer/iMessage number.
 - **Emails** send from the human's connected Gmail.
-- **Calendar** events land on the human's Google Calendar (they're the organizer).
+- **Calendar** events are organized on the acting identity's Google Calendar — for a
+  **clone** that's the human it clones; for a **standalone AI** (Myli) that's the AI's
+  own calendar. This distinction drives who gets an email invite (see Appointments).
 
 The clone is assigned to a lead via the lead's `ai_agent_user_id` + `ai_role_id`. Only
 when **AI Mode** is enabled on the lead does the clone act.
@@ -35,9 +37,10 @@ when **AI Mode** is enabled on the lead does the clone act.
 
 The clone's system prompt is prepended with live context so it never guesses:
 
-- **Right now** — the current date/time in the **agent's timezone**, so "tomorrow at
-  5pm" resolves to the correct date + UTC offset (this fixed bookings landing on
-  garbage dates).
+- **Right now** — the current date/time in the **business timezone** (Central /
+  `America/Chicago`, from Business Settings — *not* the agent's personal timezone), so
+  "tomorrow at 5pm" resolves to 5pm Central with the correct UTC offset. (Grounding in
+  the agent's personal Eastern timezone previously booked appointments an hour off.)
 - **The lead** — name, phone, email, source (so it greets by name and knows where the
   invite goes).
 - **Pipeline stage** — the lead's current stage on each pipeline, which drives the
@@ -70,9 +73,25 @@ Wired today: **Text messages, Email, Appointments, Tasks, Notes, Search homes.**
 ## Appointments (the important flow)
 
 **Booking — `schedule_appointment`.** Writes the `hl_appointments` record (the same
-table the UI reads), creates the Google Calendar event on the **agent's** calendar,
-and emails a real invite to **both the lead and the agent** (`sendUpdates: all`). The
-lead is stored in `guest_emails` so the UI shows the guest.
+table the UI reads), creates the Google Calendar event on the **acting identity's**
+calendar, and adds **both the lead and the assigned agent** as guests (`guest_emails`
+on the record; calendar attendees with `sendUpdates: all`). Times are interpreted in
+the business timezone (Central).
+
+<Warning>
+**Who actually gets an email invite depends on the mode** — because Google Calendar
+**never emails the event's organizer an invite to their own event**:
+
+- **AI mode** (a standalone AI like **Myli** organizes the event): the assigned agent is
+  a *guest*, not the organizer → **Google emails the agent the invite.** ✅
+- **Clone mode** (the clone acts **as the human**, so that human is the organizer): the
+  event lands on the agent's calendar, but **Google will not email the agent** an invite
+  to their own event. The agent sees it on their calendar; the **lead** is still emailed.
+
+So if you want the assigned agent to receive an emailed invite, the booking must come
+from an AI that is *not* that agent's clone (e.g. Myli owning the calendar). This is by
+Google's design, not a bug.
+</Warning>
 
 **Type → stage (this is how the stepper moves).** The appointment **type** drives the
 stage advance via `hl_appointment_types.stage_advance_to_stage_id`. The clone is shown
@@ -111,4 +130,5 @@ timing? want to reschedule?").
 
 Source: `apps/houseloop-crm/lib/ai/lead-conversation.ts` (dispatch + tools),
 `lib/agent-runtime/capabilities.ts` (toggles), `lib/appointments/apply-outcome.ts`
-(disposition), `lib/calendar/google-calendar.ts` (calendar).
+(disposition), `lib/calendar/google-calendar.ts` (calendar), `lib/datetime.ts` +
+`lib/business-profile.ts` (business timezone).
