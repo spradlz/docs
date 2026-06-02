@@ -1,0 +1,114 @@
+---
+title: "AI Clone"
+description: "The AI Clone is a HouseLoop CRM user's autonomous double — it texts leads AS the agent (their number, email, calendar), with the agent's persona, and can search homes, speak to a specific listing, and book/cancel showings on the agent's real Google Calendar. Distinct from Myli (who has her own identity)."
+---
+
+The **AI Clone** is *you, electrified*: an AI that acts as a specific human agent on
+HouseLoop CRM. When a lead texts the agent's number and **AI Mode** is on, the clone
+reads the thread, replies in the agent's voice, and takes real actions on the agent's
+behalf. It is **not** Myli — Myli is her own standalone identity; a clone always acts
+*as the human it clones*.
+
+## Identity — "acting as" the human
+
+A clone is an `hl_users` row with `clone_of_user_id` set to the human it clones. Its
+**acting identity** is `COALESCE(clone_of_user_id, ai_agent_user_id)` — so for Zach's
+clone, that resolves to **Zach**. Everything the clone does uses the human's identity:
+
+- **Texts** send from the human's dialer/iMessage number.
+- **Emails** send from the human's connected Gmail.
+- **Calendar** events land on the human's Google Calendar (they're the organizer).
+
+The clone is assigned to a lead via the lead's `ai_agent_user_id` + `ai_role_id`. Only
+when **AI Mode** is enabled on the lead does the clone act.
+
+## How a turn works
+
+1. Lead texts the agent's number → BlueBubbles/Twilio webhook → `dispatchInboundToAi`
+   (`lib/ai/lead-conversation.ts`), fire-and-forget after the webhook responds.
+2. The clone shows a **typing indicator** (CRM thread + the lead's iMessage), composes
+   with Claude (tool-use loop), waits a **human-paced beat**, then sends.
+3. The reply renders **live** in the CRM Texts thread (Postgres `LISTEN/NOTIFY`, so it
+   shows without a refresh) and on the lead's phone.
+
+### Situational grounding (injected every turn)
+
+The clone's system prompt is prepended with live context so it never guesses:
+
+- **Right now** — the current date/time in the **agent's timezone**, so "tomorrow at
+  5pm" resolves to the correct date + UTC offset (this fixed bookings landing on
+  garbage dates).
+- **The lead** — name, phone, email, source (so it greets by name and knows where the
+  invite goes).
+- **Pipeline stage** — the lead's current stage on each pipeline, which drives the
+  appointment type it books (below).
+
+## Permissions (capability toggles)
+
+Per-clone toggles live on the agent's **AI Clone → Permissions** tab. Each capability
+maps to runtime tools (`lib/agent-runtime/capabilities.ts`). **WYSIWYG default-on:** a
+wired capability is enabled unless explicitly toggled off; "Coming soon" capabilities
+are disabled. Turning **Text messages** off, for example, makes the clone go silent
+(no reply, no typing) — the toggle truly gates the tool.
+
+Wired today: **Text messages, Email, Appointments, Tasks, Notes, Search homes.**
+
+## What the clone can do (tools)
+
+| Tool | Capability | What it does |
+|---|---|---|
+| `text_lead` | Text messages | Reply by SMS/iMessage in the agent's voice. |
+| `search_homes` | Search homes | Search HouseLoop.ai listings. Plain facets (city/price/beds/type) → fast `/api/listings/search` + `/api/listings/count`; with `features` (pool, white kitchen…) → the photo-vision AI engine. Returns count + top 3 with links + hlids. |
+| `get_home_details` | Search homes | Full detail on ONE home (by hlid): description, MLS interior/exterior/lot features, flooring, pool, schools, **and AI vision tags** — so the clone gives a genuine opinion. |
+| `lookup_property` | Search homes | Look up one specific address/MLS#/Zillow URL via Repliers. |
+| `schedule_appointment` | Appointments | Book a showing — see Appointments below. |
+| `disposition_appointment` | Appointments | Cancel / mark outcome — see Appointments below. |
+| `send_email` | Email | Send an email from the agent's Gmail. |
+| `create_task` | Tasks | Create a follow-up task on the lead. |
+| `add_note` | Notes | Add a note to the lead. |
+
+## Appointments (the important flow)
+
+**Booking — `schedule_appointment`.** Writes the `hl_appointments` record (the same
+table the UI reads), creates the Google Calendar event on the **agent's** calendar,
+and emails a real invite to **both the lead and the agent** (`sendUpdates: all`). The
+lead is stored in `guest_emails` so the UI shows the guest.
+
+**Type → stage (this is how the stepper moves).** The appointment **type** drives the
+stage advance via `hl_appointment_types.stage_advance_to_stage_id`. The clone is shown
+the lead's pipeline stage and picks the type by this rule:
+
+- Buyer lead **before** "1st Appointment Set" (Buyer Pipeline position < 3) →
+  `first_buyer_appointment` → advances to **1st Appointment Set**.
+- Buyer lead **at/past** "1st Appointment Set" → `buyer_showing` → advances to
+  **Showing Homes**.
+- Seller/listing meeting → `listing_appointment` (Seller Pipeline "Appointment Set").
+- `consultation` / `phone_call` / `video_call` / `meeting` → no stage move.
+
+**Cancel / disposition — `disposition_appointment`.** This is how the clone *actually*
+cancels (not just says it did). It finds the lead's live (scheduled) appointment and
+runs the **same disposition engine the UI "Save Outcome" uses**
+(`lib/appointments/apply-outcome.ts`): sets the outcome + status, writes outcome notes,
+and runs the forward-only **stage rule engine**. For `cancelled`/`rescheduled` it also
+**cancels the Google Calendar event** (`sendUpdates: all`, so the lead gets the
+cancellation). Valid outcomes: `cancelled, rescheduled, no_show, showed_up,
+listing_signed, listing_not_signed`. On a cancel it re-engages ("was it the home or the
+timing? want to reschedule?").
+
+> **Shared engine:** the UI route `PATCH /api/appointments/[id]/outcome` and the clone
+> both call `applyAppointmentOutcome` — no drift between "Save Outcome" in the UI and a
+> clone dispositioning a text cancellation.
+
+## Known limits / roadmap
+
+- **Reactive only** — the clone replies when texted; it does not yet *initiate*
+  follow-up/cadence (proactive nudges) on its own.
+- **Booking is not availability-aware yet** — it books the requested time without
+  checking the agent's free/busy.
+- **Reschedule** is "disposition rescheduled + rebook," not a single dedicated flow.
+- **iMessage typing indicator** depends on the BlueBubbles host's Private API; on some
+  macOS versions it can lag or no-op (cosmetic only).
+
+Source: `apps/houseloop-crm/lib/ai/lead-conversation.ts` (dispatch + tools),
+`lib/agent-runtime/capabilities.ts` (toggles), `lib/appointments/apply-outcome.ts`
+(disposition), `lib/calendar/google-calendar.ts` (calendar).
