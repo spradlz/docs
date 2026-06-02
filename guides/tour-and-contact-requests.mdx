@@ -1,0 +1,119 @@
+---
+title: "Tour & Contact Requests"
+description: "The end-to-end tour/contact request workflow: a buyer requests a tour or asks an agent to reach out on houseloop.ai, and the CRM auto-sends branded emails + texts to the lead and the agent, all from editable templates, audited in the Run Log — then the agent Accepts or Declines."
+---
+
+When a buyer hits **Request a tour** or **Contact a buyer's agent** on houseloop.ai, the CRM runs
+an automatic alert workflow: the **lead** gets a branded "we got it" email + text, the **agent**
+gets an alert email + text with a deep link, and the request shows up under the lead's
+**Homes → Requests** with **Accept / Decline** buttons. Every message body is an **editable
+template** (nothing hardcoded) and every send is audited in the **Run Log**.
+
+## The flow
+
+```
+buyer on houseloop.ai                pixel ingest (CRM)            Inngest auto-alert
+─────────────────────                ──────────────────            ──────────────────
+Request a tour  ──hlTrack──▶  hl_pixel_event (tour_request)  ──▶  houseloop/tour.requested
+ (or Contact)                  + event_payload.message/date          │
+                                                                     ├─▶ Lead  : "received" EMAIL  (updates@houseloop.ai)
+                                                                     ├─▶ Lead  : "received" SMS    (notification number)
+                                                                     ├─▶ Agent : alert EMAIL       (notifications@houseloop.ai)
+                                                                     └─▶ Agent : alert SMS + deep link
+
+agent ▸ lead ▸ Homes ▸ Requests ──▶ [✓ Accept] / [Decline] ──▶ event_payload.status = confirmed | declined
+```
+
+## 1. Editable templates (nothing hardcoded)
+
+Every message is a row in **`hl_templates`** (kind `email` or `text`), referenced by an immutable
+`key`, and fully editable in **Settings → Email Templates** / **Text Templates** under the
+**Tour Request** and **Contact Request** categories.
+
+| Key | Kind | From | To |
+| --- | --- | --- | --- |
+| `tour_request_received` | email | system (updates@) | lead |
+| `tour_request_received_sms` | text | notification # | lead |
+| `tour_request_agent_alert` | email | system (notifications@) | agent |
+| `tour_request_agent_alert_sms` | text | notification # | agent |
+| `tour_confirmation` / `tour_confirmation_sms` | email/text | agent | lead |
+| `contact_request_received` | email | system (updates@) | lead |
+| `contact_request_received_sms` | text | notification # | lead |
+| `contact_request_agent_alert` | email | system (notifications@) | agent |
+| `contact_request_agent_alert_sms` | text | notification # | agent |
+| `contact_response_email` / `contact_response_sms` | email/text | agent | lead |
+
+The email templates are full HTML built on the same gold pattern as `listing_alert_welcome`
+(200px centered logo, property-photo card, CTA, footer). Hit the **eye / View** column on the
+template table to preview the rendered email, then **Edit** from the modal.
+
+## 2. Merge tokens — the `{{request.*}}` group
+
+Templates are tokenized with `{{contact.*}}`, `{{agent.*}}`, and the request group
+(`lib/merge-fields.ts`):
+
+```
+{{request.address}}  {{request.date}}   {{request.time}}    {{request.message}}
+{{request.photo}}    {{request.price}}   {{request.beds}}    {{request.baths}}
+{{request.type}}     {{request.url}}     ← deep link to the request item
+```
+
+`{{request.url}}` resolves to `/leads/{id}?tab=Homes&subtab=requests` so the agent email's
+**Accept** CTA lands on the exact request.
+
+<Note>
+Merge-field chips in the UI are **always blue** — render them with `className="hl-merge-chip"`
+(or `var(--hl-merge-*)`). The `hl/no-raw-merge-color` ESLint rule blocks any hand-styled
+(non-token) color on a monospace chip.
+</Note>
+
+## 3. Senders & the notification number
+
+The sender split is a setting, not hardcoded — `hl_settings.notification_sender`:
+
+| Audience | From | Set in |
+| --- | --- | --- |
+| **Agent** (alerts, new-lead, stage-change) | `notifications@houseloop.ai` | `email_from` |
+| **Lead** (request acks, listing alerts) | `updates@houseloop.ai` | houseloop-web (Resend) |
+| **All SMS** | the **notification number** | `sms_from_number` |
+
+Both `@houseloop.ai` addresses send through the verified Resend domain. The notification number
+is a real HouseLoop Twilio number, changeable any time in **Settings → Notifications → Outbound
+SMS Number** — no deploy needed.
+
+## 4. The Inngest auto-alerts
+
+`lib/notifications/request-alerts.ts` registers two functions (served at `/api/inngest`):
+
+- **`tour-requested-alert`** ← `houseloop/tour.requested`
+- **`contact-requested-alert`** ← `houseloop/contact.requested`
+
+The pixel ingest (`app/api/pixel/track`) emits the event when a `tour_request` / `contact_request`
+pixel event stitches to a lead. Each function loads the lead + the assigned agent (or the first
+active admin), builds the `{{request.*}}` scope from the pixel payload, and sends the lead email,
+lead SMS, agent email, and agent SMS — each as a durable `step.run` (memoized on retry = no
+double-send). Every send writes to `hl_email_send_log` and the run is captured in the
+**Run Log → alerts** lane.
+
+<Note>
+Per *Inngest or it doesn't exist*: these fire only from the real pixel event (or the Inngest
+dashboard **Invoke**) — never a bash/curl. New functions need a `PUT /api/inngest` re-sync after
+deploy to register.
+</Note>
+
+## 5. Accept / Decline on the request item
+
+Under the lead's **Homes → Requests**, each tour/contact request renders the property card, the
+buyer's message, the requested date/time, and a **status**: **Pending** → **Confirmed** or
+**Declined**. The agent flips it with the inline **Accept / Decline** buttons.
+
+- Status persists on `hl_pixel_event.event_payload.status` via `POST /api/leads/[id]/requests`.
+- The agent-alert email's **Accept** CTA deep-links straight to this request.
+
+## 6. The Schedule Tour Workflow (next)
+
+Accepting a tour is the seam into the **Workflow Builder**: a `schedule_tour` action fires the
+**Schedule Tour Workflow**, which (when built) drives Myli to confirm the time, handle the
+legally-required showing agreement, and send the confirmation — all from templates + AI triggers,
+on the native `hl_workflows` engine. See the Myli closed-loop follow-up Ground Truth for the
+operating model.
