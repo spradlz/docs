@@ -1,29 +1,20 @@
 ---
-title: "Lead Detail Routing"
-description: "URL-addressable deep-linking for every tab, sub-tab, and view in the lead detail page — designed for AI agents to construct programmatic links."
+title: "CRM Deep-Linking"
+description: "URL-addressable deep-linking for every tabbed page in HouseLoop CRM — designed for AI agents to construct programmatic links."
 ---
 
-The lead detail page (`/leads/[id]`) supports deep-linking via query parameters
+Every tabbed page in HouseLoop CRM supports deep-linking via query parameters
 so AI agents (clone, Myli, automations) can construct URLs that open directly to
-a specific panel, sub-tab, or view.
+a specific panel, sub-tab, or view. Invalid values silently fall back to
+defaults (no error, no redirect).
 
-## URL format
+## Lead detail — `/leads/[id]`
 
 ```
 /leads/[id]?tab=<Tab>&subtab=<SubTab>&view=<View>&focus=<CommId>
 ```
 
-All parameters are optional. If omitted, defaults apply:
-- **tab** → `Texts` (the default dock panel)
-- **subtab** → `activity` (only relevant when `tab=Homes`)
-- **view** → the sub-tab's default view
-- **focus** → no highlight
-
-## Route map
-
 ### Top-level tabs (dock panels)
-
-These map 1:1 to the iPad dock icons in `CenterLane`.
 
 | `?tab=` | Panel | Notes |
 |---------|-------|-------|
@@ -41,19 +32,12 @@ These map 1:1 to the iPad dock icons in `CenterLane`.
 
 When `tab=Homes`, the `subtab` parameter selects which inner panel opens.
 
-| `?subtab=` | Panel | View options |
-|------------|-------|-------------|
+| `?subtab=` | Panel | View options (future) |
+|------------|-------|----------------------|
 | `activity` | Pixel feed (page views, saves, likes) | `all`, `views`, `likes`, `saves`, `forwards` |
 | `searches` | Saved searches (e-alerts) | `client`, `agent` |
 | `requests` | Tour + contact requests | `all`, `tour`, `contact` |
 | `transactions` | Deals pipeline | `pending`, `closed`, `lost` |
-
-### View parameter (future)
-
-The `view` parameter is parsed and threaded through the component tree but does
-not yet filter content. It is reserved for AI agents to construct granular URLs
-(e.g., `?tab=Homes&subtab=searches&view=client` to link directly to client
-saved searches).
 
 ### Focus parameter
 
@@ -61,7 +45,7 @@ saved searches).
 specific email or text message) within the active panel. Used by the Run Log to
 deep-link to the exact message that triggered a notification.
 
-## How it works
+### How it works
 
 ```
 URL query params
@@ -74,11 +58,8 @@ URL query params
 Validation happens server-side in `app/(crm)/leads/[id]/page.tsx`:
 - `tab` must match the `VALID_TABS` array
 - `subtab` must match the `VALID_SUBTABS[tab]` array (currently only `Homes` has sub-tabs)
-- Invalid values silently fall back to defaults (no error, no redirect)
 
-## Leads table → detail links
-
-The leads table (`/leads`) links metric cells to the matching detail panel:
+### Leads table → detail links
 
 | Column | Link |
 |--------|------|
@@ -92,8 +73,91 @@ The leads table (`/leads`) links metric cells to the matching detail panel:
 | Saved Searches | `?tab=Homes&subtab=searches` |
 | Agent Action | `?tab=All` |
 
-These links use the `CellLink` component which builds the query string from
-`tab` and optional `subtab` props.
+---
+
+## Tasks — `/tasks`
+
+```
+/tasks?tab=<StatusTab>&view=<View>
+```
+
+| Param | Values | Default |
+|-------|--------|---------|
+| `?tab=` | `active`, `overdue`, `today`, `done`, `all` | `active` |
+| `?view=` | `personal`, `team` | `personal` |
+
+Examples:
+```typescript
+// Show overdue tasks for the team
+const url = '/tasks?tab=overdue&view=team';
+
+// Show completed tasks
+const url = '/tasks?tab=done';
+```
+
+---
+
+## Notifications — `/notifications`
+
+```
+/notifications?filter=<Filter>
+```
+
+| Param | Values | Default |
+|-------|--------|---------|
+| `?filter=` | `all`, `unread` | `all` |
+
+---
+
+## Run Log — `/run-log`
+
+```
+/run-log?view=<ViewKey>
+```
+
+| Param | Values | Default |
+|-------|--------|---------|
+| `?view=` | `all`, `system`, `comms`, `idx`, `website`, `ai`, `seo`, `alerts` | `all` |
+
+---
+
+## Settings — Email — `/settings/email`
+
+```
+/settings/email?tab=<Tab>&member=<MemberId>
+```
+
+| Param | Values | Default |
+|-------|--------|---------|
+| `?tab=` | `personal`, `team`, `bulk` | `personal` |
+| `?member=` | A team member ID | (none — auto-expands that member) |
+
+---
+
+## Settings — all other pages
+
+Settings sub-pages are file-routed (each is its own Next.js route). No query
+params needed — link directly to the path:
+
+| URL | Page |
+|-----|------|
+| `/settings/profile` | User profile |
+| `/settings/team` | Team members + roles |
+| `/settings/stages` | Pipeline stages |
+| `/settings/tags` | Lead tags |
+| `/settings/calendar-sync` | Google Calendar two-way sync |
+| `/settings/phone-provider` | Twilio / A2P 10DLC |
+| `/settings/email-templates` | Reusable email templates |
+| `/settings/text-templates` | Reusable text templates |
+| `/settings/custom-fields` | Custom field builder |
+| `/settings/merge-fields` | Merge field catalog |
+| `/settings/email-campaigns` | Campaign list |
+| `/settings/email-lists` | Audience lists |
+| `/settings/website/seo` | SEO dashboard |
+| `/settings/website/analytics` | GA4 analytics |
+| `/settings/website/pixel-tracking` | Pixel event feed |
+
+---
 
 ## For AI agents
 
@@ -106,11 +170,17 @@ const url = `/leads/${leadId}?tab=Homes&subtab=searches`;
 // Open a lead's tour requests
 const url = `/leads/${leadId}?tab=Homes&subtab=requests`;
 
-// Open the text thread
-const url = `/leads/${leadId}?tab=Texts`;
+// Show overdue tasks for the team
+const url = '/tasks?tab=overdue&view=team';
 
-// Open transactions (deals)
-const url = `/leads/${leadId}?tab=Homes&subtab=transactions`;
+// Show unread notifications
+const url = '/notifications?filter=unread';
+
+// Open Run Log → IDX Feed
+const url = '/run-log?view=idx';
+
+// Open bulk email settings
+const url = '/settings/email?tab=bulk';
 ```
 
 ## Key files
@@ -119,5 +189,7 @@ const url = `/leads/${leadId}?tab=Homes&subtab=transactions`;
 |------|------|
 | `app/(crm)/leads/[id]/page.tsx` | Server-side param validation + prop threading |
 | `components/leads/detail/CenterLane.tsx` | Client-side tab/subtab state + iPad panel switching |
-| `components/leads/detail/PixelFeedStream.tsx` | Activity sub-tab content (views/likes/saves) |
 | `components/leads/LeadsTable.tsx` | `CellLink` component that builds deep-link URLs |
+| `components/tasks/TasksPage.tsx` | Tasks tab/view routing via `useSearchParams` |
+| `app/(crm)/notifications/page.tsx` | Notifications filter routing via `useSearchParams` |
+| `components/run-log/RunLogTable.tsx` | Run Log view routing via `useSearchParams` |
