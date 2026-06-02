@@ -1,0 +1,90 @@
+---
+title: "Lead Deduplication"
+description: "How HouseLoop CRM handles duplicate contacts: email is unique, phone numbers are allowed to repeat (but detected). Covers the lead-creation rules, how inbound texts route to a lead by phone, the soft duplicate-phone warning, and the lead-detail collision banner."
+---
+
+A CRM can't naively forbid two leads from sharing a phone number — shared numbers
+are legitimate (spouses, a business line, a parent texting on a kid's behalf). But
+an *undetected* shared number is dangerous here, because the [AI Clone](/guides/ai-clone)
+routes inbound texts to a lead **by phone number**. This guide covers the rules and
+the detection that keeps that safe.
+
+## Lead-creation rules
+
+When a lead is created (manual **+ Add New Lead** modal, or the website
+`/api/integrations/website/lead-intake`):
+
+| Field | Rule |
+|---|---|
+| **Email** | **Hard-unique.** `hl_leads` has a `uq_hl_leads_email` index. A second lead with the same email is rejected (`POST /api/leads` → `409`). |
+| **Phone** | **Allowed to repeat, but detected.** Creating a lead with a phone that already exists triggers a *soft warning* (below), not a hard block. |
+
+## How inbound texts find their lead (phone routing)
+
+Every inbound text resolves which lead it belongs to **purely by phone number**.
+The iMessage webhook (`app/api/bb/inbound`) and the Twilio SMS webhook
+(`app/api/phone/webhooks/sms`) both:
+
+1. Take the sender's number, strip everything but digits, keep the **last 10**.
+2. Match it against `hl_leads.phone` (same last-10 normalization), `deleted_at IS NULL`.
+3. `ORDER BY created_at DESC LIMIT 1` — **the newest matching lead wins.**
+
+That last step is a silent tiebreaker: if two active leads carry the same number,
+the **older one never receives the text** and the AI clone never sees it. Today
+that's harmless (numbers are unique in practice), but nothing structurally prevents
+a collision — which is why we detect it.
+
+<Note>
+The duplicate detector uses the **same** last-10-digit normalization
+(`phoneTail10` in `lib/leads/duplicates.ts`) as the inbound webhooks, so the
+banner's idea of "duplicate" always matches who the clone actually routes to.
+</Note>
+
+## Soft duplicate-phone warning (on create)
+
+`POST /api/leads` checks for an existing active lead with the same phone **before**
+inserting:
+
+- If a match exists and the request didn't pass `force: true` → it returns
+  **`409 { code: "duplicate_phone", duplicates: [...] }`** instead of creating.
+- The **+ Add New Lead** modal catches that response and shows the matched leads
+  (name + link to each) with a **"Create anyway"** button.
+- "Create anyway" re-submits with `force: true`, which bypasses the check and
+  creates the lead. The choice stays with the human — we warn, we don't block.
+
+The email path is unaffected — a duplicate email is still hard-blocked by the
+unique index in the insert's catch.
+
+## Collision banner (on lead detail)
+
+The lead detail page renders a `DuplicateLeadsBanner` that calls
+`GET /api/leads/duplicates?leadId=<id>`. When this lead's phone (or email) is
+shared with other active leads, it shows an amber bar listing them, each linking
+to its detail page, and notes that **inbound texts route to the most recently
+created one**. When the lead is clean (the common case) the banner renders nothing.
+
+## The detector API
+
+`GET /api/leads/duplicates` — backed by `lib/leads/duplicates.ts`:
+
+| Query | Use |
+|---|---|
+| `?leadId=<uuid>` | Duplicates of an existing lead (the detail banner). |
+| `?phone=…&email=…&excludeLeadId=…` | Pre-create check (the Add Lead form). |
+
+Returns `{ ok, duplicates: [{ id, name, phone, email, source, stage, created_at, match }] }`
+where `match` is `phone`, `email`, or `both`. Matching is phone last-10 **OR**
+case-insensitive email, newest first.
+
+## Roadmap
+
+- **Merge Leads** — pick a survivor and combine two leads (fields, messages,
+  appointments, notes, stages, tags), soft-deleting the loser. The detection here
+  is the surface that feeds it.
+- **Smarter routing tiebreaker** — route an inbound text to the *most recently
+  active* (or assigned) lead instead of the newest-created, and flag genuinely
+  ambiguous numbers.
+
+Source: `lib/leads/duplicates.ts`, `app/api/leads/duplicates/route.ts`,
+`app/api/leads/route.ts` (POST), `components/leads/AddLeadButton.tsx`,
+`components/leads/detail/DuplicateLeadsBanner.tsx`.
