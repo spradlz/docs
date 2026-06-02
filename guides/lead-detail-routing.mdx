@@ -1,0 +1,123 @@
+---
+title: "Lead Detail Routing"
+description: "URL-addressable deep-linking for every tab, sub-tab, and view in the lead detail page — designed for AI agents to construct programmatic links."
+---
+
+The lead detail page (`/leads/[id]`) supports deep-linking via query parameters
+so AI agents (clone, Myli, automations) can construct URLs that open directly to
+a specific panel, sub-tab, or view.
+
+## URL format
+
+```
+/leads/[id]?tab=<Tab>&subtab=<SubTab>&view=<View>&focus=<CommId>
+```
+
+All parameters are optional. If omitted, defaults apply:
+- **tab** → `Texts` (the default dock panel)
+- **subtab** → `activity` (only relevant when `tab=Homes`)
+- **view** → the sub-tab's default view
+- **focus** → no highlight
+
+## Route map
+
+### Top-level tabs (dock panels)
+
+These map 1:1 to the iPad dock icons in `CenterLane`.
+
+| `?tab=` | Panel | Notes |
+|---------|-------|-------|
+| `All` | Unified activity stream | Read-only chronological mix |
+| `Texts` | iMessage / SMS thread | Default panel on load |
+| `Calls` | Call log + click-to-call | |
+| `Emails` | Email thread + compose | |
+| `Notes` | Notes stream + create | |
+| `Appointments` | Upcoming / completed | |
+| `Tasks` | Task list + create | |
+| `Homes` | Website activity + searches + requests + transactions | Has sub-tabs (see below) |
+| `Myli` | AI memory stream | |
+
+### Homes sub-tabs
+
+When `tab=Homes`, the `subtab` parameter selects which inner panel opens.
+
+| `?subtab=` | Panel | View options |
+|------------|-------|-------------|
+| `activity` | Pixel feed (page views, saves, likes) | `all`, `views`, `likes`, `saves`, `forwards` |
+| `searches` | Saved searches (e-alerts) | `client`, `agent` |
+| `requests` | Tour + contact requests | `all`, `tour`, `contact` |
+| `transactions` | Deals pipeline | `pending`, `closed`, `lost` |
+
+### View parameter (future)
+
+The `view` parameter is parsed and threaded through the component tree but does
+not yet filter content. It is reserved for AI agents to construct granular URLs
+(e.g., `?tab=Homes&subtab=searches&view=client` to link directly to client
+saved searches).
+
+### Focus parameter
+
+`?focus=<id>` scrolls to and highlights a specific communication item (e.g., a
+specific email or text message) within the active panel. Used by the Run Log to
+deep-link to the exact message that triggered a notification.
+
+## How it works
+
+```
+URL query params
+  → page.tsx (server component) validates tab/subtab/view
+  → CenterLane (client) receives initialTab + initialSubTab + initialView
+  → ActivePanel switches on tab, passes subtab to HomesPanel
+  → HomesPanel initializes its sub-tab state from initialSubTab
+```
+
+Validation happens server-side in `app/(crm)/leads/[id]/page.tsx`:
+- `tab` must match the `VALID_TABS` array
+- `subtab` must match the `VALID_SUBTABS[tab]` array (currently only `Homes` has sub-tabs)
+- Invalid values silently fall back to defaults (no error, no redirect)
+
+## Leads table → detail links
+
+The leads table (`/leads`) links metric cells to the matching detail panel:
+
+| Column | Link |
+|--------|------|
+| Phone Status → Calls chip | `?tab=Calls` |
+| Phone Status → Texts chip | `?tab=Texts` |
+| Email Status | `?tab=Emails` |
+| Registered | `?tab=All` |
+| Requests | `?tab=Homes&subtab=requests` |
+| Visits | `?tab=Homes` |
+| Listings | `?tab=Homes` |
+| Saved Searches | `?tab=Homes&subtab=searches` |
+| Agent Action | `?tab=All` |
+
+These links use the `CellLink` component which builds the query string from
+`tab` and optional `subtab` props.
+
+## For AI agents
+
+To construct a deep-link programmatically:
+
+```typescript
+// Open a lead's saved searches
+const url = `/leads/${leadId}?tab=Homes&subtab=searches`;
+
+// Open a lead's tour requests
+const url = `/leads/${leadId}?tab=Homes&subtab=requests`;
+
+// Open the text thread
+const url = `/leads/${leadId}?tab=Texts`;
+
+// Open transactions (deals)
+const url = `/leads/${leadId}?tab=Homes&subtab=transactions`;
+```
+
+## Key files
+
+| File | Role |
+|------|------|
+| `app/(crm)/leads/[id]/page.tsx` | Server-side param validation + prop threading |
+| `components/leads/detail/CenterLane.tsx` | Client-side tab/subtab state + iPad panel switching |
+| `components/leads/detail/PixelFeedStream.tsx` | Activity sub-tab content (views/likes/saves) |
+| `components/leads/LeadsTable.tsx` | `CellLink` component that builds deep-link URLs |
