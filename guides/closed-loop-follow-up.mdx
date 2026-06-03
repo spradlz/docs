@@ -1,0 +1,114 @@
+---
+title: "Closed Loop Follow-Up"
+description: "How Myli's signal-driven follow-up works in HouseLoop CRM — the lead-detail reasoning chain (head) and the Workflow Engine (brain) that drives it."
+---
+
+The **Closed Loop Follow-Up** system is how HouseLoop keeps every lead alive: an AI watches
+behavior, follows up contextually, schedules future attention so nothing falls through, and shows
+the operator *exactly* what it's doing and why. It is **signal-driven with one active workflow per
+lead** — not a chatbot, drip campaign, or generic CRM automation.
+
+The single source of truth for this system is the internal GT doc
+`GT_HOUSELOOP_MYLI_CLOSED_LOOP_FOLLOWUP_v1`. This page is the developer-facing version.
+
+## The mental model
+
+| Object | What it is | Where it shows |
+|--------|-----------|----------------|
+| **Stage** | Business pipeline position (New Lead, Appointment Set, Closed…) | Left lane (lead identity) |
+| **Workflow** | What the AI is *currently doing* — one goal + cadence | The cockpit "Current Workflow" |
+| **Signal / Trigger** | A transient runtime event that wakes the AI | Cockpit "Active Triggers" |
+| **Future Trigger** | Scheduled future attention ("the floor") | "Next Actions" |
+| **Memory** | Narrative relationship intelligence | Center timeline → Memory tab |
+
+**The active workflow *is* the state.** There is no separate state machine. "Monitoring nurture
+lead" is not a mode — it is the human-readable **name of the Warm Nurture workflow** that's
+currently running. "Following up after showing" = the Showing Follow-up workflow is active. One
+active workflow per lead = one state. (This is why the UI never shows robotic "State: Watching ·
+Mode: Listening" — the running workflow already says what the AI is doing.)
+
+## Head and brain
+
+The system splits cleanly into two halves:
+
+- **The HEAD (read-out)** — the lead-detail reasoning chain. It renders the AI's operating state
+  as a top-down chain of causality, so an operator can *see* the AI think:
+  `something happened → the AI noticed → it loaded a workflow → it did something → it scheduled
+  future attention → it waits`.
+- **The BRAIN (Workflow Engine)** — the native `hl_workflows` engine + Workflow Builder. It decides
+  which workflow is active, advances its steps, and emits signals.
+
+They connect through one contract so the engine drops in with **zero UI rework**.
+
+### The reasoning chain (the HEAD)
+
+Read top-down, in the exact order operations happen:
+
+| Section | Answers | Fed by |
+|---------|---------|--------|
+| **Status line** | Who/what state | `hl_workflows.name` of the lead's one active workflow. Default **Warm Nurture** → "Monitoring nurture lead". Never "No workflow". |
+| **Active Triggers** | What happened? | The signals that started/interrupted the workflow (`property_tour_requested`, `no_reply_24h`, `showing_feedback_due`…). |
+| **Current Workflow** | What system is running? | The active `hl_workflows` row (name + goal). **Always present.** |
+| **Current Action** | What is the AI doing right now? | The current step the workflow is executing (sending / waiting / scheduling…). |
+| **Next Actions** | What happens next? | Soonest pending row in `hl_scheduled_actions` — "the floor". |
+| **Recent Actions** | What already happened? | Completed steps / fired scheduled actions. |
+
+### Where the HEAD lives
+
+The reasoning chain renders on the lead detail page (`apps/houseloop-crm`):
+
+- **Left lane** (`components/leads/detail/LeadLane.tsx`) — when an agent's **AI Mode** (their AI
+  clone) is on, the `AiCockpit` pops in: status line → Active Triggers → Current Workflow → Current
+  Action. **Next / Recent Actions stay visible always**, AI on or off.
+- **Right lane** (`MyliLane.tsx`) — the assigned AI agent (Myli, the relationship owner) renders the
+  same chain.
+
+<Note>
+The two AIs are separate columns on `hl_leads`: **`assigned_ai_agent_id`** (Myli — the relationship
+owner, right lane, swappable, on every lead) and **`ai_clone_id`** (the agent's clone — left lane,
+toggled by AI Mode or SLA failover). Both can be active at once. See
+[Care-Team Routing](/guides/care-team-routing).
+</Note>
+
+### The HEAD ↔ BRAIN contract
+
+The Workflow Engine connects to the cockpit through one join:
+
+```
+hl_leads.active_workflow_id → hl_workflows.id   (the lead's one active workflow)
+```
+
+The engine sets `active_workflow_id` on a signal/trigger; the cockpit reads it. The engine emits
+**signals** (lights up Active Triggers), advances **steps** (lights up Current Action), and
+schedules the next step into `hl_scheduled_actions` (the floor, which already feeds Next Actions).
+
+## Build state
+
+<CardGroup cols={2}>
+  <Card title="Live now" icon="check">
+    - Dual-pipeline stages
+    - 3-column lead layout
+    - Center timeline + Memory tab (placeholder)
+    - **Future-trigger floor** — `hl_scheduled_actions` + Inngest executor (verified in prod)
+    - **Reasoning-chain HEAD** — the cockpit read-out (renders SSOT defaults as honest placeholders)
+    - Workflows admin hub (Scheduled + Run Log)
+  </Card>
+  <Card title="Planned (the BRAIN)" icon="clock">
+    - Signals engine (transient runtime triggers)
+    - Workflow wrapper — one active workflow per lead
+    - `hl_leads.active_workflow_id` join
+    - Workflow Builder (event trigger → steps → timing)
+    - Facts-as-pills + Memory narrative engine
+  </Card>
+</CardGroup>
+
+Until the BRAIN ships, the cockpit shows the SSOT defaults (Warm Nurture · "Monitoring nurture
+lead") as **honest placeholders** — no fabricated lead data. When the engine lands, these light up
+automatically through the contract above.
+
+## Related
+
+- [Care-Team Routing](/guides/care-team-routing) — the two-AI model + SLA failover ladder
+- [AI Clone](/guides/ai-clone) — what the agent's clone can do
+- [Tour & Contact Requests](/guides/tour-and-contact-requests) — the first workflow modeled
+- [Run Log](/guides/run-log) — where every fired action and handoff is audited
