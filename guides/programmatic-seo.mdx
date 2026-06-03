@@ -14,8 +14,8 @@ This page is the map. Two companion pages go deeper:
   <Card title="How pages are built & rendered" icon="layer-group" href="/guides/seo-pages-and-rendering">
     The one shared results page, the dynamic SEO block, the geo routes, the sitemap, and how to add a new page.
   </Card>
-  <Card title="SEO background jobs" icon="clock" href="/guides/seo-background-jobs">
-    The nightly cron that computes neighborhood prices, and how its runs land in the Run Log.
+  <Card title="SEO pipeline — every Inngest job" icon="clock" href="/guides/seo-background-jobs">
+    The complete Monday pipeline (weekly reports → LLM articles → per-tier page builds), daily stats crons, GSC integration, and how to operate them.
   </Card>
 </CardGroup>
 
@@ -27,38 +27,54 @@ This page is the map. Two companion pages go deeper:
 | County landing | `/{state}/{county}` | **Live** |
 | City landing | `/{state}/{county}/{city}` | **Live** |
 | Zip landing | `/{state}/{county}/{city}/{zip}` | **Live** |
-| Neighborhood landing | `/{state}/{county}/{city}/n/{slug}` | **Live** — first-class indexed page (SEO Slurry v2) |
+| Neighborhood landing | `/{state}/{county}/{city}/n/{slug}` | **Live** — first-class indexed page |
+| Facet variants | `?oh=1` / `?pr=Single+Family` / `?pool=1` etc. | **Live** — property type, open houses, features |
 | Sitemap + robots | `/sitemap.xml`, `/robots.txt` | **Live** — chunked, every active listing + the full geo tree |
+| GSC data in CRM | CRM → Settings → Website → SEO | **Live** — clicks, impressions, avg position via DWD SA |
 
 The `/n/` prefix on neighborhoods is deliberate — it avoids colliding with the `[zip]`
 segment one level up.
 
+## The Monday pipeline
+
+Every Monday, a chain of Inngest crons builds the week's SEO content:
+
+```
+04:00 UTC  Stats engine (geo-weekly-report) → sold/flow/window/FAQ/narrative per geo
+04:30 UTC  LLM article writer (seo-articles-generate) → Sonnet/Haiku narratives
+05:00 UTC  County page builder → hl_geo_page (8 counties)
+06:00 UTC  Zip page builder → hl_geo_page (~205 zips)
+07:00 UTC  City page builder → hl_geo_page (~134 cities)
+08:00 UTC  Neighborhood page builder → hl_geo_page (~5,500 neighborhoods)
+```
+
+See [SEO pipeline — every Inngest job](/guides/seo-background-jobs) for the full reference.
+
 ## Coverage
 
 The 8 Core Heartland counties (Jackson, Johnson, Clay, Cass, Platte, Wyandotte, Leavenworth,
-Miami) → every real city → top ~20 neighborhoods per city → every zip → every active listing.
-The directory tree comes from one taxonomy file; see
-[How pages are built & rendered](/guides/seo-pages-and-rendering#the-geo-taxonomy).
+Miami) → every real city → neighborhoods per city → every zip → every active listing.
+
+The directory tree comes from one taxonomy file (`lib/geo/heartland-geo.generated.json`),
+rebuilt by `scripts/build-geo-taxonomy.ts`. As of June 2026: **8 counties, 134 cities,
+205 zips, 5,524 neighborhoods = 5,871 geo pages** + every individual listing.
 
 ## Page anatomy (geo + neighborhood pages)
 
 1. **H1** — `"{Place}, {ST} Real Estate & Homes For Sale"` (Zillow phrasing, one line).
 2. **Result count + sort**, filter bar, listing cards, map toggle.
 3. **Breadcrumb trail** — `For Sale: Kansas • Johnson County • Overland Park` at the top of the SEO block (`BreadcrumbList` JSON-LD).
-4. **The SEO section** — the full Zillow-style block, rendered dynamically by `LocationSeo`:
-   Find a Home You'll Love (amenity) · Select Property Type · Popular Searches ·
-   Nearby City Homes ($) · Neighborhood Homes ($) · Homes by Zip ($) · Estimate Sale
-   Proceeds · More to Explore (price bands). Each section has its own icon. This internal
-   link graph is what makes the SEO compound.
-5. **Compliance footer** (see below).
+4. **Market Trends hero** — 8-card grid from `hl_geo_market_stats` (homes for sale, median sale price, sold 12mo, $/sqft, sell-to-list, days to offer, coming soon, under contract). Anchored at `#market-trends`.
+5. **Weekly article** — LLM-written narrative + deterministic FAQ from `hl_geo_weekly_report`. Updated every Monday.
+6. **The SEO section** — rendered dynamically by `LocationSeo`: Find a Home You'll Love (amenity) · Select Property Type · Popular Searches · Nearby City Homes ($) · Neighborhood Homes ($) · Homes by Zip ($) · Estimate Sale Proceeds · More to Explore (price bands).
+7. **Compliance footer** (see below).
 
 ## Compliance — non-negotiable
 
 <Warning>
-**Sold prices are NEVER displayed.** MLS GRID's IDX rule and our Heartland license forbid it.
-Every average dollar figure shown on any page (city / zip / neighborhood) is the **average
-ACTIVE list price**. Sold data may be used to *rank* (e.g. to pick the top neighborhoods),
-but it is never shown as a price.
+**Aggregate sold stats ARE permitted** at neighborhood / zip / city / county level per
+Heartland §15. Only **per-address** sold price is restricted (§12.3b) — relevant only to
+the individual listing detail page.
 </Warning>
 
 - Per-page Heartland MO/KS disclosure: "Listings courtesy of Heartland MLS, distributed by MLS GRID."
@@ -80,15 +96,24 @@ Neighborhood     /{state}/{county}/{city}/n/{slug}        e.g. /kansas/johnson-c
 Legacy `/listings/{hlid}/` is a permanent 301 to the canonical readable URL, so every link
 Google already crawled keeps its equity.
 
+## Google Search Console
+
+GSC data is pulled via domain-wide delegation (DWD SA impersonating `admin@houseloop.ai`).
+The CRM SEO dashboard shows 30-day totals (clicks, impressions, avg position) and a daily
+series. The API route is `GET houseloop.ai/api/seo/overview`.
+
+Code: `apps/houseloop-web/lib/seo/gsc.ts` + `lib/google/dwd.ts`.
+Railway env: `HOUSELOOP_GCP_SA_KEY_JSON` on the `houseloop-web` service.
+
 ## Roadmap (not yet shipped)
 
 - **Recently-sold detail pages** + `/sold/...` URLs (sold-only, off-market, never priced).
-- **Facet landing pages** as standalone indexed URLs (`/3-bedroom`, `/homes-under-300k`, `/pool`, `/condos`).
 - **Photo archival to Cloudflare R2** for sold listings (Repliers purges sold photos within hours).
-- **Google Search Console** URL Inspection push for new listings; per-listing image sitemap.
+- **Google Search Console URL Inspection push** for new listings; per-listing image sitemap.
 - Flip listing detail pages off `force-dynamic` → ISR (`revalidate`) for crawl-budget efficiency.
 
 ## Source of truth
 
 - Ground truth: `GT/GT - ACTIVE/GT_HOUSELOOP_SEO.md` + `GT_HOUSELOOP_MASTER.md` (§6 index).
 - Full v2 spec: `GT/GT - Pending/GT_HOUSELOOP_SEO_SLURRY_V2_PRD.md`.
+- Pipeline reference: [SEO pipeline — every Inngest job](/guides/seo-background-jobs).
