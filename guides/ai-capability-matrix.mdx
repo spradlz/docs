@@ -1,54 +1,68 @@
 ---
 title: "AI Capability Matrix"
-description: "What the AI clone can do today vs. what's pending — every lead action mapped to human UI, AI tool, built status, runtime handler, the gap, and the god-tier target. The built:true/false flags here drive what shows as a usable Workflow Builder step vs 'Coming soon'."
+description: "The source-of-truth backlog for HouseLoop lead actions: what a human can do, what the AI can do, what's built vs pending, and the gap build list. PRINCIPLE: human↔AI is 1:1 parity — every gap is ONE shared server function wired to (a) the human button, (b) the AI tool in ALL_TOOLS, (c) the Workflow Builder step (capabilities.ts built:true). Build once, three surfaces."
 ---
 
-This is the source-of-truth audit of every lead action: who can do it (human/AI), whether
-it's built, the runtime handler, and what's missing. Built-status lives in
-`lib/agent-runtime/capabilities.ts`; the AI runtime is `ALL_TOOLS` in
-`lib/ai/lead-conversation.ts`. The Workflow Builder palette sources from these flags —
-`built:true` = a usable step, `built:false` = "Coming soon".
+This is the GT backlog for the AI clone + lead-detail capabilities. **Human ↔ AI is 1:1
+parity:** every gap below is ONE shared `lib/` function wired to three surfaces — the human
+button on lead detail, the AI tool in `ALL_TOOLS` (`lib/ai/lead-conversation.ts`), and the
+Workflow Builder step (`capabilities.ts` `built:true`). Build once, all three light up.
 
-## Built today ✅
+## ✅ BUILT (human + AI, today)
 
-| Capability | AI tool | Runtime handler |
+| Capability | AI tool | Handler |
 |---|---|---|
-| **Text lead** | `text_lead` | `lib/phone/send-sms.ts` + `send-bb.ts` |
-| **Email lead** (generic) | `send_email` | `/api/email/send` (resolves merge fields + signature; pass `template_key:'direct'`) |
-| **Search homes** | `search_homes`, `get_home_details`, `lookup_property` | `/api/listings/search` + `/count` + `/api/search/nlp`; `GET /api/listings/{hlid}` |
-| **Create appointment** | `schedule_appointment` | `hl_appointments` + `lib/calendar/google-calendar.ts` + `lib/stages/advance-on-appointment.ts` |
-| **Disposition / cancel appointment** | `disposition_appointment` | `lib/appointments/apply-outcome.ts` (shared with the UI) |
-| **Notes** | `add_note` | `hl_notes` / `/api/leads/[id]/notes` |
-| **Tasks** | `create_task` | tasks API |
+| Text a lead | `text_lead` | `lib/phone/send-sms.ts` + `send-bb.ts` |
+| Email a lead (free-text) | `send_email` | `/api/email/send` (`template_key:'direct'`) |
+| Search homes | `search_homes`, `get_home_details`, `lookup_property` | `/api/listings/*`, `/api/search/nlp` |
+| Create appointment | `schedule_appointment` | `hl_appointments` + `google-calendar.ts` + `advance-on-appointment.ts` |
+| Disposition / cancel appt | `disposition_appointment` | `lib/appointments/apply-outcome.ts` (shared w/ UI) |
+| Add note | `add_note` | `hl_notes` / `/api/leads/[id]/notes` |
+| Create task | `create_task` | tasks API |
+| **Read a text** (inbound) | trigger + thread context | `dispatchInboundToAi` |
 
-## Pending ❌ (`built:false` — not yet a usable workflow step)
+## ⏳ THE GAP BUILD LIST (pending — build 1 at a time)
 
-| Capability | Status | Gap → what's needed |
+Each = one shared fn → human button + AI tool + workflow step. `built:false` in `capabilities.ts`.
+
+| # | Capability | Shared fn (new) | AI tool | Notes |
+|---|---|---|---|---|
+| 1 | **Text a listing** (card + photo) | `sendListingText` | `send_home` | links work today; the card is the gap |
+| 2 | **Email a listing** (card) | `sendListingEmail` | `send_listing_email` | brand-asset logo in template |
+| 3 | **Create a saved search for a client** | `createLeadSavedSearch` | `create_saved_search` | POST + wire to alert engine (route is GET-only now) |
+| 4 | **Follow up on a task** (reschedule/snooze + outcome + next) | `followUpTask` | `follow_up_task` | today: create/complete only |
+| 5 | **Update stage directly** | `setLeadStage` | `update_stage` | extract from apply-outcome rule engine |
+| 6 | **Tags** (add/remove) | `setLeadTags` | `manage_tags` | no human tag UI today either |
+| 7 | **Send market report / CMA** | `sendMarketReport` | `send_market_report` | pulls `hl_geo_market_stats` |
+| 10 | **Update contact info** (name/email/phone/source) | `updateLeadContact` | `update_contact` | dedup-aware (reuse phone detector) |
+| 11 | **Complete / mark a Next Action** (left bar) | `resolveNextAction` | `complete_next_action` | the human "mark off" |
+| 12 | **Read home views / saved / liked / forwarded** | `readLeadHomeActivity` | `read_home_activity` | from `hl_pixel_event` |
+| 13 | **Accept a showing / tour request** | `acceptShowingRequest` | `accept_showing_request` | convert tour_request → appt + reply (builds on Tour/Contact intake) |
+| 14 | **Follow up on a contact request** | `followUpContactRequest` | `follow_up_contact_request` | the contact_agent request → respond/convert |
+
+## ⏳ INBOUND / READ (mostly triggers + context, not buttons)
+
+| Inbound | State | Build |
 |---|---|---|
-| **Text a listing CARD** (`send_home`) | ❌ | Clone already texts listing *links* (search_homes → text_lead). The rich photo card is unbuilt — needs an MMS/iMessage listing card (photo + price + specs + link). |
-| **Email a listing** | ❌ | `send_email` is generic only. Needs `send_listing_email` that renders a branded listing card into HTML. |
-| **Update stage** | ❌ | Stage logic is trapped inside `apply-outcome.ts` (appointment-driven). Needs a standalone `setLeadStage()` + AI tool. |
-| **Saved search for a client** | ❌ | `/api/leads/[id]/saved-searches` is GET-only. Needs a create (POST) wired to the Saved-Search-Alert engine + an AI tool. |
-| **Tags** | ❌ | No add/remove-tag function or AI tool. |
-| **Calls** | ❌ | No outbound-call-via-dialer function or AI tool. |
-| **Proactive follow-up / cadence** | ❌ | No scheduled-action engine — the clone is reactive (replies when texted), it doesn't initiate. |
+| Read a text | ✅ done | — |
+| **Read an email** | ❌ syncs to timeline, doesn't feed the AI | wire inbound email → dispatch (+ optional auto-reply) |
+| **Read a calendar** (agent free/busy) | ❌ write-only today | `read_calendar` — **unblocks availability-aware booking** |
+| Read history on demand | ⚠️ grounding only | light `read_lead_history` tool |
+| **Answer a call** | ❌ forwards to mobile | voice agent — large, own project |
 
-## Zach's three questions
+## AI-ONLY gaps (human already can, manually)
 
-- **Does the AI text listings on its own?** Partly. It autonomously searches and texts listing
-  **links** (`search_homes` → `text_lead`). It does **not** send a rich photo card — that's
-  `send_home`, which is not built.
-- **Does it email listings?** No. `send_email` is generic free-text; there's no listing-card
-  email tool yet.
-- **Saved search for a client?** View-only today (`GET`). Creating one (human or AI) isn't
-  built — needs a `POST` + AI tool wired to the alert engine.
+| # | Capability | Notes |
+|---|---|---|
+| 8 | **Calls** | human has MakeCallModal; AI `place_call` missing |
+| 9 | **Proactive follow-up / cadence** | human does manually; AI never initiates |
 
-## Recommended build order
-1. `update_stage` standalone setter (smallest; unblocks the Workflow Builder).
-2. `send_home` — text a listing card (closes the "I thought it did this" gap).
-3. `send_listing_email` — email a listing card.
-4. Saved-search create (human + AI parity).
-5. Tags, calls, proactive cadence.
+## Build phases (recommended)
+1. **Reads first** (they inform everything): update contact (10), read home activity (12), read calendar (read).
+2. **Send actions:** text listing (1), email listing (2).
+3. **Requests + saved search:** accept showing (13), follow up contact (14), create saved search (3).
+4. **Lead ops:** mark next action (11), update stage (5), follow up task (4), tags (6).
+5. **Bigger:** market report (7), inbound email→AI, calls (8), proactive cadence (9), voice answer.
 
-Full per-row detail + god-tier targets: `GT/GT - ACTIVE/GT_HOUSELOOP_AI_CAPABILITY_MATRIX.md`.
-See also [AI Clone](/guides/ai-clone).
+Canonical backlog: `GT/GT - ACTIVE/GT_HOUSELOOP_AI_CAPABILITY_MATRIX.md`. Build tracker:
+`.claude/state/session-scope-ai-listing-actions.lock`. Related: [AI Clone](/guides/ai-clone).
