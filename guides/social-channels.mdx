@@ -1,0 +1,90 @@
+---
+title: "Social Channels & Auto-Posting Bot"
+description: "HouseLoop's standalone social presence (YouTube, Facebook, Instagram) and the never-expiring bot that publishes to them via API."
+---
+
+HouseLoop runs its own social presence under the **"Spradling Group powered by HouseLoop"** strategy — fully separate from the Spradling team brand and from PlacedAgent. Every channel is owned by HouseLoop's own accounts so it can be managed (and one day sold/transferred) as a standalone product.
+
+All three channels share one handle: **@houseloopai**.
+
+## Channels at a glance
+
+| Channel | Handle / URL | Owner account | Programmatic access |
+|---|---|---|---|
+| YouTube | `@houseloopai` ([channel](https://www.youtube.com/@houseloopai)) | admin@houseloop.ai (Google) | YouTube Data API v3 (OAuth) |
+| Facebook Page | HouseLoop | Zach's personal FB (admin) + HouseLoop Business Portfolio | Graph API (System User token) |
+| Instagram | `@houseloopai` (Business) | admin@houseloop.ai (own IG login) | Instagram Graph API (System User token) |
+
+Credentials live in the **Master Login Credentials** sheet (Social Media + API Keys sections) and are mirrored into `.env` under `HOUSELOOP_*` keys. The brand config is `pipeline/brands/houseloop/config.json`.
+
+## The "standalone product" model
+
+A Facebook Page and an Instagram Business account are **assets, not logins** — you never "log into Facebook as HouseLoop." What makes them separable is the **Business Portfolio** that owns them, plus a **System User token** that the bot uses to post with no human in the loop.
+
+- **Business Portfolio "HouseLoop"** — `985346324392840`. The container that owns the Page + IG. This is the transferable unit.
+- **Human admin** — Zach's personal Facebook profile. Meta requires a real person at the root; this is by design and unavoidable. Day-to-day posting never uses it.
+- **Instagram** is the one channel with its own discrete login (`admin@houseloop.ai`), because IG accounts can be created standalone and then linked to the Page.
+
+## YouTube
+
+- **Channel:** `@houseloopai`, ID `UCcPoJiSlGuxDpxQ3YUdESCA`, owned by **admin@houseloop.ai**.
+- **API access:** OAuth refresh token in `YOUTUBE_HOUSELOOP_REFRESH_TOKEN`, issued by the **houseloop-496200** Google OAuth client (not the BossLoop client — that one blocks external accounts).
+- **Branding tools** (brand-agnostic, pass `brand_slug: "houseloop"`):
+  - `set_channel_banner` and `set_channel_info` work via the Data API.
+  - The **profile picture cannot be set via API** — it must be uploaded in YouTube Studio.
+- To re-issue the token: `node tools/youtube/youtube-oauth.mjs houseloop`, then approve consent as admin@houseloop.ai.
+
+## The Meta bot (Facebook + Instagram)
+
+The bot is a Meta app plus a System User whose token never expires.
+
+| Piece | ID / env |
+|---|---|
+| Meta app "HouseLoop Bot" | `2256623225143233` · secret in `HOUSELOOP_META_APP_SECRET` |
+| System User "HouseLoop Bot" | `61590405939198` (full control of the Page + IG + app) |
+| Facebook Page (Graph ID) | `1124401867423716` · `HOUSELOOP_FB_PAGE_ID` |
+| Instagram user ID (for publishing) | `17841424760298572` · `HOUSELOOP_INSTAGRAM_USER_ID` |
+| Never-expiring token | `HOUSELOOP_INSTAGRAM_ACCESS_TOKEN` |
+
+Token scopes: `instagram_basic`, `instagram_content_publish`, `pages_read_engagement`, `pages_show_list`.
+
+<Note>
+The **Graph Page ID** (`1124401867423716`) differs from the **Studio/asset ID** (`61590429638312`) Meta shows in some URLs. Always use the Graph ID for API calls. Likewise the IG **user ID** for publishing (`17841424760298572`) differs from the IG **business-asset ID** (`1070475209492397`).
+</Note>
+
+### Publishing to Instagram
+
+Two-step container flow on the IG user ID:
+
+```bash
+# 1) create a media container
+POST https://graph.facebook.com/v21.0/17841424760298572/media
+  image_url=<public image URL>&caption=<text>&access_token=$HOUSELOOP_INSTAGRAM_ACCESS_TOKEN
+
+# 2) publish it
+POST https://graph.facebook.com/v21.0/17841424760298572/media_publish
+  creation_id=<id from step 1>&access_token=$HOUSELOOP_INSTAGRAM_ACCESS_TOKEN
+```
+
+### Verify the token
+
+```bash
+GET https://graph.facebook.com/v21.0/me/accounts?access_token=$HOUSELOOP_INSTAGRAM_ACCESS_TOKEN
+GET https://graph.facebook.com/v21.0/1124401867423716?fields=name,instagram_business_account&access_token=$HOUSELOOP_INSTAGRAM_ACCESS_TOKEN
+```
+
+The second call returns the linked `@houseloopai` account — proof the token can reach the IG profile.
+
+## Gotchas (these ate real time — read before touching the bot)
+
+- **"Add Instagram account" only *connects an existing* IG.** You must create `@houseloopai` first (desktop `instagram.com/accounts/emailsignup` in an incognito window, since the IG app shortcuts already-logged-in accounts). Then connect it.
+- The desktop Business-Suite connect can throw **"Invalid redirect URI"** (a flaky Meta OIDC bug for new accounts). The reliable path is the **Instagram app → Accounts Center → Add Facebook account** → pick the HouseLoop Page.
+- **Each brand's Instagram has its own login** — not the personal Facebook.
+- The System User needs the **app assigned as an asset** (Assign assets → Apps → Manage app) or the generate-token wizard shows "no permissions available."
+- **Facebook feed posting** needs the "Pages" use case added to the app — only Instagram scopes are offered under the Instagram use case the app was created with.
+
+## Where everything is recorded
+
+- `pipeline/brands/houseloop/config.json` — `channels.video`, `channels.facebook`, `channels.instagram`.
+- `.env` — all `HOUSELOOP_*` IDs, secret, and token (mirror of the sheet).
+- Master Login Credentials sheet — Social Media section (logins) + API Keys & Tokens section (the bot token).
