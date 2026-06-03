@@ -1,6 +1,6 @@
 ---
 title: "Care Team & Lead Routing"
-description: "How a HouseLoop lead is staffed — the AI Responder + Human Owner two-slot model, per-source defaults (AI-first front door), appointment handoff, and how message identity follows the active handler."
+description: "How a HouseLoop lead is staffed — the AI Responder + Human Owner two-slot model, per-source defaults (AI-first front door), the warm 3-way handoff, and the SLA failover engine (clone auto-on → Myli re-take + reassign)."
 ---
 
 Every lead has a **two-slot care team**, set independently. This drives who answers the lead, who
@@ -46,12 +46,49 @@ Columns live on `hl_lead_sources` (migration `0089`): `default_ai_agent_user_id`
 These defaults apply to **NEW leads only** — changing a source never retroactively reassigns
 existing leads.
 
+## SLA Failover Engine (warm handoff → clone auto-on → Myli re-take)
+
+> **Ships OFF.** The entire engine is gated by a global master switch (`agent_sla_policy.auto_failover`,
+> default **false**) at **Settings → Team → AI Failover Engine**. Until it's on, handoff is a simple
+> silent owner-assign and nothing auto-texts or auto-reassigns.
+
+When **on**, it fixes the classic "agent ignores the group text, lead ghosts" death:
+
+```
+Myli books an appointment + hands off
+  → WARM 3-WAY HANDOFF: Myli texts the lead a warm intro naming the agent (handoff_intro template),
+    the agent gets an "acknowledge within N min" alert, lead → escalation_stage='awaiting_ack'
+   ├─ agent Acknowledges (cockpit button / POST /api/leads/[id]/ack) → human_active, ladder stops
+   └─ ack window (default 5 min) elapses → CLONE AUTO-ON
+        ai_agent_user_id = the agent's clone, ai_mode on, stage='clone_active', clone window starts (12h)
+        → agent notified "your clone stepped in"
+        ├─ agent Acknowledges → clone keeps running, reassign timer cleared
+        └─ clone window (default 12h) elapses → MYLI RE-TAKES + REASSIGNS
+             ai_agent_user_id = the source's AI (Myli), reassign to the least-loaded other human,
+             restart the ladder for the new agent
+```
+
+- **Engine:** `lib/leads/sla-sweep.ts` — a durable **1-minute Inngest cron** (`sla-failover-sweep`,
+  also fireable via `hl/sla.sweep`). Robust over per-lead timers (no orphans, self-healing).
+- **Windows + master switch:** `agent_sla_policy` in `hl_settings` (org default) overlaid by
+  per-agent `hl_users.data.ai_policy`. Helpers in `lib/leads/handoff-engine.ts` (`isFailoverEnabled`
+  is the single gate every auto behavior checks).
+- **Lead state:** `hl_leads.escalation_stage` / `ack_due_at` / `clone_ack_due_at` / `responder_mode`
+  (migration `0090`).
+- **Cockpit:** the lead-detail left AI lane shows a banner ("Awaiting your acknowledgment" /
+  "AI clone is working this lead") with an **Acknowledge** button while the ladder is active.
+- **Notifications:** `agent_ack_request`, `clone_activated`, `lead_reassigned` events + editable
+  templates (migrations `0092`/`0093`) — bell/SMS/email per prefs.
+- **Audit:** every transition logs to `hl_run_log` with `source='handoff'` (Inngest-or-it-doesn't-exist).
+
 ## Where each piece is wired
 
 | Step | Code |
 |------|------|
-| Apply source defaults on a new lead | `app/api/integrations/website/lead-intake/route.ts` (INSERT sets AI responder + owner) |
-| Appointment handoff | `lib/leads/handoff.ts` `maybeHandoffOnAppointment(leadId)` — called from `/api/calendar/events` POST (human) **and** the clone's `schedule_appointment` |
+| Apply source defaults on a new lead | `app/api/integrations/website/lead-intake/route.ts` |
+| Appointment handoff (+ warm intro when failover on) | `lib/leads/handoff.ts` `maybeHandoffOnAppointment(leadId, {summary})` — from `/api/calendar/events` POST + the clone's `schedule_appointment` |
+| Failover ladder (clone auto-on, Myli reassign) | `lib/leads/sla-sweep.ts` (`sla-failover-sweep` cron) |
+| Acknowledge | `POST /api/leads/[id]/ack` |
 | AI auto-reply | `lib/ai/lead-conversation.ts` `dispatchInboundToAi` — fires when `ai_mode_enabled` && `ai_agent_user_id` |
 
 ## Message identity (`{{agent.*}}`)
