@@ -1,6 +1,6 @@
 ---
 title: "Email Templates"
-description: "How HouseLoop's AI-assisted email template system works — production HTML templates, the preview system, merge fields, and the campaign integration."
+description: "How HouseLoop's email template system works — production HTML templates, the preview system, merge fields, folder pills, and the campaign integration."
 ---
 
 HouseLoop uses an AI-assisted email template system. Templates are full production HTML
@@ -25,27 +25,37 @@ Every HouseLoop email follows a consistent 6-section structure:
 
 | Section | Description |
 | --- | --- |
-| **Logo header** | White background, HouseLoop logo PNG (`/houseloop-logo.png`) |
+| **Logo header** | White background, HouseLoop logo PNG — **absolute** URL `https://houseloop.ai/brand/logo-full.png` |
 | **Body content** | Template-specific (greeting, listing cards, market data, etc.) |
 | **CTA button** | Brand blue (`#2D6DFF`) button linking to the relevant page |
 | **Manage link** | "Manage your preferences at houseloop.ai/updates" |
 | **Promo band** | Dark navy band: "Never miss your HouseLoop alerts" |
 | **Footer** | Unsubscribe link + Privacy Policy (CAN-SPAM required) |
 
+<Warning>
+The logo `<img src>` **must be an absolute URL**. A relative `/houseloop-logo.png` renders as a
+broken image in email clients (and in the preview iframe) because there's no `houseloop.ai` base
+to resolve against. Use `https://houseloop.ai/brand/logo-full.png`.
+</Warning>
+
 ## Merge fields
 
 Templates use `{{namespace.field}}` placeholders that get resolved with real data at send
-time. The canonical registry is `apps/houseloop-crm/lib/merge-fields.ts`.
+time. The canonical registry is `apps/houseloop-crm/lib/merge-fields.ts` (preview) +
+`lib/email/template-merge.ts` (send). A template body is real copy with merge fields **embedded** —
+the body is never itself a single token.
 
 | Group | Fields |
 | --- | --- |
-| **CONTACT** | `first_name`, `last_name`, `full_name`, `email`, `phone` |
+| **CONTACT** | `first_name`, `last_name`, `full_name`, `email`, `phone`, `crm_url` |
 | **LISTING** | `address`, `price`, `beds`, `baths`, `sqft` |
 | **AGENT** | `full_name`, `email`, `phone` |
 | **MARKET** | `area_name`, `avg_price` |
 | **SEARCH** | `name`, `match_count`, `url` |
+| **REQUEST** | `address`, `date`, `time`, `message`, `type`, `url`, `photo`, `price`, `beds`, `baths` |
 
-Custom fields from `hl_custom_fields` automatically join via `{{contact.<key>}}`.
+`{{contact.crm_url}}` is the per-lead deep link into the CRM — used by team-alert "View lead"
+buttons. Custom fields from `hl_custom_fields` automatically join via `{{contact.<key>}}`.
 
 Dynamic blocks like `{{listing_cards}}` are resolved at send time by the specific
 automation function — they're template-specific, not in the merge field registry.
@@ -66,7 +76,21 @@ and shows which merge fields are used in the template.
 For full HTML templates (`body_source = 'html'`), the editor shows a read-only code
 textarea. Editing happens through the AI agent, not the WYSIWYG.
 
-## Template picker in campaigns
+Notification templates are also reachable from **Settings → Notifications** — the View (eye) on
+any row opens a modal that previews + inline-edits the template and deep-links here to the full
+editor. See [Notifications](/guides/notifications).
+
+## Template list page (folders + columns)
+
+The list at `/settings/email-templates` (and `/settings/text-templates`) has:
+
+- **Folder filter pills** — tokenized, counted, single-select category pills (same look as the Run
+  Log filters): `All N` + one pill per category, each its own color. SSOT for label+color is
+  `lib/templates/categories.ts`; the pill row is `components/settings/templates/TemplateCategoryFilter.tsx`.
+- **Columns:** `TYPE` (the category pill, first column) · `TEMPLATE` (name + subject) · `CREATED`
+  · `VIEW` (eye → preview) · `ACTIONS`. The raw template `key` is not shown (not human-readable).
+
+## Campaign integration
 
 The campaign composer at `/settings/email-campaigns` includes a **"Use Template"** button
 that lists all available templates. Selecting one pre-fills the campaign's subject line
@@ -79,27 +103,28 @@ Templates live in `hl_templates` (Railway houseloop-crm database):
 | Column | Type | Purpose |
 | --- | --- | --- |
 | `id` | uuid | Primary key |
-| `kind` | text | Always `'email'` |
+| `kind` | text | `'email'` or `'text'` (SMS) |
 | `name` | text | Display name |
 | `key` | text | Immutable slug for code references |
-| `category` | text | Grouping (listing_alert, open_house, etc.) |
-| `subject` | text | Subject line with merge fields |
-| `body` | text | Full production HTML |
-| `body_source` | text | `'html'` (production) or `'manual'` (WYSIWYG) |
+| `category` | text | Grouping (listing_alert, team_alert, system_alert, welcome, …) |
+| `subject` | text | Subject line with merge fields (email only) |
+| `body` | text | Full production HTML (email) / message text (SMS) |
+| `body_source` | text | `'template'` / `'html'` / `'manual'` |
 | `visibility` | text | `'system'`, `'team'`, `'private'` |
 
-## Current templates
+## Notification templates
 
-| Key | Name | Category |
-| --- | --- | --- |
-| `listing_alert_welcome` | Listing Alert - Welcome | listing_alert |
-| `listing_alert_digest` | Listing Alert - New Matches | listing_alert |
+Beyond marketing templates, `hl_templates` also holds the **notification** templates — the
+team/system alert emails + SMS and the client-facing acks — seeded by migrations `0085`/`0086`
+and mapped per event in `lib/notifications/template-registry.ts`. Categories: `team_alert`,
+`system_alert`, `welcome`, `listing_alert`, `tour_request`, `contact_request`. Full detail in
+[Notifications](/guides/notifications).
 
 ## Logo
 
-All emails use the HouseLoop logo from `/houseloop-logo.png` — a single PNG file that
-exists in both `apps/houseloop-web/public/` and `apps/houseloop-crm/public/`. This is the
-single source of truth for the logo across all email templates and documentation.
+Emails use the canonical HouseLoop logo at **`https://houseloop.ai/brand/logo-full.png`** (the
+brand-assets SSOT). Always reference it as an absolute URL in template HTML — see the warning
+above. See [Brand Assets](/guides/brand-assets).
 
 ## Reference
 
@@ -107,8 +132,8 @@ single source of truth for the logo across all email templates and documentation
 | --- | --- |
 | `apps/houseloop-crm/app/(crm)/settings/email-templates/` | Template list + editor pages |
 | `apps/houseloop-crm/components/shared/EmailPreviewModal.tsx` | Preview modal (iframe) |
-| `apps/houseloop-crm/components/shared/RichBodyEditor.tsx` | TipTap WYSIWYG (for simple templates) |
-| `apps/houseloop-crm/components/shared/MergeFieldPicker.tsx` | Categorized merge field picker |
-| `apps/houseloop-crm/lib/merge-fields.ts` | Canonical merge field registry |
+| `apps/houseloop-crm/lib/merge-fields.ts` | Canonical merge field registry (preview) |
+| `apps/houseloop-crm/lib/email/template-merge.ts` | Send-time merge scope + applyMerge |
+| `apps/houseloop-crm/lib/templates/categories.ts` | Category label + token-color SSOT |
 | `apps/houseloop-crm/app/api/email/templates/` | CRUD API for templates |
 | `GT/GT - ACTIVE/GT_HOUSELOOP_EMAIL_TEMPLATE_SYSTEM.md` | Ground truth document |
