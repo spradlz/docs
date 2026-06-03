@@ -1,0 +1,111 @@
+---
+title: "FUB Scraper"
+description: "How Follow Up Boss lead data — masked message, email, and call bodies — is recovered into our own database on Camp David and mirrored to RealLoop. The data-acquisition half of the FUB system."
+---
+
+<Note>
+**Quarantined FUB section.** This documents the **FUB (Follow Up Boss) system**, which runs on
+RealLoop infrastructure (realloop.co, future ConvertLoop) — **not** HouseLoop web or CRM. It
+lives in this docs project only because FUB lead data will eventually migrate into HouseLoop.
+Nothing here is wired to HouseLoop web/CRM.
+</Note>
+
+## What it does
+
+Follow Up Boss masks message/email/call bodies in its public API (`[CONTENT HIDDEN]` /
+"Body is hidden for privacy reasons"). The **FUB Scraper** logs into FUB as the agent via a
+real CDP-controlled Chrome session and **recovers the bodies a human can actually see in the
+FUB UI**, writes them to our own Postgres (`fub.*` on Camp David = ground truth), and bridges
+them to the RealLoop mirror that the [FUB Follow-Up Widget](/fub/follow-up-widget) reads.
+
+```
+FUB webhook ──▶ realloop.co/api/fub/webhook ──▶ upsert fub.* (masked) + queue rehydration
+Camp David scraper (Chrome as Zach, CDP :18800) ──▶ recover visible bodies ──▶ content_status='visible'
+        └──▶ bridge to RealLoop mirror: POST /api/fub/sync-message (texts) + /api/fub/sync-email (emails)
+```
+
+- **Camp David Postgres** (`192.168.1.211:5432/bossloop`, schema `fub.*`) = **ground truth.**
+- **RealLoop (Railway)** holds a **mirror**, fed by the sync bridges, that the widget reads.
+
+## Processes (pm2 on Camp David)
+
+| pm2 name | script | role | mem cap |
+|---|---|---|---|
+| **fub-backfill-a / -b** | `fub-parallel-scraper.mjs` | Master scraper — pending-first from `fub.rehydration_log`, runs real-time | 1 GB |
+| **fub-webhook-scraper** | `fub-webhook-scraper.mjs` | Real-time — polls `fub.rehydration_queue` (`FOR UPDATE SKIP LOCKED`), scrapes webhook-triggered leads immediately | — |
+| **fub-watchdog** | `fub-backfill-watchdog.mjs` | Restarts a stalled backfill worker | 200 MB |
+
+All scraping logic lives in **`fub-scraper-lib.mjs`** (shared by both scrapers). Key functions:
+`scrapePersonFull`, `scrapeEmailCards`, `matchAndUpdateEmails`, `applyApiTexts`,
+`matchAndUpdateMessages`, `refreshLeadCounts`. Repo source of truth: `tools/fub-scraper/` —
+deploy with `tools/fub-scraper/deploy.sh`; never hand-edit the files on the box.
+
+<Warning>
+A redundant duplicate daemon (`fub-webhook-sink`, same script, **no memory cap**) OOM-crash-looped
+(heap → ~3.9 GB → `FATAL ERROR: heap out of memory`, thousands of restarts) and was **stopped**
+2026-06-02. The permanent fix is to remove it from the pm2 ecosystem config (one webhook worker is
+enough), or give it `max_memory_restart: 1G` like the backfills.
+</Warning>
+
+## How body recovery works
+
+1. **DOM extraction** — open the lead's email/text tabs in the authenticated Chrome session and
+   read the cards that render. `scrapeEmailCards` parses each thread message.
+2. **Internal timeline API interception** — the newest message often never fully renders in the
+   DOM. The scraper intercepts the FUB SPA's **own** authenticated response to
+   `GET /api/v1/timeline?...&types=ThreadNew`, whose `lastEmail.bodyHtmlVisibleClean` carries the
+   full unmasked body. (A direct `fetch` of that endpoint returns `401` — you must intercept the
+   UI's own request, not replay it.)
+3. **Write + flag** — recovered rows get `content_status='visible'`; the body replaces the masked
+   placeholder.
+4. **Bridge to RealLoop** — recovered texts `POST /api/fub/sync-message`, emails
+   `POST /api/fub/sync-email`, keeping the Railway mirror in sync with Camp David.
+
+## ⚠️ Hard truth: UI-hidden emails are unrecoverable
+
+**If a FUB user has their emails set private/hidden in the FUB UI, the scraper cannot recover
+them — they show `[CONTENT HIDDEN]` in the actual UI, so there is nothing to scrape. This is a
+FUB privacy feature, not a scraper bug.**
+
+- Example: an active teammate (e.g. *Aaron Foster*) with UI-hidden email. Leads carrying his
+  emails store `[CONTENT HIDDEN]` (16 chars, `content_status='hidden'`) **permanently**. Do not
+  treat this as a defect or "fix" the scraper for it.
+- The scraper log shows `email-tab:no-cards` when nothing is scrapeable, `email-tab:N cards` when
+  it recovers N. A large hidden count is often **expected** (mostly UI-hidden), not a failure.
+
+## Data model
+
+| Table | Holds |
+|---|---|
+| `fub.people` | Leads — `phones` (jsonb), `tags` (text[]), `content_status`, materialized `*_count` |
+| `fub.text_messages` · `fub.emails` · `fub.calls` · `fub.notes` · `fub.events` | Recovered activity, each with `content_status` (`hidden` → `visible`) |
+| `fub.zillow_home_activity` | Homes the lead viewed (with Zillow URLs) |
+| `fub.rehydration_log` | Backfill queue (`pending` / `done`) — drives `fub-backfill-a/b` |
+| `fub.rehydration_queue` | Real-time webhook queue (`FOR UPDATE SKIP LOCKED`) — drives `fub-webhook-scraper` |
+
+## Health check
+
+```bash
+# processes
+ssh lee@192.168.1.211 "PATH=/opt/homebrew/bin:\$PATH pm2 list" | grep fub
+# recovery + backlog
+ssh lee@192.168.1.211 "PGPASSWORD=*** psql -h localhost -U bossloop -d bossloop -c \"
+  SELECT count(*) FILTER (WHERE content_status='visible') visible,
+         count(*) FILTER (WHERE content_status IS DISTINCT FROM 'visible') hidden
+  FROM fub.emails WHERE synced_at > now()-interval '48 hours';
+  SELECT count(*) pending FROM fub.rehydration_log WHERE status='pending';\""
+# live recovery log — watch email:N / email-tab:N cards
+ssh lee@192.168.1.211 "PATH=/opt/homebrew/bin:\$PATH pm2 logs fub-webhook-scraper --out --lines 30 --nostream"
+```
+
+**Healthy =** `fub-backfill-a/b` + `fub-webhook-scraper` `online`; the webhook log shows `email:N`
+recoveries on leads that have visible emails; the `rehydration_log` pending backlog trending down.
+A high `hidden` count is **not** automatically a problem (see UI-hidden truth above).
+
+## Change log
+
+- **2026-06-02** — Established the UI-hidden-emails truth; stopped the `fub-webhook-sink` OOM
+  crash-loop; consolidated five scattered ground-truth docs into this one page.
+- **2026-06-01** — Re-enabled email scraping; added timeline-API `bodyHtmlVisibleClean`
+  interception for the newest-message body; added the email→RealLoop `sync-email` bridge and
+  `applyApiTexts` for bulletproof text recovery.

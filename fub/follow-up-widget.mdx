@@ -1,0 +1,114 @@
+---
+title: "FUB Follow-Up Widget"
+description: "The AI-clone follow-up widget embedded inside Follow Up Boss — reads each lead's recovered history, drafts channel-aware replies, and texts or calls the lead from one number that routes between FUB and HouseLoop. The engagement half of the FUB system."
+---
+
+<Note>
+**Quarantined FUB section.** Part of the **FUB system** on RealLoop infrastructure
+(realloop.co, future ConvertLoop) — **not** HouseLoop web/CRM. Documented here only because FUB
+leads migrate into HouseLoop eventually. The one shared touch-point with the CRM (inbound call/text
+routing) is described under [Inbound routing](#inbound-routing-one-number-two-systems) and is
+deliberately the only crossover.
+</Note>
+
+## What it is
+
+A Follow Up Boss **embedded app** ("Houseloop") that renders in the right column of every FUB
+person view. It loads the lead's **recovered** history (the bodies the [FUB Scraper](/fub/scraper)
+unmasked), acts as the agent's AI clone, and lets them **text or call the lead** without leaving
+FUB. Served from `https://realloop.co/fub-widget`.
+
+- **Auth:** FUB passes `?context=<base64 json>&signature=<hmac>`; the widget verifies
+  `HMAC-SHA256(context, FUB_EMBEDDED_APP_API_KEY)` before rendering. No `X-Frame-Options` (it's an iframe).
+- **Freshness:** every panel re-reads the database on open (`Cache-Control: no-store`) so it always
+  reflects the latest activity.
+
+## The three tabs
+
+| Tab | Shows |
+|---|---|
+| **⚡ Actions** | Claude "what should I do?" — summary, intent, single best next step, a channel-aware drafted reply, **Approve & Send**, **Call lead**, Regenerate. |
+| **💬 Activity** | Texts / Calls / Emails / Homes — the real recovered content, homes are clickable Zillow links. |
+| **📇 Context** | The living brain — who the lead is + buying intent, regenerated from live data. |
+
+The AI reads a **single unified, timestamped timeline** across *every* channel — texts, emails,
+calls, team notes, and home-activity events — with the most-recent line flagged, so suggestions
+reflect what just happened rather than a stale early message.
+
+## First-touch outreach mode
+
+When a lead has a **team-exit / prior-agent tag** (e.g. `Team Exit - April Atkinson`), no recent
+outbound from us, and a real in-market property to anchor on, the widget switches to a cold
+first-touch script:
+
+1. **Who** — "Zach Spradling, team lead at The Spradling Group in Overland Park — the local Zillow
+   team that runs showings in your area."
+2. **Bridge** — names the prior agent: "April's moved on from our team, so I'm personally looking
+   after your search now."
+3. **The property** — the most-recently-viewed home **in the lead's primary market** (out-of-state
+   browsing noise filtered out), pulled from the notes.
+4. **The ask + open door** — "Saw you checking out <address> — want to go see it? Happy to set up
+   that one or any others you've got your eye on."
+5. The exact Zillow URL is appended deterministically (the model never edits the link).
+
+## Sending — text and call
+
+There is **no FUB API that sends a message** (`POST /v1/textMessages` only *logs*; it never
+transmits). So the widget sends through a number we control and logs into FUB for the timeline.
+
+- **Number:** `+1 (913) 286-1761` "Zach AI Outbound" on our Twilio account — A2P brand **approved**,
+  campaign **verified**, in a Messaging Service.
+- **Text** — `POST /fub-widget/send` → Twilio `Messages` (`From=+19132861761` **and**
+  `MessagingServiceSid` together, for A2P compliance) → then logs to the FUB timeline via the
+  registered-system API (gated on `FUB_SYSTEM_KEY`).
+- **Call (click-to-call bridge)** — `POST /fub-widget/call` → Twilio rings the agent's cell first,
+  then `/fub-widget/voice/outbound` `<Dial callerId=+19132861761>` bridges the lead. The agent
+  talks on their normal phone; the lead sees the AI-outbound number.
+
+<Note>
+Logging sent/received texts onto the **FUB timeline** requires registering the system at
+`apps.followupboss.com/system-registration` and setting `FUB_SYSTEM` + `FUB_SYSTEM_KEY`. Sending,
+calling, and inbound routing all work without it — only the FUB timeline row waits on that key.
+</Note>
+
+## Inbound routing — one number, two systems
+
+A lead lives in **exactly one** system — FUB (this widget) or HouseLoop CRM — never both, and keeps
+the same number when they graduate FUB → HouseLoop. Inbound to `+19132861761` therefore routes by
+**ownership = does an `hl_leads` row exist for that phone** (HouseLoop-first, FUB-fallback):
+
+```
+Lead texts/calls +19132861761
+   └─ CRM webhook (front door) checks hl_leads by phone tail-10
+        ├─ HouseLoop lead  → handled in the CRM (unchanged)
+        └─ not a HouseLoop lead (FUB-owned) → forwarded to the FUB widget:
+             SMS  → POST realloop.co/fub-widget/sms/inbound  (X-HL-Forward-Secret + MessageSid dedupe)
+             Voice→ <Redirect> to realloop.co/fub-widget/voice/inbound (whisper "call from <name>")
+```
+
+Graduation is automatic: the moment an `hl_leads` row exists for that number, the next inbound
+resolves to HouseLoop and the widget stops receiving it — **no double-send, no flag to flip.** The
+shared `FUB_FORWARD_SECRET` guards the SMS forward; `MessageSid` / `CallSid` dedupe Twilio retries.
+
+<Note>
+True lead caller-ID on a forwarded inbound call is **not possible on raw Twilio** (anti-spoofing /
+STIR-SHAKEN). The agent's phone shows the AI-outbound number; a spoken **whisper** announces who's
+calling instead.
+</Note>
+
+## Endpoints
+
+| Route | Purpose |
+|---|---|
+| `GET /fub-widget` | The iframe (Actions / Activity / Context), HMAC-gated |
+| `GET /fub-widget/ai` | Claude read + channel-aware draft (no-store) |
+| `POST /fub-widget/send` | Send text via Twilio + log to FUB |
+| `POST /fub-widget/call` | Click-to-call bridge |
+| `POST /fub-widget/sms/inbound` | Receive a FUB-owned inbound text forwarded by the CRM front-router |
+| `POST /fub-widget/voice/inbound` · `/voice/whisper` · `/voice/outbound` | Inbound forward + whisper + outbound bridge TwiML |
+
+## Change log
+
+- **2026-06-02** — Shipped the comms console: Twilio send + click-to-call from the widget; one-number
+  CRM↔FUB inbound router (CRM front-door fallback-forward); first-touch outreach mode; AI now reads
+  the full multi-channel timeline (added notes/calls/events).
