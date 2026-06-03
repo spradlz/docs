@@ -1,60 +1,76 @@
 ---
 title: "Brand Assets"
-description: "The single source of truth for HouseLoop logos, favicon, and OG image — hosted at houseloop.ai/brand/ with a machine-readable manifest. Everything (website, CRM, emails, AI workflows) references these canonical URLs. This is the index an agent reads to GET the logo and embed it."
+description: "The single source of truth for HouseLoop logos, favicon, social avatars, banners, OG, and email logos — hosted at houseloop.ai/brand/ with a machine-readable manifest. Everything (website, CRM, emails, social, AI workflows) references these canonical URLs. Rebuilt 2026-06-03 as one reproducible vector kit + lint enforcement."
 ---
 
-There is **one** home for HouseLoop brand assets. Don't re-draw the logo in code (for a
-fixed-color context) and don't copy these files anywhere — **reference the canonical URL.**
+There is **one** logo kit for HouseLoop. Don't re-draw the logo in code, don't hardcode the
+brand color, and don't copy these files anywhere — **reference the canonical URL.**
 
 - **Canonical URL namespace:** `https://houseloop.ai/brand/<name>`
 - **Machine-readable manifest:** [`https://houseloop.ai/brand/manifest.json`](https://houseloop.ai/brand/manifest.json)
 - **Authed tool endpoint (inside the CRM):** `GET /api/brand/assets`
 - **Repo source:** `apps/houseloop-web/public/brand/`
+- **Full law:** `GT/GT - ACTIVE/GT_HOUSELOOP_BRAND_ASSETS.md`
 
-## The assets
+Brand blue **`#2D6DFF`**. Wordmark: **DM Sans** — "House" `#0A1F44` (bold 700), "Loop" `#2D6DFF` (regular 400).
+The mark is a house chevron over an open loop ring.
 
-| Key | URL | Size | Use |
-|---|---|---|---|
-| `logo_full` | `https://houseloop.ai/brand/logo-full.png` | 516×280 | **Primary lockup** (icon + "HouseLoop" wordmark). Email headers, doc headers, marketing. |
-| `logo_mark` | `https://houseloop.ai/brand/logo-mark.png` | 512×512 | **Square icon** (roof + loop). App icon, avatars, social profile, CRM top-left. |
-| `og_image` | `https://houseloop.ai/brand/og-image.png` | 516×280 | Open Graph / social share preview. |
-| `favicon` | `https://houseloop.ai/brand/favicon.ico` | 64×64 | Browser tab favicon (also at `/favicon.ico`). |
-| `icon_svg` | `https://houseloop.ai/brand/icon.svg` | vector | Vector app icon. |
+## The kit
 
-Brand color **`#2D6DFF`**. Wordmark: "House" `#0A1F44`, "Loop" `#2D6DFF`.
+**Master vectors** — `public/brand/master/` (20 editable SVGs, the source every raster is exported from):
+horizontal + stacked lockups, mark-only, wordmark-only, each in **color / white / black / blue / on-blue**, plus the app-icon tiles. Never edit a PNG — edit a master and re-export.
+
+**Logos:**
+
+| Key | URL | Use |
+|---|---|---|
+| `logo_full` | `/brand/logo-full.png` | Primary horizontal lockup (mark + wordmark). Email/doc headers, marketing. |
+| `logo_mark` | `/brand/logo-mark.png` | Square app-icon (white mark on blue tile, 512). CRM top-left, avatars. |
+
+**Web icons** (also wired into Next via `app/` file-convention): `favicon.ico` (16/32/48), `icon.svg`, `apple-touch-icon.png` (180), `icon-192/512.png`, `icon-maskable-512.png`, `/site.webmanifest`.
+
+**Social** — `/brand/social/`: `avatar-master-1024.png` (every platform downscales this), `avatar-youtube-800.png`, and banners `banner-youtube-2560x1440`, `banner-facebook-851x315`, `banner-x-1500x500`, `banner-linkedin-1128x191`.
+
+**Share / Email:** `share/og-default-1200x630.png` (+ `og-image.png` alias) · `email/email-logo-color@2x.png` (light headers) · `email/email-logo-white@2x.png` (dark-mode clients).
+
+## Avatar / favicon rule
+
+At tiny sizes (16–98px) the avatar/favicon is the **white mark on a solid `#2D6DFF` tile** — the
+full lockup is illegible that small and a thin mark on transparent vanishes on light feeds. Use the
+full/stacked lockups only at ≥120px. (`icon-tile-blue` is the blue-on-white alternate for light contexts.)
 
 ## For AI workflows — how to GET a logo
-
-When a workflow needs to put the logo on an email, page, or asset:
 
 ```bash
 # 1. Read the manifest
 curl https://houseloop.ai/brand/manifest.json
-# 2. Pick the asset by key (logo_full for an email header, og_image for a share card)
-# 3. Embed its url — e.g. in an email:
-#    <img src="https://houseloop.ai/brand/logo-full.png" alt="HouseLoop" width="170">
+# 2. Pick the asset by key (logo_full for an email header, og_default for a share card,
+#    avatar_master for a social profile, email_logo_white for a dark email)
+# 3. Embed its url — e.g. in an email header:
+#    <img src="https://houseloop.ai/brand/logo-full.png" alt="HouseLoop" width="180">
 ```
 
 Inside the CRM (TypeScript), import from the one module — never hardcode a path:
 
 ```ts
 import { BRAND, BRAND_ASSETS } from '@/lib/brand/assets';
-// BRAND.logoFull, BRAND.logoMark, BRAND.ogImage
-// BRAND_ASSETS.logo_full.url, .width, .height, .use
 ```
 
-## Raster (this SSOT) vs the in-app vector mark
+## In-app recolorable mark
 
-These hosted PNGs are the source of truth for **fixed-color** contexts: emails, OG,
-marketing, docs, AI content, and logo *displays* (e.g. CRM Business Settings).
+A recolorable SVG mark (`components/ui/HouseLoopLogo.tsx`) is the **one** allowed inline render —
+for UI chrome that must adapt to its background (e.g. the white logo on the blue header bar; a PNG
+can't recolor). It matches the canonical geometry. Don't invent another; for a fixed-color logo use
+the assets above.
 
-A separate **recolorable SVG mark** still exists for UI chrome that must adapt to its
-background — e.g. the website header renders a **white** logo on the blue bar (a PNG can't
-recolor). That vector mark mirrors the canonical design (roof + loop). Don't invent a new
-one; if you need a fixed-color logo, use the assets above.
+## Enforcement (the lint roller)
+
+`tools/houseloop-drift-check.sh` **CHECK 6** runs in pre-commit + CI and **blocks** any new change that
+(a) redraws the logo mark inline, (b) references a deleted brand file, or (c) hardcodes `#2D6DFF`/`#0A1F44`
+instead of the `--hl-brand` / `--hl-navy` tokens. Pre-existing debt is inventoried, not retro-blocked —
+migrate a file when you touch it.
 
 ## Who references it (kept in sync)
 
 Website header/favicons/OG · CRM top-left (`BrandLogoMark`) · CRM Business Settings ·
-email templates (`hl_templates`) — all point at the canonical `/brand/` assets. Full law:
-`GT/GT - ACTIVE/GT_HOUSELOOP_BRAND_ASSETS.md`.
+email templates (`hl_templates`) · social tools — all point at the canonical `/brand/` assets.
