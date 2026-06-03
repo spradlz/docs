@@ -1,0 +1,78 @@
+---
+title: "Care Team & Lead Routing"
+description: "How a HouseLoop lead is staffed — the AI Responder + Human Owner two-slot model, per-source defaults (AI-first front door), appointment handoff, and how message identity follows the active handler."
+---
+
+Every lead has a **two-slot care team**, set independently. This drives who answers the lead, who
+owns it, and whose name appears on outbound messages.
+
+| Slot | Column(s) | Meaning | Nullable |
+|------|-----------|---------|----------|
+| **AI Responder** | `ai_agent_user_id` + `ai_role_id` + `ai_mode_enabled` | The **one** AI that answers the lead | ✅ |
+| **Human Owner** | `assigned_user_id` | The human responsible / hand-off target | ✅ |
+
+<Note>
+**One lead = one AI responder.** The AI Responder can point to a standalone AI (e.g. **Myli**) **or
+a human's clone** (e.g. Zach-as-AI) — never both. "Clone mode" is not a separate parallel toggle;
+a human's clone is just a possible *value* of the AI Responder. This is enforced structurally —
+there is a single `ai_agent_user_id` field.
+</Note>
+
+## The front-door flow
+
+```
+new website registration
+  → AI Responder = Myli (from the source default), Human Owner = null, ai_mode = on
+  → Myli works the lead (texts/emails as Myli)
+  → Myli books an appointment
+  → HANDOFF: Human Owner = source.handoff_user (default Zach)  [if auto-handoff is on]
+  → the human owns it; the AI responder stays in place to keep assisting
+```
+
+## Lead source = the default care team
+
+**Settings → Lead Sources → edit a source → Default Care Team:**
+
+- **Default AI Responder** — AI agents only (flattened to `agent · role`, e.g. "Myli · AI ISA").
+  Sets `ai_agent_user_id` / `ai_role_id` / `ai_mode_enabled=true` on new leads.
+- **Default Human Owner** — humans only (or *Unassigned*). Sets `assigned_user_id`.
+- **☑ Hand off to a human when the AI books an appointment → [human]** — sets `handoff_user_id` +
+  `auto_handoff_on_appointment`.
+
+Columns live on `hl_lead_sources` (migration `0089`): `default_ai_agent_user_id`,
+`default_ai_role_id`, `handoff_user_id`, `auto_handoff_on_appointment`. The legacy
+`default_assigned_user_id` is the **human** owner default.
+
+These defaults apply to **NEW leads only** — changing a source never retroactively reassigns
+existing leads.
+
+## Where each piece is wired
+
+| Step | Code |
+|------|------|
+| Apply source defaults on a new lead | `app/api/integrations/website/lead-intake/route.ts` (INSERT sets AI responder + owner) |
+| Appointment handoff | `lib/leads/handoff.ts` `maybeHandoffOnAppointment(leadId)` — called from `/api/calendar/events` POST (human) **and** the clone's `schedule_appointment` |
+| AI auto-reply | `lib/ai/lead-conversation.ts` `dispatchInboundToAi` — fires when `ai_mode_enabled` && `ai_agent_user_id` |
+
+## Message identity (`{{agent.*}}`)
+
+Outbound client/agent templates (welcome, tour/contact acks) resolve the **active handler** for
+`{{agent.*}}`:
+1. the **AI Responder** when `ai_mode_enabled` is on, else
+2. the **Human Owner**, else
+3. the first active human (fallback).
+
+So a lead defaulted to Myli gets a welcome signed by **Myli**; after handoff to Zach the next
+message is signed by **Zach** — no template edits needed. (See [Notifications](/guides/notifications).)
+
+## Lead-detail layout
+
+The lead-detail page is three lanes. As of 2026-06-03 the **AI lane is on the LEFT** (whoever is
+answering leads the layout), the activity center is anchored in the middle, and the **owner /
+contact lane is on the right**. The care team shows both slots; because there is only ever one AI
+responder, there is no "two AIs" ambiguity.
+
+## Related
+- [Notifications](/guides/notifications) — Senders, client rules, templates, agent identity.
+- [Lead deduplication](/guides/lead-deduplication) — inbound phone→lead routing.
+- [CRM Deep-Linking](/guides/lead-detail-routing) — URL params for the lead-detail tabs.
