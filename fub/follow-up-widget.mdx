@@ -18,7 +18,7 @@ person view. It loads the lead's **recovered** history (the bodies the [FUB Scra
 unmasked), acts as the agent's AI clone, and lets them **text or call the lead** without leaving
 FUB. Served from `https://realloop.co/fub-widget`.
 
-- **Auth:** FUB passes `?context=<base64 json>&signature=<hmac>`; the widget verifies
+- **Auth:** FUB passes a `context` (base64 JSON) plus an HMAC `signature`; the widget verifies
   `HMAC-SHA256(context, FUB_EMBEDDED_APP_API_KEY)` before rendering. No `X-Frame-Options` (it's an iframe).
 - **Freshness:** every panel re-reads the database on open (`Cache-Control: no-store`) so it always
   reflects the latest activity.
@@ -27,9 +27,9 @@ FUB. Served from `https://realloop.co/fub-widget`.
 
 | Tab | Shows |
 |---|---|
-| **⚡ Actions** | Claude "what should I do?" — summary, intent, single best next step, a channel-aware drafted reply, **Approve & Send**, **Call lead**, Regenerate. |
-| **💬 Activity** | Texts / Calls / Emails / Homes — the real recovered content, homes are clickable Zillow links. |
-| **📇 Context** | The living brain — who the lead is + buying intent, regenerated from live data. |
+| **Actions** | Claude "what should I do?" — summary, intent, single best next step, a channel-aware drafted reply, **Approve & Send**, **Call lead**, Regenerate. |
+| **Activity** | Texts / Calls / Emails / Homes — the real recovered content, homes are clickable Zillow links. |
+| **Context** | The living brain — who the lead is + buying intent, regenerated from live data. |
 
 The AI reads a **single unified, timestamped timeline** across *every* channel — texts, emails,
 calls, team notes, and home-activity events — with the most-recent line flagged, so suggestions
@@ -47,7 +47,7 @@ first-touch script:
    after your search now."
 3. **The property** — the most-recently-viewed home **in the lead's primary market** (out-of-state
    browsing noise filtered out), pulled from the notes.
-4. **The ask + open door** — "Saw you checking out <address> — want to go see it? Happy to set up
+4. **The ask + open door** — "Saw you checking out `[address]` — want to go see it? Happy to set up
    that one or any others you've got your eye on."
 5. The exact Zillow URL is appended deterministically (the model never edits the link).
 
@@ -58,12 +58,13 @@ transmits). So the widget sends through a number we control and logs into FUB fo
 
 - **Number:** `+1 (913) 286-1761` "Zach AI Outbound" on our Twilio account — A2P brand **approved**,
   campaign **verified**, in a Messaging Service.
-- **Text** — `POST /fub-widget/send` → Twilio `Messages` (`From=+19132861761` **and**
-  `MessagingServiceSid` together, for A2P compliance) → then logs to the FUB timeline via the
-  registered-system API (gated on `FUB_SYSTEM_KEY`).
-- **Call (click-to-call bridge)** — `POST /fub-widget/call` → Twilio rings the agent's cell first,
-  then `/fub-widget/voice/outbound` `<Dial callerId=+19132861761>` bridges the lead. The agent
-  talks on their normal phone; the lead sees the AI-outbound number.
+- **Text** — `POST /fub-widget/send` sends via the Twilio Messages API (`From` = the AI-outbound
+  number **and** `MessagingServiceSid` together, for A2P compliance), then logs to the FUB timeline
+  via the registered-system API (gated on `FUB_SYSTEM_KEY`).
+- **Call (click-to-call bridge)** — `POST /fub-widget/call` rings the agent's cell first, then
+  `/fub-widget/voice/outbound` returns TwiML that dials the lead with the AI-outbound number as
+  caller ID and bridges the two. The agent talks on their normal phone; the lead sees the
+  AI-outbound number.
 
 <Note>
 Logging sent/received texts onto the **FUB timeline** requires registering the system at
@@ -74,16 +75,16 @@ calling, and inbound routing all work without it — only the FUB timeline row w
 ## Inbound routing — one number, two systems
 
 A lead lives in **exactly one** system — FUB (this widget) or HouseLoop CRM — never both, and keeps
-the same number when they graduate FUB → HouseLoop. Inbound to `+19132861761` therefore routes by
-**ownership = does an `hl_leads` row exist for that phone** (HouseLoop-first, FUB-fallback):
+the same number when they graduate FUB to HouseLoop. Inbound to the AI-outbound number therefore
+routes by **ownership = does an `hl_leads` row exist for that phone** (HouseLoop-first, FUB-fallback):
 
 ```
-Lead texts/calls +19132861761
-   └─ CRM webhook (front door) checks hl_leads by phone tail-10
-        ├─ HouseLoop lead  → handled in the CRM (unchanged)
-        └─ not a HouseLoop lead (FUB-owned) → forwarded to the FUB widget:
-             SMS  → POST realloop.co/fub-widget/sms/inbound  (X-HL-Forward-Secret + MessageSid dedupe)
-             Voice→ <Redirect> to realloop.co/fub-widget/voice/inbound (whisper "call from <name>")
+Lead texts/calls the AI-outbound number
+   -> CRM webhook (front door) checks hl_leads by phone tail-10
+        - HouseLoop lead          -> handled in the CRM (unchanged)
+        - not a HouseLoop lead     -> forwarded to the FUB widget:
+             SMS   -> POST realloop.co/fub-widget/sms/inbound  (X-HL-Forward-Secret + MessageSid dedupe)
+             Voice -> TwiML Redirect to realloop.co/fub-widget/voice/inbound (whisper "call from <lead>")
 ```
 
 Graduation is automatic: the moment an `hl_leads` row exists for that number, the next inbound
@@ -105,10 +106,10 @@ calling instead.
 | `POST /fub-widget/send` | Send text via Twilio + log to FUB |
 | `POST /fub-widget/call` | Click-to-call bridge |
 | `POST /fub-widget/sms/inbound` | Receive a FUB-owned inbound text forwarded by the CRM front-router |
-| `POST /fub-widget/voice/inbound` · `/voice/whisper` · `/voice/outbound` | Inbound forward + whisper + outbound bridge TwiML |
+| `POST /fub-widget/voice/inbound`, `/voice/whisper`, `/voice/outbound` | Inbound forward + whisper + outbound bridge TwiML |
 
 ## Change log
 
 - **2026-06-02** — Shipped the comms console: Twilio send + click-to-call from the widget; one-number
-  CRM↔FUB inbound router (CRM front-door fallback-forward); first-touch outreach mode; AI now reads
+  CRM-to-FUB inbound router (CRM front-door fallback-forward); first-touch outreach mode; AI now reads
   the full multi-channel timeline (added notes/calls/events).
