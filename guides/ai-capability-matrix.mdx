@@ -1,0 +1,54 @@
+---
+title: "AI Capability Matrix"
+description: "What the AI clone can do today vs. what's pending — every lead action mapped to human UI, AI tool, built status, runtime handler, the gap, and the god-tier target. The built:true/false flags here drive what shows as a usable Workflow Builder step vs 'Coming soon'."
+---
+
+This is the source-of-truth audit of every lead action: who can do it (human/AI), whether
+it's built, the runtime handler, and what's missing. Built-status lives in
+`lib/agent-runtime/capabilities.ts`; the AI runtime is `ALL_TOOLS` in
+`lib/ai/lead-conversation.ts`. The Workflow Builder palette sources from these flags —
+`built:true` = a usable step, `built:false` = "Coming soon".
+
+## Built today ✅
+
+| Capability | AI tool | Runtime handler |
+|---|---|---|
+| **Text lead** | `text_lead` | `lib/phone/send-sms.ts` + `send-bb.ts` |
+| **Email lead** (generic) | `send_email` | `/api/email/send` (resolves merge fields + signature; pass `template_key:'direct'`) |
+| **Search homes** | `search_homes`, `get_home_details`, `lookup_property` | `/api/listings/search` + `/count` + `/api/search/nlp`; `GET /api/listings/{hlid}` |
+| **Create appointment** | `schedule_appointment` | `hl_appointments` + `lib/calendar/google-calendar.ts` + `lib/stages/advance-on-appointment.ts` |
+| **Disposition / cancel appointment** | `disposition_appointment` | `lib/appointments/apply-outcome.ts` (shared with the UI) |
+| **Notes** | `add_note` | `hl_notes` / `/api/leads/[id]/notes` |
+| **Tasks** | `create_task` | tasks API |
+
+## Pending ❌ (`built:false` — not yet a usable workflow step)
+
+| Capability | Status | Gap → what's needed |
+|---|---|---|
+| **Text a listing CARD** (`send_home`) | ❌ | Clone already texts listing *links* (search_homes → text_lead). The rich photo card is unbuilt — needs an MMS/iMessage listing card (photo + price + specs + link). |
+| **Email a listing** | ❌ | `send_email` is generic only. Needs `send_listing_email` that renders a branded listing card into HTML. |
+| **Update stage** | ❌ | Stage logic is trapped inside `apply-outcome.ts` (appointment-driven). Needs a standalone `setLeadStage()` + AI tool. |
+| **Saved search for a client** | ❌ | `/api/leads/[id]/saved-searches` is GET-only. Needs a create (POST) wired to the Saved-Search-Alert engine + an AI tool. |
+| **Tags** | ❌ | No add/remove-tag function or AI tool. |
+| **Calls** | ❌ | No outbound-call-via-dialer function or AI tool. |
+| **Proactive follow-up / cadence** | ❌ | No scheduled-action engine — the clone is reactive (replies when texted), it doesn't initiate. |
+
+## Zach's three questions
+
+- **Does the AI text listings on its own?** Partly. It autonomously searches and texts listing
+  **links** (`search_homes` → `text_lead`). It does **not** send a rich photo card — that's
+  `send_home`, which is not built.
+- **Does it email listings?** No. `send_email` is generic free-text; there's no listing-card
+  email tool yet.
+- **Saved search for a client?** View-only today (`GET`). Creating one (human or AI) isn't
+  built — needs a `POST` + AI tool wired to the alert engine.
+
+## Recommended build order
+1. `update_stage` standalone setter (smallest; unblocks the Workflow Builder).
+2. `send_home` — text a listing card (closes the "I thought it did this" gap).
+3. `send_listing_email` — email a listing card.
+4. Saved-search create (human + AI parity).
+5. Tags, calls, proactive cadence.
+
+Full per-row detail + god-tier targets: `GT/GT - ACTIVE/GT_HOUSELOOP_AI_CAPABILITY_MATRIX.md`.
+See also [AI Clone](/guides/ai-clone).
