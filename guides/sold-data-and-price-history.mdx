@@ -1,76 +1,67 @@
 ---
 title: "Sold Data & Price History"
-description: "How HouseLoop sources sold listings and full price history from Repliers — the live per-listing history fetch, the ListingHistory sold-comps backfill, and the Repliers pagination gotcha."
+description: "How HouseLoop detects sold listings in real time (the Repliers webhook Sc→Sld transition), builds the permanent sold page, and renders price history. The single source of truth, and why there is no backfill cron."
 ---
 
-HouseLoop shows two kinds of sold data, both sourced from **Repliers** (the Heartland MLS IDX feed):
+HouseLoop has exactly **one source of truth for a sale**: the **Repliers `listing.updated` webhook**, firing on a genuine status **transition to sold**. There is no cron, no polling backfill, no "catch the diff" backup. Webhook or nothing.
 
-1. **Price history on a listing detail page** — every PRIOR sale of that address, rendered live.
-2. **The sold-comps universe** — every Heartland sold listing back to 2016, stored in the `ListingHistory` table (foundation for the future sold map / sold search / SEO sold pages).
+## The one source of truth — the sold transition
 
-Sold **prices are never displayed** (Heartland IDX rule) — the UI shows `—` for the sold figure and only ever shows the publicly-listed **asking** price.
-
-## 1. Price history (prior sales) — live per listing
-
-Every Repliers single-listing GET (`GET /listings/{mlsNumber}`) returns a `history[]`
-array: every prior MLS record for that address (Sale/Lease, list price, sold price,
-list date, and the real **close date** at `timestamps.closedDate`).
+A real close arrives as a Repliers `listing.updated` webhook whose payload diff shows the listing's `lastStatus` **changing** to `Sld`:
 
 ```
-detail page (server)                       Repliers
-getPriceHistoryViaRepliers(mls) ──▶ GET /listings/{mls}?fields=history
-  │                                  → history[] (prior sales, back to 2016)
-  ▼
-<PriceHistory listing={l} history={priceHistory} />
-  → merges current-listing lifecycle + prior sales, newest-first
+previous: { lastStatus: "Sc" }                 ← was under contract (or "New" = active)
+data:     { status: "U", lastStatus: "Sld" }   ← now SOLD
 ```
 
-- Function: `getPriceHistoryViaRepliers(mlsNumber)` in `lib/listings/providers/repliers.ts`.
-  Cached daily (`next: { revalidate: 86400 }`). Maps `history[]` → `PriceHistoryEntry[]`.
-- `soldDate` = `timestamps.closedDate` (the actual close), **not** the entry's own
-  `soldDate` field (which is the contract date).
-- Floored at **2016-01-01**. Sale records only (no leases).
-- Renders in `components/listing/PriceHistory.tsx`. Dates are parsed date-only
-  (`iso.slice(0,10)`) to avoid a UTC-midnight → Central off-by-one.
+- `lastStatus === "Sld"` is the canonical sold marker across the whole codebase (`lib/listings/providers/repliers.ts`, `market-report.ts`).
+- **The discriminator** (proven live via `hl_webhook_inbound_log`): Repliers' `previous` object is the *changed-fields diff*. It carries `lastStatus` **only when lastStatus actually changed**. A metadata **re-sync** of an already-sold record sends `previous.lastStatus = null` — same `data.lastStatus="Sld"`, but no real sale. We fire **only** when `previous.lastStatus` is present and `!= "Sld"`.
 
-No storage or backfill is needed for this — it works for every listing, including
-brand-new ones, because Repliers builds `history[]` dynamically per request.
-
-## 2. Sold-comps universe — the `ListingHistory` backfill
-
-For a sold **map / search / SEO**, the per-listing live fetch isn't enough — you can't
-query or map data that only exists as a per-page call. So the full sold universe is
-stored in the `ListingHistory` table (one row per sold transaction).
-
-- **Source:** `GET /listings?status=U&lastStatus=Sld&minSoldDate=2016-01-01&boardId=157`
-  — **426,595** Heartland sold listings as of 2026-05.
-- **Script:** `apps/houseloop-web/scripts/backfill-listing-history.ts`
-  - Resumable + idempotent (preloads existing `mlsId`s and skips them).
-  - Lean rows: address, prices, dates, beds/baths/sqft, lat/lng, primary photo, brokerage.
-  - `soldDate` = `timestamps.closedDate`. `listingStatus = "sold"`.
-  - Non-destructive (INSERT only).
-
-```bash
-# verify a slice first (known record + page-1 sample + read-back)
-U="<prod db url>" REPLIERS_API_KEY=... npx tsx scripts/backfill-listing-history.ts --verify
-# full run
-U="<prod db url>" REPLIERS_API_KEY=... npx tsx scripts/backfill-listing-history.ts
-# resume / dry-run
-... --start-page 50      ... --max-pages 1 --dry-run
+```
+app/api/repliers/webhook/route.ts
+  becameSold = data.lastStatus === "Sld"
+            && previous.lastStatus != null
+            && previous.lastStatus !== "Sld"
+  → inngest.send("houseloop/listing.sold", { hlid, mls, source: "webhook" })
 ```
 
 <Warning>
-**Repliers pagination gotcha.** Repliers paginates with **`pageNum`** and
-**`resultsPerPage`** — **not** `page` / `pageSize`. The latter are silently ignored:
-the API returns **page 1 every time** (and `pageSize` defaults to 100). A backfill that
-uses `page`/`pageSize` will fetch the same 100 rows on every page and — if it dedupes by
-key — **skip everything**. Always use `pageNum` + `resultsPerPage`, plus a `sortBy`
-(e.g. `createdOnDesc`) so pages are stable and non-overlapping.
+**Never trigger sold processing off `Listing.status='sold'`.** That column is a *cache* field written by `upsertListingToCache` (`lib/listings/cache.ts`) from the polling sync / search caching for **any** home Repliers returns as closed — it does not mean a sale just happened. A cron that swept `status='sold' AND no article` (the old `house-blurb-generate` `0 5 * * *`) backfilled that polluted pool — 100+ fake "sold processing" runs a day. **That cron was removed.** The webhook transition is the only trigger.
 </Warning>
 
-## SEO sold pages (held)
+## The one workflow — `listing-sold`
 
-Turning the 426K sold rows into individually-indexed public pages (one per address,
-marked "Sold", in the sitemap) is a planned build, **held pending an MLS/IDX compliance
-check** — some MLSes restrict permanent public indexing of sold listings. Do not point
-Googlebot at sold pages until that's confirmed.
+The `houseloop/listing.sold` event runs a single Inngest function (`lib/inngest/functions/listing-sold.ts`) that does the whole sequence as one job, idempotently:
+
+1. **idempotency-check** — if `ListingHistory` already has `arc_<hlid>`, stop (cheap no-op; a stray re-emit never re-runs R2 + LLM).
+2. **load** — the live Repliers record (`fields=*,raw.CloseDate` → the real close date).
+3. **mark-sold** — `Listing.status='sold'` + `soldDate = raw.CloseDate` + stamp `lastStatusChangeAt`.
+4. **archive** — `archiveListingToHistory` → a `ListingHistory` row + photos copied to Cloudflare R2 (so the page survives after Repliers drops the listing).
+5. **ai-overview** — invokes `house-blurb-generate` per-hlid for the Sold House AI overview (Haiku).
+
+`house-blurb-generate` has **no cron** — it runs only when `listing-sold` invokes it (or a manual per-hlid invoke). No backfill, ever.
+
+## Observability — the inbound webhook log
+
+Every POST to `/api/repliers/webhook` is recorded in **`hl_webhook_inbound_log`** before any decision: `received_at`, `user_agent` (e.g. `Repliers-Webhook/687`), `source_ip`, the full `raw_body`, and the `previous`/`data` status diff. This is the permanent proof of *who* hit us and *what* they sent — cross-reference it against the `listing-sold` runs in the Run Log. Real Repliers traffic shows the `Repliers-Webhook/*` user-agent and AWS IPs.
+
+## Price history (prior sales) — live per listing
+
+Independent of the sold pipeline: every Repliers single-listing GET returns a `history[]` array (every prior MLS record for the address). Rendered live, newest-first.
+
+- `getPriceHistoryViaRepliers(mlsNumber)` in `lib/listings/providers/repliers.ts` (cached daily). Maps `history[]` → `PriceHistoryEntry[]`.
+- `soldDate` = `timestamps.closedDate` (the actual close), **not** the entry's own `soldDate` (the contract date).
+- Floored at 2016-01-01, sale records only. Renders in `components/listing/PriceHistory.tsx`.
+- **Sold prices are never displayed** (Heartland IDX rule) — the UI shows the publicly-listed asking price only.
+
+## The sold-comps archive — `ListingHistory`
+
+The full sold universe (one row per sold transaction, ~426K Heartland sales back to 2016) lives in `ListingHistory`, the foundation for the sold map / sold search / permanent `/home/{addressSlug}` SEO pages.
+
+- One-time seed: `scripts/backfill-listing-history.ts` (resumable, idempotent, INSERT-only). Source `GET /listings?status=U&lastStatus=Sld&minSoldDate=2016-01-01&boardId=157`.
+- Ongoing: `listing-sold` adds a fresh, R2-backed row for each newly-sold home in real time.
+- Searchable by address: `/api/locations/autocomplete` matches `ListingHistory.addressSlug` (indexed) and routes to `/home/{addressSlug}`.
+
+<Warning>
+**Repliers pagination gotcha.** Repliers paginates with **`pageNum`** + **`resultsPerPage`** — not `page`/`pageSize` (those are silently ignored → page 1 every time). Always use `pageNum` + `resultsPerPage` plus a stable `sortBy` (e.g. `createdOnDesc`).
+</Warning>
