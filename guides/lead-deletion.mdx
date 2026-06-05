@@ -1,0 +1,160 @@
+---
+title: "Lead Deletion"
+description: "How HouseLoop CRM hard-deletes a lead: total purge across CRM tables, no-FK tables, phone-matched messages, and the cross-database website User — nothing survives."
+---
+
+When a lead is deleted in HouseLoop CRM, **every trace is permanently removed**
+from both the CRM database and the website database. There is no soft-delete, no
+trash bin at the database level, and no tombstone row. The "Trash" concept lives
+as a pipeline stage for leads the operator wants to hide temporarily — an actual
+delete is irreversible and total.
+
+## Why hard-delete
+
+Soft-delete (a `deleted_at` timestamp) was removed in May 2026 because orphaned
+data kept resurfacing. A lead marked as deleted would still match inbound texts
+by phone number, still appear in notification queries, and still pollute pixel
+analytics. The hard-delete model eliminates every class of ghost data by removing
+the rows entirely.
+
+## The delete flow
+
+Both the single-lead endpoint (`DELETE /api/leads/[id]`) and the bulk endpoint
+(`POST /api/leads/bulk` with `action: "delete"`) run the same sequence:
+
+### 1. Snapshot the lead
+
+Before touching anything, the handler reads the lead's `id`, `email`, and `phone`
+from `hl_leads`. These values drive the cleanup steps below.
+
+### 2. Purge no-FK tables
+
+Two tables store lead data but have **no foreign key** to `hl_leads`:
+
+| Table | Match column |
+|---|---|
+| `hl_pixel_event` | `lead_id` |
+| `hl_pixel_visitor` | `lead_id` |
+
+These are deleted explicitly by `lead_id` before the cascade step, because
+without a foreign key constraint they would be silently orphaned.
+
+### 3. Purge polymorphic tables
+
+`hl_notes` uses `entity_type` + `entity_id` instead of a direct FK:
+
+```sql
+DELETE FROM hl_notes
+WHERE entity_type = 'lead' AND entity_id = $1
+```
+
+No FK means no cascade — the delete handler does it explicitly.
+
+### 4. Purge phone-matched messages
+
+`hl_inbound_messages` links to leads **by phone number**, not by `lead_id`. If
+the lead has a phone, the handler normalizes it to the last 10 digits and deletes
+every row where `from_number` or `to_number` matches:
+
+```sql
+DELETE FROM hl_inbound_messages
+WHERE right(regexp_replace(from_number, '\D', '', 'g'), 10) = $1
+   OR right(regexp_replace(to_number, '\D', '', 'g'), 10) = $1
+```
+
+This prevents a future lead with the same phone number from inheriting the deleted
+lead's message history. Without this step, the
+[comms resolver](/guides/team-communications) would re-attach old messages to the
+new lead, creating ghost conversations.
+
+<Warning>
+Phone-matched deletion is aggressive by design. If two leads share a phone number
+(rare but possible — see [deduplication](/guides/lead-deduplication)), deleting
+one will remove inbound messages that matched _both_. This is intentional: the
+constitutional rule is that nothing from a deleted lead survives.
+</Warning>
+
+### 5. CASCADE delete from `hl_leads`
+
+```sql
+DELETE FROM hl_leads WHERE id = $1
+```
+
+Every FK that references `hl_leads.id` is set to `ON DELETE CASCADE`. As of
+migration 0106, that includes **33 foreign keys** across tables like:
+
+| Table | What it stores |
+|---|---|
+| `hl_messages` | All comms (text, email, iMessage) |
+| `hl_notification` | Bell alerts, unread badges |
+| `hl_tasks` | Assigned tasks |
+| `hl_appointments` | Booked appointments |
+| `hl_calls` | Call records |
+| `hl_lead_tags` | Tag associations |
+| `hl_lead_collaborators` | Team collaborators |
+| `hl_stage_transitions` | Pipeline stage history |
+| `hl_saved_search_match` | Saved search results |
+| `hl_bb_events` | BlueBubbles iMessage events |
+| `hl_lead_addresses` | Address records |
+
+One `DELETE` on `hl_leads` wipes all 33 dependent tables automatically. No
+application code enumerates these tables — the database enforces it.
+
+### 6. Cross-database website purge
+
+The CRM and website run on **separate PostgreSQL databases**. The website stores
+a `User` row (with sessions, saved searches, and profile data) that matches the
+CRM lead by email.
+
+After the CRM cascade, the handler calls `deleteWebUserByEmail(email)` via a
+separate connection pool (`HL_WEB_DATABASE_URL`) pointed at the website database:
+
+```sql
+DELETE FROM "User" WHERE lower(email) = lower($1)
+```
+
+The website's `User` table also uses `ON DELETE CASCADE` on all its FKs
+(`SavedSearch`, `Session`, `Account`, etc.), so one delete cleans everything.
+
+<Note>
+The cross-DB delete is **best-effort with error logging**. If the website DB is
+unreachable, the CRM lead is still deleted and the failure is logged to the
+server console. The website `User` row becomes orphaned but harmless (no login
+session, no CRM data to display).
+</Note>
+
+## Bulk delete
+
+`POST /api/leads/bulk` with `action: "delete"` (or `"trash"` for backward
+compatibility) runs the same purge sequence across all provided `lead_ids` in
+a single pass. The no-FK and phone-based deletes use `ANY($1::uuid[])` and
+array parameters for efficiency.
+
+## What is NOT deleted
+
+| Item | Why |
+|---|---|
+| `hl_lead_sources` | Sources are shared config rows, not per-lead data. |
+| `hl_stages` / `hl_pipelines` | Pipeline configuration. |
+| `hl_templates` | Email/text templates are team-level. |
+| `hl_run_log` | Inngest run history — operational audit, not lead data. |
+
+## Guarding against future orphans
+
+Every new table that references `hl_leads.id` **must** use
+`ON DELETE CASCADE` in its migration. A lint rule in
+`tools/houseloop-prisma-check.sh` scans all migration files and fails the
+check if any new FK to `hl_leads` uses `SET NULL`, `NO ACTION`, or `RESTRICT`.
+
+If a new table stores lead data without a direct FK (polymorphic, phone-matched,
+or cross-DB), it must be added to the explicit purge block in both
+`/api/leads/[id]/route.ts` and `/api/leads/bulk/route.ts`.
+
+## Source files
+
+| File | Role |
+|---|---|
+| `app/api/leads/[id]/route.ts` | Single-lead DELETE handler |
+| `app/api/leads/bulk/route.ts` | Bulk delete handler |
+| `lib/web-db.ts` | Cross-DB connection pool + `deleteWebUserByEmail()` |
+| `db/migrations/0106_notification_cascade_on_lead_delete.sql` | Last SET NULL → CASCADE fix |
