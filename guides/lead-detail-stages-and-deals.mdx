@@ -1,6 +1,6 @@
 ---
 title: "Lead Detail — Stages, Deals, and the Audit Trail"
-description: "How stage transitions on the lead detail page capture pending and closed deals, handle regressions, and write the audit log."
+description: "How stage transitions on the lead detail page capture pending and closed deals, handle regressions, and write the audit log. Includes the dual-pipeline source of truth."
 ---
 
 The lead detail page (`/leads/[id]`) is where you move a buyer or seller
@@ -9,6 +9,59 @@ Closed, regressions out of either — because they touch revenue and need
 clean, recoverable records. This guide explains exactly what each
 transition does, what database row it writes, and how the engagement
 feed surfaces the result.
+
+## Pipelines — THE SOURCE OF TRUTH (read this first)
+
+HouseLoop has **TWO pipelines, not one**: a **Buyer Pipeline** (`is_default = TRUE`)
+and a **Seller Pipeline** (`is_default = FALSE`). A single lead can be on **both at the
+same time** — that's why the lead detail shows a **Buyer** stepper row and a **Seller**
+stepper row.
+
+| Concept | Where it lives |
+|---|---|
+| The two pipelines | `hl_pipelines` (Buyer = default, Seller seeded in migration `0013_hl_dual_pipelines`) |
+| Stages per pipeline | `hl_stages`, keyed by `pipeline_id` (~13 stages each) |
+| A lead's stage in each pipeline | `hl_lead_pipeline_memberships` (`UNIQUE (lead_id, pipeline_id)` — one row per pipeline the lead is on) |
+| Buyer vs Seller of a deal | **derived from the pipeline**: `hl_lead_deals.stage_id → hl_stages.pipeline_id → hl_pipelines`. There is no buyer/seller flag — the pipeline IS the answer. |
+
+**Buyer Pipeline stages (live):** New Lead → Attempted Contact → Spoke With Buyer →
+1st Appointment Set → 1st Appointment Met → Showing Homes → Under Contract → Closed *(terminal)* →
+Nurture Cold → Nurture Warm → Nurture Hot → Junk → DNC *(terminal)*.
+
+**Seller Pipeline stages:** New Lead → Attempted Contact → Spoke With Seller → Appointment Set →
+Listing Agreement → Active Listing → Under Contract → Closed *(terminal)* → Lost / Inactive.
+
+<Warning>
+**`GET /api/stages` returns ONLY the default (Buyer) pipeline.** It does
+`SELECT id FROM hl_pipelines WHERE is_default LIMIT 1`. It is **not** the way to enumerate
+"all stages / both pipelines" — it makes it look like there's one pipeline (this has misled
+multiple devs). To read both pipelines, use **`GET /api/leads/[id]/pipeline`** (returns the
+lead's `buyer` + `seller` `PipelineWithStages`) or query `hl_pipelines` + `hl_stages` directly.
+</Warning>
+
+Full SSOT (with table/column/id detail): `GT/GT - ACTIVE/GT_HOUSELOOP_PIPELINES_SSOT.md`.
+
+## For the AI ISA (Myli) — how to read & move a lead's stage
+
+The AI must NEVER call `/api/stages` to figure out a lead's stage — that's Buyer-only and
+will be wrong for sellers. The canonical source for an AI stage move is the lead's
+**pipeline membership**:
+
+1. Read `hl_lead_pipeline_memberships` for the lead → each row is the lead's stage in a pipeline.
+2. Enumerate valid stage names from `hl_stages WHERE pipeline_id = <that membership's pipeline>`.
+3. Move by updating the membership's `stage_id` (never `/api/stages`).
+
+This is exactly what the `update_stage` tool does in
+`apps/houseloop-crm/lib/ai/lead-conversation.ts → execUpdateStage`. The lead's **current
+stage is injected into the AI system prompt** so she picks the target by name within the
+lead's pipeline.
+
+<Note>
+**Known caveat:** `execUpdateStage` currently resolves against `memberships[0]` (the
+oldest membership, usually Buyer). For a lead on BOTH pipelines, a seller-side move could
+land on the Buyer pipeline. If you wire seller-aware AI moves, pass/resolve the intended
+pipeline (Buyer vs Seller) explicitly rather than defaulting to the first membership.
+</Note>
 
 ## The two stage-mover surfaces
 
@@ -123,7 +176,7 @@ Migration `0069_hl_lead_deals.sql` + `0070_hl_lead_deals_voiding.sql`.
 |--------|---------|
 | `id` | UUID PK |
 | `lead_id` | FK to hl_leads |
-| `stage_id` | The stage the lead was at when the milestone was captured |
+| `stage_id` | The stage the lead was at when the milestone was captured (→ its pipeline = buyer vs seller) |
 | `milestone` | `'under_contract'` \| `'closed'` \| `'fell_through'` |
 | `property_address` | Free-text address as entered |
 | `property_price` | Numeric, the contract price |
@@ -189,32 +242,35 @@ top-level item in the left sidebar under **Team Settings → Audit Log**.
 
 | Method | Path | What it does |
 |--------|------|--------------|
+| GET | `/api/leads/[id]/pipeline` | The lead's Buyer + Seller pipelines with stages (use THIS, not `/api/stages`) |
 | POST | `/api/leads/[id]/pipeline` | Move a lead to a stage; writes `leads.stage_change` audit |
 | POST | `/api/leads/[id]/deal` | Insert a new deal milestone; writes `deals.<milestone>` audit |
 | PATCH | `/api/leads/[id]/deal` | Void the most recent live deal of a milestone (body: `{action:'void_latest', milestone, reason?}`); writes `deals.<milestone>_voided` audit |
 | GET | `/api/leads/[id]/deal` | List all deal milestones for the lead (newest first, includes voided) |
+| GET | `/api/stages` | **Buyer (default) pipeline only** — not the SSOT for all pipelines |
 
 ## Component file map
 
 ```
 apps/houseloop-crm/
 ├── lib/
-│   └── audit/
-│       └── write.ts                          ← writeAudit() helper
+│   ├── ai/lead-conversation.ts                ← execUpdateStage (AI stage move, membership-based)
+│   └── audit/write.ts                          ← writeAudit() helper
 ├── app/
 │   ├── api/leads/[id]/
-│   │   ├── pipeline/route.ts                  ← stage_change writes
+│   │   ├── pipeline/route.ts                  ← buyer+seller read + stage_change writes
 │   │   └── deal/route.ts                      ← POST + PATCH + GET deals
 │   ├── (crm)/settings/audit/page.tsx          ← ACTION_LABELS + SUMMARY column
 │   └── components/Sidebar/Sidebar.tsx         ← Audit Log nav link
 ├── components/leads/detail/
 │   ├── PipelineChipDropdown.tsx               ← navy chip intercept
-│   ├── CenterLane.tsx (PipelineStepperRow)    ← inline stepper intercept
+│   ├── CenterLane.tsx (PipelineStepperRow)    ← inline stepper intercept (Buyer + Seller rows)
 │   ├── DealMilestoneModal.tsx                 ← capture/edit pending or closed
 │   ├── PendingLostModal.tsx                   ← regression out of UC
 │   ├── ClosedExitModal.tsx                    ← exit Closed (or just-proceed mode)
 │   └── PixelFeedStream.tsx                    ← Pending + Closed pills + deal cards
 └── db/migrations/
+    ├── 0013_hl_dual_pipelines.sql             ← Seller Pipeline + hl_lead_pipeline_memberships
     ├── 0069_hl_lead_deals.sql                 ← deal-milestones table
     └── 0070_hl_lead_deals_voiding.sql         ← voided_at + void_reason
 ```
