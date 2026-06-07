@@ -1,0 +1,67 @@
+---
+title: "Registration"
+description: "How a new account on houseloop.ai becomes a CRM lead — the context-aware New Registration system workflows, the bare-signup gate, and Myli's welcome (SMS + personal email + a pixel-aware saved search)."
+---
+
+When a visitor creates an account on `houseloop.ai`, HouseLoop fires a **registration event**
+that is *contextually aware of where they came from*. A bare "Sign up" fires **General
+Registration**; signing up while saving a search, booking a tour, or contacting an agent fires
+**that intent's** event instead. Exactly one event fires per new account — never a double-welcome.
+
+## The registration family (System Workflows → Website → Registration)
+
+Each entry point that forces account creation gets its own locked **New Registration (Context)**
+system workflow, so the welcome reads for *how* the person showed up — in Myli's voice, not a
+canned blast.
+
+| Workflow | Fires when… | Trigger |
+|---|---|---|
+| **New Registration (New Account Only)** | bare "Sign up", no other intent | `general_registration` |
+| New Registration (Saved Search) | created an account to save a search | `saved_search` |
+| New Registration (Tour) | created an account to book a tour | `tour_requested` |
+| New Registration (Contact / Seller / Property Liked / Saved / Shared) | created an account via that action | the matching event |
+
+These live under **System Workflows → 🌐 Website — HouseLoop.ai → 📝 Registration** in the CRM.
+They are *locked* (system) workflows: built + proven, then locked so they fire on every matching
+event for HouseLoop.ai-sourced leads.
+
+## The bare-signup gate
+
+`complete-profile` (the post-signup capture form) is hit by three flows: the bare signup form,
+the Save-Search modal, and the account-edit form. It fires **General Registration only on a bare
+signup** — driven by an `intent` parameter:
+
+| Caller | `intent` | General Registration fires? |
+|---|---|---|
+| Bare signup (`/auth/complete-profile`) | _(none)_ | ✅ Yes |
+| Save-Search modal | `saved_search` | ❌ No — the saved-search event fires instead |
+| Account edit (`/account`) | `profile_update` | ❌ No — it's an edit, not a registration |
+
+`apps/houseloop-web/app/api/auth/complete-profile/route.ts`.
+
+## What New Registration (New Account Only) does
+
+A bare new account is always *new*, so there's no stage branch — it runs straight through:
+
+```
+general_registration →
+  1. Welcome SMS from Myli (context-aware, first-name merge)
+  2. Pixel-aware Starter Saved Search (weekly) — see Saved Search Alerts
+  3. Personal email from Myli (her address + signature, via Resend)
+  4. Update Stage → Attempted Contact
+```
+
+- The **SMS + email** come from Myli's identity (`myli@houseloop.ai`) via Resend — signed, with
+  reply-to routing to her inbox. Her Gmail is never used for the automated send. See
+  [Email Settings](/guides/email-settings).
+- The **saved search** is built from the homes the lead actually viewed before signing up. See
+  [Saved Search Alerts](/guides/saved-search-alerts).
+- The messages are real, editable `hl_templates` (`myli_new_registration_account_only_sms` /
+  `_email`) — not hardcoded.
+
+## Reference
+
+- `apps/houseloop-web/app/api/auth/complete-profile/route.ts` — the gate
+- `apps/houseloop-crm` migrations `0116`–`0118` — the seeded workflow + nodes
+- Workflow key `sys_reg_account_only` · assigned to the HouseLoop.ai `general_registration` event
+- [Workflows](/guides/workflows) · [Saved Search Alerts](/guides/saved-search-alerts) · [Email Settings](/guides/email-settings)

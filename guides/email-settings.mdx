@@ -1,0 +1,59 @@
+---
+title: "Email Settings"
+description: "How HouseLoop email routing works — the three sender identities, the rail each uses (personal Gmail vs Resend), signatures, reply-routing, and send-as aliases. Settings → Email."
+---
+
+Email in HouseLoop is organized by one rule: **who an email is *from* decides everything** —
+the alias it sends as, the rail it sends on, whether a signature is appended, and where replies
+go. **Settings → Email** is the control panel, split into four tabs.
+
+## The three sender identities
+
+| Sender | Rail (how it sends) | Signature | Replies land in |
+|---|---|---|---|
+| **A human** (e.g. `zach@spradlingrealtygroup.com`) | their **Gmail** (OAuth) | their own | their Gmail |
+| **An AI agent — Myli** (`myli@houseloop.ai`) | **Resend** (not her Gmail) | hers, appended | her Gmail inbox |
+| **System / bulk** | **Resend** (`updates@` / `notifications@`) | none | system / team |
+
+The key design choice: **Myli's automated email rides Resend, never her Gmail.** Because
+`houseloop.ai` is a verified Resend domain, any address at it (`myli@`, `updates@`,
+`notifications@`) is a valid **send-as alias** through Resend with no per-address setup. So her
+welcomes and weekly alerts send *as* `myli@houseloop.ai` without ever touching her Gmail —
+there's nothing to "burn" at volume.
+
+### Send one place, receive another
+
+Outbound and inbound are decoupled by the `reply-to` header. Myli **sends** via Resend (no Gmail
+volume) but `reply-to: myli@houseloop.ai` means **replies land in her real inbox**, where inbound
+sync processes them. Send via Resend, receive via Gmail.
+
+## The four tabs
+
+| Tab | Configures |
+|---|---|
+| **Personal Inbox** | *Your own* connected Gmail + signature + send-as aliases — for manual 1:1 email you send. |
+| **Team Email** | *Every* teammate / AI agent's identity (admin / God-mode). This is where you set **Myli's** signature and connected inbox via **Configure**. |
+| **Bulk Email** | System transactional + marketing senders (`updates@`, `notifications@`) and saved-search alert delivery. |
+| **Email Compliance** | Footer, unsubscribe, and the bulk sender identity (from / reply-to). |
+
+## How automated agent email actually sends
+
+When a workflow step sends "as the assigned agent" (`sender_mode: 'assigned'`), the runtime:
+
+1. Resolves the lead's assigned agent (Myli) → `From: Myli <myli@houseloop.ai>`.
+2. Pulls her stored signature (`hl_oauth_connections.signature`, set in **Team Email → Configure**)
+   and **appends it** to the email body.
+3. Sets `reply-to` to her inbox.
+4. Sends via **Resend** (`sendViaResend`).
+
+So whatever you configure in **Team Email** is honored on every automated send — signed,
+reply-routed, and Gmail-safe. (Manual 1:1 email from the composer still sends via the human's
+Gmail and appends their signature server-side via `/api/email/send`.)
+
+## Reference
+
+- `apps/houseloop-crm/lib/email/resend-send.ts` — Resend sender (`from`, `reply_to`)
+- `apps/houseloop-crm/lib/workflows/execute-step.ts` — `emailIdentityFor` (from + reply-to + signature)
+- `apps/houseloop-crm/lib/agent-runtime/resolve-send-identity.ts` — who a send goes out as
+- Settings → Email → **Team Email → Configure** — per-agent identity + signature
+- [Email Templates](/guides/email-templates) · [Team Communications](/guides/team-communications)
