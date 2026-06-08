@@ -1,45 +1,135 @@
 ---
-title: "Registration"
-description: "How a new account on houseloop.ai becomes a CRM lead — the context-aware New Registration system workflows, the bare-signup gate, and Myli's welcome (SMS + personal email + a pixel-aware saved search)."
+title: "Registration & Sign-in"
+description: "The houseloop.ai buyer sign-in / registration flow — one unified modal, Google return-to-modal, forced phone capture with TCPA consent, decoupled lead creation, and the context-aware New Lead (X) system workflows that turn a signup into Myli outreach."
 ---
 
-When a visitor creates an account on `houseloop.ai`, HouseLoop fires a **registration event**
-that is *contextually aware of where they came from*. A bare "Sign up" fires **General
-Registration**; signing up while saving a search, booking a tour, or contacting an agent fires
-**that intent's** event instead. Exactly one event fires per new account — never a double-welcome.
+When a visitor signs up or signs in on `houseloop.ai`, two things happen: a **CRM lead** is
+created, and — once we have a phone number — a **context-aware workflow** fires in Myli's voice.
+This page covers the whole path: the front-end modal, the Google round-trip, forced phone capture,
+how lead creation is decoupled from the workflow, and the **New Lead (X)** workflow family.
 
-## The registration family (System Workflows → Website → Registration)
+## The unified sign-in modal
 
-Each entry point that forces account creation gets its own locked **New Registration (Context)**
-system workflow, so the welcome reads for *how* the person showed up — in Myli's voice, not a
-canned blast.
+Every auth/registration entry point opens **one** component — `components/site/SignInModal.tsx` —
+so the experience is identical everywhere (like a home, save a search, the profile "Sign in"
+button). It is fully tokenized (`HL_MODAL` tokens in `lib/tokens.ts`): one size, the HouseLoop
+logo on **every** step, consistent verbiage.
 
-| Workflow | Fires when… | Trigger |
+It's a two-/three-step flow:
+
+| Step | What it asks | Notes |
 |---|---|---|
-| **New Registration (New Account Only)** | bare "Sign up", no other intent | `general_registration` |
-| New Registration (Saved Search) | created an account to save a search | `saved_search` |
-| New Registration (Tour) | created an account to book a tour | `tour_requested` |
-| New Registration (Contact / Seller / Property Liked / Saved / Shared) | created an account via that action | the matching event |
+| `identify` | Continue with Google **or** email | The contextual pill ("To save this home…") renders here |
+| `details` | Email + password (email path only) | Skipped entirely on the Google path |
+| `profile` | **"You're almost there"** — first/last name + phone | The forced phone-capture step |
 
-These live under **System Workflows → 🌐 Website — HouseLoop.ai → 📝 Registration** in the CRM.
-They are *locked* (system) workflows: built + proven, then locked so they fire on every matching
-event for HouseLoop.ai-sourced leads.
+The headline adapts to the step (`profile` → **"You're almost there"**) and the gate context, so a
+"create your free account" headline never sits over a "Sign in" form — that contradiction is gone.
 
-## The bare-signup gate
+## The auth gate — what's gated, and how it reads
 
-`complete-profile` (the post-signup capture form) is hit by three flows: the bare signup form,
-the Save-Search modal, and the account-edit form. It fires **General Registration only on a bare
-signup** — driven by an `intent` parameter:
+`components/site/auth-gate.tsx` is the single choke point. A signed-out buyer who clicks a gated
+action gets the modal with **contextual copy**; signed-in users pass straight through.
 
-| Caller | `intent` | General Registration fires? |
+| Gate | Trigger | Headline style |
 |---|---|---|
-| Bare signup (`/auth/complete-profile`) | _(none)_ | ✅ Yes |
-| Save-Search modal | `saved_search` | ❌ No — the saved-search event fires instead |
-| Account edit (`/account`) | `profile_update` | ❌ No — it's an edit, not a registration |
+| `liked` / `saved` / `shared` / `save-search` | a button **on a specific home** | "To save this home, **create your free account**" (create-first) |
+| `all` / `updates` | a **nav heading** (Favorites / Saved Searches) | "Sign in or create an account to see your…" (sign-in-first) |
+| `generic` | the profile **Sign in** button | "Sign in" (no pill) |
 
-`apps/houseloop-web/app/api/auth/complete-profile/route.ts`.
+`gateListingAction(type, status)` is the helper every listing surface calls at the top of a
+like/save/share handler — signed out → it opens the modal and returns `true` (caller bails); signed
+in → returns `false` and the action proceeds. The buyer lands back on the same page after auth.
 
-## What New Registration (New Account Only) does
+## Google return — back to the modal, not a white page
+
+When the buyer picks **Continue with Google**, they leave to Google's native screen (expected).
+The return must land them **back in the modal over the blurred page**, not on a standalone form:
+
+```
+Continue with Google
+  → Google native screen
+  → /auth/complete-profile router redirects to  <originalPage>?hlAuthProfile=1&ctx=<gateType>
+  → AuthGateModal sees ?hlAuthProfile=1, re-opens SignInModal at the `profile` step
+    ("You're almost there") over the blurred page, restoring the gate context from ?ctx=
+```
+
+`AuthGateModal` (in `auth-gate.tsx`) watches for `?hlAuthProfile=1` once the session resolves,
+strips the params, and reopens the modal at `initialStep: "profile"`. The `ctx` param carries the
+original gate type so the **right** New Lead (X) workflow fires on submit.
+
+## Forced registration & the phone step
+
+When the **phone-required** registration setting is on, the `profile` step is
+**non-dismissable** (PPC-grade capture): the buyer can't bounce past it, and **Finish** stays
+disabled until a valid 10-digit phone is entered. This guarantees every lead has a phone before
+the workflow's text step runs.
+
+## Consent (TCPA)
+
+The phone step carries a standardized **call/text consent disclaimer** —
+`components/legal/ConsentFinePrint.tsx`, modeled on Zillow's. It's deliberately small
+(`text-[11px]`), left-justified, and sits directly under the phone field. Submitting the profile is
+the consent action.
+
+## Lead creation is decoupled from the workflow trigger
+
+The order matters: the workflow's **first step is often a text**, and a text needs a phone. So
+completing auth (Google **or** email) creates the lead **passively** and does **not** fire a
+workflow yet:
+
+```
+auth.ts events.createUser / register route
+  → pushLeadToCRM({ action: "account_created" })   ← PASSIVE: maps to NO event, no workflow
+```
+
+The **profile step** (after the phone is captured) is what fires the real registration event:
+
+```
+complete-profile route, ENTRY_ACTION:
+  liked  → liked_home_registration
+  saved  → saved_home_registration
+  (else) → google_signin   (→ general_registration)
+```
+
+So the lead exists the instant they authenticate, but the **welcome workflow only fires once we
+have a phone** — the text step never runs dry.
+
+## The New Lead (X) family — entry-point routing
+
+Each entry point creates a lead that fires **its own** workflow, named for *how* the person showed
+up. The naming convention is **New Lead (X)**:
+
+| Workflow | Fires when… | Event key |
+|---|---|---|
+| **New Lead (Registration only)** | bare signup, no other intent | `general_registration` |
+| **New Lead (Liked Home)** | created an account by liking a home | `liked_home_registration` |
+| **New Lead (Saved Home)** | created an account by saving a home | `saved_home_registration` |
+| **New Lead (Tour Request)** | created an account booking a tour | `tour_requested` |
+| **New Lead (Contact Request)** | created an account contacting an agent | `contact_requested` |
+
+These live under **System Workflows → 🌐 Website — HouseLoop.ai → 📝 Registration** in the CRM,
+*locked* (built, proven, then locked so they fire on every matching event for HouseLoop.ai leads).
+
+### How the event reaches the workflow
+
+The website posts the action to the CRM lead-intake, which upserts the lead, applies the matching
+**event tag**, and fires the trigger:
+
+```
+website action  → /api/integrations/website/lead-intake
+  → UPSERT hl_leads (by email), assign to Myli, put on Buyer pipeline @ New Lead
+  → ACTION_TO_EVENT[action] = eventKey   (e.g. liked_home_registration)
+  → apply the event tag  → emit houseloop/lead.tag-added   ← the generic workflow trigger
+  → (+ EVENT_TO_INNGEST first-class event for built-in events)
+  → workflowDispatcher matches the lead source's event→workflow assignment and runs it
+```
+
+Because the lead is created on the **Buyer pipeline at New Lead**, a registration workflow that
+ends on **Update Stage → Buyer · Attempted Contact** advances the lead's stepper cleanly (see
+[Workflows → Update Stage](/guides/workflows#update-stage-step)).
+
+## What a registration workflow does (example: New Account Only)
 
 A bare new account is always *new*, so there's no stage branch — it runs straight through:
 
@@ -56,12 +146,15 @@ general_registration →
   [Email Settings](/guides/email-settings).
 - The **saved search** is built from the homes the lead actually viewed before signing up. See
   [Saved Search Alerts](/guides/saved-search-alerts).
-- The messages are real, editable `hl_templates` (`myli_new_registration_account_only_sms` /
-  `_email`) — not hardcoded.
+- The messages are real, editable `hl_templates` (e.g. `myli_new_lead_liked_home_sms` / `_email`) —
+  not hardcoded.
 
 ## Reference
 
-- `apps/houseloop-web/app/api/auth/complete-profile/route.ts` — the gate
-- `apps/houseloop-crm` migrations `0116`–`0118` — the seeded workflow + nodes
-- Workflow key `sys_reg_account_only` · assigned to the HouseLoop.ai `general_registration` event
+- `apps/houseloop-web/components/site/SignInModal.tsx` — the unified modal (identify / details / profile)
+- `apps/houseloop-web/components/site/auth-gate.tsx` — the gate + Google return-to-modal
+- `apps/houseloop-web/components/legal/ConsentFinePrint.tsx` — TCPA consent line
+- `apps/houseloop-web/app/api/auth/complete-profile/route.ts` — phone capture + `ENTRY_ACTION` routing
+- `apps/houseloop-web/app/api/auth/register/route.ts` + `auth.ts` — passive `account_created` lead
+- `apps/houseloop-crm/app/api/integrations/website/lead-intake/route.ts` — `ACTION_TO_EVENT`, tag + `lead.tag-added`
 - [Workflows](/guides/workflows) · [Saved Search Alerts](/guides/saved-search-alerts) · [Email Settings](/guides/email-settings)
