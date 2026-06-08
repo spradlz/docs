@@ -1,18 +1,18 @@
 ---
 title: "Email Settings"
-description: "How HouseLoop email routing works — the three sender identities, the rail each uses (personal Gmail vs Resend), signatures, reply-routing, and send-as aliases. Settings → Email."
+description: "How HouseLoop email routing works — the three sender identities, the rail each uses (personal Gmail vs Resend), signatures, reply-routing, and send-as aliases. Settings -> Email."
 ---
 
 Email in HouseLoop is organized by one rule: **who an email is *from* decides everything** —
 the alias it sends as, the rail it sends on, whether a signature is appended, and where replies
-go. **Settings → Email** is the control panel, split into four tabs.
+go. **Settings -> Email** is the control panel, split into four tabs.
 
 ## The three sender identities
 
 | Sender | Rail (how it sends) | Signature | Replies land in |
 |---|---|---|---|
 | **A human** (e.g. `zach@spradlingrealtygroup.com`) | their **Gmail** (OAuth) | their own | their Gmail |
-| **An AI agent — Myli** (`myli@houseloop.ai`) | **Resend** (not her Gmail) | hers, appended | her Gmail inbox |
+| **An AI agent - Myli** (`myli@houseloop.ai`) | **Resend** (not her Gmail) | hers, appended | her Gmail inbox |
 | **System / bulk** | **Resend** (`updates@` / `notifications@`) | none | system / team |
 
 The key design choice: **Myli's automated email rides Resend, never her Gmail.** Because
@@ -36,12 +36,56 @@ sync processes them. Send via Resend, receive via Gmail.
 | **Bulk Email** | System transactional + marketing senders (`updates@`, `notifications@`) and saved-search alert delivery. |
 | **Email Compliance** | Footer, unsubscribe, and the bulk sender identity (from / reply-to). |
 
+## Email signatures — setup flow
+
+Signatures are **dual-written** to two locations. Both must be set together.
+
+### 1. Gmail native signature
+
+Set via Google Workspace Admin API (`set_signature` tool). This controls what Gmail shows
+when the agent composes manually from their inbox (webmail or mobile).
+
+```bash
+# Example: set Myli's Gmail signature
+mcp__google-workspace-admin__set_signature({
+  user_email: "myli@houseloop.ai",
+  signature: "<html signature string>"
+})
+```
+
+### 2. CRM stored signature
+
+Stored in the `hl_oauth_connections.signature` column for the agent's email. The CRM reads this
+and appends it server-side on:
+- **Automated sends** via Resend (`lib/email/resend-send.ts`)
+- **Manual sends** from the CRM composer via `/api/email/send`
+
+Update via SQL or the CRM **Settings -> Email -> Team Email -> Configure** UI.
+
+### Signature HTML rules
+
+- **Max ~10KB** (Gmail native signature limit). Host images as URLs, never inline base64.
+- **Headshot:** `<img src="https://houseloop.ai/brand/headshots/{name}.jpg">` — see [Brand Assets](/guides/brand-assets#headshots).
+- **HouseLoop logo:** `<img src="https://houseloop.ai/brand/logo-full.png">` — never recreate as CSS text.
+- **eXp logo:** `<img src="https://houseloop.ai/brand/partner/exp-realty.png">`.
+- **Outer wrapper:** `max-width: 400px` to prevent stretch in wide email clients and the CRM preview card.
+- **Two approved variants** (Spradling Group + HouseLoop Native) — specs at [Brand Assets: Email Signatures](/guides/brand-assets#email-signatures-locked-2026-06-08).
+
+### Adding a new team member's signature
+
+1. Save their headshot to `apps/houseloop-web/public/brand/headshots/{name}.jpg` and push.
+2. Choose the correct variant (Spradling Group for human agents, HouseLoop Native for AI agents).
+3. Build the HTML from the locked spec (see Brand Assets page).
+4. Set Gmail signature via `set_signature`.
+5. Set CRM signature in `hl_oauth_connections.signature` for their email.
+6. Verify: open Gmail compose, check the signature renders. Open CRM lead detail, send a test email, check the signature in the sent copy.
+
 ## How automated agent email actually sends
 
 When a workflow step sends "as the assigned agent" (`sender_mode: 'assigned'`), the runtime:
 
-1. Resolves the lead's assigned agent (Myli) → `From: Myli <myli@houseloop.ai>`.
-2. Pulls her stored signature (`hl_oauth_connections.signature`, set in **Team Email → Configure**)
+1. Resolves the lead's assigned agent (Myli) -> `From: Myli <myli@houseloop.ai>`.
+2. Pulls her stored signature (`hl_oauth_connections.signature`, set in **Team Email -> Configure**)
    and **appends it** to the email body.
 3. Sets `reply-to` to her inbox.
 4. Sends via **Resend** (`sendViaResend`).
@@ -55,5 +99,6 @@ Gmail and appends their signature server-side via `/api/email/send`.)
 - `apps/houseloop-crm/lib/email/resend-send.ts` — Resend sender (`from`, `reply_to`)
 - `apps/houseloop-crm/lib/workflows/execute-step.ts` — `emailIdentityFor` (from + reply-to + signature)
 - `apps/houseloop-crm/lib/agent-runtime/resolve-send-identity.ts` — who a send goes out as
-- Settings → Email → **Team Email → Configure** — per-agent identity + signature
+- Settings -> Email -> **Team Email -> Configure** — per-agent identity + signature
+- [Brand Assets: Email Signatures](/guides/brand-assets#email-signatures-locked-2026-06-08) — the two approved signature variants
 - [Email Templates](/guides/email-templates) · [Team Communications](/guides/team-communications)
