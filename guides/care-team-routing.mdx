@@ -1,6 +1,6 @@
 ---
 title: "Care Team & Lead Routing"
-description: "How a HouseLoop lead is staffed — the AI Responder + Human Owner two-slot model, per-source defaults (AI-first front door), the warm 3-way handoff, and the SLA failover engine (clone auto-on → Myli re-take + reassign)."
+description: "How a HouseLoop lead is staffed — the AI Responder + Human Owner two-slot model, per-source defaults (AI-first front door) with an org-default fallback so every new lead gets Myli, the warm 3-way handoff, and the SLA failover engine (clone auto-on → Myli re-take + reassign)."
 ---
 
 Every lead has a **two-slot care team**, set independently. This drives who answers the lead, who
@@ -43,8 +43,14 @@ Columns live on `hl_lead_sources` (migration `0089`): `default_ai_agent_user_id`
 `default_ai_role_id`, `handoff_user_id`, `auto_handoff_on_appointment`. The legacy
 `default_assigned_user_id` is the **human** owner default.
 
-These defaults apply to **NEW leads only** — changing a source never retroactively reassigns
-existing leads.
+### Every new lead gets an AI responder (org-default fallback)
+
+The AI Responder resolves **source default → org default**: if a source has no
+`default_ai_agent_user_id` (or the lead is created manually / from a non-configured source), it
+falls back to the org-wide default AI agent in `hl_settings.default_assigned_ai_agent`
+(**Myli**). So **every** new lead lands on an AI responder with `ai_mode` on — whether it comes
+from the website intake **or** the manual **Add Lead** form. This applies to **NEW leads only** —
+changing a source or the org default never retroactively reassigns existing leads.
 
 ## SLA Failover Engine (warm handoff → clone auto-on → Myli re-take)
 
@@ -85,7 +91,8 @@ Myli books an appointment + hands off
 
 | Step | Code |
 |------|------|
-| Apply source defaults on a new lead | `app/api/integrations/website/lead-intake/route.ts` |
+| Apply source defaults on a website lead (AI agent: source → org default) | `app/api/integrations/website/lead-intake/route.ts` |
+| Apply the same AI-agent default on a manually created lead | `app/api/leads/route.ts` (POST) |
 | Appointment handoff (+ warm intro when failover on) | `lib/leads/handoff.ts` `maybeHandoffOnAppointment(leadId, {summary})` — from `/api/calendar/events` POST + the clone's `schedule_appointment` |
 | Failover ladder (clone auto-on, Myli reassign) | `lib/leads/sla-sweep.ts` (`sla-failover-sweep` cron) |
 | Acknowledge | `POST /api/leads/[id]/ack` |
@@ -100,7 +107,9 @@ Outbound client/agent templates (welcome, tour/contact acks) resolve the **activ
 3. the first active human (fallback).
 
 So a lead defaulted to Myli gets a welcome signed by **Myli**; after handoff to Zach the next
-message is signed by **Zach** — no template edits needed. (See [Notifications](/guides/notifications).)
+message is signed by **Zach** — no template edits needed. Outbound texts/emails resolve the
+sending channel identity the same way via `resolveAgentSendIdentity` — see
+[Team Communications](/guides/team-communications#outbound-sends-resolve-the-leads-assigned-agent).
 
 ## Lead-detail layout
 
@@ -113,3 +122,4 @@ responder, there is no "two AIs" ambiguity.
 - [Notifications](/guides/notifications) — Senders, client rules, templates, agent identity.
 - [Lead deduplication](/guides/lead-deduplication) — inbound phone→lead routing.
 - [CRM Deep-Linking](/guides/lead-detail-routing) — URL params for the lead-detail tabs.
+- [Team Communications](/guides/team-communications) — the one message store + channel identities.
