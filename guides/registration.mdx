@@ -1,12 +1,13 @@
 ---
 title: "Registration & Sign-in"
-description: "The houseloop.ai buyer sign-in / registration flow — one unified modal, Google return-to-modal, forced phone capture with TCPA consent, decoupled lead creation, and the context-aware New Lead (X) system workflows that turn a signup into Myli outreach."
+description: "The houseloop.ai buyer sign-in / registration flow — one unified modal, Google return-to-modal, the global phone policy (Required / Optional / Hidden), when a lead is created (Finish or X), the no-phone re-prompt loop, and the context-aware New Lead (X) workflows that turn a signup into Myli outreach."
 ---
 
 When a visitor signs up or signs in on `houseloop.ai`, two things happen: a **CRM lead** is
 created, and — once we have a phone number — a **context-aware workflow** fires in Myli's voice.
-This page covers the whole path: the front-end modal, the Google round-trip, forced phone capture,
-how lead creation is decoupled from the workflow, and the **New Lead (X)** workflow family.
+This page covers the whole path: the front-end modal, the Google round-trip, the global phone
+policy, exactly when the lead is created, the no-phone re-prompt loop, and the **New Lead (X)**
+workflow family.
 
 ## The unified sign-in modal
 
@@ -15,36 +16,38 @@ so the experience is identical everywhere (like a home, save a search, the profi
 button). It is fully tokenized (`HL_MODAL` tokens in `lib/tokens.ts`): one size, the HouseLoop
 logo on **every** step, consistent verbiage.
 
-It's a two-/three-step flow:
+It's a single-page "join or sign in" flow with an optional phone step:
 
 | Step | What it asks | Notes |
 |---|---|---|
-| `identify` | Continue with Google **or** email | The contextual pill ("To save this home…") renders here |
-| `details` | Email + password (email path only) | Skipped entirely on the Google path |
-| `profile` | **"You're almost there"** — first/last name + phone | The forced phone-capture step |
+| `identify` | **Continue with Google** on top, then **or**, then an email field | One email field — we look it up and route to the right next screen |
+| `details` | Password (email path only) | "Welcome back" for an existing email, "Create your account" for a new one |
+| `profile` | **"You're almost there"** — first/last name + phone | The phone-capture step (governed by the global phone policy below) |
 
-The headline adapts to the step (`profile` → **"You're almost there"**) and the gate context, so a
-"create your free account" headline never sits over a "Sign in" form — that contradiction is gone.
+When the buyer types an email and hits **Continue with email**, a read-only lookup
+(`GET /api/auth/email-exists`) decides whether they land on **Welcome back** (password → sign in)
+or **Create your account** (password → phone). No manual "new vs returning" toggle.
 
 ## The auth gate — what's gated, and how it reads
 
 `components/site/auth-gate.tsx` is the single choke point. A signed-out buyer who clicks a gated
-action gets the modal with **contextual copy**; signed-in users pass straight through.
+action gets the modal with **contextual copy**; signed-in users pass straight through (unless they
+still owe a phone — see the re-prompt loop below).
 
 | Gate | Trigger | Headline style |
 |---|---|---|
-| `liked` / `saved` / `shared` / `save-search` | a button **on a specific home** | "To save this home, **create your free account**" (create-first) |
-| `all` / `updates` | a **nav heading** (Favorites / Saved Searches) | "Sign in or create an account to see your…" (sign-in-first) |
+| `liked` / `saved` / `save-search` | a button **on a specific home** | "To save this home, **log in or create your free account**" |
+| `all` / `updates` / `shared` | a **nav heading** (Favorites / Saved Searches / Shared) | "Sign in or create an account to see your…" |
 | `generic` | the profile **Sign in** button | "Sign in" (no pill) |
 
-`gateListingAction(type, status)` is the helper every listing surface calls at the top of a
-like/save/share handler — signed out → it opens the modal and returns `true` (caller bails); signed
-in → returns `false` and the action proceeds. The buyer lands back on the same page after auth.
+`gateListingAction(type, status, hlid?)` is the helper every listing surface calls at the top of a
+like/save handler — signed out → it opens the modal and stashes the pending like/save so it
+**replays** after auth; signed in → the action proceeds. Sharing a home is **free / never gated**.
 
 ## Google return — back to the modal, not a white page
 
 When the buyer picks **Continue with Google**, they leave to Google's native screen (expected).
-The return must land them **back in the modal over the blurred page**, not on a standalone form:
+The return lands them **back in the modal over the blurred page**, not on a standalone form:
 
 ```
 Continue with Google
@@ -54,46 +57,71 @@ Continue with Google
     ("You're almost there") over the blurred page, restoring the gate context from ?ctx=
 ```
 
-`AuthGateModal` (in `auth-gate.tsx`) watches for `?hlAuthProfile=1` once the session resolves,
-strips the params, and reopens the modal at `initialStep: "profile"`. The `ctx` param carries the
-original gate type so the **right** New Lead (X) workflow fires on submit.
+`app/auth/complete-profile/page.tsx` is a pure **router** for the Google return (the old standalone
+form is dead). It only bounces back with `?hlAuthProfile=1` when the global policy is **Required**
+and the user has no phone yet; otherwise it sends them straight to where they were.
 
-## Forced registration & the phone step
+## The global phone policy (Required / Optional / Hidden)
 
-When the **phone-required** registration setting is on, the `profile` step is
-**non-dismissable** (PPC-grade capture): the buyer can't bounce past it, and **Finish** stays
-disabled until a valid 10-digit phone is entered. This guarantees every lead has a phone before
-the workflow's text step runs.
+One CRM setting controls how hard we push for a phone at registration:
+**CRM → Settings → Website → Registration Settings → "Require phone number at registration"**
+(`social_phone_requirement` in `hl_registration_settings`). The website reads it via
+`GET /api/registration-settings` (cached 60s) and the modal honors it:
+
+| Policy | Phone step | The X | No-phone outcome |
+|---|---|---|---|
+| **Required** (PPC default) | shown, marked required | present (corner) | X creates an **email-only lead + "no phone" note** |
+| **Optional** | shown, with a friendly **"Skip for now"** | present | skip creates an **email-only lead + "no phone" note** |
+| **Hidden** | **not shown at all** | n/a | **email-only lead**, no note |
+
+There is **always an X**, by design — you can never truly force a phone number (a trapped user
+types a fake one or closes the tab). "Required" raises the friction (no friendly skip button, only
+the corner X); it does not cage the buyer.
+
+## When the lead is created — Finish or X, never at login
+
+This is the core rule (set by Zach 2026-06-09). **Authenticating does NOT create a lead.** A
+NextAuth `User` is just a login record. The CRM lead is created at the **resolution of the phone
+step**, exactly two ways:
+
+```
+Google / email auth succeeds  →  NO CRM lead yet
+   │
+   ├─ Finish (enter phone)  →  lead created WITH phone  +  the gated like/save replays → HOME SAVED
+   │
+   └─ X / Skip              →  lead created (email + name) + "Registered without a phone number" note
+                                 the gated like/save is CLEARED → the HOME IS NOT SAVED
+```
+
+- The single creation point is `complete-profile` → `pushLeadToCRM(...)` →
+  `/api/integrations/website/lead-intake`. The two old "passive `account_created`" pushes at auth
+  time (in `auth.ts` `events.createUser` and the `register` route) were **removed** — they created
+  phone-less ghost leads and fired the "new lead" notification before the lead was real.
+- **X / Skip** sends `phoneSkipped: true` → lead-intake adds the note, fires the
+  `houseloop/registration.no-phone` signal (the update-phone nurture), and **suppresses the
+  registration text workflow** (you can't text a numberless lead). **Hidden** sends
+  `phoneHidden: true` → email-only lead, no note.
+- Because **only Finish saves the home**, the phone is the carrot: give a number, keep the home.
+
+## The no-phone re-prompt loop
+
+A buyer who is **logged in but has no phone** (Required mode) does not get a free pass on the next
+like/save. The engagement bar checks `needsPhone = phoneRequired && authenticated && !session.user.phone`
+and, instead of saving, re-opens the phone step — **"Please enter your phone number to continue"**,
+first/last name prefilled — every time, until they give a number:
+
+```
+logged in, no phone → click Like/Save
+   → promptPhoneForAction(type, hlid)  (stashes the action, opens modal to the `profile` step)
+        ├─ Finish → phone saved → the stashed like/save replays → HOME SAVED, loop ends
+        └─ X      → home still not saved, back to normal — next save attempt re-prompts again
+```
 
 ## Consent (TCPA)
 
 The phone step carries a standardized **call/text consent disclaimer** —
-`components/legal/ConsentFinePrint.tsx`, modeled on Zillow's. It's deliberately small
-(`text-[11px]`), left-justified, and sits directly under the phone field. Submitting the profile is
-the consent action.
-
-## Lead creation is decoupled from the workflow trigger
-
-The order matters: the workflow's **first step is often a text**, and a text needs a phone. So
-completing auth (Google **or** email) creates the lead **passively** and does **not** fire a
-workflow yet:
-
-```
-auth.ts events.createUser / register route
-  → pushLeadToCRM({ action: "account_created" })   ← PASSIVE: maps to NO event, no workflow
-```
-
-The **profile step** (after the phone is captured) is what fires the real registration event:
-
-```
-complete-profile route, ENTRY_ACTION:
-  liked  → liked_home_registration
-  saved  → saved_home_registration
-  (else) → google_signin   (→ general_registration)
-```
-
-So the lead exists the instant they authenticate, but the **welcome workflow only fires once we
-have a phone** — the text step never runs dry.
+`components/legal/ConsentFinePrint.tsx`, modeled on Zillow's. It's deliberately small, left-justified,
+and sits directly under the phone field. Submitting the profile (Finish) is the consent action.
 
 ## The New Lead (X) family — entry-point routing
 
@@ -110,6 +138,8 @@ up. The naming convention is **New Lead (X)**:
 
 These live under **System Workflows → 🌐 Website — HouseLoop.ai → 📝 Registration** in the CRM,
 *locked* (built, proven, then locked so they fire on every matching event for HouseLoop.ai leads).
+The **X / no-phone** path does **not** fire these text-first workflows — it routes to the
+update-phone nurture instead (see above).
 
 ### How the event reaches the workflow
 
@@ -121,40 +151,38 @@ website action  → /api/integrations/website/lead-intake
   → UPSERT hl_leads (by email), assign to Myli, put on Buyer pipeline @ New Lead
   → ACTION_TO_EVENT[action] = eventKey   (e.g. liked_home_registration)
   → apply the event tag  → emit houseloop/lead.tag-added   ← the generic workflow trigger
-  → (+ EVENT_TO_INNGEST first-class event for built-in events)
+  → (+ EVENT_TO_INNGEST first-class event for built-in events)   ← suppressed when no phone
   → workflowDispatcher matches the lead source's event→workflow assignment and runs it
 ```
 
-Because the lead is created on the **Buyer pipeline at New Lead**, a registration workflow that
-ends on **Update Stage → Buyer · Attempted Contact** advances the lead's stepper cleanly (see
-[Workflows → Update Stage](/guides/workflows#update-stage-step)).
+## High-intent flows always require a phone
 
-## What a registration workflow does (example: New Account Only)
+Independent of the global policy, the four **high-intent** request forms hard-require a phone to
+**submit** — Request a Tour, Contact an Agent, Get a Home Value Report, and Seller "Get Started."
+Those are people who expect a call back, so the phone is mandatory on the form itself.
 
-A bare new account is always *new*, so there's no stage branch — it runs straight through:
+<Note>
+**Upcoming — Hard-gated PPC forced registration (not yet built).** A planned PPC setting will let
+you put a **hard wall** in front of the listings, beyond the soft phone capture above:
 
-```
-general_registration →
-  1. Welcome SMS from Myli (context-aware, first-name merge)
-  2. Pixel-aware Starter Saved Search (weekly) — see Saved Search Alerts
-  3. Personal email from Myli (her address + signature, via Resend)
-  4. Update Stage → Attempted Contact
-```
+- **Register to view any home** — a logged-out visitor can't open a listing detail at all until
+  they register, or
+- **View N homes, then register** — let them browse a few (e.g. 3) listing details, then force
+  registration to continue.
 
-- The **SMS + email** come from Myli's identity (`myli@houseloop.ai`) via Resend — signed, with
-  reply-to routing to her inbox. Her Gmail is never used for the automated send. See
-  [Email Settings](/guides/email-settings).
-- The **saved search** is built from the homes the lead actually viewed before signing up. See
-  [Saved Search Alerts](/guides/saved-search-alerts).
-- The messages are real, editable `hl_templates` (e.g. `myli_new_lead_liked_home_sms` / `_email`) —
-  not hardcoded.
+This builds on the existing `ppc_min_detail_views_for_registration` and
+`ppc_photo_gating_enabled` settings (already in `hl_registration_settings`, not yet enforced as a
+hard wall). It's a route/middleware gate on the listing-detail page, distinct from the in-modal
+phone capture documented here. Tracking only — no behavior is live yet.
+</Note>
 
 ## Reference
 
-- `apps/houseloop-web/components/site/SignInModal.tsx` — the unified modal (identify / details / profile)
-- `apps/houseloop-web/components/site/auth-gate.tsx` — the gate + Google return-to-modal
-- `apps/houseloop-web/components/legal/ConsentFinePrint.tsx` — TCPA consent line
-- `apps/houseloop-web/app/api/auth/complete-profile/route.ts` — phone capture + `ENTRY_ACTION` routing
-- `apps/houseloop-web/app/api/auth/register/route.ts` + `auth.ts` — passive `account_created` lead
-- `apps/houseloop-crm/app/api/integrations/website/lead-intake/route.ts` — `ACTION_TO_EVENT`, tag + `lead.tag-added`
+- `apps/houseloop-web/components/site/SignInModal.tsx` — the unified modal (identify / details / profile), the X → `skipPhone`, the global-policy fetch
+- `apps/houseloop-web/components/site/auth-gate.tsx` — the gate, Google return-to-modal, and `promptPhoneForAction` (the re-prompt loop)
+- `apps/houseloop-web/components/listing/ListingEngagementBar.tsx` — `needsPhone` re-prompt on like/save
+- `apps/houseloop-web/app/api/registration-settings/route.ts` — public read of `social_phone_requirement`
+- `apps/houseloop-web/app/api/auth/complete-profile/route.ts` — phone capture, `phoneSkipped` / `phoneHidden`, `ENTRY_ACTION` routing (the single lead-creation point)
+- `apps/houseloop-web/lib/listings/pending-listing-action.ts` — stash / clear of the like/save that replays after Finish
+- `apps/houseloop-crm/app/api/integrations/website/lead-intake/route.ts` — `ACTION_TO_EVENT`, the no-phone note + `registration.no-phone` signal, text-workflow suppression
 - [Workflows](/guides/workflows) · [Saved Search Alerts](/guides/saved-search-alerts) · [Email Settings](/guides/email-settings)
