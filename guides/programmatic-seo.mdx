@@ -130,6 +130,33 @@ series. The API route is `GET houseloop.ai/api/seo/overview`.
 Code: `apps/houseloop-web/lib/seo/gsc.ts` + `lib/google/dwd.ts`.
 Railway env: `HOUSELOOP_GCP_SA_KEY_JSON` on the `houseloop-web` service.
 
+## The SEO Overview dashboard (CRM)
+
+The CRM page **Settings → Website → SEO → Overview** is rendered server-side and fetches
+`GET houseloop.ai/api/seo/overview` (the CRM always reads the **production** website API, even
+on localhost — `NEXT_PUBLIC_HOUSELOOP_WEB_URL` defaults to `https://houseloop.ai`). The endpoint
+reads `hl_seo_artifact_log` and returns three things:
+
+| UI element | Source field | Counts |
+|---|---|---|
+| KPI cards (clicks / impressions / rank) | GSC (see above) | 30-day GSC totals |
+| **"Articles by type"** cards | `COUNT(*) GROUP BY level` | every artifact, all-time, per geo level |
+| **"Articles published per week"** stacked bar | `date_trunc('week', "createdAt")` | artifacts grouped by the week they were **generated** |
+
+<Note>
+**The weekly chart buckets every level by `createdAt` (generation date) — not `weekStart`.**
+A geo article's `weekStart` is the *market-stats week the article is about*, which a single
+Monday generation run backfills across many historical weeks. Bucketing the chart on `weekStart`
+made one run scatter into earlier bars (a 6/8 run with 1,888 neighborhood articles showed up under
+the 6/1 week, leaving the 6/8 bar showing only that week's houses). The chart means "articles
+**published** per week", so it buckets on `createdAt` and a run shows as one stacked bar — matching
+what the Run Log shows for that day. A "coverage by stats-week" view (gaps in market-week coverage)
+would be a *separate* chart keyed on `weekStart`; it is not built.
+</Note>
+
+Code: `apps/houseloop-web/app/api/seo/overview/route.ts` (endpoint) +
+`apps/houseloop-crm/app/(crm)/settings/website/seo/page.tsx` (chart render).
+
 ## Roadmap (not yet shipped)
 
 - **Title tags with listing count** — "705+ Listings in Overland Park, KS" (Zillow pattern).
