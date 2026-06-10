@@ -4,9 +4,9 @@ description: "The HouseLoop CRM workflow engine — triggers (incl. FUB-style Ta
 ---
 
 A **workflow** is a trigger + a sequence of steps (send a text, send an email, wait, branch on
-a condition). Workflows are how a lead event — a tag applied, a saved search created, a tour
-requested — turns into outreach without anyone touching a keyboard. Everything runs through
-**Inngest**, so every step is auditable in the [Run Log](/guides/run-log).
+a condition) laid out on the **workflow canvas**. Workflows are how a lead event — a tag applied,
+a saved search created, a tour requested — turns into outreach without anyone touching a keyboard.
+Everything runs through **Inngest**, so every step is auditable in the [Run Log](/guides/run-log).
 
 ## How it flows
 
@@ -17,7 +17,7 @@ event (e.g. houseloop/lead.tag-added)
 workflowDispatcher (Inngest)      ← matches the event to workflows whose trigger fits
       │
       ▼
-workflowRunner (Inngest)          ← walks nodes: send / wait / condition gate
+workflowRunner (Inngest)          ← walks the canvas steps: send / wait / condition gate
       │
       ├─▶ Send Text  → execute-step.ts → BlueBubbles / Twilio (per sender rule)
       ├─▶ Send Email → execute-step.ts → Gmail/Resend
@@ -33,24 +33,25 @@ After deploying a new or changed workflow function, **re-sync Inngest**:
 dashboard until you do.
 </Note>
 
-## The graph is the truth (constitutional)
+## The workflow canvas is the truth (constitutional)
 
 <Warning>
-**Every step a workflow runs must be a visible node on a visible path in the builder. No node may
-be shared between two branches, and no hidden connection may exist. If you can't see the step do
-the thing in the builder, the step doesn't get to do the thing.**
+**Every step a workflow runs must be a visible step on a visible path on the workflow canvas. No
+step may be shared between two branches, and no hidden connection may exist. If you can't see the
+step do the thing on the canvas, the step doesn't get to do the thing.**
 </Warning>
 
-The builder graph **is** the behavior — what runs equals exactly what's drawn, nothing hidden.
-This is the workflow sibling of [Inngest or it doesn't exist](/guides/run-log): a job doesn't
-exist unless it ran through Inngest and shows in the Run Log; a workflow **step** doesn't exist
-unless it's a visible node on a visible path in the builder.
+The workflow canvas (the builder / workbench) **is** the behavior — what runs equals exactly
+what's laid out on the canvas, nothing hidden. This is the workflow sibling of
+[Inngest or it doesn't exist](/guides/run-log): a job doesn't exist unless it ran through Inngest
+and shows in the Run Log; a workflow **step** doesn't exist unless it's a visible step on a visible
+path on the canvas. Same principle — no invisible side-effects.
 
-When a **Branch** node splits the flow, each side must be a **complete, self-contained chain**
-down to its own terminal node. **Never** wire one branch into another branch's node to "reuse" it
-— that makes the builder lie about what runs.
+When a **Branch** step splits the flow, each side must be a **complete, self-contained chain**
+down to its own terminal step. **Never** wire one branch into another branch's step to "reuse" it
+— that makes the canvas lie about what runs.
 
-Example — the General Registration workflow, both branches built out independently:
+Example — the General Registration workflow, both branches built out independently on the canvas:
 
 ```
 New Registration (trigger)
@@ -64,17 +65,17 @@ New Registration (trigger)
 
 Both branches do their **own** Note, their **own** Email, and their **own** Update Stage. The only
 difference: **YES sends a text; NO adds the "Registered: No Phone" tag and skips the text.** Neither
-branch borrows a node from the other.
+branch borrows a step from the other.
 
-**Verify in the builder, not the database.** A green run record ("the lead advanced to Attempted
-Contact") is **not** proof the workflow is correct. Open the builder and trace every branch
-end-to-end — every action must be a drawn node on a drawn path.
+**Verify on the canvas, not in the database.** A green run record ("the lead advanced to Attempted
+Contact") is **not** proof the workflow is correct. Open the workflow canvas and trace every branch
+end-to-end — every action must be a step drawn on a drawn path.
 
 <Note>
-This rule exists because it bit us: the phone branch visually dead-ended at "Send Text" while
-secretly running the email + stage-advance through the *other* branch's nodes (a cross-link the
-builder never drew). It worked in the data; the graph lied. Fixed by giving each branch its own
-complete chain. Full rule: `.claude/rules/WORKFLOW_GRAPH_IS_TRUTH.md`.
+This rule exists because it bit us: the phone branch visually dead-ended at "Send Text" on the
+canvas while secretly running the email + stage-advance through the *other* branch's steps (a
+cross-link the canvas never drew). It worked in the data; the canvas lied. Fixed by giving each
+branch its own complete chain. Full rule: `.claude/rules/WORKFLOW_CANVAS_IS_TRUTH.md`.
 </Note>
 
 ## Data model
@@ -85,13 +86,13 @@ A workflow is one `hl_workflows` row:
 | --- | --- |
 | `trigger_type` | what starts it — e.g. `tag_added` |
 | `trigger_config` | JSONB. For Tag Added: `{ tag_ids: ["…","…"] }` (multi-tag, "is one of") |
-| `workflow_config` | JSONB `{ nodes, connections }` — the step graph the runner walks |
+| `workflow_config` | JSONB `{ nodes, connections }` — the steps + connections the canvas draws and the runner walks |
 | `kind` | grouping / category |
 
-The `workflow_config.connections` array is the set of **edges** — `{ source, target }`, plus
-`branch: "true" | "false"` on the two edges leaving a Branch node. Every edge in this array is a
-line the builder draws and the runner walks; there are no edges that run but aren't drawn (see
-[The graph is the truth](#the-graph-is-the-truth-constitutional)).
+The `workflow_config.connections` array is the set of **connections** — `{ source, target }`, plus
+`branch: "true" | "false"` on the two connections leaving a Branch step. Every connection in this
+array is a line the canvas draws and the runner walks; there are no connections that run but aren't
+drawn (see [The workflow canvas is the truth](#the-workflow-canvas-is-the-truth-constitutional)).
 
 ## Triggers
 
@@ -142,9 +143,10 @@ as deduped. This stops a double-dispatch from double-texting a lead. (Email goes
 
 ## Condition & branch steps (the communication-recency matrix)
 
-A **Condition** node is a gate (continue if true, else stop). A **Branch** node forks into a
-**true** path and a **false** path — and per [The graph is the truth](#the-graph-is-the-truth-constitutional),
-each path must be its own complete chain. Conditions/branches are how you split "new lead vs.
+A **Condition** step is a gate (continue if true, else stop). A **Branch** step forks into a
+**true** path and a **false** path — and per
+[The workflow canvas is the truth](#the-workflow-canvas-is-the-truth-constitutional), each path
+must be its own complete chain on the canvas. Conditions/branches are how you split "new lead vs.
 returning lead," "has phone vs. no phone," or "only text if we haven't talked in 3 days."
 
 Fields and operators live in `lib/workflows/condition-fields.ts`; evaluation in
@@ -177,7 +179,7 @@ Full spec: `GT/GT - ACTIVE/GT_HOUSELOOP_WORKFLOW_CONDITIONS.md`.
 
 - **Template picker** is collapsible — collapsed shows the selected template + a "Change" link;
   the selected category is pinned to the top; categories use human-readable labels.
-- The workflow builder lives in `apps/houseloop-crm/components/workflows/WorkflowBuilder.tsx`.
+- The workflow canvas + editor live in `apps/houseloop-crm/components/workflows/WorkflowBuilder.tsx`.
 
 ## Reference
 
@@ -185,7 +187,7 @@ Full spec: `GT/GT - ACTIVE/GT_HOUSELOOP_WORKFLOW_CONDITIONS.md`.
 - `apps/houseloop-crm/lib/workflows/execute-step.ts` — send steps, sender rule, dedupe guard
 - `apps/houseloop-crm/lib/workflows/condition-fields.ts` — condition field + operator catalog
 - `apps/houseloop-crm/lib/workflows/evaluate-condition.ts` — condition evaluation
-- `apps/houseloop-crm/components/workflows/WorkflowBuilder.tsx` — the editor
+- `apps/houseloop-crm/components/workflows/WorkflowBuilder.tsx` — the workflow canvas + editor
 - `apps/houseloop-crm/components/shared/TagPill.tsx` — the blue tag pill
-- `.claude/rules/WORKFLOW_GRAPH_IS_TRUTH.md` — "the graph is the truth" constitutional rule
+- `.claude/rules/WORKFLOW_CANVAS_IS_TRUTH.md` — "the canvas is the truth" constitutional rule
 - `GT/GT - ACTIVE/GT_HOUSELOOP_WORKFLOW_CONDITIONS.md` — condition matrix PRD
