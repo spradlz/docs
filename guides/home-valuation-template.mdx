@@ -30,7 +30,7 @@ A single white card with rounded corners containing:
 | Section | Description |
 |---------|-------------|
 | **Header** | Lockup A (stacked: Spradling Group eXp / Powered By / HouseLoop) + "Home Valuation Report" title + month pill |
-| **Property photo** | Hero image scraped from Zillow/Realtor.com, stored in R2 |
+| **Property photo** | Hero image scraped from Redfin, stored in R2 |
 | **Address card** | Street, city/state/zip, beds/baths/sqft/year/subdivision |
 | **Estimated value** | Big bold number on white card, 56px DM Sans |
 | **Valuation range** | Low / Estimate / High with House Canary-style bar chart distribution (blue→green→yellow) |
@@ -64,18 +64,26 @@ Inspired by three products (screenshots in brainstorm checkpoint):
 | Navy band | `#1B3564` | Footer brand band |
 | Max width | 640px (web) / 560px (email) | Container |
 
+## The data contract (HvrData)
+
+The report's field shape is the canonical **`HvrData`** interface in `apps/houseloop-web/components/listing/HomeValuationReport.tsx`: `estimatedValue`, `valueLow/valueHigh`, `psf*`, `purchasePrice/Date`, `appreciationPct`, `equityGain`, market temp (`avgDom`/`listToSalePct`/`inventoryMonths`), `zip/metroAppreciation`, `comps[]`, `valueHistory[]`, `beds/baths/sqft/yearBuilt/neighborhood`, `photoUrl`. Every surface renders this same shape.
+
+## Data Storage — the ONE table
+
+Every valuation snapshot lives in a **single table: `hl_srg_home_valuations`** (CRM DB, migration `0136`), one row per past client (`past_client_id` → `hl_srg_past_clients.id`). The full `HvrData` snapshot sits in a `data` JSONB column; hot fields (`estimated_value`, `equity`, `appreciation_pct`, …) are promoted to scalar columns for sorting.
+
+**There is exactly one valuation table — no parallel valuation tables anywhere.** Every surface reads it: the [Dashboard](/guides/home-valuation-dashboard), the CRM Home Report modal, the web `/home/[slug]/report`, and this email. The only writer is the monthly Inngest cron. An absent / NULL row renders "—". SSOT: `GT_HOUSELOOP_MASTER.md` §12.
+
 ## Data Requirements
 
 ### Available now:
-- Estimated value + range (CMA from Repliers sold comps)
 - Purchase price + date (SISU import)
-- Appreciation % and $ (computed)
-- Market temperature (hl_geo_market_stats: DOM, list-to-sale, inventory)
-- Market comparison (zip vs metro appreciation)
-- Comp cards with photos (Repliers sold listings)
+- Comps + neighborhood / market temperature (Repliers sold listings + `hl_geo_market_stats`)
+- Photos (Redfin scraper → R2)
 
-### Needs building:
-- **Property photos** — Zillow/Realtor.com scraper → R2 storage
+### Needs building (writes into `hl_srg_home_valuations`):
+- **Realie AVM call** — `modelValue` (estimate), `modelValueMin/Max` (range), `equityCurrentEstBal` (equity), `totalLienBalance` (mortgage owed), `LTVCurrentEstCombined` (LTV), `lenderName`
+- **Comps engine** — blended 50/50 with the Realie AVM when 3+ comps
 - **Value history chart data** — monthly estimates (interpolated from zip trends + purchase/current anchors)
 - **AI contextual message** — LLM call at send time from merge field data
 
