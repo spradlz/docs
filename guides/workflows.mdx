@@ -1,6 +1,6 @@
 ---
 title: "Workflows"
-description: "The HouseLoop CRM workflow engine — triggers (incl. FUB-style Tag Added), send steps with sender rules, and the communication-recency condition matrix. Runs on Inngest."
+description: "The HouseLoop CRM workflow engine — triggers (incl. FUB-style Tag Added), send steps with sender rules, branches, and the communication-recency condition matrix. Runs on Inngest."
 ---
 
 A **workflow** is a trigger + a sequence of steps (send a text, send an email, wait, branch on
@@ -33,6 +33,50 @@ After deploying a new or changed workflow function, **re-sync Inngest**:
 dashboard until you do.
 </Note>
 
+## The graph is the truth (constitutional)
+
+<Warning>
+**Every step a workflow runs must be a visible node on a visible path in the builder. No node may
+be shared between two branches, and no hidden connection may exist. If you can't see the step do
+the thing in the builder, the step doesn't get to do the thing.**
+</Warning>
+
+The builder graph **is** the behavior — what runs equals exactly what's drawn, nothing hidden.
+This is the workflow sibling of [Inngest or it doesn't exist](/guides/run-log): a job doesn't
+exist unless it ran through Inngest and shows in the Run Log; a workflow **step** doesn't exist
+unless it's a visible node on a visible path in the builder.
+
+When a **Branch** node splits the flow, each side must be a **complete, self-contained chain**
+down to its own terminal node. **Never** wire one branch into another branch's node to "reuse" it
+— that makes the builder lie about what runs.
+
+Example — the General Registration workflow, both branches built out independently:
+
+```
+New Registration (trigger)
+  → Update Stage (New Lead)
+  → Create Saved Search
+  → Branch: Phone is not empty
+       ├─ YES → Add Note → Send Text  → Send Email → Update Stage (Attempted Contact)
+       └─ NO  → Add Note → Add Tag     → Send Email → Update Stage (Attempted Contact)
+                          "Registered: No Phone"
+```
+
+Both branches do their **own** Note, their **own** Email, and their **own** Update Stage. The only
+difference: **YES sends a text; NO adds the "Registered: No Phone" tag and skips the text.** Neither
+branch borrows a node from the other.
+
+**Verify in the builder, not the database.** A green run record ("the lead advanced to Attempted
+Contact") is **not** proof the workflow is correct. Open the builder and trace every branch
+end-to-end — every action must be a drawn node on a drawn path.
+
+<Note>
+This rule exists because it bit us: the phone branch visually dead-ended at "Send Text" while
+secretly running the email + stage-advance through the *other* branch's nodes (a cross-link the
+builder never drew). It worked in the data; the graph lied. Fixed by giving each branch its own
+complete chain. Full rule: `.claude/rules/WORKFLOW_GRAPH_IS_TRUTH.md`.
+</Note>
+
 ## Data model
 
 A workflow is one `hl_workflows` row:
@@ -43,6 +87,11 @@ A workflow is one `hl_workflows` row:
 | `trigger_config` | JSONB. For Tag Added: `{ tag_ids: ["…","…"] }` (multi-tag, "is one of") |
 | `workflow_config` | JSONB `{ nodes, connections }` — the step graph the runner walks |
 | `kind` | grouping / category |
+
+The `workflow_config.connections` array is the set of **edges** — `{ source, target }`, plus
+`branch: "true" | "false"` on the two edges leaving a Branch node. Every edge in this array is a
+line the builder draws and the runner walks; there are no edges that run but aren't drawn (see
+[The graph is the truth](#the-graph-is-the-truth-constitutional)).
 
 ## Triggers
 
@@ -91,11 +140,12 @@ if an identical body already went to that lead within the window, the step is sk
 as deduped. This stops a double-dispatch from double-texting a lead. (Email goes via Resend, not
 `hl_messages`, so the guard is texts-only.)
 
-## Condition steps (the communication-recency matrix)
+## Condition & branch steps (the communication-recency matrix)
 
-A **Condition** node is a gate: the workflow continues only if the condition is true, otherwise it
-stops. Conditions are how you branch "new lead vs. returning lead" or "only text if we haven't
-talked in 3 days."
+A **Condition** node is a gate (continue if true, else stop). A **Branch** node forks into a
+**true** path and a **false** path — and per [The graph is the truth](#the-graph-is-the-truth-constitutional),
+each path must be its own complete chain. Conditions/branches are how you split "new lead vs.
+returning lead," "has phone vs. no phone," or "only text if we haven't talked in 3 days."
 
 Fields and operators live in `lib/workflows/condition-fields.ts`; evaluation in
 `evaluate-condition.ts`. The communication-recency matrix:
@@ -110,11 +160,13 @@ Fields and operators live in `lib/workflows/condition-fields.ts`; evaluation in
 | `last_call` / `last_call_made` / `last_call_received` | `hl_calls` by direction |
 | `last_activity` | comms ∪ `hl_pixel_event` (texts/emails/calls *and* website activity) |
 
-**Operators** (date-valued): `is_empty`, `is_not_empty`, `less_than_days`, `more_than_days`.
-`is_empty` / `is_not_empty` take no value (the editor hides the Days input for them).
+**Operators**: text/number fields support `is`, `is_not`, `contains`, **`is_not_empty`**, `is_empty`;
+date-valued fields support `is_empty`, `is_not_empty`, `less_than_days`, `more_than_days`. The
+`*_empty` operators take no value (the editor hides the value input for them) — e.g. the General
+Registration branch gates on **"Phone is not empty."**
 
 <Note>
-**New-lead vs. returning** is the primary use case: gate one branch on
+**New-lead vs. returning** is the primary recency use case: gate one branch on
 **"Last Contact Attempt is empty"** (brand-new lead → send the Myli intro) and the other on
 **"is not empty"** (we've reached out before → send a lighter "here's your search" touch).
 </Note>
@@ -135,4 +187,5 @@ Full spec: `GT/GT - ACTIVE/GT_HOUSELOOP_WORKFLOW_CONDITIONS.md`.
 - `apps/houseloop-crm/lib/workflows/evaluate-condition.ts` — condition evaluation
 - `apps/houseloop-crm/components/workflows/WorkflowBuilder.tsx` — the editor
 - `apps/houseloop-crm/components/shared/TagPill.tsx` — the blue tag pill
+- `.claude/rules/WORKFLOW_GRAPH_IS_TRUTH.md` — "the graph is the truth" constitutional rule
 - `GT/GT - ACTIVE/GT_HOUSELOOP_WORKFLOW_CONDITIONS.md` — condition matrix PRD
