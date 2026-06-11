@@ -1,12 +1,13 @@
 ---
 title: "Workflows"
-description: "The HouseLoop CRM workflow engine — triggers (incl. FUB-style Tag Added), send steps with sender rules, branches, and the communication-recency condition matrix. Runs on Inngest."
+description: "The HouseLoop CRM workflow engine — one workflow per lead event (system defaults vs custom takeovers), the sender chain, Assign Lead routing, triggers, branches, and the communication-recency condition matrix. Runs on Inngest."
 ---
 
-A **workflow** is a trigger + a sequence of steps (send a text, send an email, wait, branch on
-a condition) laid out on the **workflow canvas**. Workflows are how a lead event — a tag applied,
-a saved search created, a tour requested — turns into outreach without anyone touching a keyboard.
-Everything runs through **Inngest**, so every step is auditable in the [Run Log](/guides/run-log).
+A **workflow** is a trigger + a sequence of steps (send a text, send an email, assign the lead,
+wait, branch on a condition) laid out on the **workflow canvas**. Workflows are how a lead event —
+a registration, a tag applied, a saved search created, a tour requested — turns into outreach
+without anyone touching a keyboard. Everything runs through **Inngest**, so every step is
+auditable in the [Run Log](/guides/run-log).
 
 ## How it flows
 
@@ -17,11 +18,12 @@ event (e.g. houseloop/lead.tag-added)
 workflowDispatcher (Inngest)      ← matches the event to workflows whose trigger fits
       │
       ▼
-workflowRunner (Inngest)          ← walks the canvas steps: send / wait / condition gate
+workflowRunner (Inngest)          ← walks the canvas steps: send / assign / wait / condition gate
       │
-      ├─▶ Send Text  → execute-step.ts → BlueBubbles / Twilio (per sender rule)
-      ├─▶ Send Email → execute-step.ts → Gmail/Resend
-      └─▶ Condition  → evaluate-condition.ts (continue if true, else stop)
+      ├─▶ Send Text   → execute-step.ts → BlueBubbles / Twilio (per the sender chain)
+      ├─▶ Send Email  → execute-step.ts → Gmail/Resend
+      ├─▶ Assign Lead → execute-step.ts → sets the lead's owner (human or AI)
+      └─▶ Condition   → evaluate-condition.ts (continue if true, else stop)
 ```
 
 Both Inngest functions live in `apps/houseloop-crm/lib/workflows/runtime.ts`. Step execution is
@@ -32,6 +34,34 @@ After deploying a new or changed workflow function, **re-sync Inngest**:
 `curl -X PUT https://crm.houseloop.ai/api/inngest`. New functions don't appear in the Inngest
 dashboard until you do.
 </Note>
+
+## One workflow per event (Lead Flow)
+
+**Every lead event is owned by exactly ONE workflow.** The map of event → workflow lives at
+**Settings → Lead Flow** — one row per event (General Registration, Liked Home, Tour Request,
+Contact Request, Saved Search, …) showing the owning workflow, its ACTIVE toggle, last fired,
+and row actions (open in builder / create / delete).
+
+Two kinds of workflow can own an event:
+
+| Kind | Badge | Behavior |
+| --- | --- | --- |
+| **System** | 🔒 system | Ships locked. Read-only in the builder — use **Duplicate as Custom** to change it. |
+| **Custom** | ⚡ custom | Fully editable. Activating it **takes over** the event from the system default. |
+
+**Takeover and resume rules** (enforced server-side in `PATCH /api/workflows/[id]`):
+
+- **Activate a custom workflow** → it takes over its trigger's events. Silent when the event was
+  on a system default; if **another active custom** owns the trigger, the UI asks
+  *"Replace it? (it pauses)"* — confirming pauses the other custom and moves the events over.
+- **Pause / deactivate a custom** → its events rebind to the system default for that trigger
+  automatically. Pausing your copy brings the built-in back.
+- **A bound workflow owns its event at ANY status.** Pausing the workflow means the event sends
+  *nothing* — no legacy fallback wakes up behind it. The Lead Flow ACTIVE toggle is the one and
+  only on/off.
+
+The shared event ↔ trigger mapping lives in `lib/workflows/event-trigger-map.ts` (note that
+`seller_requested` owns **two** events: Home Value Report and Seller Get Started).
 
 ## The workflow canvas is the truth (constitutional)
 
@@ -87,6 +117,8 @@ A workflow is one `hl_workflows` row:
 | `trigger_type` | what starts it — e.g. `tag_added` |
 | `trigger_config` | JSONB. For Tag Added: `{ tag_ids: ["…","…"] }` (multi-tag, "is one of") |
 | `workflow_config` | JSONB `{ nodes, connections }` — the steps + connections the canvas draws and the runner walks |
+| `is_system` / `locked_at` | system default — locked in the builder, customized via Duplicate as Custom |
+| `sender_default` | the workflow-level "Sends as" — `lead_owner`, `system`, or a specific user id |
 | `kind` | grouping / category |
 
 The `workflow_config.connections` array is the set of **connections** — `{ source, target }`, plus
@@ -113,26 +145,36 @@ Matching is **"is one of"** — the dispatcher fires if the applied tag is in `t
 a tag that was genuinely **new** on the lead (the intake INSERT … RETURNING tells it which tags
 were added vs already present), so re-applying a tag doesn't re-trigger.
 
-## Send steps & the sender rule
+## Send steps & the sender chain
 
-Each Send Text / Send Email step answers one question: **"Who does this message come from?"**
+Each Send Text / Send Email step answers one question: **"Who does this message come from?"** —
+resolved through a three-level chain (`resolveStepSendIdentity()` in `execute-step.ts`):
 
-| `sender_mode` | Sends as |
+1. **Step override** — the step's own "Send as" select: the lead's owner, the system identity,
+   or a **specific member** (pins that one message to that member's line + inbox no matter who
+   owns the lead).
+2. **Workflow default** — the builder toolbar's "Sends as" (`hl_workflows.sender_default`):
+   `lead_owner` (default), `system`, or a specific member. **A step that never touched its
+   sender select follows this.**
+3. **Lead's owner** — `lead_owner` resolves at send time to the lead's AI agent (Myli) or
+   assigned human; the AI-clone rule applies (a clone sends as the human it clones).
+
+| Resolved sender | Sends as |
 | --- | --- |
-| `system` (default) | the HouseLoop system identity |
-| `assigned` | the lead's assigned agent — and if that agent is the AI ISA, it sends **as Myli** |
+| system | the HouseLoop system identity (Client Updates inbox / outbound SMS number) |
+| lead's owner | the owner's BlueBubbles iMessage line or dialer number + their inbox; falls back to system if nobody is assigned |
+| specific member | that member's line + inbox (`resolveUserSendIdentity()` in `lib/agent-runtime/resolve-send-identity.ts`) |
 
-When `sender_mode = 'assigned'`, the executor resolves the lead's send identity (BlueBubbles
-iMessage line / inbox) via the agent runtime and sends the text **as that agent**. A message sent
-as Myli logs to `hl_messages` as `imessage / ai_agent / sent` — it shows up in the lead's thread
-as if Myli texted them, not as a system blast.
+A message sent as Myli logs to `hl_messages` as `imessage / ai_agent / sent` — it shows up in the
+lead's thread as if Myli texted them, not as a system blast. **AI Message** steps are the one
+exception: they always send as the lead's AI agent (that's the point of the step).
 
-<Note>
-**Lead-only by default.** The `houseloop.ai` lead source assigns **no human agent**. So a
-saved-search workflow there is lead-only: the buyer gets a homes email + a Myli text, and no
-agent gets pinged. Adding agent-notify steps to a no-agent source fails ("agent has no phone") —
-that's by design.
-</Note>
+### Assign Lead (lead routing as a canvas step)
+
+The **Assign Lead** step (palette group *Lead Routing*) sets who owns the lead from that step on —
+a human (`assigned_user_id`) or an AI member (`assigned_ai_agent_id`). Because send steps resolve
+"lead's owner" live at send time, an Assign step upstream changes who every following message goes
+out as: `Trigger → Assign to Myli → Send Text` texts from Myli's line.
 
 ### Dedupe guard
 
@@ -180,11 +222,14 @@ Full spec: `GT/GT - ACTIVE/GT_HOUSELOOP_WORKFLOW_CONDITIONS.md`.
 - **Template picker** is collapsible — collapsed shows the selected template + a "Change" link;
   the selected category is pinned to the top; categories use human-readable labels.
 - The workflow canvas + editor live in `apps/houseloop-crm/components/workflows/WorkflowBuilder.tsx`.
+- System workflows show a lock banner with **Duplicate as Custom** in place of Save.
 
 ## Reference
 
 - `apps/houseloop-crm/lib/workflows/runtime.ts` — `workflowDispatcher` + `workflowRunner` (Inngest)
-- `apps/houseloop-crm/lib/workflows/execute-step.ts` — send steps, sender rule, dedupe guard
+- `apps/houseloop-crm/lib/workflows/execute-step.ts` — send steps, sender chain, Assign Lead, dedupe guard
+- `apps/houseloop-crm/lib/workflows/event-trigger-map.ts` — event ↔ trigger mapping (one workflow per event)
+- `apps/houseloop-crm/lib/agent-runtime/resolve-send-identity.ts` — lead-owner + specific-member send identities
 - `apps/houseloop-crm/lib/workflows/condition-fields.ts` — condition field + operator catalog
 - `apps/houseloop-crm/lib/workflows/evaluate-condition.ts` — condition evaluation
 - `apps/houseloop-crm/components/workflows/WorkflowBuilder.tsx` — the workflow canvas + editor
