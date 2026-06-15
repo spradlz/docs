@@ -1,13 +1,17 @@
 ---
 title: "SEO background jobs"
-description: "The nightly Inngest cron that prices neighborhoods for the SEO pages, how it stays MLS-compliant, and how its runs surface in the CRM Run Log under IDX Feed."
+description: "The Inngest crons behind the SEO pages — the nightly neighborhood pricing cache, the Monday geo page-builder pipeline, dispatcher batching, and how runs surface in the CRM Run Log."
 ---
 
-The SEO pages show an **average price next to each neighborhood, city, and zip link**. Those
-figures are not computed at request time — they're precomputed nightly by a background job and
-cached, so the pages stay fast and the numbers stay consistent across the whole site.
+The SEO pages are fed by a set of Inngest crons. This page is the operations reference: the
+nightly pricing cache, the Monday page-builder pipeline, the batching rule every dispatcher must
+follow, and how to operate + verify a run.
 
-## The job — `geo-neighborhood-stats`
+## The nightly pricing cache — `geo-neighborhood-stats`
+
+The SEO pages show an **average price next to each neighborhood, city, and zip link**. Those
+figures are precomputed nightly and cached, so the pages stay fast and the numbers stay
+consistent across the whole site.
 
 | Field | Value |
 |---|---|
@@ -34,9 +38,8 @@ GROUP BY city, state, neighborhood
 HAVING <has any active or recent-sold>
 ```
 
-The slug for each neighborhood is derived in JS with `geoSlug()` so it matches the taxonomy
-(the `neighborhoodSlug` column isn't backfilled on the listing cache). A neighborhood with zero
-active listings stores `avgValue = null` and links **without** a price.
+The slug for each neighborhood is derived in JS with `geoSlug()` so it matches the taxonomy. A
+neighborhood with zero active listings stores `avgValue = null` and links **without** a price.
 
 <Warning>
 **Compliance hard-stop.** Sold price is **never selected** in this query — sold listings are
@@ -44,13 +47,77 @@ only *counted*, to rank neighborhoods by activity. The stored and displayed doll
 strictly the **average active list price**. This is the MLS GRID IDX rule.
 </Warning>
 
+## The geo page-builder pipeline
+
+The Monday pipeline builds the per-page artifacts (`hl_geo_page`) the public market-report pages
+render. Each tier is a **dispatcher cron → per-geo build** fan-out:
+
+| Dispatcher cron (UTC) | Per-geo builder | Tier | Writes |
+|---|---|---|---|
+| `geo-weekly-report` `0 5 * * 1` | (inline) | weekly data + narrative | `hl_geo_weekly_report` + `hl_seo_artifact_log` |
+| `seo-articles-generate` `30 5 * * 1` | (inline) | LLM narratives | `hl_seo_artifact_log` |
+| `geo-county-pages-cron` `0 6 * * 1` | `geo-county-page` | county (8) | `hl_geo_page` |
+| `geo-zip-pages-cron` `0 7 * * 1` | `geo-zip-page` | zip (~205) | `hl_geo_page` |
+| `geo-city-pages-cron` `0 8 * * 1` | `geo-city-page` | city (~134) | `hl_geo_page` |
+| `geo-neighborhood-pages-cron` `0 9 * * 1` | `geo-neighborhood-page` | neighborhood (~5,500) | `hl_geo_page` |
+
+The dispatcher enumerates every geo at its tier from the taxonomy and fans out one
+`houseloop/geo.<tier>-page.build` event per geo; each event runs the per-geo builder, which
+computes the report live **at build time**, runs the delta-gate (skip if stats unchanged → no
+LLM spend), writes the `hl_geo_page` artifact, and self-verifies the live URL.
+
+<Note>
+**Inventory counts don't depend on this pipeline being fresh.** The page renderer
+(`LocationSeo.tsx`) recomputes homes-for-sale / coming-soon / under-contract **live per request**
+regardless of artifact age (see
+[where the numbers come from](/guides/seo-pages-and-rendering#where-the-market-trends-numbers-come-from-data-model)).
+The builder pipeline refreshes the cached sold-side aggregates + the narrative.
+</Note>
+
+### Dispatcher batching
+
+**Every dispatcher MUST chunk its `inngest.send()` to ≤500 events.** A single `inngest.send()`
+of more than ~5,000 events exceeds Inngest's per-call cap and **throws** — which fails the whole
+dispatch silently.
+
+```ts
+// lib/inngest/functions/geo-neighborhood-page.ts — the ~5,500-geo tier
+const SEND_BATCH = 500;
+const events = subs.map((s) => ({ name: "houseloop/geo.neighborhood-page.build", data: s }));
+for (let i = 0; i < events.length; i += SEND_BATCH) {
+  await inngest.send(events.slice(i, i + SEND_BATCH));
+}
+```
+
+This bug killed the neighborhood builder from May 28 → Jun 15, 2026: the un-batched send of
+~5,500 events threw every Monday, so zero neighborhood pages rebuilt while county/zip/city (small
+tiers, under the cap) were fine. The neighborhood pages rendered a frozen artifact. Same pattern
+as `data-coverage-reconcile`'s `SEND_BATCH`.
+
+### Builder health
+
+`GET houseloop.ai/api/seo/overview` returns `builderHealth` — per-tier `hl_geo_page` built /
+fresh / newest / `stale` (stale = >8 days old or 0 fresh in the last 8 days). The CRM SEO
+overview renders it as a panel that turns **red** when a tier goes stale, so a dead builder is
+visible even while the article writers keep publishing. This is the observability that would have
+caught the neighborhood-builder failure in week one.
+
+### Auto-registration on boot
+
+Inngest functions are registered in `apps/houseloop-web/app/api/inngest/route.ts` (the
+`serve({ functions: [...] })` list). On deploy, Inngest auto-syncs the function set. After ANY
+`houseloop-web` deploy that **adds or changes** an Inngest function, re-register so the new
+crons + schedules are picked up:
+
+```bash
+curl -X PUT https://houseloop.ai/api/inngest
+```
+
 ## How runs show up in the Run Log
 
-The job does **not** emit a manual event. The CRM's capture function
-(`houseloop-crm` → `capture-fn.ts`) auto-subscribes to every Inngest
-`function.finished` / `function.failed` and writes the run to `hl_run_log`. The
-**IDX Feed** grouping comes from registering this function as `category: 'idx'` in the CRM's
-`lib/run-log/inngest-registry.ts`:
+The CRM's capture function (`houseloop-crm` → `capture-fn.ts`) auto-subscribes to every Inngest
+`function.finished` / `function.failed` and writes the run to `hl_run_log`. The grouping (IDX
+Feed vs SEO) comes from the function's `category` in the CRM's `lib/run-log/inngest-registry.ts`:
 
 ```ts
 {
@@ -63,15 +130,10 @@ The job does **not** emit a manual event. The CRM's capture function
 ```
 
 Hand-rolling a `houseloop/idx.event` from the job would double-log — don't. The run's return
-value (`{ cities, neighborhoods, withPrice, durationMs }`) is what the auto-capture records.
-See the [Run Log guide](/guides/run-log) for the lane model.
+value is what the auto-capture records. See the [Run Log guide](/guides/run-log) for the lane
+model. The categorization contract is owned by the Run Log infra (Adam); coordinate any change.
 
-<Note>
-This is why the job lands under **IDX Feed**, not **Background Jobs** — it's listing-data-derived.
-The categorization contract is owned by the Run Log infra (Adam); coordinate any change there.
-</Note>
-
-## Operating the job
+## Operating the jobs
 
 ```bash
 # After ANY houseloop-web deploy that adds/changes an Inngest function, re-register:
@@ -81,10 +143,21 @@ curl -X PUT https://houseloop.ai/api/inngest
 curl -X POST "https://inn.gs/e/$INNGEST_EVENT_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"name":"geo-neighborhood-stats/manual.run","data":{}}'
+
+# Rebuild every neighborhood page now (the batched dispatcher):
+curl -X POST "https://inn.gs/e/$INNGEST_EVENT_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"houseloop/geo.neighborhood-pages.build-all","data":{}}'
 ```
 
-Verify the result by checking `hl_geo_neighborhood_stats` row count (or the IDX Feed lane in
-the CRM Run Log for the latest run + duration).
+<Warning>
+A full neighborhood rebuild re-runs the per-geo builder for ~5,500 geos. The delta-gate skips
+unchanged geos (no LLM spend), but a large run after a long gap will narrate many drifted geos —
+real LLM cost. Prefer letting the Monday cron handle it unless an immediate refresh is needed.
+</Warning>
+
+Verify via the **Page builder health** panel on the CRM SEO overview (per-tier freshness) or the
+IDX Feed / SEO lanes in the [Run Log](/guides/run-log).
 
 ## Related jobs
 
