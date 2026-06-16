@@ -126,6 +126,60 @@ A member's iMessage handle lives in `hl_imessage_assignments.bb_address`.
 
 Unlike SMS, iMessage is data-based (Apple ID) and is **not** subject to A2P 10DLC.
 
+## Sending a text to a lead — who it goes out as
+
+When you send a text from a lead's card (the chat bar), or when Myli's AI / a workflow texts a
+lead, the **From** number is resolved from the **lead's assigned agent** — never the logged-in user,
+never a hardcoded default. This is what keeps every text in a thread coming from the *same* number
+the client already knows (e.g. Myli → **913-355-6809**).
+
+<Note>
+**One resolver, every path.** `resolveAgentSendIdentity(leadId)`
+(`lib/agent-runtime/resolve-send-identity.ts`) is the single source of truth for "who does this send
+go out AS." The manual composer, the live AI reply (`lib/ai/lead-conversation.ts`), and the workflow
+runner (`lib/workflows/execute-step.ts`) all call it — so a human-typed text and an automated Myli
+text use identical sender resolution.
+</Note>
+
+### How the From is resolved
+
+`GET /api/leads/[id]/send-identity` is the composer's "From" source of truth. It returns:
+
+- **`defaultSenderId`** — the assigned agent's `is_text_default` dialer (Myli → `913-355-6809`),
+  pre-selected.
+- **`senders[]`** — every selectable sender: each active agent's dialer (SMS) and, when the lead has
+  iMessage enabled, each agent's BlueBubbles line (iMessage). The assigned agent's entry is flagged
+  `isAssigned`.
+- **`imessageAvailable` / `imessageEnabled`** — whether iMessage can be / is turned on for this lead.
+
+Resolution inside `resolveAgentSendIdentity`:
+
+| Lead state | Resolves to |
+|---|---|
+| Has an assigned AI agent or clone | That agent's identity — `is_text_default` dialer + BB line. A **clone** sends as the human it clones; a standalone AI (Myli) sends as itself. |
+| No assigned agent | **`system`** fallback (identity fields null) — the caller uses the system notification sender. **Never a null From.** |
+
+<Warning>
+The chat bar used to read `/api/phone/settings` (the **logged-in user's** dialer → a *voice* number),
+so texts went out from the wrong number. It now reads `/api/leads/[id]/send-identity` → the **lead's
+assigned agent's** text-default dialer. New leads are assigned to **Myli** by default so there is
+always a real agent to resolve from.
+</Warning>
+
+### Channel: iMessage first, SMS fallback
+
+`POST /api/phone/sms/send` with `{ to, message, lead_id, from_number, channel }`:
+
+- **`channel` defaults to `imessage`** (BlueBubbles). Twilio SMS is the fallback — used when the
+  caller passes `channel: 'sms'`, or when BlueBubbles fails / isn't configured.
+- **iMessage From = the agent's BlueBubbles line** (per-lead on/off toggle, migration 0120) — never a
+  Twilio voice number.
+- **SMS From = the agent's dialer number + the A2P `MessagingServiceSid`** together (the 10DLC
+  delivery rule above).
+
+Both directions thread onto the lead's conversation (outbound SMS green, iMessage blue) and log to the
+Communications SSOT.
+
 ## Calendar (Google) — two-way sync
 
 Bound per member in `hl_calendar_connections` (import + export toggles).
