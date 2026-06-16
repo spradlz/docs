@@ -1,0 +1,72 @@
+---
+title: "Property Data Model & Address Identity"
+description: "How HouseLoop stores homes — ONE address-keyed table where a home is one row for its whole life — and how an address becomes a stable, USPS-conformed unique identifier."
+---
+
+Every HouseLoop home — coming soon, active, under contract, pending, or sold — is **one row in one table**, identified by its **address**. Not by the MLS number, not by a per-source id. This page is the source of truth for how property data is keyed and how addresses are normalized.
+
+## The one table
+
+There is exactly **one property table: `Listing`**. A home is a single row for its entire life; the lifecycle is a `status` field that flips on that same row:
+
+```
+coming_soon → active → pending → sold        (status changes; same row, same URL)
+```
+
+- **Never a new row** for a status change, **never a second slug**, **never a per-source id as identity.**
+- `mlsNumber`, `zpid`, `parcelNumber` are **columns** (source references), not identity.
+- Sold homes are just rows with `status='sold'`. (Historically these lived in a separate `ListingHistory` archive; that table was absorbed into `Listing` and renamed `ListingHistory_deprecated` — a reversible backup. See [Sold Data & Price History](/guides/sold-data-and-price-history).)
+
+Reads filter the live, visible set with `deletedAt IS NULL AND quarantinedAt IS NULL` (and `status` as needed). `quarantinedAt` is a non-destructive "hide this row" flag used to retire duplicates without deleting data.
+
+## Identity = the canonical address
+
+A home's identity is its **canonical, normalized address** — because the address is the one thing that's true across every data source (MLS, Zillow, county), while each source has its own id (Zillow has no MLS number, it has a `zpid`; the county has a `parcelNumber`). Keying on any single source id breeds duplicate rows for the same house.
+
+### Layer 1 — deterministic normalization (offline, free)
+
+`lib/listings/canonical-address.ts` standardizes a raw address with zero API calls (runs at render time, in the sitemap, and as the redirect resolver):
+
+- **Street suffix → one full word:** `Rd`/`Rd.`/`Road` → `road`; `St` → `street`; `Ave` → `avenue`; etc.
+- **Directionals → one abbreviation:** `North`/`N` → `n`.
+- **Unit fragments dropped** from the street line.
+
+```
+canonicalSlug({ street: "1230 W 31st St", city: "Independence", state: "MO", zip: "64055" })
+  → "1230-w-31st-street-independence-mo-64055"
+```
+
+Same physical home → same slug, regardless of which spelling a source sent. This handles ~97% of addresses.
+
+### The URL contract
+
+- Each home renders at **`/home/{canonicalSlug}`** — one canonical URL per home.
+- A request for a non-canonical variant (`…-rd-…` when canonical is `…-road-…`) **308-redirects** to the canonical URL, and the page sets `rel=canonical`.
+- The sitemap emits **one URL per home** (distinct `canonicalSlug`).
+
+## Address as a USPS-conformed unique ID
+
+The deterministic layer can't fix everything: two sources may disagree on the **city** ("Baldwin" vs "Baldwin City" for the same ZIP) or on a suffix abbreviation, producing two slugs for one home. The U.S. Postal Service is the real ground truth for "is this a single, deliverable address," so addresses conform to USPS. This is the `lib/listings/address-identity.ts` service.
+
+### Layer 2 — the city-independent identity key (free)
+
+`identityKey({street, unit, city, state, zip})` = **canonical street + unit + 5-digit ZIP — city deliberately excluded.** Because the ZIP already pins the locale, "Baldwin" and "Baldwin City" produce the **same key**. This is the match/dedup key; it never depends on the city label.
+
+The **USPS-preferred city** for a ZIP comes from `zip-preferred-city.generated.json` (built by `scripts/build-zip-preferred-city.mjs` from the most-common city per ZIP among real MLS rows — Heartland MLS feeds USPS-standard cities, so this is free and self-maintaining). `preferredCity(zip)` resolves it, and `canonicalSlugPreferred()` builds the URL slug with it — so a home always slugs to one consistent, USPS-correct city.
+
+### Layer 3 — CASS validation (paid, reserved)
+
+`validateAddress(parts)` standardizes an address against USPS via a pluggable provider — **Smarty** (CASS-certified, bulk-friendly) → **Google Address Validation** (we already hold the key) → **offline**. It returns the USPS-standard address, the preferred city, ZIP+4, and the **DPV delivery-point key** (`ZIP5 + ZIP4 + delivery-point` = a unique mailable address — the closest thing to a national primary key). It never throws; with no provider configured it degrades to the deterministic offline result, so identity is always resolvable.
+
+**Cost doctrine:** never blind-validate the whole ~430K base through a paid provider. The free Layer 1 + Layer 2 pass collapses ~95%; paid CASS is reserved for **new ingest** (one cheap call per new home) and the **ambiguous residual** (the handful Layer 1+2 can't disambiguate).
+
+## Key files
+
+| Concern | File |
+|---|---|
+| Deterministic normalizer (suffix/directional) | `lib/listings/canonical-address.ts` |
+| Address-as-ID service (identityKey, preferredCity, validateAddress) | `lib/listings/address-identity.ts` |
+| ZIP → USPS-preferred-city map | `lib/listings/zip-preferred-city.generated.json` (built by `scripts/build-zip-preferred-city.mjs`) |
+| Sold detection + archive | `lib/inngest/functions/listing-sold.ts`, `lib/listings/archive.ts` |
+| `/home` page + canonical redirect | `app/home/[slug]/page.tsx` |
+| Sitemap (one URL per home) | `app/sitemap.ts` |
