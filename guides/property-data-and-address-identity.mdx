@@ -1,9 +1,9 @@
 ---
 title: "Property Data Model & Address Identity"
-description: "How HouseLoop stores homes — ONE address-keyed table where a home is one row for its whole life — and how an address becomes a stable, USPS-conformed unique identifier."
+description: "How HouseLoop stores homes — ONE address-keyed table where a home is one row for its whole life — how an address becomes a stable, USPS-conformed unique identifier, and how an incoming address resolves to one owned home."
 ---
 
-Every HouseLoop home — coming soon, active, under contract, pending, or sold — is **one row in one table**, identified by its **address**. Not by the MLS number, not by a per-source id. This page is the source of truth for how property data is keyed and how addresses are normalized.
+Every HouseLoop home — coming soon, active, under contract, pending, or sold — is **one row in one table**, identified by its **address**. Not by the MLS number, not by a per-source id. This page is the source of truth for how property data is keyed, how addresses are normalized, and how an incoming address resolves to the one home we already own.
 
 ## The one table
 
@@ -54,11 +54,35 @@ The deterministic layer can't fix everything: two sources may disagree on the **
 
 The **USPS-preferred city** for a ZIP comes from `zip-preferred-city.generated.json` (built by `scripts/build-zip-preferred-city.mjs` from the most-common city per ZIP among real MLS rows — Heartland MLS feeds USPS-standard cities, so this is free and self-maintaining). `preferredCity(zip)` resolves it, and `canonicalSlugPreferred()` builds the URL slug with it — so a home always slugs to one consistent, USPS-correct city.
 
+<Note>
+**Why city is never part of the key.** Kansas City-metro ZIP codes straddle municipal lines: ZIP `66215` is **Lenexa** per USPS but **Overland Park** per Zillow; `66216` shows as both **Shawnee** and **Shawnee Mission**; `64118` as both **Kansas City** and **Gladstone**. If the city were part of the match key, the same physical home would split into two records the moment two sources disagreed on the label. The ZIP pins the geography and the house number pins the home — the city is a display attribute, never an identifier.
+</Note>
+
 ### Layer 3 — CASS validation (paid, reserved)
 
 `validateAddress(parts)` standardizes an address against USPS via a pluggable provider — **Smarty** (CASS-certified, bulk-friendly) → **Google Address Validation** (we already hold the key) → **offline**. It returns the USPS-standard address, the preferred city, ZIP+4, and the **DPV delivery-point key** (`ZIP5 + ZIP4 + delivery-point` = a unique mailable address — the closest thing to a national primary key). It never throws; with no provider configured it degrades to the deterministic offline result, so identity is always resolvable.
 
 **Cost doctrine:** never blind-validate the whole ~430K base through a paid provider. The free Layer 1 + Layer 2 pass collapses ~95%; paid CASS is reserved for **new ingest** (one cheap call per new home) and the **ambiguous residual** (the handful Layer 1+2 can't disambiguate).
+
+## Resolving an address to one home — the resolver
+
+Identity (above) answers *"what is this home's key?"* The **resolver** answers the operational question: *given an incoming address, which of our owned homes is this — or is it new?* It's the front door every home passes through, whether it arrives from the live Repliers feed or a one-time backfill.
+
+`resolveHome(db, input)` (`lib/listings/resolve-home.ts`) returns a verdict — `matched` (with the owned `hlid`) or `mint` (it's new) — using three rungs, cheapest first:
+
+1. **Identity key** — match an existing owned home on `identityKey()` (city-free street + ZIP). Handles the vast majority.
+2. **Physical point** — when the key misses but coordinates are present, match on **lat/lng within ~25 m**. A house can't move, so two address strings on the same rooftop are the same home. Coordinates arrive free from the Repliers feed (`map.latitude/longitude`); a geocoder is only needed for backfill rows that lack them.
+3. **Mint** — no owned home matches → this is a new home; create one row and stamp its identity.
+
+<Warning>
+**Resolve by address, not by MLS number.** The same physical home is routinely relisted under a **new MLS number** — sometimes years apart, sometimes with a different city label (one listing says *Lenexa*, a later one says *Overland Park* for the same ZIP). A pipeline that keys homes on the MLS number forks a second row every time that happens. Resolving by **address identity** keeps one physical home as **one row** — carrying its full listing history — instead of a pile of duplicates.
+</Warning>
+
+## Data enrichment — the value/schools/tax base
+
+Consumer data that the MLS feed doesn't carry — the home **value estimate**, **GreatSchools** ratings, and **tax history** — is sourced from Zillow data (via the OpenWeb Ninja API) **once, when the home is first resolved.** That establishes the home's **base**. The home is not re-queried against Zillow afterward: the displayed value over time, the value-history chart, and the sold close-out are all derived from **our own data** — the MLS record plus our geographic appreciation model (`lib/valuation/appreciation.ts`) — anchored on that one-time base.
+
+Structural facts (beds/baths, square footage, year built, style, lot, features, HOA, assigned schools) come from the **MLS record via Repliers**; the **sold price and date** come from the **MLS** (and are display-restricted in non-disclosure states). Each field has exactly one authoritative source. See [Home Valuation](/guides/home-valuation-dashboard) and [Sold Data & Price History](/guides/sold-data-and-price-history).
 
 ## Key files
 
@@ -66,7 +90,9 @@ The **USPS-preferred city** for a ZIP comes from `zip-preferred-city.generated.j
 |---|---|
 | Deterministic normalizer (suffix/directional) | `lib/listings/canonical-address.ts` |
 | Address-as-ID service (identityKey, preferredCity, validateAddress) | `lib/listings/address-identity.ts` |
+| Address resolver (identity → coords → mint) | `lib/listings/resolve-home.ts` |
 | ZIP → USPS-preferred-city map | `lib/listings/zip-preferred-city.generated.json` (built by `scripts/build-zip-preferred-city.mjs`) |
+| Geographic appreciation model (value drift) | `lib/valuation/appreciation.ts` |
 | Sold detection + archive | `lib/inngest/functions/listing-sold.ts`, `lib/listings/archive.ts` |
 | `/home` page + canonical redirect | `app/home/[slug]/page.tsx` |
 | Sitemap (one URL per home) | `app/sitemap.ts` |
