@@ -1,6 +1,6 @@
 ---
 title: "Workflows"
-description: "The HouseLoop CRM workflow engine — one workflow per lead event (system defaults vs custom takeovers), the sender chain, Assign Lead routing, triggers, branches, and the communication-recency condition matrix. Runs on Inngest."
+description: "The HouseLoop CRM workflow engine — one workflow per lead event (system defaults vs custom takeovers), the new-lead vs existing-lead trigger split, the sender chain, Assign Lead routing, branches, and the communication-recency condition matrix. Runs on Inngest."
 ---
 
 A **workflow** is a trigger + a sequence of steps (send a text, send an email, assign the lead,
@@ -114,7 +114,7 @@ A workflow is one `hl_workflows` row:
 
 | Column | Meaning |
 | --- | --- |
-| `trigger_type` | what starts it — e.g. `tag_added` |
+| `trigger_type` | what starts it — e.g. `tag_added`, `tour_request_registration`, `tour_requested` |
 | `trigger_config` | JSONB. For Tag Added: `{ tag_ids: ["…","…"] }` (multi-tag, "is one of") |
 | `workflow_config` | JSONB `{ nodes, connections }` — the steps + connections the canvas draws and the runner walks |
 | `is_system` / `locked_at` | system default — locked in the builder, customized via Duplicate as Custom |
@@ -127,6 +127,69 @@ array is a line the canvas draws and the runner walks; there are no connections 
 drawn (see [The workflow canvas is the truth](#the-workflow-canvas-is-the-truth-constitutional)).
 
 ## Triggers
+
+A **trigger** is the event that starts a workflow. Every lead action maps to a trigger, and the
+**server-side intake decides new-lead vs. existing-lead routing** so each gets its own atomic
+workflow with its own editable message.
+
+### The chain: action → event → trigger → workflow
+
+A lead action only fires a workflow if every layer of the chain agrees — there is **no single
+"trigger map."** There are five code maps across three files plus one DB table:
+
+```
+WEBSITE                        CRM INGEST                            INNGEST EVENT            DISPATCHER                 WORKFLOW
+hlTrack("<event_type>")   ──▶  /api/pixel/track                  ──▶ houseloop/property.*  ──▶ EVENT_TO_TRIGGER     ──▶ trigger_type match (active)
+                               PIXEL_EVENT_TO_INNGEST                                           │
+action:"<x>" (signup) ────▶  /api/integrations/website/          ──▶ houseloop/<x>  +       ──▶ TRIGGER_TO_EVENT_KEY ─▶ hl_lead_source_events
+                               lead-intake (ACTION_TO_EVENT,          houseloop/lead.tag-        + REG_SUBEVENTS         (event_key → workflow_id)
+                               REG_VARIANT, EVENT_TO_INNGEST)         added                                              ◀── the routing hub
+```
+
+| Map | File | Role |
+| --- | --- | --- |
+| `hlTrack("…")` literals | `apps/houseloop-web` (8 sites) | the emitted pixel `event_type` |
+| `PIXEL_EVENT_TO_INNGEST` | `app/api/pixel/track/route.ts` | pixel event_type → Inngest event |
+| `ACTION_TO_EVENT` + `REG_VARIANT` + `EVENT_TO_INNGEST` | `app/api/integrations/website/lead-intake/route.ts` | signup `action` → eventKey → Inngest event |
+| `EVENT_TO_TRIGGER` + `TRIGGER_TO_EVENT_KEY` + `REG_SUBEVENTS` | `lib/workflows/runtime.ts` | Inngest event → trigger_type → source-event key |
+| `EVENT_TRIGGER` | `lib/workflows/event-trigger-map.ts` | Lead Flow UI presets |
+| `hl_lead_source_events` (DB) | CRM Postgres | **event_key → workflow_id** — the real routing hub |
+
+<Note>
+The full canonical trigger truth table (every event, its new/existing workflows, and the
+maintenance rule) is the private ground-truth doc `GT_HOUSELOOP_WORKFLOW_TRIGGERS_SSOT.md`. This
+page is the public engine reference.
+</Note>
+
+### New lead vs. existing lead (the atomic split)
+
+The same website action fires a **different** workflow depending on whether the person is a
+brand-new lead or a returning one. **The intake's `created` flag is the authority** — it dedupes by
+email, then by the last-10 digits of the phone (the same way Follow Up Boss / SureSend dedupe), so
+it works whether or not the visitor is logged in:
+
+- **Logged in** → the Tour / Contact form pre-fills name, email, and phone from the session → on
+  submit the intake matches their existing lead → **existing-lead** workflow.
+- **Logged out, types a known email/phone** → the intake matches it → **existing-lead** workflow.
+- **Logged out, brand-new email/phone** → no match → **new-lead** workflow.
+
+When `created` is true the intake remaps the event key to its `*_registration` variant
+(`REG_VARIANT`), which routes through `lead.tag-added` → `REG_SUBEVENTS` → the source-event
+assignment to the **New Lead** door. When `created` is false it fires the first-class event
+(`tour.requested` / `contact.requested` / …) to the **existing-lead** ack. The lead-visible **tag is
+the same** for both — the new/existing distinction is the *workflow*, not the tag.
+
+| Event | New lead (`created=true`) | Existing lead (`created=false`) |
+| --- | --- | --- |
+| Registration | `general_registration` → New Lead — General Registration | — (registration is the new-lead event) |
+| Liked home | `liked_home_registration` → New Lead — Liked Home | `property_liked` → Property Liked signal |
+| Saved home | `saved_home_registration` → New Lead — Saved Home | `property_saved` → Property Saved signal |
+| Saved search | `saved_search_registration` → New Lead — Saved Search | `saved_search` → Saved Search digest |
+| Tour request | `tour_request_registration` → New Lead — Tour Request | `tour_requested` → Tour Request Received |
+| Contact request | `contact_request_registration` → New Lead — Contact Request | `contact_requested` → Contact Request Received |
+
+Each cell is its own `hl_workflows` row, so the copy for "a new lead just asked for a tour" can
+diverge from "a returning lead asked for a tour" — edit each independently in the builder.
 
 ### Tag Added (FUB-style)
 
@@ -210,9 +273,10 @@ date-valued fields support `is_empty`, `is_not_empty`, `less_than_days`, `more_t
 Registration branch gates on **"Phone is not empty."**
 
 <Note>
-**New-lead vs. returning** is the primary recency use case: gate one branch on
-**"Last Contact Attempt is empty"** (brand-new lead → send the Myli intro) and the other on
-**"is not empty"** (we've reached out before → send a lighter "here's your search" touch).
+The new-lead vs. existing-lead split is normally decided at **intake** (see
+[New lead vs. existing lead](#new-lead-vs-existing-lead-the-atomic-split)) so each gets its own
+workflow. A Condition/Branch on **"Last Contact Attempt is empty"** is the in-workflow way to fork
+the same workflow when you'd rather not split it into two.
 </Note>
 
 Full spec: `GT/GT - ACTIVE/GT_HOUSELOOP_WORKFLOW_CONDITIONS.md`.
@@ -227,12 +291,14 @@ Full spec: `GT/GT - ACTIVE/GT_HOUSELOOP_WORKFLOW_CONDITIONS.md`.
 ## Reference
 
 - `apps/houseloop-crm/lib/workflows/runtime.ts` — `workflowDispatcher` + `workflowRunner` (Inngest)
+- `apps/houseloop-crm/app/api/integrations/website/lead-intake/route.ts` — `ACTION_TO_EVENT` + `REG_VARIANT` (new-vs-existing split)
+- `apps/houseloop-crm/app/api/pixel/track/route.ts` — `PIXEL_EVENT_TO_INNGEST` (pixel events → workflows)
 - `apps/houseloop-crm/lib/workflows/execute-step.ts` — send steps, sender chain, Assign Lead, dedupe guard
 - `apps/houseloop-crm/lib/workflows/event-trigger-map.ts` — event ↔ trigger mapping (one workflow per event)
 - `apps/houseloop-crm/lib/agent-runtime/resolve-send-identity.ts` — lead-owner + specific-member send identities
 - `apps/houseloop-crm/lib/workflows/condition-fields.ts` — condition field + operator catalog
 - `apps/houseloop-crm/lib/workflows/evaluate-condition.ts` — condition evaluation
 - `apps/houseloop-crm/components/workflows/WorkflowBuilder.tsx` — the workflow canvas + editor
-- `apps/houseloop-crm/components/shared/TagPill.tsx` — the blue tag pill
 - `.claude/rules/WORKFLOW_CANVAS_IS_TRUTH.md` — "the canvas is the truth" constitutional rule
+- `GT/GT - ACTIVE/GT_HOUSELOOP_WORKFLOW_TRIGGERS_SSOT.md` — the canonical trigger truth table (private)
 - `GT/GT - ACTIVE/GT_HOUSELOOP_WORKFLOW_CONDITIONS.md` — condition matrix PRD
