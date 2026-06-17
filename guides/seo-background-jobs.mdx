@@ -1,11 +1,11 @@
 ---
 title: "SEO background jobs"
-description: "The Inngest crons behind the SEO pages — the nightly neighborhood pricing cache, the Monday geo page-builder pipeline, dispatcher batching, and how runs surface in the CRM Run Log."
+description: "The Inngest crons behind the SEO pages — the nightly neighborhood pricing cache, the Monday geo page-builder pipeline, dispatcher batching, the long-tail fallback, and how runs surface in the CRM Run Log."
 ---
 
 The SEO pages are fed by a set of Inngest crons. This page is the operations reference: the
 nightly pricing cache, the Monday page-builder pipeline, the batching rule every dispatcher must
-follow, and how to operate + verify a run.
+follow, why every neighborhood builds (not just the priced ones), and how to operate + verify a run.
 
 ## The nightly pricing cache — `geo-neighborhood-stats`
 
@@ -25,8 +25,11 @@ consistent across the whole site.
 ### What it does
 
 For each city, it ranks that city's neighborhoods by `(active + sold-last-12-months)` listing
-count, keeps the **top ~20**, and stores the **average active list price** for each. The table
-is fully replaced every run — it's a derived cache, so the job is idempotent.
+count and stores the **average active list price** for each. It keeps **every neighborhood that
+has homes for sale now plus enough recent sales** to fill the market columns — there is **no
+per-city cap** (the old top-20 cap was removed 2026-06-17; it had quietly limited the whole site
+to ~210 priced neighborhoods while the universe is ~5,500). The table is fully replaced every run
+— it's a derived cache, so the job is idempotent. Today this lands ~660 priced neighborhoods.
 
 ```sql
 SELECT city, state, neighborhood,
@@ -35,7 +38,7 @@ SELECT city, state, neighborhood,
        ROUND(AVG("listPrice") FILTER (WHERE status = 'active'))                 AS avg_active
 FROM "Listing"
 GROUP BY city, state, neighborhood
-HAVING <has any active or recent-sold>
+HAVING <has homes for sale now AND enough recent sales>
 ```
 
 The slug for each neighborhood is derived in JS with `geoSlug()` so it matches the taxonomy. A
@@ -46,6 +49,13 @@ neighborhood with zero active listings stores `avgValue = null` and links **with
 only *counted*, to rank neighborhoods by activity. The stored and displayed dollar figure is
 strictly the **average active list price**. This is the MLS GRID IDX rule.
 </Warning>
+
+<Note>
+**The price cache is NOT the page universe.** `hl_geo_neighborhood_stats` is a *pricing* cache
+(~660 neighborhoods with enough activity to compute reliable figures). The set of neighborhood
+**pages** is the full taxonomy — **~5,524 subdivisions**. Every one builds; see
+[the long tail](#the-long-tail-neighborhoods-without-a-cached-profile-still-build) below.
+</Note>
 
 ## The geo page-builder pipeline
 
@@ -59,7 +69,7 @@ render. Each tier is a **dispatcher cron → per-geo build** fan-out:
 | `geo-county-pages-cron` `0 6 * * 1` | `geo-county-page` | county (8) | `hl_geo_page` |
 | `geo-zip-pages-cron` `0 7 * * 1` | `geo-zip-page` | zip (~205) | `hl_geo_page` |
 | `geo-city-pages-cron` `0 8 * * 1` | `geo-city-page` | city (~134) | `hl_geo_page` |
-| `geo-neighborhood-pages-cron` `0 9 * * 1` | `geo-neighborhood-page` | neighborhood (~5,500) | `hl_geo_page` |
+| `geo-neighborhood-pages-cron` `0 9 * * 1` | `geo-neighborhood-page` | neighborhood (~5,524) | `hl_geo_page` |
 
 The dispatcher enumerates every geo at its tier from the taxonomy and fans out one
 `houseloop/geo.<tier>-page.build` event per geo; each event runs the per-geo builder, which
@@ -94,13 +104,41 @@ This bug killed the neighborhood builder from May 28 → Jun 15, 2026: the un-ba
 tiers, under the cap) were fine. The neighborhood pages rendered a frozen artifact. Same pattern
 as `data-coverage-reconcile`'s `SEND_BATCH`.
 
+### The long tail — neighborhoods without a cached profile still build
+
+The page universe (~5,524 subdivisions) is **much larger** than the priced set in
+`hl_geo_neighborhood_stats` (~660). A neighborhood with too few active/sold listings to compute
+reliable market figures has **no cached profile** — but it **must still get a page**.
+
+So the per-geo builder does **not require a profile**. When `getNeighborhoodLiveProfile()`
+returns null it falls back to a minimal report (the inventory tiles are still computed live;
+sold-side aggregates are left null), and the model split routes it to the **deterministic
+weekly-pulse template** — `$0` LLM, a hash-rotated narrative shell that re-touches its
+"Week ending …" line every Monday so Google sees a fresh modification.
+
+```ts
+// geo-neighborhood-page.ts — the "stats" step
+const np = await getNeighborhoodLiveProfile(ci.name, st.abbr, sub.name);
+if (np) return richReport(np);          // ~660 priced → Haiku/stats page
+return minimalReport();                  // long tail → $0 deterministic page (must NOT throw)
+```
+
+<Warning>
+**Do not make the builder throw on a missing profile.** Before 2026-06-17 it did, so ~5,300
+long-tail neighborhoods never built — the page-builder health sat at `neighborhood 0/210` while
+the universe was 5,524, and those pages rendered nothing/stale. The contract: the builder builds
+**every** neighborhood in the taxonomy; the profile only decides *which narrative path* (rich vs
+deterministic), never *whether* a page exists.
+</Warning>
+
 ### Builder health
 
 `GET houseloop.ai/api/seo/overview` returns `builderHealth` — per-tier `hl_geo_page` built /
 fresh / newest / `stale` (stale = >8 days old or 0 fresh in the last 8 days). The CRM SEO
 overview renders it as a panel that turns **red** when a tier goes stale, so a dead builder is
-visible even while the article writers keep publishing. This is the observability that would have
-caught the neighborhood-builder failure in week one.
+visible even while the article writers keep publishing. This is the observability that caught
+both the May–Jun batching failure and the Jun 2026 "0/210" long-tail-throw failure. A healthy
+neighborhood tier shows `built` in the **thousands** (→ ~5,524), not ~210.
 
 ### Auto-registration on boot
 
@@ -139,21 +177,26 @@ model. The categorization contract is owned by the Run Log infra (Adam); coordin
 # After ANY houseloop-web deploy that adds/changes an Inngest function, re-register:
 curl -X PUT https://houseloop.ai/api/inngest
 
-# Manual run / first populate (Inngest event key):
+# Repopulate the neighborhood price cache (now uncapped — all qualifying neighborhoods):
 curl -X POST "https://inn.gs/e/$INNGEST_EVENT_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"name":"geo-neighborhood-stats/manual.run","data":{}}'
 
-# Rebuild every neighborhood page now (the batched dispatcher):
+# Rebuild every neighborhood page now (the batched dispatcher → all ~5,524):
 curl -X POST "https://inn.gs/e/$INNGEST_EVENT_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"name":"houseloop/geo.neighborhood-pages.build-all","data":{}}'
 ```
 
+When repopulating after a code change, fire the **stats** job first (it feeds the rich pages),
+then the **build-all** dispatcher. Watch the **Page builder health** panel: the neighborhood
+`built` count should climb past ~210 toward ~5,524 with `stale=false`.
+
 <Warning>
-A full neighborhood rebuild re-runs the per-geo builder for ~5,500 geos. The delta-gate skips
-unchanged geos (no LLM spend), but a large run after a long gap will narrate many drifted geos —
-real LLM cost. Prefer letting the Monday cron handle it unless an immediate refresh is needed.
+A full neighborhood rebuild re-runs the per-geo builder for ~5,524 geos. The delta-gate skips
+unchanged geos (no LLM spend) and the long tail is deterministic ($0), but a large run after a
+long gap will narrate many drifted priced geos — real (small) LLM cost. Prefer letting the Monday
+cron handle it unless an immediate refresh is needed.
 </Warning>
 
 Verify via the **Page builder health** panel on the CRM SEO overview (per-tier freshness) or the
