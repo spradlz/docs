@@ -1,0 +1,69 @@
+---
+title: "Past-Client Data Pipeline"
+description: "How a sold home's full profile — value, photos, GreatSchools, tax history, sold date — is sourced from the MLS, Zillow, and Redfin, reconciled into one render row, and surfaced on /home."
+---
+
+Every home the brokerage has sold gets a complete, accurate profile page at `/home/{slug}` — the HouseLoop Value, the photo gallery, GreatSchools ratings, multi-year tax history, the listing description, and the sold date. This page documents where each of those fields comes from, how they're reconciled into a single row, and how the home becomes findable by address.
+
+## Source-of-truth map
+
+Every field has exactly **one** authoritative source — no double-writes, no guessing.
+
+| Field | Source | Why |
+|---|---|---|
+| Sold price + sold date | **MLS** (Heartland) | KS/MO are non-disclosure states; Zillow can't have it |
+| Structural (beds/baths, sqft, basement, style, features, school district) | **Repliers** (MLS) | Same source as active listings → schema parity |
+| HouseLoop Value (Zestimate) | **OpenWeb Ninja / Zillow** | Real-Time Zillow Data API |
+| Photo gallery | **OpenWeb Ninja / Zillow**, with **Redfin** fallback | Zillow's feed thins to a single street-view photo on some older off-market homes; Redfin fills those |
+| GreatSchools ratings | **OpenWeb Ninja / Zillow** | `schools[]` (name, rating, level, grades, distance) |
+| Tax history (multi-year) | **OpenWeb Ninja / Zillow** | `taxHistory[]` (year, taxPaid, assessed value) |
+
+Realtor.com is **not** a source — its valuations and galleries are not trusted for this pipeline.
+
+## The HouseLoop Value
+
+The displayed value is **anchor × drift, blended with the Zestimate**:
+
+```
+HouseLoop Value = MLS sold price  ×  (our market's $/sqft now ÷ $/sqft at the sale month)
+                  blended 50/50 with the current Zillow Zestimate
+```
+
+The **anchor** is the real MLS sold price (home-specific accuracy). The **drift** is our own market's appreciation between the sale month and today, computed from our ~430K sold records at the home's tightest geo level (neighborhood → ZIP → city → county). It is **never** computed as `$/sqft × sqft`. Validated against Zillow on demo homes to within ~0.5%.
+
+## The two tables
+
+Enrichment data and the rendered page live in two different stores; a copy step bridges them.
+
+```
+hl_sold_profiles  ──(backfill copy)──►  Listing  ──►  /home/{slug}
+(enrichment store)                      (render store)
+```
+
+- **`hl_sold_profiles`** (CRM database) — the **enrichment store**. The Zillow/Ninja pull (value, photos, schools, tax) lands here first, one row per resolved address.
+- **`Listing`** (website database) — the **render store**. The one address-keyed property table the website actually reads (see [Property Data Model & Address Identity](/guides/property-data-and-address-identity)). The backfill copies each enriched profile onto the matching `Listing` row by canonical address, computes the HouseLoop Value, caches photos to R2, and flips `status='sold'`.
+
+The copy is **idempotent and improvement-only**: it never regresses a richer gallery or overwrites a real MLS sold date, and re-runs skip rows already enriched. Photos are always cached to Cloudflare R2 (`photosCached[].hlCdnUrl`) — the page never hot-links Zillow.
+
+## Reconciliation rules
+
+- **Identity is the canonical address**, never an MLS number or `zpid` — those are columns. One physical home = one row = one URL. (Full normalization rules: [Property Data Model & Address Identity](/guides/property-data-and-address-identity).)
+- **Match cascade** when copying a profile to its `Listing` row: MLS number → exact canonical slug → ZIP + house-number + street-name (immune to `Ct`/`Court` and city aliases). The most authoritative live MLS row always wins over a synthetic archive row.
+- **Every enriched home has a sold date.** A home with no closing date is not enriched into the table.
+- A home with no Zillow data still renders with its **MLS-anchored value** (we always have the sold price + date we closed it).
+
+## Finding a sold home by address
+
+A sold home is reachable from the site search bar's address autocomplete, which routes to `/home/{slug}`. The autocomplete matches your typed address against each home's `addressSlug` (built as `street-city-state-zip`). The match is **state-agnostic** — typing the street + city + ZIP finds the home whether or not you include the two-letter state — and the street filter ignores leading direction tokens (`W`, `N`, …) so a common house number on a directional street doesn't crowd out the exact match.
+
+## Key files
+
+| Concern | File |
+|---|---|
+| Zillow/Ninja enrichment → `hl_sold_profiles` | `tools/houseloop-cards/zillow-enrich.mjs` |
+| One-address enrich (Repliers + Ninja merge) | `tools/houseloop-cards/enrich-sold-home.mjs` |
+| Copy `hl_sold_profiles` → `Listing` | `tools/houseloop-cards/backfill-past-clients.mjs` |
+| Redfin photo fallback → R2 → `Listing` | `tools/houseloop-photos/hl-photo-engine.mjs`, `writeback-past-client-photos.mjs` |
+| Value algorithm (anchor × drift) | `apps/houseloop-web/lib/valuation/appreciation.ts` |
+| Address autocomplete | `apps/houseloop-web/app/api/locations/autocomplete/route.ts` |
+| `/home` render | `apps/houseloop-web/app/home/[slug]/page.tsx` |
