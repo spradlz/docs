@@ -1,0 +1,119 @@
+---
+title: "AI Context Blocks"
+description: "How Myli's AI-composed message sections work — editable prompt blocks ({{ai.<key>}}) embedded inside structured human templates. How they're built, how the compose engine runs them, how they're called from a workflow, and how they're previewed and edited. The AI is boxed into named sections; it never writes the whole message."
+---
+
+An **AI Context Block** is a single **editable prompt** that Myli composes from, dropped into a
+template as a `{{ai.<key>}}` token. It is how the CRM gets **personalized-per-lead** copy (the home
+they acted on, their area, their price band) **without** letting an AI free-write the whole message.
+
+<Note>
+**The trust model.** A template is a STRUCTURED message: hardcoded human text + one or more AI
+sections (each a defined, prompt-boxed `{{ai.<key>}}`) + a link + an image. The AI only writes the
+sections you give it; the rest is your words. You can read every prompt, see a sample of what it
+produces, and edit it — nothing about the message lives in code.
+</Note>
+
+## The data model
+
+A block is one row in **`hl_templates`** with `kind = 'context_block'`:
+
+| Column | Meaning |
+| --- | --- |
+| `key` | the token name — referenced in a template body as `{{ai.<key>}}` (e.g. `general_reg_text_hook`) |
+| `llm_compose_prompt` | **THE PROMPT** — exactly what Myli is told to write for this section |
+| `body` | the **fallback / sample** — a real human version that ships if the AI is unavailable, and is shown as the sample in previews |
+| `channel` | `text` or `email` — which editor surface the block belongs to |
+| `name` | the human description ("New Registration — email opening") |
+| `category` / `folder` / `lifecycle` | library grouping (mirrors the template taxonomy) |
+
+The library lives at **Settings → Context Blocks** (`components/settings/context-blocks/ContextBlocksPage.tsx`),
+a clone of the Email Templates grammar with two extra columns: the first lines of the **prompt** in
+the row, and a live **Used-in** workflow count → drill-down.
+
+## How they're called (template → workflow → send)
+
+```
+Template body:  "Hey {{contact.first_name}}, {{ai.general_reg_intro}} ... {{ai.general_reg_close}}"
+       │  (the workflow's Send Text / Send Email step uses this template)
+       ▼
+execute-step.ts  — scans the body for {{ai.*}} tokens (scanAiTokens)
+       │           and calls renderAiContextBlocks(leadId, body, …)
+       ▼
+context-blocks.ts renderOneBlock(block)  — builds the brief, calls the model, scrubs, returns text
+       │
+       ▼
+applyMerge() substitutes the composed section back into the template, then the message sends.
+```
+
+A block does nothing on its own — it only fires when a **template that contains its token** is sent
+by a **workflow step**. The same `{{ai.<key>}}` can appear in many templates; it composes fresh each
+time, grounded in that lead.
+
+## How the engine works
+
+Code: `lib/ai/context-blocks.ts`. For each block the body references:
+
+1. **Build the brief** = `doctrinePromptOrCode(block, codeDefault)` **+ grounding + local time + a fence instruction**.
+   - `doctrinePromptOrCode` returns the block's **editable `llm_compose_prompt`** — UNLESS it's still
+     an old stub, in which case it falls back to the in-code "doctrine" default (`lib/ai/myli-voice.ts`).
+     **So editing the block's prompt changes what Myli is told.** The code default is only a safety net.
+   - **Grounding** is computed live per block type: the lead's **browsing profile** (top city / price
+     band / standout home, from the first-party pixel) for registration blocks, the **saved search**
+     profile for saved-search blocks, or the **subject home** the lead acted on. The grounding is
+     facts only — Myli is told to present them like a sharp agent and **never** imply she tracked them.
+   - **Fence + scrub:** the model output is fenced and run through `cleanComposedOutput` (strips
+     meta-narration, GSM-7 scrubs) and the text **leak-guard** so AI scaffolding can never reach a lead.
+2. **Compose** with the lead's AI model (Haiku by default; see [AI capability matrix](/guides/ai-capability-matrix)).
+3. **Fail-open:** any error → the block's `body` (fallback) ships instead. The message never dies.
+4. **Log:** every compose writes an `hl_run_log` row with `source = 'ai-block'` (visible in the [Run Log](/guides/run-log)).
+
+### Bare-signup determinism
+
+For registration blocks, if the lead has **no browsing data** (cold signup), the engine does **not**
+call the LLM (it would parrot "no data on file"). Instead it renders the block's **`body`**
+deterministically with `{{contact.first_name}}` + `{{search.url}}` filled in. The warm welcome lives
+in the editable block body, not in code.
+
+## The doctrine migration (why the prompts moved out of code)
+
+Originally the real prompts for the registration / liked-home / saved-home / saved-search blocks were
+hardcoded "doctrine" functions in `lib/ai/myli-voice.ts`, and the block's stored prompt was a stub.
+That made the prompt invisible and un-editable. The prompts were **seeded into the blocks**
+(`llm_compose_prompt`) byte-for-byte, and the engine now reads the block (with the code doctrine as a
+fallback for any un-seeded stub). The code doctrines remain only as defaults.
+
+<Note>
+**Re-sync tool:** `POST /api/context-blocks/sync-doctrines` writes the current code doctrines into any
+block whose prompt is still a stub (idempotent; never clobbers an edited prompt). Use it if a new
+doctrine block is added in code and needs to land in the DB.
+</Note>
+
+## Authoring & previewing
+
+- In a **text or email template editor**, an **"AI sections in this message"** panel lists every
+  `{{ai.<key>}}` the body uses. Each row is **clickable → a modal showing the exact prompt** Myli is
+  given + the sample/fallback, with an **Edit prompt** button that deep-links to
+  `/settings/context-blocks?edit=<key>` (the block's editor).
+- The **preview** substitutes the block's **fallback as a sample** (accented with a blue left-bar so
+  you see which part is AI-written) instead of a placeholder — `resolveForPreview(text, ctx, aiSamples)`
+  in `lib/merge-fields.ts`. It reads like a real message; the actual send personalizes it live.
+
+## Creating a new block
+
+**Settings → Context Blocks → New** (or `POST /api/context-blocks`): give it a **name** (description),
+a **key** (becomes `{{ai.<key>}}`), a **channel** (text/email), the **prompt** (what Myli writes), and
+a **fallback** (the human default). Then drop `{{ai.<key>}}` into a template body where the section
+belongs. A brand-new key auto-grounds on the home the lead acted on + their request + local time;
+the special browsing/saved-search feeds are wired to specific keys in `lib/ai/myli-voice.ts` HOOKS.
+
+## Reference
+
+- `lib/ai/context-blocks.ts` — `renderAiContextBlocks`, `renderOneBlock`, `doctrinePromptOrCode`, `scanAiTokens`
+- `lib/ai/myli-voice.ts` — `MYLI_IDENTITY`, the doctrine **fallbacks** + the `*_HOOKS` key→kind maps
+- `lib/workflows/execute-step.ts` — where the text/email send scans `{{ai.*}}` and calls the engine
+- `lib/merge-fields.ts` — `resolveForPreview(text, ctx, aiSamples)` (sample rendering)
+- `app/api/context-blocks/route.ts` — list (+ usage) / create; `[id]/route.ts` — edit/delete; `sync-doctrines/route.ts` — re-sync
+- `components/settings/context-blocks/ContextBlocksPage.tsx` — the library UI
+- DB: `hl_templates` rows with `kind = 'context_block'`; run records in `hl_run_log` (`source = 'ai-block'`)
+- Related: [Workflows](/guides/workflows) · [AI capability matrix](/guides/ai-capability-matrix) · [Run Log](/guides/run-log)
