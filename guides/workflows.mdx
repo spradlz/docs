@@ -77,6 +77,12 @@ what's laid out on the canvas, nothing hidden. This is the workflow sibling of
 and shows in the Run Log; a workflow **step** doesn't exist unless it's a visible step on a visible
 path on the canvas. Same principle — no invisible side-effects.
 
+This extends to **what a send step does to the message itself**. Anything the runtime would do to
+an outbound — attach an image, rewrite a link, suppress a re-send, append a signature — is either a
+**control you can see and set on the step**, or a **read-only note the step shows you** for the
+safety/compliance/delivery behaviors that must always run. Nothing silently rewrites your copy. See
+[Send-step controls](#send-step-controls-what-you-see-is-what-sends).
+
 When a **Branch** step splits the flow, each side must be a **complete, self-contained chain**
 down to its own terminal step. **Never** wire one branch into another branch's step to "reuse" it
 — that makes the canvas lie about what runs.
@@ -232,6 +238,19 @@ A message sent as Myli logs to `hl_messages` as `imessage / ai_agent / sent` —
 lead's thread as if Myli texted them, not as a system blast. **AI Message** steps are the one
 exception: they always send as the lead's AI agent (that's the point of the step).
 
+**A lead-facing text never goes out as System.** If a step (or the workflow default) is set to
+`system`/`brand` for a lead-facing **text**, the runtime coerces it to the lead's agent — a lead
+always hears from a person. System voice is valid only for an **agent-alert** text or over email.
+
+### "This sends as →" (resolved-sender preview)
+
+The "Send as" dropdown shows the **source** of the choice; right under it the step shows the
+**outcome** the runtime actually computes — encoding the two overrides that would otherwise be
+invisible: the lead-text System→agent coercion above, and "Workflow default" inheriting the
+header's "Sends as." Because the lead's concrete owner resolves per-lead at send time, the preview
+labels it honestly (*"Myli — the lead's owner · resolved when this runs"*) rather than guessing a
+name. If an **Assign Lead** step runs upstream, "the lead's owner" is whoever it set.
+
 ### Assign Lead (lead routing as a canvas step)
 
 The **Assign Lead** step (palette group *Lead Routing*) sets who owns the lead from that step on —
@@ -239,12 +258,67 @@ a human (`assigned_user_id`) or an AI member (`assigned_ai_agent_id`). Because s
 "lead's owner" live at send time, an Assign step upstream changes who every following message goes
 out as: `Trigger → Assign to Myli → Send Text` texts from Myli's line.
 
-### Dedupe guard
+## Send-step controls — what you see is what sends
 
-Send-Text steps run through a **10-minute dedupe guard** (`alreadySent()` in `execute-step.ts`):
-if an identical body already went to that lead within the window, the step is skipped and logged
-as deduped. This stops a double-dispatch from double-texting a lead. (Email goes via Resend, not
-`hl_messages`, so the guard is texts-only.)
+Every send step exposes, as a **visible field**, anything the runtime would do to the outbound. The
+rest (safety, delivery, compliance, audit) is shown as a read-only note so the canvas never hides a
+behavior. All fields default to the engine's prior behavior — an existing step is unchanged until
+you touch a field.
+
+### Attach image (text) — the Media Gallery
+
+The **Attach image** control on a Send Text step is *None* / *From gallery* / *The home's photo*:
+
+- **From gallery** opens the **Media Gallery** picker (a grid of saved images, like inserting an
+  image in an email editor). Pick one and it attaches to that text, every run; the thumbnail shows
+  on the step. **Upload from your computer** adds a new image (file → R2 → gallery), or add one by
+  URL. The gallery is `hl_media`; the picker is `MediaPickerModal.tsx`; uploads go to the R2 photos
+  bucket under `media/` via `/api/media/upload`.
+- **The home's photo** attaches the dynamic listing photo when the text is about a specific home
+  (served by the web app's `/api/home-image/<code>`).
+- **None** = text only.
+
+There is **no hidden contact-card auto-attach** — to send an agent's contact card, pick it from the
+gallery on the step. (The seeded gallery includes Myli/Zach/Ana contact cards + the HouseLoop logo.)
+
+### Link handling (text)
+
+Shown when *The home's photo* is selected: **Auto-format the home link** vs **Leave my copy exactly
+as written**.
+
+- **Auto-format** (default) replaces any houseloop.ai link in your copy with a clean tappable short
+  link (`houseloop.ai/h/<code>`) and lays the text out as *opening → link → question*.
+- **Verbatim** sends your exact words and links, untouched — the photo still attaches. Use this when
+  the copy is hand-written and must ship as-is.
+
+### Don't repeat this exact message (text dedupe)
+
+The previously-fixed 10-minute re-fire guard is now a field: *Within 10 minutes (default)* / *Never
+suppress* / *Within 1 hour* / *Within a day*. If the lead already got a word-for-word identical body
+in the window, the step skips instead of double-sending (`alreadySent()` in `execute-step.ts`, with
+an injection-safe integer window; `0` = never suppress). It matches on **exact body**, so an
+`{{ai.*}}`-composed message — which differs every run — rarely trips it.
+
+### Signature (email)
+
+*The lead's agent's signature (default)* / *No signature*. Default appends the acting agent's saved
+signature (Team Email → Configure) via the `{{agent.signature}}` token — even when the email sends
+from the System address (the "every lead email is signed" law). Branded marketing blasts are
+unsigned by design regardless.
+
+### Always on (can't be turned off)
+
+A read-only note on every send step states the safety / delivery / compliance / audit behaviors that
+must keep running:
+
+- **Texts** — *Leak guard* (a text that somehow contains AI scaffolding is blocked rather than sent,
+  and the block shows in the Run Log); *Auto-routing* (Apple → blue iMessage, Android → green SMS,
+  both from the same line; Twilio failover if BlueBubbles is down); *Logged* to the lead's timeline;
+  AI blocks are auto-flattened to plain text so no HTML ships over SMS.
+- **Emails** — *Auto-login links* (every houseloop.ai link is wrapped so the recipient is signed in
+  on click; unsubscribe + API links left alone); *Logged* to the timeline; registration emails
+  (`new_reg_*`) send at most once per lead per day; **brand** mode adds the legal CAN-SPAM
+  unsubscribe footer + one-click header and skips anyone who opted out.
 
 ## Condition & branch steps (the communication-recency matrix)
 
@@ -293,9 +367,11 @@ Full spec: `GT/GT - ACTIVE/GT_HOUSELOOP_WORKFLOW_CONDITIONS.md`.
 - `apps/houseloop-crm/lib/workflows/runtime.ts` — `workflowDispatcher` + `workflowRunner` (Inngest)
 - `apps/houseloop-crm/app/api/integrations/website/lead-intake/route.ts` — `ACTION_TO_EVENT` + `REG_VARIANT` (new-vs-existing split)
 - `apps/houseloop-crm/app/api/pixel/track/route.ts` — `PIXEL_EVENT_TO_INNGEST` (pixel events → workflows)
-- `apps/houseloop-crm/lib/workflows/execute-step.ts` — send steps, sender chain, Assign Lead, dedupe guard
+- `apps/houseloop-crm/lib/workflows/execute-step.ts` — send steps, sender chain, image/link/signature/dedupe handling, Assign Lead
 - `apps/houseloop-crm/lib/workflows/event-trigger-map.ts` — event ↔ trigger mapping (one workflow per event)
 - `apps/houseloop-crm/lib/agent-runtime/resolve-send-identity.ts` — lead-owner + specific-member send identities
+- `apps/houseloop-crm/lib/media/r2.ts` + `app/api/media/*` — the Media Gallery (R2 upload, list)
+- `apps/houseloop-crm/components/workflows/MediaPickerModal.tsx` — the image gallery picker
 - `apps/houseloop-crm/lib/workflows/condition-fields.ts` — condition field + operator catalog
 - `apps/houseloop-crm/lib/workflows/evaluate-condition.ts` — condition evaluation
 - `apps/houseloop-crm/components/workflows/WorkflowBuilder.tsx` — the workflow canvas + editor
