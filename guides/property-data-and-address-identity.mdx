@@ -1,12 +1,12 @@
 ---
 title: "Property Data Model & Address Identity"
-description: "How HouseLoop keys homes by address — the ONE address-keyed table model, how an address becomes a stable USPS-conformed identifier, how the resolver matches an incoming listing to one owned home (forward), and how pre-existing duplicates are collapsed reversibly against ground truth."
+description: "How HouseLoop keys homes by address — the ONE address-keyed table model, how an address becomes a stable USPS-conformed identifier, how the resolver matches an incoming listing to one owned home, and the ONE reconciliation engine (identityKey → LLM sieve → Redfin) used for every address."
 ---
 
-HouseLoop keys every home by its **address** — not by the MLS number, not by a per-source id. This page documents the property data model, how addresses are normalized into a stable identifier, how the resolver matches an incoming listing to the one home we already own, and how the pre-existing duplicate rows are collapsed.
+HouseLoop keys every home by its **address** — not by the MLS number, not by a per-source id. This page documents the property data model, how addresses are normalized into a stable identifier, how the resolver matches an incoming listing to the one home we already own, and **the one engine we use to reconcile any address to that home**.
 
 <Note>
-**Current status (be precise).** The address resolver runs on the live ingest path, so it prevents **new** duplicates going forward. The historical data still contains pre-existing duplicate rows (the same physical home stored more than once from before the resolver existed); a careful, verified, **reversible** collapse of those is **in progress**. So "one home = one row" is the model the resolver enforces forward, and the collapse below is bringing the existing rows to that state.
+**Current status (be precise).** The address resolver runs on the live ingest path, so it prevents **new** duplicates going forward. The historical data still contains pre-existing duplicate rows (the same physical home stored more than once from before the resolver existed); a careful, verified, **reversible** collapse of those is **in progress**. So "one home = one row" is the model the resolver enforces forward, and the engine below is bringing the existing rows to that state.
 </Note>
 
 ## The one table (the target model)
@@ -77,23 +77,22 @@ The **USPS-preferred city** for a ZIP comes from `zip-preferred-city.generated.j
 **Where it runs (live, forward).** The resolver is wired into the ingest path (`lib/listings/cache.ts`): every Repliers sync resolves the incoming address **before** the upsert. If we already own the home under a different `hlid` (a relist under a new MLS number), the write targets that owned row — so going forward the home updates in place instead of forking a new duplicate.
 
 <Warning>
-**Why duplicates existed.** The ingest historically upserted by `hlid = hl_heartlandmls_<mlsNumber>` — keyed on the MLS number, not the address — so every relist under a new MLS number forked a second row. The resolver fixes this **for new ingests**; the **pre-existing** duplicate rows are collapsed by the reversible process below.
+**Why duplicates existed.** The ingest historically upserted by `hlid = hl_heartlandmls_<mlsNumber>` — keyed on the MLS number, not the address — so every relist under a new MLS number forked a second row. The resolver fixes this **for new ingests**; the **pre-existing** duplicate rows are collapsed by the reconciliation engine below.
 </Warning>
 
-## Collapsing pre-existing duplicates (reversible)
+## The reconciliation engine — the ONE way we reconcile an address
 
-The historical duplicates are collapsed by a **multi-stage funnel** — cheapest, most-certain check first, each stage handling only what the prior couldn't. **Every collapse is reversible** (a flag, never a delete), and a stage that's unsure leaves the rows alone rather than guessing.
+There is exactly **one** engine that reconciles any address (a new listing, a sold disposition, a past client, the full historical backfill) to the one canonical HouseLoop home. It is a three-stage funnel — cheapest and most certain first, escalating only for what the prior stage can't settle:
 
-| Stage | Resolves |
-|---|---|
-| Deterministic cluster | groups candidate twins by house number + first street word + ZIP |
-| LLM grouping + verify | a model reads unit + beds/baths/sqft and groups same-home rows; a stricter second pass re-confirms before any merge |
-| Unit guard | a deterministic rule that can't be overridden — rows may only merge if they share the same explicit unit, or all have no unit and identical specs |
-| Review pass | re-reads the quarantine set and **restores** any false positive (spelling variants like `Dr`=`Drive`, missing suffix, casing are the same home; different units are not) |
-| Geocode sieve | the single-family ambiguous tail — Google Geocoding returns a `place_id` per address; the same `place_id` is the same home (excludes units and lots, which geocode resolves to a building or road) |
-| **Redfin ground truth** | the **condo / multi-unit** tail — see below |
+1. **`identityKey` — deterministic (free).** Canonical street + unit + ZIP5 (city-free), via `lib/listings/address-identity.ts`. An exact key match is the same home. This resolves the overwhelming majority.
+2. **LLM sieve — for the ambiguous tail.** A model (Claude Haiku) judges the cases the key can't equate — a dropped directional (`1270 Petzold` vs `1270 N Petzold`), an ambiguous street-type, near-identical specs — into confident-merge / confident-distinct / uncertain.
+3. **Redfin ground truth — last resort only.** For the small "uncertain" residual the sieve can't settle, Redfin's address autocomplete is the tiebreaker (its property inventory is authoritative for which units exist), and Redfin's address becomes canonical. Never the first move.
 
-**The reversible mechanism** — every stage writes the same three records, so any collapse can be undone:
+<Warning>
+**Google geocoding is NOT the reconciliation engine.** Geocoding (`canonicalize-addresses.mjs`) only standardizes messy postal *text*; it does not resolve an address to our canonical home. It is deprecated for reconciliation — the engine is `identityKey → LLM sieve → Redfin`.
+</Warning>
+
+**Every collapse is reversible** — a stage that's unsure leaves the rows alone rather than guessing, and each merge writes three records so it can be undone:
 
 - `Listing.quarantinedAt = now()` — the row drops out of search but is fully restorable.
 - `hl_dedup_quarantine` — an audit log of `(loser, winner, addresses, reason)`.
@@ -101,15 +100,9 @@ The historical duplicates are collapsed by a **multi-stage funnel** — cheapest
 
 The **keeper** of each group is chosen by completeness: most enriched (value history, photos, value) → live over sold → cleanest address → most recent.
 
-### Redfin ground truth for condos
-
-Condo and multi-unit buildings are the hard case: our records sometimes lack the unit number, so distinct units can look like one cluster. To resolve them we read **Redfin's address autocomplete**, which returns a building's real unit inventory — the base building **and** each unit, every one a distinct Redfin property id. Each of our rows is mapped to a Redfin property id by unit (no-unit → the base building). Rows that land on the **same** Redfin property id are the same home and collapse; rows on different ids are genuinely different units and are left alone. A row is only used if its Redfin match shares our house number and street, so fuzzy autocomplete neighbors can't cause a wrong merge.
-
-This runs as a standalone, resumable scraper (real browser, human-paced, parallel instances) that **only reads** an address queue and **writes a results file** — it never touches the database. The database changes are applied separately by the same reversible quarantine mechanism above.
-
 ### Keeping it collapsed (forward)
 
-The same Redfin ground truth becomes a **fallback** on the live path: when an incoming new or sold listing can't be confidently reconciled against a home we already own, it's resolved against Redfin **once**, and the resulting perfect address is stored on the canonical record — so the next time that address appears, it resolves instantly against our own data and never needs an external lookup again.
+The same engine runs on the live path: when an incoming new or sold listing can't be confidently reconciled against a home we already own, the LLM sieve (and, last, Redfin) resolves it **once**, and the resulting perfect address is stored on the canonical record — so the next time that address appears, it resolves instantly against our own data and never needs an external lookup again.
 
 ## Data sources for a home
 
@@ -129,9 +122,10 @@ Geographic appreciation (`lib/valuation/appreciation.ts`) drifts an anchor value
 | Deterministic normalizer (suffix/directional) | `lib/listings/canonical-address.ts` |
 | Address-as-ID service (identityKey, preferredCity, validateAddress) | `lib/listings/address-identity.ts` |
 | Address resolver (identity → coords → mint) | `lib/listings/resolve-home.ts` |
+| Reconciliation engine — stage 2 (LLM sieve) | `scripts/twin-sieve.ts` |
+| Reconciliation engine — stage 3 (Redfin, last resort) | `tools/houseloop-reconcile/redfin-adjudicate.mjs` |
 | Listing ingest (calls the resolver before upsert) | `lib/listings/cache.ts` |
 | ZIP → USPS-preferred-city map | `lib/listings/zip-preferred-city.generated.json` |
-| Duplicate collapse (Redfin ground-truth tool) | `tools/houseloop-reconcile/` |
 | Geographic appreciation model (value drift) | `lib/valuation/appreciation.ts` |
 | `/home` page + canonical redirect | `app/home/[slug]/page.tsx` |
 | Sitemap (one URL per home) | `app/sitemap.ts` |
