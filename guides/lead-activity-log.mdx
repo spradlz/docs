@@ -1,0 +1,79 @@
+---
+title: "Lead Activity Log"
+description: "The one canonical run-log for every lead event — one store, one writer, one catalog, one reader. Every lead-detail surface and Myli's dossier read it."
+---
+
+The **lead activity log** is the single source of truth for everything that ever happens to a lead — texts, emails (sent, opened, clicked), notes, tasks, appointments, calls, website activity, and record changes. One append-only table holds every event; one API reads it; every surface in the lead detail (and Myli's dossier) calls that one API. There are no parallel sources of truth.
+
+## The shape — one store
+
+Every event is one row of the same shape in **`hl_lead_activity`** (migration `0221`):
+
+| Column | Meaning |
+| --- | --- |
+| `id` | UUID |
+| `lead_id` | the lead this happened to |
+| `kind` | canonical event kind (a catalog key): `text_sent`, `email_opened`, `note_added`, `name_changed`, … |
+| `occurred_at` | when it actually happened |
+| `actor` / `actor_role` | who did it on our side (`hl_users.id` \| `system` \| `lead`; role `human` \| `ai_agent` \| `system` \| `lead`) |
+| `direction` | `inbound` \| `outbound` \| null |
+| `title` / `body` / `photo` | headline, content, thumbnail |
+| `source` / `source_table` / `source_id` | provider + the raw row this was derived from (traceability + idempotency) |
+| `meta` | jsonb — everything else (listing, search criteria, engagement, old→new field values) |
+
+**Idempotency:** a partial unique index on `(source_table, source_id)` means the same source row can be logged twice (live double-write + backfill, or a retry) and collapses to one row. Append-only — never updated or deleted in normal operation.
+
+## One writer — `logActivity()`
+
+`lib/activity/log-activity.ts` exports `logActivity()`, the only function that writes `hl_lead_activity`. It is best-effort (a logging failure never breaks the real action) and fires a realtime frame (`notifyLeadStream(leadId, 'activity', …)`) so open feeds update with no refresh.
+
+Every source double-writes through it, right after its own insert:
+
+| Source | Kinds |
+| --- | --- |
+| `logMessage` (comms SSOT) | `text_sent` / `text_received` / `image_sent` / `email_sent` / `email_received` / `call_logged` |
+| Workflow + manual email (`execute-step.ts`, `/api/email/send`) | `email_sent` (idempotent on the message id; saved-search digests pin `saved_search_id`) |
+| Resend webhook (`/api/webhooks/resend`) | `email_opened` / `email_clicked` |
+| First-party pixel (`/api/pixel/track`) | `property_view` / `like_home` / `save_home` / `share_home` / `search` / `saved_search` / `registration` / requests |
+| Notes / Tasks / Appointments | `note_added` / `task_created` / `task_completed` / `appointment_created` |
+| Lead record edits (`PATCH /api/leads/[id]`) | `name_changed` / `contact_updated` / `stage_changed` (old→new in `meta`) |
+| Voice (`/api/phone/voice/outbound`) | `call_logged` (keyed on the Twilio CallSid) |
+
+## One catalog — `activity-badges.ts`
+
+`lib/leads/activity-badges.ts` (`ACTIVITY_CATALOG`) classifies **every** kind into `{ label, color, Icon, category }`, where `category` is one of `message`, `email`, `note`, `appointment`, `task`, `call`, `website`, `field`, `system`. Helpers: `badgeFor`, `eventLabel`, `categoryFor`, `canonicalEventType`, `feedEventTypes`.
+
+**This is the only place to recategorize anything.** Want "Saved Search" under a different lens, or a new pill color? One edit, everywhere.
+
+## One reader — `GET /api/leads/[id]/activity`
+
+The single endpoint every surface (and Myli's dossier) reads:
+
+```
+GET /api/leads/{id}/activity?limit=500&kinds=text_sent,email_opened&savedSearchId=...
+```
+
+It reads only `hl_lead_activity`, newest first, and classifies each row server-side through the catalog (returns `label`, `color`, `request` alongside the raw row). `?kinds=` filters to a catalog subset (a "lens"); `?savedSearchId=` pins to one saved search.
+
+## Adding a new event type
+
+This is the whole point — adding an event is two steps, no per-surface edits:
+
+1. **Log it** — call `logActivity({ leadId, kind: 'your_kind', … })` at the source, with `sourceTable` + `sourceId` for idempotency.
+2. **Catalog it** — add one row to `ACTIVITY_CATALOG` (`label`, `color`, `Icon`, `category`).
+
+It now appears, correctly labeled and colored, in the All feed, the relevant Website-tab lens, and the dossier — automatically.
+
+## Surfaces
+
+All lead-detail surfaces read the one reader:
+
+- **All feed** (`AllStreamV2`) — the unified, time-ordered stream of every event, with a loading state and a live SSE refetch.
+- **Website tab** (`PixelFeedStream`) — website activity + saved-search email engagement, rendered as property cards from `meta.property`. (Deals/transactions and saved-search standing cards keep their own sources — they aren't activity events.)
+- **Myli's dossier** — one call to the reader returns the lead's whole history.
+
+The raw capture tables (`hl_pixel_event`, `hl_email_event`) still record provider events; they **feed** the log via `logActivity` but are no longer read directly by the lead detail.
+
+## History backfill
+
+`leadActivityBackfill` (Inngest function, event `hl/lead-activity.backfill`) replays the existing source tables — `hl_messages`, `hl_pixel_event`, `hl_notes`, `hl_appointments`, `hl_tasks`, `hl_email_event` — into `hl_lead_activity`. It is idempotent (the `(source_table, source_id)` unique index) and re-runnable, and is triggered through Inngest so the run is visible in the [Run Log](/guides/run-log).
