@@ -1,6 +1,6 @@
 ---
 title: "Run Log"
-description: "One real-time timeline of everything happening across HouseLoop — communications, website activity, IDX listing events, AI search calls, and background jobs — each row tagged with an explicit category."
+description: "One real-time timeline of everything happening across HouseLoop — communications, website activity, IDX listing events, AI search calls, and background jobs — each row tagged with an explicit category and a short type pill."
 ---
 
 The **Run Log** (CRM → **Run Log**, API `GET /api/run-log`) is HouseLoop's single
@@ -17,26 +17,72 @@ Each tab is just a filter on the row's own `category`:
 | **All** | _(everything)_ | The full timeline, newest first. |
 | **Communications** | `communication` | Person-to-person: email (sent + inbound), iMessage, SMS, calls, message notifications. |
 | **Website Activity** | `website_activity` | First-party pixel behavior on houseloop.ai — homes Viewed / Liked / Saved / Shared and tour requests, each with the street address. Has a **Humans / Bots** lens. |
-| **IDX Feed** | `idx_feed` | Listing data from Repliers — new listings, price changes, sold/off-market, plus listing-data jobs (cache sync, catalog backfill, neighborhood stats). |
+| **IDX Feed** | `idx_feed` | The listing-lifecycle event feed from Repliers (see [IDX Feed](#idx-feed-the-listing-lifecycle)). |
 | **AI Search** | `ai_search` | Request-time LLM calls — AI search, search routing, re-rank, market-report narration. Shows `model · $cost · tokens · results`. |
-| **Background Jobs** | `background_job` | Every other Inngest cron (engagement stats, scheduled actions, capture, Gmail watch renewal). |
+| **Inngest** | `background_job` | Every Inngest function / workflow run, each with a short **type pill** and — for multi-step workflows — its **steps** (see [Inngest workflows](#inngest-workflows-and-steps)). |
 
-The **Type** column shows the flag on every row, so the categorization is always visible —
+The **Type** column shows a short pill on every row, so the categorization is always visible —
 never guessed at render time.
 
 ## How it works
 
 - **One source of truth.** The category is computed **once, server-side**, from the event's
-  origin (its kind + source + which registered Inngest function produced it) and stored on the
+  origin (its kind + source + which Inngest function produced it) and stored on the
   row. The UI and the tabs only ever read that column — they never re-derive it.
+- **Auto-categorized pills.** Every Inngest function maps to a **short type pill** (`Intake`,
+  `Value`, `Sold`, `SEO`, `Photos`, `Vision`, `Alert`, `Workflow`, `System`, …) via a
+  deterministic rule on its function id — a new function self-types, and an unmatched one falls
+  to `System` (never blank). Each pill deep-links to that function's run in the Inngest dashboard.
 - **Real-time, no polling.** New events stream in over Server-Sent Events. A Postgres
-  `LISTEN/NOTIFY` bus fires on insert (pixel events, emails, calls, texts, listing events), so
-  the feed and the lead page update within ~1–2s with no refresh.
-- **Cross-app bridges.** `houseloop-web` (the public site, separate database) can't write the
-  CRM directly, so it emits Inngest events the CRM records:
-  - `houseloop/ai-search.event` → AI Search lane (with token cost).
-  - `houseloop/idx.event` → IDX Feed lane (with the listing address).
-  - All other Inngest functions are auto-captured via `function.finished`/`failed`.
+  `LISTEN/NOTIFY` bus fires on insert, so the feed and the lead page update within ~1–2s.
+- **Cross-app bridges.** `houseloop-web` (the public site, separate database) emits Inngest
+  events the CRM records: `houseloop/ai-search.event` → AI Search lane, `houseloop/idx.event`
+  → IDX Feed lane; all other functions are auto-captured via `function.finished`/`failed`.
+
+## IDX Feed — the listing lifecycle
+
+The IDX Feed is the **event lens** on every home: one row per Repliers webhook, with **three
+facets** (the question each answers in brackets):
+
+- **Type** *(what happened — the verb)*: `Intake` (first time we see the listing) · `Status
+  Change` (it moved in the funnel) · `Price Change` (list price moved, status unchanged) ·
+  `Disposition` (it sold) · `Canceled` (it left the market without selling) · `Sync` *(a no-op
+  re-fire — same status + price as last time; rendered muted so the feed stays readable)*.
+- **Listing Status** *(the state now — the noun)*: `Coming Soon` · `Active` · `Pending` ·
+  `Sold` · `Off-Market`.
+- **Status** *(did our run succeed)*: `Completed` / `Failed`.
+
+So a home reads as a story over its rows: `Intake · Coming Soon` → `Status Change · Active` →
+`Price Change · Active` → `Disposition · Sold`. The **Type is derived server-side** from the
+log itself (the row's status + price vs. the prior row for the same MLS) — no upstream stamp.
+
+Each IDX event is *processed by* an Inngest workflow that shows in the **Inngest** tab: an
+`Intake` is handled by `catalog-listing`, a `Disposition` by `listing-sold`. Same moment, two
+lenses — the IDX Feed shows what happened to the home, the Inngest tab shows what the engine did.
+
+## Inngest workflows and steps
+
+The **Inngest** tab shows every Inngest function run. A **multi-step workflow** (e.g.
+`catalog-listing`, which resolves → enriches → caches photos → AI-tags a new listing) renders
+as **one thick row with its steps stacked**, each step `✓` (ran) or `✗` (failed), and a
+deep-link to that single run. A genuinely single-action job stays a one-line row. So you see a
+workflow *and* which of its steps succeeded, never a flat atomic line per sub-task.
+
+## What the Run Log does NOT log
+
+A few utility functions fire **hundreds-of-thousands → millions** of times and carry **zero
+audit value** — the real artifact lives elsewhere (photos in Cloudflare R2 + `Listing.photosCached`,
+data on the target row), and the per-listing intake workflow already shows them as a *step*.
+Their **success** rows are deliberately skipped by `capture-fn` (failures still log — we always
+want those). The skip set: `photos-cache`, `data-coverage-reconcile`, `vision-tag-listing`,
+`listing-catalog-cache-one`, `sold-photo-rescue`.
+
+<Warning>
+This skip exists for a reason: `photos-cache` had logged **2.8M rows = 96% of the Run Log
+table**, filling the CRM Postgres volume and 500ing the feed (2026-06-19). Per-item cache /
+backfill **success** must never be logged to `hl_run_log`. When a new high-frequency backfill
+job appears, add it to the skip set.
+</Warning>
 
 ## Filtering
 
@@ -90,5 +136,3 @@ The Run Log is CRM-session gated (it returns `401` without a valid session). Sys
 website, IDX, and background-job rows are read-only — only communication rows are clickable
 (they navigate to the lead). There are no bulk operations.
 </Note>
-
-
