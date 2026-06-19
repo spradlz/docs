@@ -188,9 +188,16 @@ is the source of truth (one row per text). Two things the renderer resolves that
 ### Images (the contact card / home photo)
 
 The attached image — Myli's contact card on a first text, or a home photo — lives in
-**`hl_messages.metadata->>'imageUrl'`**, not in a column and not as a separate row. The renderer draws
-the image **above** the body inside the same bubble. An image-only message (image, no text) renders the
-image; the placeholder **`(empty message)`** appears **only when both the body and the image are empty**.
+**`hl_messages.metadata->>'imageUrl'`** (in the message's `metadata`, **not** a column and **not** a
+separate row). iMessage sends the card as its **own message**, so the thread renders it as its **own
+bubble above the text** — a bare rounded image with no blue/green chat background, exactly the way it
+looks on the phone — **not** crammed inside the text bubble. So one row with both an image and a body
+renders as **two bubbles** (the image, then the text); image-only renders just the image bubble;
+text-only renders just the text bubble; a row with neither renders nothing.
+
+When you transmit an attachment, BlueBubbles echoes back a **separate empty-body, no-image row**. That
+echo is **filtered as noise** (the SSR loader and `/api/bb/thread` both drop any row with no body *and*
+no image) so it never shows as an `(empty message)` ghost bubble.
 
 The thread is loaded from three places, and **every one must carry `image_url`** or the image flashes in
 then disappears (you'll see it on a hard refresh, then it vanishes):
@@ -204,7 +211,8 @@ then disappears (you'll see it on a hard refresh, then it vanishes):
    just-sent card renders without a refresh.
 
 If you add a new way to load or echo messages into the thread, it **must** select
-`metadata->>'imageUrl'`, or image-only messages will render as `(empty message)`.
+`metadata->>'imageUrl'` **and** filter the empty echo (no body + no image), or the card will either
+vanish or leave a ghost bubble.
 
 ### Transport — Twilio vs BlueBubbles
 
