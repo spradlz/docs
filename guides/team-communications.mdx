@@ -180,6 +180,40 @@ always a real agent to resolve from.
 Both directions thread onto the lead's conversation (outbound SMS green, iMessage blue) and log to the
 Communications SSOT.
 
+## The lead-detail Texts thread — how messages render
+
+The lead's text history renders in the lead-detail **Texts** tab (`TextThreadStream.tsx`). `hl_messages`
+is the source of truth (one row per text). Two things the renderer resolves that aren't obvious:
+
+### Images (the contact card / home photo)
+
+The attached image — Myli's contact card on a first text, or a home photo — lives in
+**`hl_messages.metadata->>'imageUrl'`**, not in a column and not as a separate row. The renderer draws
+the image **above** the body inside the same bubble. An image-only message (image, no text) renders the
+image; the placeholder **`(empty message)`** appears **only when both the body and the image are empty**.
+
+The thread is loaded from three places, and **every one must carry `image_url`** or the image flashes in
+then disappears (you'll see it on a hard refresh, then it vanishes):
+
+1. **SSR load** — the server component selects `metadata->>'imageUrl' AS image_url`.
+2. **Mount re-fetch** — `/api/bb/thread` re-pulls the thread on mount and **replaces** the SSR rows, so it
+   must select the image too. (This was the "card shows on refresh then disappears" bug — the endpoint
+   wasn't returning it.) The live BlueBubbles thread carries the card as a raw attachment, so this endpoint
+   **enriches** each BlueBubbles row's `image_url` from `hl_messages.metadata` by message id.
+3. **Live SSE frame** — the realtime push (`notifyLeadStream('message', …)`) includes `image_url` so a
+   just-sent card renders without a refresh.
+
+If you add a new way to load or echo messages into the thread, it **must** select
+`metadata->>'imageUrl'`, or image-only messages will render as `(empty message)`.
+
+### Transport — Twilio vs BlueBubbles
+
+The green/blue bubble (`channel` = `sms` / `imessage`) is the message **type**, not the line that
+carried it — a green SMS can go out over **Twilio** *or* over **BlueBubbles**. The actual provider is
+**`hl_messages.source`** (`twilio` | `bluebubbles` | `gmail` | `app`), set when the message is logged.
+The thread carries `source` through all three load paths so the UI can resolve which line sent each
+message. **Resolve transport from `source`, never from the bubble color.**
+
 ## Calendar (Google) — two-way sync
 
 Bound per member in `hl_calendar_connections` (import + export toggles).
