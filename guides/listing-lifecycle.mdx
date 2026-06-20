@@ -1,0 +1,109 @@
+---
+title: "Listing Lifecycle: Intake → Disposition"
+description: "The whole life of a home on HouseLoop — how a new listing is taken in, how it's dispositioned when it sells, and how every step resolves to ONE canonical address and ONE permanent URL."
+---
+
+Every home on HouseLoop is **one record for its entire life**. It arrives from the MLS (intake),
+lives on-market, sells (disposition), and keeps the **same row and the same URL** through all of it.
+Status is a field that flips — never a new row, never a second page. This is the front-door story for
+how that works end to end.
+
+<Note>
+This page is the **lifecycle overview** — the two workflows and the one identity that ties them
+together. For depth: [Listing Intake Pipeline](/guides/listing-intake-pipeline) ·
+[Sold Data & Price History](/guides/sold-data-and-price-history) ·
+[Property Data & Address Identity](/guides/property-data-and-address-identity) ·
+[Run Log](/guides/run-log) (how every run is observed).
+</Note>
+
+## The spine: one canonical address, one URL — forever
+
+Before either workflow runs, one rule governs everything: **a home's identity is its address, not its
+MLS number.** Every step below resolves the incoming record to the one home we already own and writes
+to that single row.
+
+- **Identity key** = canonical street + unit + 5-digit ZIP, **city excluded** (the ZIP pins the
+  locale, so "Kansas City" vs "Raytown" for the same ZIP collapse to one key). Computed in
+  `lib/listings/address-identity.ts`.
+- **One URL** = `/home/{canonicalSlug}`, served for every status (active → pending → sold → relisted).
+- **The MLS number, zpid, and parcel number are columns**, not identity. A relist under a new MLS
+  number resolves to the same home and updates it in place — it never forks a duplicate.
+
+See [Property Data & Address Identity](/guides/property-data-and-address-identity) for the resolver and
+the reconciliation engine. The two key facts the lifecycle depends on:
+
+1. **Resolution runs at write time.** Every intake/disposition write calls `resolveHome()` first, so the
+   data lands on the one owned home.
+2. **The URL is resilient to the city.** `/home/{slug}` resolves by the city-free identity key when the
+   exact slug isn't found, then **301-redirects to the home's canonical URL**. A link with a different
+   (but valid) city — `…-raytown-…` vs the canonical `…-kansas-city-…` — lands on the right home instead
+   of 404ing. A real home can't dead-end on a wrong-city or wrong-suffix URL.
+
+## Intake — a new listing becomes a live, enriched home
+
+A brand-new on-market listing fires **one** orchestrator, `catalog-listing` (an Inngest function), which
+runs its steps inline as a single run — **one run, one Run Log row** ("Cataloged — &lt;address&gt;").
+
+```
+Repliers webhook  →  cache upsert (SYNC, runs resolveHome, home queryable ~50ms)
+                  →  houseloop/listing.catalog  →  catalog-listing (one run):
+                        • home    — load the resolved address
+                        • photos  — copy photos to Cloudflare R2 (permanent copy)
+                        • ai-tags — gpt-4o vision tags buyer features (pool, garage, …)
+                        • zillow  — ONE OpenWeb Ninja call (tax + schools + sold/price history + Zestimate)
+                  =  home live + fully enriched on the website
+```
+
+| Phase | What happens | Result |
+| --- | --- | --- |
+| **Webhook → cache (sync)** | `POST /api/repliers/webhook` fetches the full record and calls `upsertListingToCache()`, which runs `resolveHome()` so the listing maps to the one owned home. | Home **queryable in ~50ms** (thin — no R2 photos/value yet). |
+| **photos** | Each Repliers photo is uploaded to Cloudflare R2 (our permanent copy — Repliers strips its CDN ~24h after a home leaves the feed). | `photosCached` |
+| **ai-tags** | gpt-4o vision tags buyer-facing features. | `visionTags` |
+| **zillow** | **One** OpenWeb Ninja call (street + ZIP). Returns tax history, GreatSchools, prior sold/price history (Repliers doesn't supply sold history), and the Zestimate. | `taxHistory`, `schoolsGreatSchools`, `valueHistory`, `zestimate`, `annualTaxAmount` |
+
+The Ninja call is made **exactly once per home, at intake** — every step is idempotent, so re-runs never
+double-spend. **Timing:** queryable ~50ms; fully enriched within ~15–30s. Full detail:
+[Listing Intake Pipeline](/guides/listing-intake-pipeline).
+
+## Disposition — a home sells and becomes a permanent record
+
+When a home sells, **one** orchestrator, `listing-sold` (an Inngest function), runs the entire sold
+sequence as steps of one run. The **only** trigger is the Repliers `listing.updated` webhook firing on a
+genuine status **transition** to sold (`previous.lastStatus` present, `→ "Sld"`). There is no cron, no
+sweep, no polling emitter — and an idempotency check makes any stray event a cheap no-op.
+
+```
+Repliers status transition → "Sld"  →  houseloop/listing.sold  →  listing-sold (one run):
+   1. idempotency-check — already archived? STOP (no-op, never re-spends R2 + LLM).
+   2. load             — the live Repliers record (real close date = raw.CloseDate).
+   3. mark-sold        — flip the Listing row: status='sold' + soldDate + lastStatusChangeAt.
+   4. archive          — copy to the permanent /home page + push photos to R2.
+   5. ai-overview      — generate the Sold House AI overview (house-blurb-generate).
+```
+
+Two backstop functions keep sold data complete (each a registered Inngest run, visible in the
+[Run Log](/guides/run-log)):
+
+| Function | Step | What it does |
+| --- | --- | --- |
+| **`sold-data-reconcile`** | `select-missing` | Fills sold homes missing value/tax/school/price-history fields. |
+| **`sold-photo-rescue`** | `cache-sold-photos` | Rescues thin sold-home galleries (re-caches photos to R2). |
+
+The sold home keeps the **same row and the same `/home/{canonicalSlug}` URL** — `status` simply flips to
+`sold`. The MLS sale price is captured but **display-restricted** in non-disclosure states (Heartland
+§12.3b). Value detail: [Sold Data & Price History](/guides/sold-data-and-price-history).
+
+## Why it's built this way (Inngest or it doesn't exist)
+
+Both workflows are **registered Inngest functions**, so every intake and every sale is a real run in the
+Inngest dashboard and the [Run Log](/guides/run-log) — never a one-off script or a hand-edited row. One
+run = one row; if a step fails, the run names exactly which one. No backfill cron writes to the sold
+column (it's a polluted cache field) — only a genuine webhook transition processes a sale.
+
+## What the lifecycle does NOT include
+
+- **Notifying buyers** is a separate downstream workflow — saved-search alerts pull *from* the website;
+  they are not part of intake. See [Saved Search Alerts](/guides/saved-search-alerts).
+- **Collapsing pre-existing duplicate rows** (homes stored more than once before the resolver existed)
+  is a separate reconciliation effort — duplicates are **merged or deleted onto one canonical keeper**,
+  never hidden. See [Property Data & Address Identity](/guides/property-data-and-address-identity).
