@@ -3,8 +3,9 @@ title: "Past-Client Data Pipeline"
 description: "End-to-end: how the Spradling Group past-client book is built, enriched from MLS + Zillow/OpenWeb-Ninja + Redfin, linked to the FollowUpBoss scraper, fed to the website Listing table, and read by the CRM seller-report dashboard."
 ---
 
-<Accordion title="Changelog — last updated 2026-06-21 6:40 AM ET" icon="clock-rotate-left">
+<Accordion title="Changelog — last updated 2026-06-21 7:20 AM ET" icon="clock-rotate-left">
 Newest first. Times Eastern. (Collapsed so it never grows past the page; the latest date always shows in the title above.)
+- **2026-06-21 7:20 AM** — Documented the SISU closing-card schema + the **money-column law**: `transaction_amount` = SALE PRICE (never income), `gci` = GROSS commission, `gross_paid_income` = NET after fees/splits. Added the **Zillow referral fee** (the `gci` → `gross_paid_income` gap; verified ~40% of GCI across 1,155 Zillow Flex deals) and the three meanings of "referral." (Caleb)
 - **2026-06-21 6:40 AM** — Full rewrite to the real end-to-end lift: the two-table model (`hl_srg_past_clients` people + `Listing` houses), the MLS/Ninja/Redfin backfills, the FUB-scraper linkage (`fub_id` → texts/notes/calls/deals → `dossier` + `fub_identity`), and the CRM seller-report dashboard. Corrected the retired `hl_sold_profiles` middle table. (Caleb)
 - **2026-06-17 5:54 AM** — Original guide created (house/value enrichment only; `hl_sold_profiles` two-table model, now superseded).
 </Accordion>
@@ -39,6 +40,32 @@ The past-client book is assembled and enriched from four data sources, each auth
 
 ### 1. SISU — the deal spine (who, when, how much, which agent, buy vs sell)
 `sisu_transactions` (CRM, ~11,636 rows) is the source of truth that **a closing happened**, its **buy/sell role** (`transaction_type`), and the **working agent** (`agent`). Each client's `closings[]` jsonb is built from their SISU rows. **SISU is the only trusted source for agent attribution and role** — see the source-truth hierarchy in GT §13 (MLS rolls all agents up under `ANASPRAD`, so MLS agent is never trusted).
+
+**One SISU row = one closing card.** Its columns, grouped:
+
+| Group | Columns | Meaning |
+|---|---|---|
+| Who | `client_first_name`, `client_last_name`, `address`, `transaction_type` (Buyer/Seller) | the deal |
+| Our people | `agent` (cleaned, e.g. `Alisha Hanks`), `agent_raw` (tier-prefixed, e.g. `Hanks - Tier 2, Alisha`), `tc`, `team`, `appt_set_by` | `agent` is the cleaned name; `agent_raw` carries a tier/label prefix |
+| 💰 Money | `transaction_amount`, `gci`, `gross_paid_income` | **SALE PRICE · GROSS commission · NET after fees/splits** |
+| Lead | `lead_type`, `lead_source` | origin (e.g. `Zillow Flex Originated`, `Zillow Preferred`) |
+| Timeline | `created_date` → `under_contract_date` → `closed_date` → `paid_date` (+ appt/signed/mls dates) | dates |
+| Vendors | `mortgage_company`, `title_company`, `home_inspection`, `home_warranty`, `insurance_company` | service providers |
+| Link / text | `fub_url` (→ the FUB person), `notes` | join to FUB + free text |
+
+**The money-column law (do not conflate these):**
+- **`transaction_amount` = the SALE PRICE of the home.** Never a fee, never income, never summed as money earned.
+- **`gci` = GROSS commission income** (~3% of sale price).
+- **`gross_paid_income` = what the team actually NETTED** after referral fees and broker splits — the real income line.
+
+**The Zillow referral fee lives in the `gci` → `gross_paid_income` gap** (not a separate row). We pay Zillow a referral fee on Zillow-sourced (Flex/Preferred) deals. Measured across 1,155 closed Zillow Flex deals: the team keeps ~**57%** of GCI vs ~**74%** on non-Zillow deals — the ~17-point gap is the Zillow referral fee (~40% of GCI). About **60% of closed deals are Zillow-sourced** (`lead_source ILIKE '%zillow%'` OR `lead_type ILIKE '%zillow flex%'`). It is a **cost**, never a deal or income.
+
+**"Referral" means three different things** — disambiguate by `gci` + `lead_source`:
+1. **Past-agent referral as a lead source** — a past client sent us a deal we repped → full `gci` (a real repped deal, income).
+2. **Outbound referral** — we referred a client out and took a cut → tiny amount + `gci = 0` (income, small).
+3. **Zillow/Flex referral fee** — a percentage of our commission paid to Zillow → the `gci` → `gross_paid_income` drop (a cost).
+
+> Rows whose `agent = "Past Agent Referrals"` use that string as a **bucket label**, not the real agent — the true agent is often embedded in the client-name field (e.g. `"David Mettman - Noelle Referral"`). The reconcile algorithm unmasks it, the same way it drops the MLS team-lead rollup.
 
 ### 2. MLS download — structured facts (`hl_srg_mls_deals`)
 `hl_srg_mls_deals` (CRM, ~1,971 rows) is the downloaded Spradling Group MLS. It is the **free source for the structured fields** on a past-client home: `beds`, `full_baths`/`half_baths`, `sqft`, `year_built`, `lot_size`, `property_type`, `subdivision`, schools, `hoa_fee`. The MLS backfill matches each past-client `Listing` by MLS# (extracted from `hl_heartlandmls_<mls>` hlid) → address fallback, then COALESCE-fills the null `Listing` fields. Tool: `.claude/scratch/_mls_backfill.mjs`. (`bathroomsTotal` = `full_baths + 0.5·half_baths`.)
