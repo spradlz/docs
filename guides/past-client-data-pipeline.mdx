@@ -1,69 +1,91 @@
 ---
 title: "Past-Client Data Pipeline"
-description: "How a sold home's full profile — value, photos, GreatSchools, tax history, sold date — is sourced from the MLS, Zillow, and Redfin, reconciled into one render row, and surfaced on /home."
+description: "End-to-end: how the Spradling Group past-client book is built, enriched from MLS + Zillow/OpenWeb-Ninja + Redfin, linked to the FollowUpBoss scraper, fed to the website Listing table, and read by the CRM seller-report dashboard."
 ---
 
-Every home the brokerage has sold gets a complete, accurate profile page at `/home/{slug}` — the HouseLoop Value, the photo gallery, GreatSchools ratings, multi-year tax history, the listing description, and the sold date. This page documents where each of those fields comes from, how they're reconciled into a single row, and how the home becomes findable by address.
+<Info>
+**Update log** — newest first. (Times Eastern.)
+- **2026-06-21 6:40 AM** — Full rewrite to the real end-to-end lift: the two-table model (`hl_srg_past_clients` people + `Listing` houses), the MLS/Ninja/Redfin backfills, the FUB-scraper linkage (`fub_id` → texts/notes/calls/deals → `dossier` + `fub_identity`), and the CRM seller-report dashboard. Corrected the retired `hl_sold_profiles` middle table. (Caleb)
+- **2026-06-17 5:54 AM** — Original guide created (house/value enrichment only; `hl_sold_profiles` two-table model, now superseded).
+</Info>
 
-## Source-of-truth map
+This is the canonical developer reference for the **Spradling Realty Group past-client data project** — one of the largest data lifts in HouseLoop. It powers the CRM seller-report dashboard (past-client reactivation) and every past-client home's `/home` page. The internal strategy + the in-progress reconcile algorithm live in the private GT doc `GT_HOUSELOOP_SG_PAST_CLIENTS_PRD.md` §13; this page documents the **shipped architecture** a developer needs to operate it.
 
-Every field has exactly **one** authoritative source — no double-writes, no guessing.
+## The two canonical tables (the whole model)
 
-| Field | Source | Why |
+There are exactly **two** tables. Everything else is a feed or a derived view.
+
+| Table | Database | Grain | Holds |
+|---|---|---|---|
+| **`hl_srg_past_clients`** | CRM (`HL_CRM_DATABASE_URL`, Railway *autorack*) | 1 row / past client (~1,834) | the **PERSON**: name, `bucket`, `closings` (jsonb deal history), `current_home`, `phone`/`email`, **`fub_id`** (→ FUB), **`website_hlid`** (→ the house), `dossier` (jsonb), `fub_identity` (jsonb) |
+| **`Listing`** | WEB (`HL_WEB_DATABASE_URL`, Railway *centerbeam*) = PRODUCTION | 1 row / house (~354K) | the **HOUSE**: value, photos, schools, tax, price/sale history, beds/baths/sqft. Keyed by `identityKey`/`canonicalSlug`. Carries **nothing** about clients. |
+
+**The link is a pointer, never a copy.** `hl_srg_past_clients.website_hlid` → `Listing.hlid`. The CRM **pulls** the home value FROM the website by that pointer; it never stores or recomputes it (no copy = no drift). One physical home = one `Listing` row = one `/home/<canonicalSlug>` URL.
+
+```
+hl_srg_past_clients (CRM: the person)
+  ├─ closings[]      ─ the deals we did (from SISU)
+  ├─ fub_id          ──────────────►  fub.people (FUB scraper, Camp David)
+  ├─ website_hlid    ──────────────►  Listing (WEB: the house)  ──►  /home/<slug>
+  ├─ dossier         ─ structured FUB metadata (texts/notes/calls/deals)
+  └─ fub_identity    ─ canonical person + duplicates + spouse
+```
+
+> The retired `hl_sold_profiles` middle table (described in the original version of this guide) is **gone** — enrichment writes directly onto `Listing`.
+
+## How the table was built (the backfill lift)
+
+The past-client book is assembled and enriched from four data sources, each authoritative for different fields.
+
+### 1. SISU — the deal spine (who, when, how much, which agent, buy vs sell)
+`sisu_transactions` (CRM, ~11,636 rows) is the source of truth that **a closing happened**, its **buy/sell role** (`transaction_type`), and the **working agent** (`agent`). Each client's `closings[]` jsonb is built from their SISU rows. **SISU is the only trusted source for agent attribution and role** — see the source-truth hierarchy in GT §13 (MLS rolls all agents up under `ANASPRAD`, so MLS agent is never trusted).
+
+### 2. MLS download — structured facts (`hl_srg_mls_deals`)
+`hl_srg_mls_deals` (CRM, ~1,971 rows) is the downloaded Spradling Group MLS. It is the **free source for the structured fields** on a past-client home: `beds`, `full_baths`/`half_baths`, `sqft`, `year_built`, `lot_size`, `property_type`, `subdivision`, schools, `hoa_fee`. The MLS backfill matches each past-client `Listing` by MLS# (extracted from `hl_heartlandmls_<mls>` hlid) → address fallback, then COALESCE-fills the null `Listing` fields. Tool: `.claude/scratch/_mls_backfill.mjs`. (`bathroomsTotal` = `full_baths + 0.5·half_baths`.)
+
+### 3. OpenWeb Ninja / Zillow — value, value-history, schools, tax, price history, photos
+The "Real-Time Zillow Data" API (`realtime-zillow-data/property-details?zpid` → `/search` fallback) provides the **Zestimate**, **GreatSchools** ratings, **tax history**, and **price/sale history**, written onto `Listing`. The **HouseLoop Value = Zestimate × 1.005** (`hlEstimate`); homes without a Zestimate fall back to the ZHVI market index, never blank. Tools: `tools/houseloop-cards/enrich-pastclient-listing.mjs`, `enrich-from-mls.mjs`, `zillow-enrich.mjs`.
+
+### 4. Redfin photo engine — gallery fallback
+Off-market homes thin to a single street-view photo on the Ninja/Zillow feed. The Redfin engine (`tools/houseloop-photos/hl-photo-engine.mjs`, 3 real-Chrome shards on Camp David) pulls the full gallery → uploads to **Cloudflare R2** (`past-clients/<streetSlug>/photo-NN.jpg`) → writes back onto `Listing.photosCached` (improvement-only). Homes with no public gallery render the Google Street View fallback (needs lat/lng). The page never hot-links Zillow/Redfin — always our R2 copy.
+
+## How it links to the FUB scraper
+
+`hl_srg_past_clients.fub_id` = `fub.people.id` on the Camp David `bossloop` Postgres (`fub.*` schema, the FUB scraper SSOT). That join unlocks the full communication history per client:
+
+| FUB table | Rows | What it gives the client record |
 |---|---|---|
-| Sold price + sold date | **MLS** (Heartland) | KS/MO are non-disclosure states; Zillow can't have it |
-| Structural (beds/baths, sqft, basement, style, features, school district) | **Repliers** (MLS) | Same source as active listings → schema parity |
-| HouseLoop Value (Zestimate) | **OpenWeb Ninja / Zillow** | Real-Time Zillow Data API |
-| Photo gallery | **OpenWeb Ninja / Zillow**, with **Redfin** fallback | Zillow's feed thins to a single street-view photo on some older off-market homes; Redfin fills those |
-| GreatSchools ratings | **OpenWeb Ninja / Zillow** | `schools[]` (name, rating, level, grades, distance) |
-| Tax history (multi-year) | **OpenWeb Ninja / Zillow** | `taxHistory[]` (year, taxPaid, assessed value) |
+| `fub.people` | ~49K | name, emails, phones, **addresses** (current residence), tags (`Secondary`, `Team Exit - <agent>`), stage, source |
+| `fub.text_messages` | ~399K | every text (in/out, agent, date) |
+| `fub.notes` | ~136K | the manual agent notes — relocation clues, spouse contacts |
+| `fub.calls` | ~40K | call outcomes, duration |
+| `fub.deals` | ~4.5K | deal records with agent name |
+| `fub.assignment_history` | — | handoff lineage (`from_agent → to_agent`) |
 
-Realtor.com is **not** a source — its valuations and galleries are not trusted for this pipeline.
+Two derived columns are built deterministically from this (no LLM):
+- **`dossier`** (jsonb) — structured metadata per client (text/email/call counts + first/last dates + agents, raw notes, deals, tags, lifecycle, signals). The knowledge base Myli reads to write outreach. Tool: `.claude/scratch/_build_dossier.mjs`.
+- **`fub_identity`** (jsonb) — canonical person + **FUB duplicate records** (same email, or same phone+name) + **spouse** (the FUB person tagged `Secondary`, linked by shared home address). Tool: `.claude/scratch/_resolve_identity.mjs`.
 
-## The HouseLoop Value
+## How the CRM seller-report dashboard reads it
 
-The displayed value is **anchor × drift, blended with the Zestimate**:
+The seller-report dashboard at **`/settings/seller-report`** (`apps/houseloop-crm/app/(crm)/settings/seller-report/page.tsx`) is the human-readable past-client surface. Per row it shows the client, their `closings`, their `bucket` (Ana Only / Ana Handoff / Spradling Team / HouseLoop), and the home value. **It reads `hl_srg_past_clients` and pulls the value LIVE from the website `Listing` by `website_hlid`** (`hlEstimate` = Zestimate × 1.005) — it does not store a separate valuation. An absent pointer renders "—".
 
-```
-HouseLoop Value = MLS sold price  ×  (our market's $/sqft now ÷ $/sqft at the sale month)
-                  blended 50/50 with the current Zillow Zestimate
-```
+## Key files & tables
 
-The **anchor** is the real MLS sold price (home-specific accuracy). The **drift** is our own market's appreciation between the sale month and today, computed from our ~430K sold records at the home's tightest geo level (neighborhood → ZIP → city → county). It is **never** computed as `$/sqft × sqft`. Validated against Zillow on demo homes to within ~0.5%.
-
-## The two tables
-
-Enrichment data and the rendered page live in two different stores; a copy step bridges them.
-
-```
-hl_sold_profiles  ──(backfill copy)──►  Listing  ──►  /home/{slug}
-(enrichment store)                      (render store)
-```
-
-- **`hl_sold_profiles`** (CRM database) — the **enrichment store**. The Zillow/Ninja pull (value, photos, schools, tax) lands here first, one row per resolved address.
-- **`Listing`** (website database) — the **render store**. The one address-keyed property table the website actually reads (see [Property Data Model & Address Identity](/guides/property-data-and-address-identity)). The backfill copies each enriched profile onto the matching `Listing` row by canonical address, computes the HouseLoop Value, caches photos to R2, and flips `status='sold'`.
-
-The copy is **idempotent and improvement-only**: it never regresses a richer gallery or overwrites a real MLS sold date, and re-runs skip rows already enriched. Photos are always cached to Cloudflare R2 (`photosCached[].hlCdnUrl`) — the page never hot-links Zillow.
-
-## Reconciliation rules
-
-- **Identity is the canonical address**, never an MLS number or `zpid` — those are columns. One physical home = one row = one URL. (Full normalization rules: [Property Data Model & Address Identity](/guides/property-data-and-address-identity).)
-- **Match cascade** when copying a profile to its `Listing` row: MLS number → exact canonical slug → ZIP + house-number + street-name (immune to `Ct`/`Court` and city aliases). The most authoritative live MLS row always wins over a synthetic archive row.
-- **Every enriched home has a sold date.** A home with no closing date is not enriched into the table.
-- A home with no Zillow data still renders with its **MLS-anchored value** (we always have the sold price + date we closed it).
-
-## Finding a sold home by address
-
-A sold home is reachable from the site search bar's address autocomplete, which routes to `/home/{slug}`. The autocomplete matches your typed address against each home's `addressSlug` (built as `street-city-state-zip`). The match is **state-agnostic** — typing the street + city + ZIP finds the home whether or not you include the two-letter state — and the street filter ignores leading direction tokens (`W`, `N`, …) so a common house number on a directional street doesn't crowd out the exact match.
-
-## Key files
-
-| Concern | File |
+| Concern | Where |
 |---|---|
-| Zillow/Ninja enrichment → `hl_sold_profiles` | `tools/houseloop-cards/zillow-enrich.mjs` |
-| One-address enrich (Repliers + Ninja merge) | `tools/houseloop-cards/enrich-sold-home.mjs` |
-| Copy `hl_sold_profiles` → `Listing` | `tools/houseloop-cards/backfill-past-clients.mjs` |
-| Redfin photo fallback → R2 → `Listing` | `tools/houseloop-photos/hl-photo-engine.mjs`, `writeback-past-client-photos.mjs` |
-| Value algorithm (anchor × drift) | `apps/houseloop-web/lib/valuation/appreciation.ts` |
-| Address autocomplete | `apps/houseloop-web/app/api/locations/autocomplete/route.ts` |
+| People table | `hl_srg_past_clients` (CRM) |
+| House table | `Listing` (WEB) — see [Property Data Model & Address Identity](/guides/property-data-and-address-identity) |
+| Deal spine | `sisu_transactions` + `hl_srg_mls_deals` (CRM) |
+| FUB scraper | `fub.*` on Camp David `bossloop` Postgres |
+| MLS structured backfill | `.claude/scratch/_mls_backfill.mjs` |
+| Zillow/Ninja enrich | `tools/houseloop-cards/enrich-pastclient-listing.mjs` |
+| Redfin photos → R2 | `tools/houseloop-photos/hl-photo-engine.mjs` |
+| Dossier builder | `.claude/scratch/_build_dossier.mjs` |
+| FUB identity resolver | `.claude/scratch/_resolve_identity.mjs` |
+| Seller-report dashboard | `apps/houseloop-crm/app/(crm)/settings/seller-report/page.tsx` |
 | `/home` render | `apps/houseloop-web/app/home/[slug]/page.tsx` |
+
+## In progress (see GT §13)
+
+A deterministic **reconcile algorithm** (identity → orphan-audit → dedupe deals → SISU agent/role → bucket → current home) is being built to clean duplicate closings, dedupe FUB people, link spouses, and correct buckets across the whole book. The strategy and source-truth hierarchy are private — `GT_HOUSELOOP_SG_PAST_CLIENTS_PRD.md` §13. This guide is updated as each stage ships.
