@@ -1,10 +1,11 @@
 ---
 title: "Past-Client Data Pipeline"
-description: "End-to-end: how the Spradling Group past-client book is built, enriched from MLS + Zillow/OpenWeb-Ninja + Redfin, linked to the FollowUpBoss scraper, fed to the website Listing table, and read by the CRM seller-report dashboard."
+description: "End-to-end: how the Spradling Group past-client book is built, enriched from MLS + Zillow/OpenWeb-Ninja + Redfin, linked to the FollowUpBoss scraper, fed to the website Listing table, reconciled by a forensic dossier engine, and read by the CRM seller-report dashboard."
 ---
 
-<Accordion title="Changelog — last updated 2026-06-21 7:20 AM ET" icon="clock-rotate-left">
+<Accordion title="Changelog — last updated 2026-06-21 9:19 AM ET" icon="clock-rotate-left">
 Newest first. Times Eastern. (Collapsed so it never grows past the page; the latest date always shows in the title above.)
+- **2026-06-21 9:19 AM** — Documented the **forensic reconcile engine** (the dossier + price/date triangulation + the LLM investigator) and the SISU **address caveat** (the `address` field is sometimes the client's *residence*, not the transacted property). MLS = sold-truth, SISU = paid-truth, they triangulate. (Caleb)
 - **2026-06-21 7:20 AM** — Documented the SISU closing-card schema + the **money-column law**: `transaction_amount` = SALE PRICE (never income), `gci` = GROSS commission, `gross_paid_income` = NET after fees/splits. Added the **Zillow referral fee** (the `gci` → `gross_paid_income` gap; verified ~40% of GCI across 1,155 Zillow Flex deals) and the three meanings of "referral." (Caleb)
 - **2026-06-21 6:40 AM** — Full rewrite to the real end-to-end lift: the two-table model (`hl_srg_past_clients` people + `Listing` houses), the MLS/Ninja/Redfin backfills, the FUB-scraper linkage (`fub_id` → texts/notes/calls/deals → `dossier` + `fub_identity`), and the CRM seller-report dashboard. Corrected the retired `hl_sold_profiles` middle table. (Caleb)
 - **2026-06-17 5:54 AM** — Original guide created (house/value enrichment only; `hl_sold_profiles` two-table model, now superseded).
@@ -58,6 +59,8 @@ The past-client book is assembled and enriched from four data sources, each auth
 - **`gci` = GROSS commission income** (~3% of sale price).
 - **`gross_paid_income` = what the team actually NETTED** after referral fees and broker splits — the real income line.
 
+**⚠️ The SISU `address` caveat (critical):** the `address` field is **not always the property transacted** — it is sometimes the client's **residence/apartment** at the time of the deal. Example: an investor sold their house, moved to an apartment, then bought a fourplex — and SISU stored the *apartment* address on the fourplex purchase. Resolve the true property via the **MLS sold-truth + triangulation** below, never by trusting the SISU address blindly.
+
 **The Zillow referral fee lives in the `gci` → `gross_paid_income` gap** (not a separate row). We pay Zillow a referral fee on Zillow-sourced (Flex/Preferred) deals. Measured across 1,155 closed Zillow Flex deals: the team keeps ~**57%** of GCI vs ~**74%** on non-Zillow deals — the ~17-point gap is the Zillow referral fee (~40% of GCI). About **60% of closed deals are Zillow-sourced** (`lead_source ILIKE '%zillow%'` OR `lead_type ILIKE '%zillow flex%'`). It is a **cost**, never a deal or income.
 
 **"Referral" means three different things** — disambiguate by `gci` + `lead_source`:
@@ -65,10 +68,10 @@ The past-client book is assembled and enriched from four data sources, each auth
 2. **Outbound referral** — we referred a client out and took a cut → tiny amount + `gci = 0` (income, small).
 3. **Zillow/Flex referral fee** — a percentage of our commission paid to Zillow → the `gci` → `gross_paid_income` drop (a cost).
 
-> Rows whose `agent = "Past Agent Referrals"` use that string as a **bucket label**, not the real agent — the true agent is often embedded in the client-name field (e.g. `"David Mettman - Noelle Referral"`). The reconcile algorithm unmasks it, the same way it drops the MLS team-lead rollup.
+> Rows whose `agent = "Past Agent Referrals"` use that string as a **bucket label**, not the real agent — the true agent is often embedded in the client-name field (e.g. `"David Mettman - Noelle Referral"`). The reconcile engine unmasks it, the same way it drops the MLS team-lead rollup.
 
-### 2. MLS download — structured facts (`hl_srg_mls_deals`)
-`hl_srg_mls_deals` (CRM, ~1,971 rows) is the downloaded Spradling Group MLS. It is the **free source for the structured fields** on a past-client home: `beds`, `full_baths`/`half_baths`, `sqft`, `year_built`, `lot_size`, `property_type`, `subdivision`, schools, `hoa_fee`. The MLS backfill matches each past-client `Listing` by MLS# (extracted from `hl_heartlandmls_<mls>` hlid) → address fallback, then COALESCE-fills the null `Listing` fields. Tool: `.claude/scratch/_mls_backfill.mjs`. (`bathroomsTotal` = `full_baths + 0.5·half_baths`.)
+### 2. MLS download — structured facts + the SOLD-TRUTH (`hl_srg_mls_deals`)
+`hl_srg_mls_deals` (CRM, ~1,971 rows) is the downloaded Spradling Group MLS. It is the **sold-truth** for a deal (real property / date / price), and the **free source for the structured fields** on a past-client home: `beds`, `full_baths`/`half_baths`, `sqft`, `year_built`, `lot_size`, `property_type`, `subdivision`, schools, `hoa_fee`. The `our_roles` (`buy-*`/`list-*`) + client name tell which side we repped. The MLS backfill matches each past-client `Listing` by MLS# (extracted from `hl_heartlandmls_<mls>` hlid) → address fallback, then COALESCE-fills the null `Listing` fields. Tool: `.claude/scratch/_mls_backfill.mjs`. (`bathroomsTotal` = `full_baths + 0.5·half_baths`.)
 
 ### 3. OpenWeb Ninja / Zillow — value, value-history, schools, tax, price history, photos
 The "Real-Time Zillow Data" API (`realtime-zillow-data/property-details?zpid` → `/search` fallback) provides the **Zestimate**, **GreatSchools** ratings, **tax history**, and **price/sale history**, written onto `Listing`. The **HouseLoop Value = Zestimate × 1.005** (`hlEstimate`); homes without a Zestimate fall back to the ZHVI market index, never blank. Tools: `tools/houseloop-cards/enrich-pastclient-listing.mjs`, `enrich-from-mls.mjs`, `zillow-enrich.mjs`.
@@ -93,6 +96,32 @@ Two derived columns are built deterministically from this (no LLM):
 - **`dossier`** (jsonb) — structured metadata per client (text/email/call counts + first/last dates + agents, raw notes, deals, tags, lifecycle, signals). The knowledge base Myli reads to write outreach. Tool: `.claude/scratch/_build_dossier.mjs`.
 - **`fub_identity`** (jsonb) — canonical person + **FUB duplicate records** (same email, or same phone+name) + **spouse** (the FUB person tagged `Secondary`, linked by shared home address). Tool: `.claude/scratch/_resolve_identity.mjs`.
 
+## The forensic reconcile engine — how a clean record is produced
+
+The raw sources disagree: SISU misspells names and stores residence addresses, the card price-matches deals to the wrong listing, the same deal appears twice, contactless FUB profiles (no phone/email) hide whole moves. The reconcile engine cleans this with a staged pipeline — **all report-only; nothing writes to the table without human sign-off.** Each stage is a tool in `.claude/scratch/`:
+
+| Stage | Tool | What it does |
+|---|---|---|
+| **S0 Identity** | `_resolve_identity_v2.mjs` | collapse duplicate FUB people, link spouse (`Secondary` tag + shared address). **Surname FUZZY** (catches typos like `Bohnsedt`≈`Bohnstedt`), **first name TIGHT** (Tonya ≠ Sonja). |
+| **S0.5 Forensic gather** | `_s05_forensic_gather.mjs` | surface the **complete** household FUB cluster — *including contactless profiles* (no phone/email) that FUB's own UI buries but that often hold a move or a second deal. Fuzzy-match SISU to flag closings missing from the card. |
+| **S1 Orphan audit** | `_s1_orphan_audit.mjs` | classify every closing; flag collapse-pairs (same deal recorded twice) and orphans needing verification. |
+| **S6 LLM investigator** | `_s6_investigator.mjs` | the capstone — reads a full **dossier** and returns a structured verdict (below). |
+
+### The dossier — a human-style case file
+
+The investigator (claude-sonnet-4-6, report-only) does **not** read raw rows — it reads a six-section case file assembled per household:
+
+1. **Our card** — what the pipeline currently believes (may be wrong).
+2. **SISU (paid-truth)** — when we got paid and how much. *Address may be the residence.*
+3. **MLS sold-truth** — the real property/date/price, attributed by `our_roles` + client name.
+4. **Triangulation** — for each SISU closing, MLS sold rows within **±$3k and ±20 days** are pre-computed. **Same price + same date = the same deal**, even when the SISU address is a residence and even when the MLS row has no client attribution.
+5. **House forensics** — the web `Listing` per resolved MLS# (HouseLoop value, price/value/tax history, status, `/home` URL).
+6. **FUB people evidence** — the full cluster (notes/texts/calls/emails/tags/events).
+
+Each resolved deal carries a `source_of_property` provenance tag: `mls-attributed | triangulated | sisu-address | card | unknown`. **The reconciliation canon:** MLS = sold-truth (property/date/price), SISU = paid-truth (when/how much), they **triangulate** — neither overrides the other; never trust a SISU address blindly; if nothing resolves, the property is **UNKNOWN** (surface candidates, never invent).
+
+> **Worked example.** An investor's 2021 `$450k` SISU buy carried the address `10501 W 113th St Apt 5401` — their *apartment*. Triangulation matched **MLS 2355413 — `801 W Poplar St`, $450k, fourplex, 1-day gap** — the true property, with the wrong same-price candidate (a different client's $449k single-family) correctly rejected.
+
 ## How the CRM seller-report dashboard reads it
 
 The seller-report dashboard at **`/settings/seller-report`** (`apps/houseloop-crm/app/(crm)/settings/seller-report/page.tsx`) is the human-readable past-client surface. Per row it shows the client, their `closings`, their `bucket` (Ana Only / Ana Handoff / Spradling Team / HouseLoop), and the home value. **It reads `hl_srg_past_clients` and pulls the value LIVE from the website `Listing` by `website_hlid`** (`hlEstimate` = Zestimate × 1.005) — it does not store a separate valuation. An absent pointer renders "—".
@@ -103,16 +132,13 @@ The seller-report dashboard at **`/settings/seller-report`** (`apps/houseloop-cr
 |---|---|
 | People table | `hl_srg_past_clients` (CRM) |
 | House table | `Listing` (WEB) — see [Property Data Model & Address Identity](/guides/property-data-and-address-identity) |
-| Deal spine | `sisu_transactions` + `hl_srg_mls_deals` (CRM) |
+| Deal spine / sold-truth | `sisu_transactions` (paid-truth) + `hl_srg_mls_deals` (sold-truth) (CRM) |
 | FUB scraper | `fub.*` on Camp David `bossloop` Postgres |
 | MLS structured backfill | `.claude/scratch/_mls_backfill.mjs` |
 | Zillow/Ninja enrich | `tools/houseloop-cards/enrich-pastclient-listing.mjs` |
 | Redfin photos → R2 | `tools/houseloop-photos/hl-photo-engine.mjs` |
-| Dossier builder | `.claude/scratch/_build_dossier.mjs` |
-| FUB identity resolver | `.claude/scratch/_resolve_identity.mjs` |
+| Reconcile engine (S0 → S6) | `.claude/scratch/_resolve_identity_v2.mjs`, `_s05_forensic_gather.mjs`, `_s1_orphan_audit.mjs`, `_s6_investigator.mjs` |
 | Seller-report dashboard | `apps/houseloop-crm/app/(crm)/settings/seller-report/page.tsx` |
 | `/home` render | `apps/houseloop-web/app/home/[slug]/page.tsx` |
 
-## In progress (see GT §13)
-
-A deterministic **reconcile algorithm** (identity → orphan-audit → dedupe deals → SISU agent/role → bucket → current home) is being built to clean duplicate closings, dedupe FUB people, link spouses, and correct buckets across the whole book. The strategy and source-truth hierarchy are private — `GT_HOUSELOOP_SG_PAST_CLIENTS_PRD.md` §13. This guide is updated as each stage ships.
+The full strategy and source-truth hierarchy are private — `GT_HOUSELOOP_SG_PAST_CLIENTS_PRD.md` §13. This guide is updated as each stage ships.
