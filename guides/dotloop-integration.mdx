@@ -4,11 +4,10 @@ description: "How HouseLoop connects to dotloop via the Public API v2 (OAuth 2.0
 ---
 
 <Note>
-**Foundation in place; data sync in active build.** dotloop has granted HouseLoop **Public API v2**
-access and our **Application Client** (OAuth 2.0) is created. The OAuth flow and read endpoints
-below are the contract we build against. The in-app loop sync and the one-time account
-authorization are being wired now — this page documents the architecture and the live API surface,
-not a finished pipeline.
+**Live + verified.** dotloop Public API v2 access is granted, the Application Client (OAuth 2.0) is
+created, and the brokerage account is connected — the CRM reads loops, profiles, participants, and
+loop detail end-to-end. The remaining build is the bulk loop **sync** into a canonical table (an
+Inngest job); the read path documented here is live.
 </Note>
 
 ## What it does
@@ -58,7 +57,8 @@ dotloop uses three-legged OAuth 2.0 (`authorization_code` + `refresh_token` gran
 
 The Client ID and Secret are stored as secrets (`DOTLOOP_CLIENT_ID` / `DOTLOOP_CLIENT_SECRET`) and
 are never committed or exposed client-side. The OAuth handshake and token refresh run server-side
-in the CRM at the redirect-URI route above.
+in the CRM. The connection (access + refresh token) is persisted in the CRM Postgres table
+`hl_dotloop_connection`; `lib/dotloop/client.ts` → `getValidAccessToken()` auto-refreshes it.
 
 ## Access scopes
 
@@ -81,18 +81,76 @@ initial integration only reads.
 
 ## Read endpoints
 
-All paths are relative to the API base and require the `Authorization: Bearer` header.
+All paths are relative to the API base and require the `Authorization: Bearer` header. List
+responses are wrapped in `{ "data": [ ... ], "meta": { "total": N } }`.
 
 | Endpoint | Returns |
 |---|---|
-| `GET /account` | the authorized account |
+| `GET /account` | the authorized account (`id`, `email`, `firstName`, `lastName`, `defaultProfileId`) |
 | `GET /profile` and `GET /profile/:id` | profiles on the account |
-| `GET /profile/:id/loop` | loops (transactions) for a profile |
+| `GET /profile/:id/loop` | loops (transactions) for a profile — supports `?limit=&sort=updated&direction=desc` |
 | `GET /profile/:id/loop/:loopId` | one loop |
-| `GET /profile/:id/loop/:loopId/detail` | loop detail (fields, milestones) |
-| `GET /profile/:id/loop/:loopId/participant` | participants on a loop |
+| `GET /profile/:id/loop/:loopId/detail` | loop detail — sectioned field map (address, financials, dates) |
+| `GET /profile/:id/loop/:loopId/participant` | participants on a loop (name, role, email) |
 | `GET /profile/:id/loop/:loopId/folder` | folders in a loop |
 | `GET /profile/:id/loop/:loopId/folder/:folderId/document` | documents in a folder |
+
+## Data model (what each call returns)
+
+### Profiles
+An account has many **profiles** (`{ id, name, type: TEAM | INDIVIDUAL, default }`). A loop is always
+read **through a profile** (`/profile/:id/loop/...`).
+
+<Warning>
+**Inactive profiles 403 on `/loop`** with `"Profile is inactive: <id>"`. When iterating an account's
+profiles, walk past the inactive ones — don't assume `profiles[0]` is readable. The `/api/dotloop/status?probe=1`
+endpoint does this (it reports the first **active** profile + its loop total).
+</Warning>
+
+### Loop (list item)
+`{ id, name, status, transactionType }`. `status` is an enum:
+`ACTIVE_LISTING · PRIVATE_LISTING · UNDER_CONTRACT · SOLD · ARCHIVED · …`. The `name` frequently
+contains the address and/or client ("12802 Walmer, Overland Park, KS 66209").
+
+### Loop detail (`/detail`)
+A map of **sections → field key/value**. Sections include `Property Address`, `Financials`,
+`Contract Dates`, `Offer Dates`, `Listing Information`, `Referral`. The richest for matching:
+
+```
+Property Address:
+  Street Number, Street Name, City, State/Prov, Zip/Postal Code, County, Country, MLS Number
+Financials:
+  Purchase/Sale Price   (string, e.g. "225,000")
+Contract Dates:
+  Closing Date          (e.g. "03/12/2013")
+```
+
+<Note>
+Field key names vary by the loop's template, and older/archived loops are sparse (sometimes only
+`Country` + `MLS Number`, with the address living in the loop `name`). **Read defensively** — treat
+every field as optional and fall back to parsing the loop name.
+</Note>
+
+### Participants (`/participant`)
+`{ fullName, role, email }` per person. `role` enum includes
+`BUYER · SELLER · BUYING_AGENT · LISTING_AGENT · MANAGING_BROKER` (and more). This is the
+name + email + side-of-deal for everyone on the transaction.
+
+## Using dotloop as a confirmation source (resolver)
+
+dotloop is a **ground-truth confirmation layer**: per transaction it yields the **client name +
+email + role**, the **property address** (street/city/state/zip/county + MLS number), and the
+**price + close date**. To confirm a past client:
+
+1. Take the loop's `Property Address` (or parse the loop `name`) → resolve to the same
+   `identityKey` / `canonicalSlug` the website uses (see
+   [Property data & address identity](/guides/property-data-and-address-identity)) → match a
+   `Listing`. When `MLS Number` is present, match it directly.
+2. Take the `BUYER` / `SELLER` participant → that's the confirmed client + their real email + which
+   side of the deal they were on.
+
+This makes dotloop the final say on *who actually transacted what address with us* — the
+confirmation step for the past-client resolver.
 
 ## Connecting an account
 
@@ -100,7 +158,8 @@ All paths are relative to the API base and require the `Authorization: Bearer` h
    `/api/dotloop/oauth/start`).
 2. They sign in to dotloop as the **brokerage** account and grant consent.
 3. dotloop redirects back to the CRM, which exchanges the code and stores the connection.
-4. Status (and a live read probe) is available at `/api/dotloop/status?probe=1`.
+4. Verify at `/api/dotloop/status?probe=1` — it reports the connected account, scopes, token expiry,
+   and a live read of the first active profile's loop total.
 
 ## References
 
@@ -109,7 +168,9 @@ All paths are relative to the API base and require the `Authorization: Bearer` h
 
 ## Change log
 
-- **2026-06-22** — dotloop Public API v2 access granted on `admin@houseloop.ai`; Application Client
-  created (OAuth 2.0, read + write on all five scopes, redirect `https://crm.houseloop.ai/api/dotloop/oauth/callback`).
-  CRM OAuth routes + connection store + Integrations card built. One-time brokerage authorization +
-  loop sync in active build.
+- **2026-06-22** — Live + verified. dotloop Public API v2 access granted on `admin@houseloop.ai`;
+  Application Client created (OAuth 2.0, read + write all scopes, redirect
+  `https://crm.houseloop.ai/api/dotloop/oauth/callback`). CRM OAuth routes + `hl_dotloop_connection`
+  store + Integrations card shipped; brokerage account connected and reading loops/profiles/
+  participants/detail end-to-end. Documented the live data model + resolver play. Next: Inngest bulk
+  loop sync into a canonical table.
