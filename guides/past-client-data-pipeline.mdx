@@ -5,6 +5,7 @@ description: "The end-to-end Spradling Group past-client pipeline: resolve each 
 
 <Accordion title="Changelog — last updated 2026-06-22" icon="clock-rotate-left">
 Newest first. Times Eastern. (Collapsed so it never grows past the page; the latest date always shows in the title above.)
+- **2026-06-22 (PM2)** — **Seller-report card = appreciation, not mortgage/equity.** Deleted a fabricated mortgage/equity estimate (it assumed 20% down @ 6.5% and amortized — a guess). The card now shows honest **Total Appreciation** (current value − purchase) + **Avg Monthly Appreciation** (total ÷ months held) — real math off two real numbers; the homeowner does their own financials. Real lien-based mortgage/equity via **Realie** is wired-but-**deferred** (credential stored; usage-billed; needs monthly refresh). Also seated **801 W Poplar** end-to-end as the first completed per-home lifecycle (Ninja $569,600 → master row + Listing → `/home` live; agent corrected to Audrie King via Repliers). (Caleb)
 - **2026-06-22 (PM)** — Wired in the **live disposition intersection**: a past-client home that sells *again now* rides the live `listing-sold` pipeline automatically (gated close → `soldPrice × 1.005` value), while old sales get the manual Ninja Zestimate backfill; both share the `ninjaEnrichedAt` gate so neither double-enriches. Added the **value-by-status** nuance (fresh sale = sold price; old sale = current Zestimate). Confirmed against the running ingest/disposition code. (Caleb)
 - **2026-06-22** — **Major correction to the model + the order of operations.** (1) Added the **master child table `hl_srg_past_client_homes`** — one row per resolved home, the canonical snapshot that **owns the data** and is built **first**; the website `Listing` is **seated from it**. (2) Documented the **per-home gated lifecycle**: resolve → sign-off → backfill (Ninja/Zillow) → canonical slug → seller report. **~93% of homes are already resolved + enriched and are never re-touched;** only the **~175 still-blank homes** remain, each backfilled **after** it is resolved to an owner and signed off — never a blind bulk run. (3) The seller-report card now reads from the **parent + child master table + dossier** (the `closings` jsonb blob is dead). (Caleb)
 - **2026-06-21 9:19 AM** — Documented the forensic reconcile engine + the SISU address caveat. MLS = sold-truth, SISU = paid-truth, they triangulate. (Caleb)
@@ -47,7 +48,7 @@ This is the canonical developer reference for the **Spradling Realty Group past-
 | **4. Canonical slug** | The website `Listing` is **seated from the confirmed master data** — minting the canonical slug + the permanent `/home/<canonicalSlug>` URL (with the USPS-preferred city for the ZIP, never city-free). | one live `/home` page |
 | **5. Seller report** | The CRM seller-report card renders the client + their confirmed homes + values. | the reactivation surface |
 
-> **801 W Poplar St** is the worked example: it is one of the ~175 blanks, and it became eligible for backfill **only because** it had already been resolved to **Kyle & Karly Nations** and signed off. Its Zestimate ($569,600 → HouseLoop Value ~$572,448) gets run **after** that confirmation — never before, and never as part of a bulk sweep.
+> **801 W Poplar St** is the worked example **of a completed lifecycle** (2026-06-22): it was one of the ~175 blanks, became eligible **only because** it had been resolved to **Kyle & Karly Nations** and signed off, then ran steps 3–5 — Ninja Zestimate **$569,600 → HouseLoop Value $572,448** written to the master row + the website `Listing`, `/home/801-w-poplar-street-olathe-ks-66061` live (HTTP 200), and the seller-report card rendering it. Never before resolution, never as part of a bulk sweep.
 
 ## The canonical tables
 
@@ -136,10 +137,23 @@ The seller-report dashboard at **`/settings/seller-report`** (`apps/houseloop-cr
 
 - **Parent `hl_srg_past_clients`** → the person (identity, `dossier`, `resolved_current_home`).
 - **Child `hl_srg_past_client_homes`** → the homes. One query, **grouped by home** (a buy + sell of the same home collapse to one card line), with a derived **disposition** (`owns` / `sold_by_us` / `sold_lost` / `unverified`) and the **most-recent home** flagged as current-on-file.
-- **Value** comes from the master row's `current_zestimate` / `current_hl_value`; each home links to its `/home/<canonical_slug>`.
+- **Per-home line:** Address · disposition badge · sale/buy agent · purchase price · **HouseLoop value** (→ `/home/<canonical_slug>`).
+- **Client header (the homeowner story):** Purchase price · Current value · **Total Appreciation** (current − purchase) · **Avg Monthly Appreciation** (total ÷ months held) · appreciation %. All are real math off two real numbers (purchase from the deal, current value from the home). **No mortgage or equity is shown** — see below.
 - **Dossier** renders as deterministic prose built from the parent + child — never the raw JSON.
 
 A home only appears fully populated once it has been through the resolve → sign-off → backfill → slug lifecycle above (or rode the live disposition pipeline).
+
+### Mortgage / equity — deferred (Realie), never fabricated
+
+True lien-based mortgage + equity is **not** on the card, and we **never fabricate it** — the old "assume 20% down @ 6.5% and amortize" estimate was **deleted** (it was a guess, and it was wrong to present as fact). The card instead shows **appreciation** (above), and the homeowner does their own financials.
+
+When we do add real mortgage/equity, the source is **Realie** (`app.realie.ai/api/public/property/address/`, code in `apps/houseloop-web/lib/listings/realie.ts`). Realie returns the recorded **lien balance + lender** (hard data) plus an estimated equity computed off **Realie's own value** (which we do **not** trust — its AVM is weak in KC). The locked rule for when it's enabled:
+
+- **Mortgage** = Realie `totalLienBalance` (real recorded debt) + `lenderName`.
+- **Equity** = **our HouseLoop value − the lien balance** (computed by us) — **never** Realie's `equityCurrentEstBal`.
+- **Owned homes only** — a sold home's loan is paid off at closing, and Realie lags recent sales (it showed Nations still owning the 2026-sold 301 with its 2023 loan).
+
+It is **deferred** purely on cost: Realie is usage-billed (Free tier = 25 calls/mo then **$0.15/call**; paid tiers ~$0.01–$0.05/call), and lien data needs a **monthly refresh** to stay current — not worth it yet. The credential is stored and the integration exists; it switches on when we decide to pay for it.
 
 ## Key files & tables
 
@@ -152,6 +166,7 @@ A home only appears fully populated once it has been through the resolve → sig
 | Deal spine | `sisu_transactions` (paid-truth) + `hl_srg_mls_deals` (sold-truth) (CRM) |
 | FUB scraper | `fub.*` on Camp David `bossloop` Postgres |
 | Per-home Ninja/Zillow backfill (the ~175 blanks) | `tools/houseloop-cards/enrich-pastclient-listing.mjs`, `enrich-home.mjs`, `zillow-enrich.mjs`, `ninja-schools-tax-fill.mjs` |
+| Mortgage / equity source (deferred) | Realie — `apps/houseloop-web/lib/listings/realie.ts` |
 | Redfin photos → R2 | `tools/houseloop-photos/hl-photo-engine.mjs` |
 | Reconcile engine (S0 → S6) | `.claude/scratch/_resolve_identity_v2.mjs`, `_s05_forensic_gather.mjs`, `_s1_orphan_audit.mjs`, `tools/houseloop-cards/s6-investigator.mjs` |
 | Seller-report dashboard | `apps/houseloop-crm/app/(crm)/settings/seller-report/page.tsx` |
