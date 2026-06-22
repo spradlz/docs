@@ -1,15 +1,16 @@
 ---
 title: "Past-Client Data Pipeline"
-description: "The end-to-end Spradling Group past-client pipeline: resolve each home to a client in sold order, sign off, backfill its Zillow/OpenWeb-Ninja value into the master table, seat the website Listing from that confirmed data, and render the CRM seller report — one home at a time, never a blind bulk backfill."
+description: "The end-to-end Spradling Group past-client pipeline: resolve each home to a client through the S6 LLM resolver (named-evidence only), sign off, backfill its Zillow/OpenWeb-Ninja value into the master table, seat the website Listing from that confirmed data, and render the CRM seller report — one home at a time, never a deterministic surname match, never a blind bulk backfill."
 ---
 
 <Accordion title="Changelog — last updated 2026-06-22" icon="clock-rotate-left">
 Newest first. Times Eastern. (Collapsed so it never grows past the page; the latest date always shows in the title above.)
-- **2026-06-22 (PM2)** — **Seller-report card = appreciation, not mortgage/equity.** Deleted a fabricated mortgage/equity estimate (it assumed 20% down @ 6.5% and amortized — a guess). The card now shows honest **Total Appreciation** (current value − purchase) + **Avg Monthly Appreciation** (total ÷ months held) — real math off two real numbers; the homeowner does their own financials. Real lien-based mortgage/equity via **Realie** is wired-but-**deferred** (credential stored; usage-billed; needs monthly refresh). Also seated **801 W Poplar** end-to-end as the first completed per-home lifecycle (Ninja $569,600 → master row + Listing → `/home` live; agent corrected to Audrie King via Repliers). (Caleb)
-- **2026-06-22 (PM)** — Wired in the **live disposition intersection**: a past-client home that sells *again now* rides the live `listing-sold` pipeline automatically (gated close → `soldPrice × 1.005` value), while old sales get the manual Ninja Zestimate backfill; both share the `ninjaEnrichedAt` gate so neither double-enriches. Added the **value-by-status** nuance (fresh sale = sold price; old sale = current Zestimate). Confirmed against the running ingest/disposition code. (Caleb)
-- **2026-06-22** — **Major correction to the model + the order of operations.** (1) Added the **master child table `hl_srg_past_client_homes`** — one row per resolved home, the canonical snapshot that **owns the data** and is built **first**; the website `Listing` is **seated from it**. (2) Documented the **per-home gated lifecycle**: resolve → sign-off → backfill (Ninja/Zillow) → canonical slug → seller report. **~93% of homes are already resolved + enriched and are never re-touched;** only the **~175 still-blank homes** remain, each backfilled **after** it is resolved to an owner and signed off — never a blind bulk run. (3) The seller-report card now reads from the **parent + child master table + dossier** (the `closings` jsonb blob is dead). (Caleb)
+- **2026-06-22 (PM3)** — **Households are resolved ONLY by the S6 LLM resolver, on named evidence.** Killed the deterministic "surname FUZZY + shared address" household matching (it falsely linked different people who shared a last name or an apartment — e.g. Christyna→Jordyn Wyatt, Kayla→Amanda Montgomery, Shriver→Stephens). The S6 resolver (`s6-investigator.mjs`) now reads every FUB note/text/email/deal, **links a household only when an artifact NAMES the tie** (with a required evidence quote), rejects unproven same-surname candidates as `false_matches`, and **writes the household back as the authority** (`fub_identity.household_fub_ids`). No deterministic logic decides households. (Caleb)
+- **2026-06-22 (PM2)** — **Seller-report card = appreciation, not mortgage/equity.** Deleted a fabricated mortgage/equity estimate. The card shows **Total Appreciation** (current − purchase) + **Avg Monthly Appreciation**. Real lien-based mortgage/equity via **Realie** is wired-but-**deferred**. Seated **801 W Poplar** end-to-end as the first completed per-home lifecycle. (Caleb)
+- **2026-06-22 (PM)** — Wired in the **live disposition intersection**: a recently-sold past-client home rides the live `listing-sold` pipeline automatically; old sales get the manual Ninja Zestimate backfill; both share the `ninjaEnrichedAt` gate. (Caleb)
+- **2026-06-22** — Added the **master child table `hl_srg_past_client_homes`** (owns the data, built first; website seated from it) + the **per-home gated lifecycle** (resolve → sign-off → backfill → slug → seller report). Card reads parent + child + dossier (the `closings` jsonb blob is dead). (Caleb)
 - **2026-06-21 9:19 AM** — Documented the forensic reconcile engine + the SISU address caveat. MLS = sold-truth, SISU = paid-truth, they triangulate. (Caleb)
-- **2026-06-21 7:20 AM** — SISU closing-card schema + the money-column law. Zillow referral fee + the three meanings of "referral." (Caleb)
+- **2026-06-21 7:20 AM** — SISU closing-card schema + the money-column law. (Caleb)
 - **2026-06-21 6:40 AM** — Rewrite to the two-table model + MLS/Ninja/Redfin backfills + FUB linkage + seller-report dashboard. (Caleb)
 - **2026-06-17 5:54 AM** — Original guide (`hl_sold_profiles`, now superseded).
 </Accordion>
@@ -20,19 +21,18 @@ This is the canonical developer reference for the **Spradling Realty Group past-
 
 **A past-client home is never enriched, slugged, or surfaced until it has been resolved to a client and signed off.** We work the book **in the order the homes sold**, one home at a time. We do **not** run a blind bulk backfill.
 
-**Most of the book is already done.** Of ~2,259 homes, **~93% (≈2,080) are already resolved and fully enriched** — they have their Zestimate, GreatSchools, tax, and history, and **we never re-run Ninja on them.** Only the **~175 still-blank homes** remain. Those are blank **by design** — they have not been resolved to an owner yet. Each one is backfilled **only after** it is resolved + signed off, one at a time, in sold order. The blanks are not a bug to fix with a bulk run; they are the queue.
+**Most of the book is already done.** Of ~2,259 homes, **~93% (≈2,080) are already resolved and fully enriched** — they have their Zestimate, GreatSchools, tax, and history, and **we never re-run Ninja on them.** Only the **~175 still-blank homes** remain. Those are blank **by design** — they have not been resolved to an owner yet. Each one is backfilled **only after** it is resolved + signed off, one at a time, in sold order.
 
 ### The per-home lifecycle (the gate)
 
 ```
-(1) RESOLVE        reconcile engine links the home → a client, in sold order  (S0→S6 below)
+(1) RESOLVE        the S6 LLM resolver links the home + household → a client, on named evidence
         │
 (2) SIGN-OFF       Zach confirms the home→client link is correct
         │
 (3) BACKFILL       NOW run OpenWeb-Ninja / Zillow on that ONE confirmed home:
         │            Zestimate (value anchor) + GreatSchools + tax + price/sale history + photos
         │            → written into the MASTER table  hl_srg_past_client_homes
-        │            (only for a still-blank home; the ~93% already enriched are skipped)
         │
 (4) CANONICAL SLUG seat the home on the website FROM the confirmed master data
         │            → one Listing row, one /home/<canonicalSlug> URL (USPS-preferred city)
@@ -42,13 +42,13 @@ This is the canonical developer reference for the **Spradling Realty Group past-
 
 | Step | What happens | Output |
 |---|---|---|
-| **1. Resolve** | The reconcile engine (S0→S6, below) ties each still-unresolved home to the correct client, in the order the homes sold. SISU paid-truth + MLS sold-truth + FUB evidence triangulate. | a confirmed `home → past_client_id` link |
+| **1. Resolve** | The **S6 LLM resolver** (below) ties each still-unresolved home + household to the correct client, reading the actual evidence — never a surname match. | a confirmed `home → past_client_id` link + the household |
 | **2. Sign-off** | Zach reviews the resolved home→client and confirms it. **Nothing downstream runs without this.** | go / no-go |
-| **3. Backfill** | A **manual Open Web Ninja / Zillow** call on that one newly-confirmed (still-blank) home pulls the **current Zestimate** (the value anchor), GreatSchools, tax, price/sale history, photos. Written into the **master table** `hl_srg_past_client_homes`. The ~93% already enriched are never re-run. | the home's master row, fully enriched |
-| **4. Canonical slug** | The website `Listing` is **seated from the confirmed master data** — minting the canonical slug + the permanent `/home/<canonicalSlug>` URL (with the USPS-preferred city for the ZIP, never city-free). | one live `/home` page |
+| **3. Backfill** | A **manual Open Web Ninja / Zillow** call on that one newly-confirmed home pulls the current Zestimate, GreatSchools, tax, price/sale history, photos → the master row. | the home's master row, fully enriched |
+| **4. Canonical slug** | The website `Listing` is **seated from the confirmed master data** — minting the canonical slug + the permanent `/home/<canonicalSlug>` URL (USPS-preferred city). | one live `/home` page |
 | **5. Seller report** | The CRM seller-report card renders the client + their confirmed homes + values. | the reactivation surface |
 
-> **801 W Poplar St** is the worked example **of a completed lifecycle** (2026-06-22): it was one of the ~175 blanks, became eligible **only because** it had been resolved to **Kyle & Karly Nations** and signed off, then ran steps 3–5 — Ninja Zestimate **$569,600 → HouseLoop Value $572,448** written to the master row + the website `Listing`, `/home/801-w-poplar-street-olathe-ks-66061` live (HTTP 200), and the seller-report card rendering it. Never before resolution, never as part of a bulk sweep.
+> **801 W Poplar St** is the worked example of a completed lifecycle (2026-06-22): resolved to **Kyle & Karly Nations**, signed off, then Ninja Zestimate **$569,600 → HouseLoop Value $572,448** written to the master row + the website `Listing`, `/home/801-w-poplar-street-olathe-ks-66061` live (HTTP 200).
 
 ## The canonical tables
 
@@ -56,14 +56,14 @@ There are three tables in play. The first two are the **CRM** (people + the mast
 
 | Table | Database | Grain | Role |
 |---|---|---|---|
-| **`hl_srg_past_clients`** | CRM (`HL_CRM_DATABASE_URL`, Railway *autorack*) | 1 row / past client (~1,834) | the **PERSON**: name, `bucket`, `phone`/`email`, **`fub_id`** (→ FUB), `dossier` (jsonb), `fub_identity` (jsonb), `resolved_current_home`. |
-| **`hl_srg_past_client_homes`** | CRM (*autorack*) | 1 row / resolved home (~2,259) | **THE MASTER SNAPSHOT — it owns the data.** One row per home a client transacted, linked by `past_client_id`. Carries the confirmed home: `address`, `canonical_slug`, `website_hlid`, `current_zestimate` / `current_hl_value`, `schools`, `tax_history`, `sale_history`, `value_history`, structured facts, `current_home_status`. **It does NOT read from the website** — it is built first, from the resolve + Ninja backfill. |
+| **`hl_srg_past_clients`** | CRM (`HL_CRM_DATABASE_URL`, Railway *autorack*) | 1 row / past client (~1,834) | the **PERSON**: name, `bucket`, `phone`/`email`, **`fub_id`** (→ FUB), `dossier` (jsonb), `fub_identity` (jsonb — incl the LLM-resolved `household_fub_ids`), `resolved_current_home`. |
+| **`hl_srg_past_client_homes`** | CRM (*autorack*) | 1 row / resolved home (~2,259) | **THE MASTER SNAPSHOT — it owns the data.** One row per home a client transacted, linked by `past_client_id`. Carries the confirmed home: `address`, `canonical_slug`, `website_hlid`, `current_zestimate` / `current_hl_value`, `schools`, `tax_history`, `sale_history`, `value_history`, structured facts, `current_home_status`. **It does NOT read from the website** — built first, from the resolve + Ninja backfill. |
 | **`Listing`** | WEB (`HL_WEB_DATABASE_URL`, Railway *centerbeam*) = PRODUCTION | 1 row / house (~354K) | the **website house**: renders `/home/<canonicalSlug>`. For past clients it is **seated FROM the master table** after sign-off. Keyed by `identityKey`/`canonicalSlug`; carries **nothing** about clients. |
 
 ```
 hl_srg_past_clients (CRM: the person)
   ├─ fub_id              ─────────────►  fub.people (FUB scraper, Camp David)
-  ├─ dossier / fub_identity ─ FUB metadata (texts/notes/calls/deals, duplicates, spouse)
+  ├─ dossier / fub_identity ─ FUB metadata + the LLM-resolved household
   └─ id  ◄── past_client_id ── hl_srg_past_client_homes (CRM: the MASTER home snapshot — owns the data)
                                    ├─ current_zestimate / current_hl_value  (OpenWeb-Ninja, post-sign-off)
                                    ├─ schools / tax_history / sale_history / value_history
@@ -72,88 +72,70 @@ hl_srg_past_clients (CRM: the person)
 
 > The old `closings` jsonb on `hl_srg_past_clients` and the retired `hl_sold_profiles` middle table are **dead**. The master home record is `hl_srg_past_client_homes`. Built by `tools/houseloop-cards/build-past-client-homes.mjs` (idempotent UPSERT on `closing_key`, never DELETE).
 
+## How a home + household gets resolved — the S6 LLM resolver IS the authority
+
+**Resolution is NOT deterministic string matching.** The household/spouse and the true property are decided by ONE thing: the **S6 LLM resolver** (`tools/houseloop-cards/s6-investigator.mjs`, claude-sonnet-4-6) **reading the actual evidence** — every FUB note, text, email, call, deal, the SISU closings, and the MLS truth. **Nothing links on surname or address alone.** (The earlier deterministic surname-matching pass, `_resolve_identity_v2.mjs`, is **retired** — it falsely linked different people who merely shared a last name or an apartment: Christyna→Jordyn Wyatt, Kayla→Amanda Montgomery, Shriver→Stephens.)
+
+**The funnel — gather wide, then let the LLM decide:**
+
+1. **Cast the net** (gathering only — decides nothing): pull every candidate that *could* be related — same/similar **last name**, same/similar **first name**, shared **email**, shared **phone**, shared **address**, any FUB **note/text** that names the client, and every **SISU closing** under the surname.
+2. **Pull all the evidence** for each candidate — every note, text, email, call, and deal.
+3. **The LLM triangulates** across all of it and returns the verdict — the authority for:
+   - **`household`** — who is truly one household (spouse / partner / duplicate-of-the-same-person), each with a **REQUIRED evidence quote** (the exact note/text/email/deal that names the tie). The classic signal is the FUB import **"Short Summary"** note that cross-references the spouse by name + email (Field Chari's note names "Jordyn Wyatt"; hers names "Field Chari").
+   - **`false_matches`** — same-surname / same-address candidates with **no named evidence**, explicitly rejected (it threw "Suzanne Tanner" out of the Chari household: *"no named connection in any note, deal, call, or text"*).
+   - the true **current home**, the **deals** (with MLS/triangulation provenance), and concrete **card_errors**.
+4. **Write-back** — the verdict is stamped onto the client: `resolved_current_home` and the evidence-based **`fub_identity.household_fub_ids`** (+ a full `household_llm` record). **The LLM is the only thing that sets the household.**
+
+> **THE RULE (locked 2026-06-22):** a household link requires **named evidence** — a note/text/email/deal that names the tie, a shared email/phone, or a "Secondary"/spouse tag pointing at this person. **Surname + address alone NEVER links. When unsure, EXCLUDE.** Everything for past clients runs through THIS resolver — no other logic, no hand-rolled deterministic merge.
+
+**The reconciliation canon:** MLS = sold-truth (property/date/price), SISU = paid-truth (when/how much), they **triangulate** (same price ±$3k + same date ±20 days = the same deal, even when the SISU address is a residence). Never trust a SISU address blindly; if nothing resolves, the property is **UNKNOWN** — surface candidates, never invent.
+
+> **Worked example (property triangulation).** An investor's 2021 `$450k` SISU buy carried the address `10501 W 113th St Apt 5401` — their *apartment*. Triangulation matched **MLS 2355413 — `801 W Poplar St`, $450k, fourplex, 1-day gap** — the true property, under Kyle & Karly Nations.
+
 ## The value rule (read this before touching value)
 
-- **The value anchor depends on how recently the home sold.** A **years-old** sale price is stale, so a past-client home's value = the **current Open Web Ninja Zestimate** (HouseLoop Value = **Zestimate × 1.005**). A home that **just sold** is valued off the **real sold price × 1.005** by the live disposition pipeline (below) — the fresh sale is the strongest anchor. Never a stale sold price × a nudge.
+- **The value anchor depends on how recently the home sold.** A **years-old** sale price is stale, so a past-client home's value = the **current Open Web Ninja Zestimate** (HouseLoop Value = **Zestimate × 1.005**). A home that **just sold** is valued off the **real sold price × 1.005** by the live disposition pipeline (below).
 - **GUARD:** if Ninja returns no Zestimate, the value is left **blank** — never the sold/list price.
-- **There is NO separate "home value" table.** The value lives as **columns on the master home row** (`current_zestimate`, `current_hl_value`, …) and is pushed to the website `Listing` when the home is seated.
-- **Direction of flow:** master table first (Ninja → master) → website seated from the master → **monthly, the value update appends a new `value_history` row** to the master, and the website updates from it.
+- **There is NO separate "home value" table.** The value lives as columns on the master home row and is pushed to the website `Listing` when the home is seated.
+- **Direction of flow:** master table first (Ninja → master) → website seated from the master → **monthly, the value update appends a new `value_history` row** to the master.
 
 ### Recently-sold past clients ride the LIVE disposition pipeline (automatically)
 
-The manual per-home backfill above is for homes sold **long ago** (no fresh sale to ride). A past-client home that **sells again now** does **not** need it — it flows through the live website **`listing-sold`** disposition pipeline on its own (see [Listing Lifecycle](/guides/listing-lifecycle)):
-
-- The Repliers webhook fires on the real status transition → "Sld"; the pipeline **gates on the real close date + price** (retrying until both land), persists the close price, and **mints the value from `soldPrice × 1.005`** — landing on the website `Listing` with zero manual work.
-- **Both paths share the `ninjaEnrichedAt` stamp** (the single "was Ninja called" gate), so the live pipeline and the manual backfill **never double-enrich** the same home.
-- **Worked example:** **301 E 68th Terrace** (a Nations home) sold in **2026** → the live pipeline valued it at **$525k × 1.005 ≈ $527,625** automatically. **801 W Poplar** sold in **2021** → it waits for the manual Ninja Zestimate backfill once resolved. Same client, two value paths, by sale recency.
+A past-client home that **sells again now** flows through the live website **`listing-sold`** pipeline on its own (see [Listing Lifecycle](/guides/listing-lifecycle)): the Repliers webhook fires on the real "Sld" transition, the pipeline **gates on the real close date + price**, persists the close price, and **mints the value from `soldPrice × 1.005`**. Both paths share the `ninjaEnrichedAt` stamp so they never double-enrich. *Example:* **301 E 68th** (sold 2026) → valued at $525k × 1.005 ≈ **$527,625** automatically; **801 W Poplar** (sold 2021) → manual Ninja backfill once resolved.
 
 ## The four data sources (each authoritative for different fields)
 
-### 1. SISU — the deal spine (who, when, how much, which agent, buy vs sell)
-`sisu_transactions` (CRM, ~11,636 rows) is the source of truth that **a closing happened**, its **buy/sell role** (`transaction_type`), and the **working agent** (`agent`). **SISU is the only trusted source for agent attribution and role** (MLS rolls all agents up under `ANASPRAD`).
+### 1. SISU — the deal spine
+`sisu_transactions` (CRM, ~11,636 rows) is the source of truth that a closing happened, its buy/sell role (`transaction_type`), and the working agent (`agent`). **SISU is the only trusted source for agent attribution and role.** **The money-column law:** `transaction_amount` = SALE PRICE · `gci` = GROSS commission · `gross_paid_income` = NET. **⚠️ The SISU `address` is sometimes the client's residence, not the property** — resolve via MLS + triangulation. The Zillow referral fee lives in the `gci` → `gross_paid_income` gap.
 
-**The money-column law (do not conflate these):**
-- **`transaction_amount` = the SALE PRICE of the home.** Never a fee, never income.
-- **`gci` = GROSS commission income** (~3% of sale price).
-- **`gross_paid_income` = what the team actually NETTED** after referral fees and broker splits — the real income line.
-
-**⚠️ The SISU `address` caveat:** the `address` field is **not always the property transacted** — it is sometimes the client's **residence** at the time of the deal. Resolve the true property via MLS sold-truth + triangulation, never by trusting the SISU address blindly.
-
-**The Zillow referral fee lives in the `gci` → `gross_paid_income` gap.** Across 1,155 closed Zillow Flex deals the team keeps ~57% of GCI vs ~74% on non-Zillow deals. ~60% of closed deals are Zillow-sourced. It is a **cost**, never a deal or income.
-
-### 2. MLS download — structured facts + the SOLD-TRUTH (`hl_srg_mls_deals`)
-`hl_srg_mls_deals` (CRM, ~1,971 rows) is the downloaded Spradling Group MLS — the **sold-truth** (real property/date/price) and the free source for structured fields: `beds`, `full_baths`/`half_baths`, `sqft`, `year_built`, `lot_size`, `property_type`, `subdivision`, schools, `hoa_fee`. (`bathroomsTotal` = `full_baths + 0.5·half_baths`.)
+### 2. MLS download — structured facts + SOLD-TRUTH (`hl_srg_mls_deals`)
+~1,971 rows — the downloaded SG MLS: real property/date/price + beds, baths, sqft, year, lot, type, subdivision, schools, HOA. (`bathroomsTotal` = `full_baths + 0.5·half_baths`.)
 
 ### 3. OpenWeb Ninja / Zillow — value, value-history, schools, tax, price history, photos (the per-home backfill)
-The "Real-Time Zillow Data" API (`realtime-zillow-data/search?location=` / `property-details?zpid`) provides the **Zestimate** (the value anchor for old sales), **GreatSchools**, **tax history**, and **price/sale history**. **Run per confirmed home, after sign-off, only for the still-blank ~175** — written into the master `hl_srg_past_client_homes` row. Tools: `tools/houseloop-cards/enrich-pastclient-listing.mjs`, `enrich-home.mjs`, `zillow-enrich.mjs`, `ninja-schools-tax-fill.mjs`.
+The "Real-Time Zillow Data" API provides the **Zestimate** (value anchor for old sales), GreatSchools, tax history, and price/sale history → written into the master row. Tools: `enrich-pastclient-listing.mjs`, `enrich-home.mjs`, `zillow-enrich.mjs`, `ninja-schools-tax-fill.mjs`.
 
 ### 4. Redfin photo engine — gallery fallback
-Off-market homes thin to a single street-view photo on the Ninja/Zillow feed. The Redfin engine (`tools/houseloop-photos/hl-photo-engine.mjs`, real-Chrome shards on Camp David) pulls the full gallery → uploads to **Cloudflare R2** → writes back (improvement-only). Never hot-links Zillow/Redfin — always our R2 copy.
+`tools/houseloop-photos/hl-photo-engine.mjs` (real-Chrome shards on Camp David) → full gallery → Cloudflare R2 → write-back (improvement-only).
 
 ## How it links to the FUB scraper
 
-`hl_srg_past_clients.fub_id` = `fub.people.id` on the Camp David `bossloop` Postgres (`fub.*` schema). That join unlocks the full communication history (`fub.text_messages` ~399K, `fub.notes` ~136K, `fub.calls` ~40K, `fub.deals` ~4.5K, `fub.assignment_history`). Two derived columns are built deterministically (no LLM):
-- **`dossier`** (jsonb) — structured per-client metadata (text/email/call counts, raw notes, deals, tags, signals). The knowledge base Myli reads to write outreach.
-- **`fub_identity`** (jsonb) — canonical person + FUB duplicates (same email, or phone+name) + spouse (`Secondary` tag + shared address).
-
-## The reconcile engine (step 1 in depth — how a home gets resolved to a client)
-
-The raw sources disagree, so resolution is a staged pipeline — **all report-only; nothing writes without human sign-off.** Tools live in `.claude/scratch/` + `tools/houseloop-cards/`:
-
-| Stage | What it does |
-|---|---|
-| **S0 Identity** | collapse duplicate FUB people, link spouse. **Surname FUZZY** (catches typos like `Bohnsedt`≈`Bohnstedt`), **first name TIGHT** (Tonya ≠ Sonja). |
-| **S0.5 Forensic gather** | surface the complete household FUB cluster — *including contactless profiles* FUB buries but that hold a move or a second deal. |
-| **S1 Orphan audit** | classify every closing; flag collapse-pairs (same deal twice) and orphans needing verification. |
-| **S6 LLM investigator** | the capstone (claude-sonnet-4-6, report-only) — reads a six-section case file (our card · SISU paid-truth · MLS sold-truth · triangulation · house forensics · FUB evidence) and returns a structured verdict. |
-
-**The reconciliation canon:** MLS = sold-truth (property/date/price), SISU = paid-truth (when/how much), they **triangulate** (same price ±$3k + same date ±20 days = the same deal, even when the SISU address is a residence). Never trust a SISU address blindly; if nothing resolves, the property is **UNKNOWN** (surface candidates, never invent).
-
-> **Worked example.** An investor's 2021 `$450k` SISU buy carried the address `10501 W 113th St Apt 5401` — their *apartment*. Triangulation matched **MLS 2355413 — `801 W Poplar St`, $450k, fourplex, 1-day gap** — the true property. That confirmed link is what makes 801 eligible for the Ninja backfill under Kyle & Karly Nations.
+`hl_srg_past_clients.fub_id` = `fub.people.id` on the Camp David `bossloop` Postgres (`fub.*` schema). That join unlocks the full communication history (`fub.text_messages` ~399K, `fub.notes` ~136K, `fub.calls` ~40K, `fub.deals` ~4.5K, `fub.emails`, `fub.events`). Derived columns:
+- **`dossier`** (jsonb) — structured per-client metadata (note/text/email/call counts + the raw notes, deals, tags, signals). The case file the S6 LLM reads.
+- **`fub_identity`** (jsonb) — the canonical person + the **LLM-resolved `household_fub_ids`** (named-evidence) + `household_llm` (the verdict + evidence quotes + rejected false_matches). The spouse/household is **set by the S6 LLM resolver, never by deterministic surname/address matching.**
 
 ## How the CRM seller-report dashboard reads it
 
 The seller-report dashboard at **`/settings/seller-report`** (`apps/houseloop-crm/app/(crm)/settings/seller-report/page.tsx`) renders **from the canonical tables, not a JSON blob**:
 
 - **Parent `hl_srg_past_clients`** → the person (identity, `dossier`, `resolved_current_home`).
-- **Child `hl_srg_past_client_homes`** → the homes. One query, **grouped by home** (a buy + sell of the same home collapse to one card line), with a derived **disposition** (`owns` / `sold_by_us` / `sold_lost` / `unverified`) and the **most-recent home** flagged as current-on-file.
-- **Per-home line:** Address · disposition badge · sale/buy agent · purchase price · **HouseLoop value** (→ `/home/<canonical_slug>`).
-- **Client header (the homeowner story):** Purchase price · Current value · **Total Appreciation** (current − purchase) · **Avg Monthly Appreciation** (total ÷ months held) · appreciation %. All are real math off two real numbers (purchase from the deal, current value from the home). **No mortgage or equity is shown** — see below.
-- **Dossier** renders as deterministic prose built from the parent + child — never the raw JSON.
-
-A home only appears fully populated once it has been through the resolve → sign-off → backfill → slug lifecycle above (or rode the live disposition pipeline).
+- **Child `hl_srg_past_client_homes`** → the homes, grouped by home, with a derived **disposition** (`owns` / `sold_by_us` / `sold_lost` / `unverified`) and the **most-recent home** flagged as current-on-file.
+- **Per-home line:** Address · disposition · agent · purchase price · **HouseLoop value** (→ `/home/<canonical_slug>`).
+- **Client header:** Purchase · Current value · **Total Appreciation** (current − purchase) · **Avg Monthly Appreciation** (total ÷ months held) · appreciation %. **No mortgage or equity is shown** (below).
+- **Dossier** renders as deterministic prose from the parent + child.
 
 ### Mortgage / equity — deferred (Realie), never fabricated
 
-True lien-based mortgage + equity is **not** on the card, and we **never fabricate it** — the old "assume 20% down @ 6.5% and amortize" estimate was **deleted** (it was a guess, and it was wrong to present as fact). The card instead shows **appreciation** (above), and the homeowner does their own financials.
-
-When we do add real mortgage/equity, the source is **Realie** (`app.realie.ai/api/public/property/address/`, code in `apps/houseloop-web/lib/listings/realie.ts`). Realie returns the recorded **lien balance + lender** (hard data) plus an estimated equity computed off **Realie's own value** (which we do **not** trust — its AVM is weak in KC). The locked rule for when it's enabled:
-
-- **Mortgage** = Realie `totalLienBalance` (real recorded debt) + `lenderName`.
-- **Equity** = **our HouseLoop value − the lien balance** (computed by us) — **never** Realie's `equityCurrentEstBal`.
-- **Owned homes only** — a sold home's loan is paid off at closing, and Realie lags recent sales (it showed Nations still owning the 2026-sold 301 with its 2023 loan).
-
-It is **deferred** purely on cost: Realie is usage-billed (Free tier = 25 calls/mo then **$0.15/call**; paid tiers ~$0.01–$0.05/call), and lien data needs a **monthly refresh** to stay current — not worth it yet. The credential is stored and the integration exists; it switches on when we decide to pay for it.
+True lien-based mortgage + equity is **not** on the card, and we **never fabricate it** (the old amortization guess was deleted). When enabled, the source is **Realie** (`apps/houseloop-web/lib/listings/realie.ts`): **Mortgage** = Realie `totalLienBalance` + `lenderName` (real recorded debt); **Equity** = **our HouseLoop value − the lien balance** (never Realie's own equity estimate); **owned homes only**. Deferred on cost (usage-billed, needs a monthly refresh).
 
 ## Key files & tables
 
@@ -161,14 +143,14 @@ It is **deferred** purely on cost: Realie is usage-billed (Free tier = 25 calls/
 |---|---|
 | People table (the person) | `hl_srg_past_clients` (CRM) |
 | **Master home snapshot (owns the data)** | **`hl_srg_past_client_homes` (CRM)** — built by `tools/houseloop-cards/build-past-client-homes.mjs` |
+| **Household + property resolver (THE authority)** | **`tools/houseloop-cards/s6-investigator.mjs`** — the S6 LLM resolver; reads all FUB/SISU/MLS evidence, links on named evidence, writes `household_fub_ids`. The deterministic `_resolve_identity_v2.mjs` is **retired**. |
 | Website house (seated from the master) | `Listing` (WEB) — see [Property Data Model & Address Identity](/guides/property-data-and-address-identity) |
 | Live disposition pipeline (recently-sold) | `lib/inngest/functions/listing-sold.ts` (WEB) — see [Listing Lifecycle](/guides/listing-lifecycle) |
 | Deal spine | `sisu_transactions` (paid-truth) + `hl_srg_mls_deals` (sold-truth) (CRM) |
 | FUB scraper | `fub.*` on Camp David `bossloop` Postgres |
-| Per-home Ninja/Zillow backfill (the ~175 blanks) | `tools/houseloop-cards/enrich-pastclient-listing.mjs`, `enrich-home.mjs`, `zillow-enrich.mjs`, `ninja-schools-tax-fill.mjs` |
+| Per-home Ninja/Zillow backfill (the ~175 blanks) | `enrich-pastclient-listing.mjs`, `enrich-home.mjs`, `zillow-enrich.mjs`, `ninja-schools-tax-fill.mjs` |
 | Mortgage / equity source (deferred) | Realie — `apps/houseloop-web/lib/listings/realie.ts` |
 | Redfin photos → R2 | `tools/houseloop-photos/hl-photo-engine.mjs` |
-| Reconcile engine (S0 → S6) | `.claude/scratch/_resolve_identity_v2.mjs`, `_s05_forensic_gather.mjs`, `_s1_orphan_audit.mjs`, `tools/houseloop-cards/s6-investigator.mjs` |
 | Seller-report dashboard | `apps/houseloop-crm/app/(crm)/settings/seller-report/page.tsx` |
 | `/home` render | `apps/houseloop-web/app/home/[slug]/page.tsx` |
 
