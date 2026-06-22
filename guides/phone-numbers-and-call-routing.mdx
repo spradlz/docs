@@ -1,69 +1,88 @@
 ---
 title: "Phone Numbers & Call Routing"
-description: "How HouseLoop owns its phone lines and routes inbound calls and texts to Myli — the inbound number is the caller's intent. Every inbound (calls, texts, voicemails) is captured to the lead record, including unknown callers."
+description: "The full SRG/HouseLoop phone topology — every line, who owns it, where it routes, and how the inbound number drives Myli's context. Internal: all comms move to HouseLoop; the owned business lines port to Twilio."
 ---
 
-HouseLoop is consolidating **all voice + SMS comms onto its own infrastructure** so every
-call and text runs through the platform and **Myli** — not a third-party CRM. This page
-covers how the business lines map to caller intent, and how inbound is captured.
-
 <Note>
-**The number a caller dials is intent data.** Each business line means something different,
-so the inbound `To` number tells Myli *who is calling and why* before she answers — and she
-opens with the right frame. The Twilio voice/SMS webhook reads the `To` number → looks up
-that line's context → loads Myli's matching prompt.
+**Internal command surface.** This page documents the real numbers and the FUB-exit plan. The
+canonical source is `GT_HOUSELOOP_MASTER.md` §8b + `.claude/checkpoints/srg-twilio-numbers-2026-06-22.md`;
+credentials live in the vault / Master Sheet (never printed here).
 </Note>
 
-## Business lines → Myli context
+## The North Star
 
-Each owned line carries a distinct intent. The handler resolves context from the `To` number:
+**All comms run through HouseLoop.** FUB is no longer where we talk to people — every call, text,
+and email flows through HouseLoop / **Myli**. FUB's only remaining roles: (1) a **data source**
+(past-client inbound on the kept Past-Agent numbers, captured to our DB), and (2) a parking lot for a
+couple of unused legacy dialer numbers. Same de-risk-from-FUB logic as the walled-garden doctrine —
+FUB is Zillow-owned and progressively closing its data taps, so we own the numbers and own the conversation.
 
-| Line role | Myli reads it as | Opening frame |
+## The number a caller dials = their intent
+
+The Twilio voice/SMS webhook reads the inbound **`To` number** → looks up that line's context → loads
+Myli's matching prompt. Three owned business lines, three frames:
+
+| Line | Role | Myli reads it as | Opening frame |
+|---|---|---|---|
+| **913-320-0906** | Company / Google My Business | new prospect found us on Google | qualify — buyer or seller? |
+| **913-354-8600** | LISTINGS / sign line (yard signs) | caller standing AT a listing | "which property are you looking at?" — high intent |
+| **913-954-7123** | Ana's old cell (Google Voice) — all her past clients call it | likely an **Ana past client** | warm; look them up in Ana's book |
+
+## Ownership & the port plan
+
+| Number | Owns it today | Action |
 |---|---|---|
-| **Company / Google My Business** (`913-320-0906`) | a new prospect who found us on Google | Qualify — buyer or seller? |
-| **Listings / sign line** (on yard signs) | a caller standing at a specific listing | "Which property are you looking at?" — high intent, property-specific |
-| **Legacy agent line** (a past agent's old number) | likely a **past client** of that agent | Warm; look them up in that agent's book |
-
-The raw line inventory and per-number configuration live in the internal CRM settings, not
-in these public docs. The routing model above is the contract: **`To` number → context → prompt.**
-
-## Number ownership
-
-HouseLoop owns its numbers in **Twilio** so they're portable and never hostage to a CRM
-vendor. Numbers currently routed through a third party are re-pointed to the HouseLoop
-voice/SMS webhooks; numbers provisioned inside another platform are **ported out to Twilio**
-(standard carrier port — LOA + a recent bill, a few business days, no downtime).
+| **913-320-0906** (Company/GMB) | FUB-provisioned (verify) | **Port → our Twilio → Myli** |
+| **913-354-8600** (LISTINGS/sign) | FUB-provisioned (verify) | **Port → our Twilio → Myli** |
+| **913-954-7123** (Ana's old cell) | **Google Voice** | **Port → Twilio** (GV port-out, unlock ~$3). Stop forwarding it to the sign line. (FUB inbox 913-453-5505 is tied to it — reconcile.) |
+| ~35 **Past-Agent** numbers | FUB | **KEEP in FUB** — past clients still call old agent lines; captured via the inbound fix below |
+| **Aaron** 913-298-8760 · **Ben** 913-379-3429 | FUB | **Drop** |
+| **Ana** 913-349-5536 · **Zach** 913-490-2988 | FUB | **Park, unused** |
 
 <Tip>
-A number provisioned *inside* a third-party CRM is owned by that CRM. Porting it to your own
-Twilio account is what makes it yours — and lets you point its Voice + SMS webhooks at Myli.
+A number provisioned *inside* FUB is owned by FUB — leaving FUB loses it. Porting it to our Twilio
+(LOA + recent bill, ~a few business days, no downtime) makes it ours and lets us point Voice + SMS at Myli.
+FUB's API does not expose number ownership — confirm in **FUB Admin → Phone Numbers**.
 </Tip>
 
-Per-member dialer numbers, A2P 10DLC brand/campaign registration, and the per-user
-caller-ID rules are documented in **[Team Members & Communications](/guides/team-communications)**.
+**Two Twilio accounts:** the HouseLoop/company Twilio + the **SRG Twilio** (`support@spradlingrealtygroup.com`,
+creds in vault / Master Sheet row 78). The SRG `913-347-xxxx` numbers (Commission Grids, etc.) currently
+route to **GoHighLevel** (`services.leadconnectorhq.com`) — we own them, just re-point to Myli.
 
-## Inbound capture — every call and text lands on the lead
+### 2-vs-3 lines (open decision)
+
+If the **yard signs in the field print 913-354-8600**, keep all 3 lines — you can't un-print physical signs.
+If the signs print the GMB number, collapse to **2** (Ana legacy + a GMB catch-all) and Myli recovers the
+sign-vs-general distinction by asking. **Ana's line stays separate either way.** Deciding question: what's
+printed on the signs today?
+
+## Inbound capture — every call & text lands on the lead
 
 <Check>
-**Live.** Inbound calls, texts, and emails are stored to the lead record and threaded onto
-the conversation — **including callers who aren't a lead yet.**
+**Live (shipped 2026-06-22).** Inbound calls, texts, and emails are stored to the lead record and
+threaded onto the conversation — **including callers who aren't a lead yet.**
 </Check>
 
-Inbound from an **unknown number** (a missed call, a voicemail, a first-touch text from
-someone not yet in the system) is captured as an *unmatched* record keyed by phone number,
-rather than dropped. This means the full inbox — missed calls and voicemails included — is
-visible and actionable, and converts cleanly into a lead when the caller is identified.
+The root cause we fixed: FUB delivers unknown callers with **`personId = 0`**, and the webhook handler did
+`if (!personId) return` — and `!0` is `true`, so **every missed call, voicemail, and first-touch text from
+an unknown number was silently dropped.** Now `handleCall` / `handleTextMessage` / `handleEmail`
+(`apps/dashboard/server/fub-webhooks.ts`) store `person_id = 0` as an *unmatched* record keyed by phone
+number instead of dropping it. So the full inbox — missed calls and voicemails included — is captured and
+converts cleanly to a lead when the caller is identified.
 
 | Inbound type | Captured | Notes |
 |---|---|---|
-| **Call** (incl. missed / voicemail) | ✅ | Recording + outcome stored; transcript when available |
+| **Call** (incl. missed / voicemail) | ✅ | Recording URL + outcome stored; transcript when available |
 | **Text** (SMS / iMessage) | ✅ | Threaded onto the lead; unknown-number texts captured too |
 | **Email** | ✅ | Threaded onto the lead |
+
+Per-member dialer numbers, A2P 10DLC, and per-user caller-ID rules:
+**[Team Members & Communications](/guides/team-communications)**.
 
 ## Roadmap
 
 <Info>
 **Live now:** inbound capture (calls, texts, voicemails, including unknown callers).
-**In progress:** Myli answering inbound calls + texts live on the owned business lines, with
-per-line context prompts; completing the number ports into Twilio.
+**Next:** the Myli inbound voice+SMS handler (reads the `To` number → context → prompt) on the owned lines;
+complete the number ports into Twilio; re-point the SRG `913-347` numbers off GoHighLevel.
 </Info>
