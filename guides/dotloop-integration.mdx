@@ -1,0 +1,106 @@
+---
+title: "dotloop Integration"
+description: "How HouseLoop connects to dotloop via the Public API v2 (OAuth 2.0) to read a brokerage's loops, participants, documents, and folders. The base of the Transaction Coordination section."
+---
+
+<Note>
+**Foundation in place; data sync in active build.** dotloop has granted HouseLoop **Public API v2**
+access and our **Application Client** (OAuth 2.0) is created. The OAuth flow and read endpoints
+below are the contract we build against. The in-app loop sync and the one-time account
+authorization are being wired now — this page documents the architecture and the live API surface,
+not a finished pipeline.
+</Note>
+
+## What it does
+
+dotloop is the transaction-management platform many brokerages use to run a deal from contract to
+close — each transaction is a **loop** containing participants, documents, folders, and milestone
+dates. The dotloop integration lets HouseLoop **read that transaction data through dotloop's
+official Public API v2** and link each loop back to the HouseLoop lead/deal it belongs to.
+
+We read the brokerage's *own* dotloop account. We don't move the data out of dotloop — dotloop
+stays the system of record; HouseLoop reads from it.
+
+## The two-account model
+
+dotloop's API separates the **application** from the **data**, and so do we:
+
+| Account | What it is | Holds |
+|---|---|---|
+| **Developer account** (`admin@houseloop.ai`) | the "app" — where the Application Client lives | the Client ID + Secret. No loops, no plan needed. |
+| **Brokerage account** (Spradling Group) | the "data" — the real transaction file | every loop, participant, document. Untouched. |
+
+The developer account is an empty, free dotloop account whose only job is to hold the API client
+(dotloop recommends a dedicated account for this). The brokerage account is where the loops live;
+it **authorizes** our client via OAuth consent, and dotloop then issues a token scoped to *that*
+account's loops. The brokerage's plan, data, and workflow are never altered.
+
+## OAuth 2.0 flow
+
+dotloop uses three-legged OAuth 2.0 (`authorization_code` + `refresh_token` grants).
+
+```
+1. Redirect the brokerage user to the authorize URL (response_type=code, client_id, redirect_uri, state)
+2. They sign in to dotloop + grant consent ──▶ dotloop redirects to our redirect_uri with ?code=...
+3. Exchange the code at the token URL (grant_type=authorization_code) ──▶ access_token + refresh_token
+4. Call the API with: Authorization: Bearer <access_token>
+5. Access token expires (~12h) ──▶ refresh with grant_type=refresh_token (the old access token is then invalid)
+```
+
+| Thing | Value |
+|---|---|
+| Authorize URL | `https://auth.dotloop.com/oauth/authorize` |
+| Token URL | `https://auth.dotloop.com/oauth/token` |
+| API base | `https://api-gateway.dotloop.com/public/v2/` |
+| Redirect URI | `https://crm.houseloop.ai/api/dotloop/oauth/callback` |
+| Access-token lifetime | ~12 hours (refresh with the refresh token) |
+| Grants | `authorization_code`, `refresh_token` |
+
+The Client ID and Secret are stored as secrets (`DOTLOOP_CLIENT_ID` / `DOTLOOP_CLIENT_SECRET`) and
+are never committed or exposed client-side. The OAuth handshake and token refresh run server-side
+in the CRM at the redirect-URI route above.
+
+## Access scopes
+
+The Application Client is provisioned with read + write on all five dotloop access domains:
+
+| Scope | Covers |
+|---|---|
+| Account | account details |
+| Profile | the user's profiles |
+| Loop | the user's loops (transactions) |
+| Contact | the user's contacts |
+| Template | loop templates |
+
+<Note>
+dotloop locks a client's access scopes at creation — they cannot be widened later without creating
+a new client (which forces a re-authorization). The client is provisioned read + write across all
+five domains so future write-back (e.g. creating loops) never requires a re-auth, even though the
+initial integration only reads.
+</Note>
+
+## Read endpoints
+
+All paths are relative to the API base and require the `Authorization: Bearer` header.
+
+| Endpoint | Returns |
+|---|---|
+| `GET /account` | the authorized account |
+| `GET /profile` · `GET /profile/:id` | profiles on the account |
+| `GET /profile/:id/loop` | loops (transactions) for a profile |
+| `GET /profile/:id/loop/:loopId` | one loop |
+| `GET /profile/:id/loop/:loopId/detail` | loop detail (fields, milestones) |
+| `GET /profile/:id/loop/:loopId/participant` | participants on a loop |
+| `GET /profile/:id/loop/:loopId/folder` | folders in a loop |
+| `GET /profile/:id/loop/:loopId/folder/:folderId/document` | documents in a folder |
+
+## References
+
+- dotloop developer guide (source of truth): <https://dotloop.github.io/public-api/>
+- dotloop API support: `apisupport@dotloop.com`
+
+## Change log
+
+- **2026-06-22** — dotloop Public API v2 access granted on `admin@houseloop.ai`; Application Client
+  created (OAuth 2.0, read + write on all five scopes, redirect `https://crm.houseloop.ai/api/dotloop/oauth/callback`).
+  In-app loop sync + one-time brokerage authorization in active build.
