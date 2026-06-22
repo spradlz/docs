@@ -1,18 +1,17 @@
 ---
 title: "Transaction Coordination"
-description: "The HouseLoop CRM section for running a deal contract-to-close — templates/contracts, the coordination layer, and the dotloop integration underneath it."
+description: "The HouseLoop CRM section for running a deal contract-to-close — transactions, fillable contracts, email queue, and the dotloop integration underneath."
 ---
 
 ## What this section is
 
-**Transaction Coordination (TC)** is the HouseLoop CRM section for running a deal after it goes under
-contract — the coordination layer (templates, contracts, checklists, client portal) on top of the
-transaction-management platform that holds the loop file (participants, documents, milestones).
+**Transaction Coordination (TC)** is the HouseLoop CRM section for running a deal — the coordination
+layer (transactions, contracts, email queue, team files) on top of the transaction-management platform
+(dotloop) that holds the loop file. Modeled as a *light*, AI-native (Myli-fillable) version of a
+dedicated TC tool, built on HouseLoop's own rails.
 
-Where [Website Integration](/guides/listing-lifecycle) is about the *listing* (the home) and the CRM
-guides are about the *lead* (the person), **Transaction Coordination is about the deal** — the
-contract-to-close record. It is modeled as a *light* version of a dedicated TC tool, AI-native
-(Myli-fillable), built on HouseLoop's own rails, with **dotloop** as the integration underneath.
+Where [Website Integration](/guides/listing-lifecycle) is about the *listing* and the CRM guides are
+about the *lead*, **Transaction Coordination is about the deal** — the contract-to-close record.
 
 ## The model
 
@@ -20,30 +19,46 @@ contract-to-close record. It is modeled as a *light* version of a dedicated TC t
 |---|---|---|
 | **Listing** (the home) | `Listing` (web DB) | renders `/home/<slug>`, value, history |
 | **Lead** (the person) | `hl_leads` (CRM DB) | CRM, AI follow-up, activity log |
-| **Deal** (the transaction) | the transaction platform (dotloop) | **coordinated via this section** |
+| **Transaction** (the deal) | **`hl_transactions`** (CRM DB) | the deal record — written by disposition |
 
-The transaction platform stays the system of record; HouseLoop reads from it (and pushes finished
-documents back). We don't replace dotloop or move its data out.
+**The transaction record already exists: `hl_transactions`** (disposition-driven — marking a lead
+*Under Contract* or *Closed* in the pipeline writes a row with address · price · closing · commission;
+`milestone` = `under_contract` \| `closed` \| `fell_through`). **Past clients = leads with a `closed`
+transaction.** The TC tables that sit alongside it: `hl_contract_template` (fillable form store),
+`hl_contract_fill` (a filled contract, per-lead), `hl_tc_email` (the email queue). dotloop stays the
+system of record for signed docs; HouseLoop reads loops and pushes finished documents back.
 
 ## The CRM section (navigation)
 
-Transaction Coordination is a **drill-in section** in the CRM: the main left nav has a
-**Transaction Coordination ›** item; clicking it swaps the whole left menu for the TC sub-nav and a
-**Back to CRM** link. The TC sub-nav (mirroring a dedicated TC tool):
+TC is a **drill-in section**: the main left nav has **Transaction Coordination ›**; clicking it swaps
+the whole left menu for the TC sub-nav + a **Back to CRM** link. Sub-nav (routes under `/tc/*`,
+additive — Dashboard/Leads unchanged):
 
-- **Templates** — the Contract Engine: reusable fillable contracts (Buyer's Agency, Single Showing
-  Agreement) that auto-fill from a lead's data, are verified by Myli, and push into the dotloop loop.
-- **Team Info · Team Members · Lists · Client Portal · Import** — the coordination + admin surfaces.
+**Transactions · Email Queue · Forms · Team Files · Team Info · Team Members · Lists · Client Portal · Import**
 
-Routes live under `/tc/*` (additive — the existing Dashboard/Leads nav is unchanged).
+## Forms — the Contract Engine
+
+The **Forms** page turns the brokerage's flat dotloop contract PDFs into **fillable forms** HouseLoop
+can complete programmatically:
+
+1. Each form's flat PDF + a coordinate **field-map** (PDF field → lead/deal data source) is stored in
+   `hl_contract_template` (`lib/tc/contract-forms.ts` holds the maps).
+2. The engine (`lib/tc/fill-contract.ts`, pdf-lib) adds AcroForm fields and fills each from the lead
+   (name, search area, budget, agent, dates) — Myli-verified values override.
+3. Pick a form → fill → **preview the filled PDF inline** → download → (Stage 4) push into the dotloop loop.
+
+The **showing-door** forms (the buyer journey): **Single Property Buyer-Broker Rep** (default, one
+house) → **Exclusive Buyer Agency** (multiple homes). Disclosures (wire fraud, ABA, broker disclosure)
+roll in later at contract time, not at showing.
 
 ## Build stages
 
 | Stage | What | Status |
 |---|---|---|
-| 0 | The shell — the drill-in nav + TC sub-nav + sub-pages | **Shipped** |
-| 1 | Contract Engine — fillable-PDF template store + field-map fill → auto-fill Buyer's Agency / Showing from a lead → PDF | In build |
-| 2 | Transactions + checklists (the coordination core) | Planned |
+| 0 | The shell — drill-in nav + TC sub-nav | **Shipped** |
+| 1 | Contract Engine — fillable forms (Single Property / Exclusive) → fill from a lead → inline PDF preview | **Shipped** |
+| 1b | Transactions table + Email Queue (read `hl_transactions` / `hl_tc_email`) | **Shipped** |
+| 2 | Transaction detail (per-deal tabs) + checklists | Planned |
 | 3 | Admin — Team Members, Lists, Client Portal, Import | Planned |
 | 4 | dotloop push + Myli autonomy (upload the filled PDF into the loop; Myli drives the showing→agreement flow) | Planned |
 
@@ -51,12 +66,14 @@ Routes live under `/tc/*` (additive — the existing Dashboard/Leads nav is unch
 
 <CardGroup cols={2}>
   <Card title="dotloop" icon="file-signature" href="/guides/dotloop-integration">
-    dotloop Public API v2 (OAuth 2.0). Read loops, participants, documents, and folders; upload
-    completed documents back into the loop. The integration underneath this section.
+    dotloop Public API v2 (OAuth 2.0). Read loops, participants, documents, folders; upload completed
+    documents back into the loop. The integration underneath this section.
   </Card>
 </CardGroup>
 
 ## Change log
 
-- **2026-06-22** — Section created; Stage 0 (the nav shell) shipped; dotloop Public API v2 integration
-  live (see [dotloop Integration](/guides/dotloop-integration)). Contract Engine (Stage 1) in build.
+- **2026-06-22** — Section shipped: TC drill-in nav, **Transactions table** (`hl_transactions`, renamed
+  from `hl_lead_deals`), **Email Queue**, and the **Contract Engine** (fillable Single Property /
+  Exclusive buyer forms → fill from a lead → inline PDF preview). dotloop Public API v2 integration live.
+  Next: transaction detail, dotloop push, Myli autonomy.
