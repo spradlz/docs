@@ -1,0 +1,70 @@
+---
+title: "Lead Flow"
+description: "The map of every lead EVENT to the ONE workflow that owns it, grouped into three buckets — New Lead Registration, Existing Lead System Events, and Follow-Up. The new-vs-existing split is decided at intake by the created flag."
+---
+
+**Lead Flow** (Settings → Pipeline & Workflow → Lead Flow) is the single screen that answers
+*"when a lead does X, what happens?"* Every lead event is owned by exactly **one** workflow, and the
+events are grouped into three buckets that read top-to-bottom.
+
+<Note>
+Lead Flow is a **lens**, not a fifth config store. It reads the truth that already lives in
+`hl_lead_source_events` (event → workflow binding), `hl_workflows` (the playbook + its bucket), and the
+Run Log (last-fired). The canonical trigger table is the private `GT_HOUSELOOP_WORKFLOW_TRIGGERS_SSOT.md`.
+</Note>
+
+## The three buckets
+
+Each event lands in a bucket based on its assigned workflow's `folder` (the source of truth), falling
+back to the event-key shape when no workflow is bound yet.
+
+| Bucket | What it holds | When it fires |
+| --- | --- | --- |
+| **New Lead Registration** | A brand-new person's first touch — General Registration, Liked Home, Saved Home, Saved Search, Tour Request, Contact Request, Seller Get Report, Seller Get Started (+ FUB Property Tour). | `created = true` |
+| **Existing Lead System Events** | Someone we already know acting again — the Tour / Contact / Saved Search / Seller acknowledgements, plus the property activity signals (Viewed, Liked, Saved, Shared). | `created = false` |
+| **Follow-Up** | Ongoing nurture that runs on a schedule (e.g. Saved Search Listing Alerts). Not tied to a single door event. | scheduled |
+
+## New lead vs. existing lead (the `created` split)
+
+The **same** website action fires a **different** workflow depending on whether the person is brand
+new or returning. **The intake's `created` flag is the authority** — it dedupes by email, then by the
+last-10 digits of the phone (the way Follow Up Boss / SureSend dedupe), so it works logged-in or out:
+
+- **New email/phone** → no match → the **New Lead Registration** door (`<event>_registration`).
+- **Known email/phone** → match → the **Existing Lead System Events** door (the base `<event>`).
+
+| Event | New lead (`created = true`) | Existing lead (`created = false`) |
+| --- | --- | --- |
+| Registration | `general_registration` → New Lead — General Registration | — (registration is the new-lead event) |
+| Liked home | `liked_home_registration` → New Lead — Liked Home | `property_liked` → Existing Lead — Property Liked |
+| Saved home | `saved_home_registration` → New Lead — Saved Home | `property_saved` → Existing Lead — Property Saved |
+| Saved search | `saved_search_registration` → New Lead — Saved Search | `saved_search` → Existing Lead — Saved Search |
+| Tour request | `tour_request_registration` → New Lead — Tour Request | `tour_request` → Existing Lead — Tour Request |
+| Contact request | `contact_request_registration` → New Lead — Contact Request | `contact_request` → Existing Lead — Contact Request |
+| Seller — Get Report | `home_value_report_registration` → New Lead — Seller Get Report | `home_value_report` → Existing Lead — Seller Get Report |
+| Seller — Get Started | `seller_get_started_registration` → New Lead — Seller Get Started | `seller_get_started` → Existing Lead — Seller Get Started |
+
+Each cell is its **own** `hl_workflows` row, so the copy for "a new lead asked for a tour" can diverge
+from "a returning lead asked for a tour" — edit each independently in the [builder](/guides/workflows).
+
+## Reading and using a row
+
+- **EVENT** — the door (e.g. Tour Request). **WORKFLOW** — the one workflow that owns it: a system
+  default (ships locked) or a custom takeover. **ACTIVE** — the on/off toggle (this IS the
+  client-message switch). **LAST FIRED** — the most recent run (click → Run Log).
+- **One workflow per event, always.** Click a row to open it in the builder. Build a custom workflow on
+  the same trigger and activate it to take over; deactivate it and the system default resumes.
+- A row with **no workflow** shows "No workflow yet" — create one from the row's menu.
+
+## Per-source
+
+Lead Flow is scoped to a **lead source** (the selector, top-right). HouseLoop.ai is the default;
+imported sources like **SRG-Follow Up Boss** have their own doors seated here (live and visible) so you
+can bind a workflow to them when you're ready — see [Lead Sources](/guides/lead-sources).
+
+## Reference
+
+- `apps/houseloop-crm/app/(crm)/settings/lead-flow/page.tsx` — the page (3-bucket grouping)
+- `apps/houseloop-crm/app/api/lead-flow/route.ts` — the projection over the four stores
+- `apps/houseloop-crm/lib/workflows/runtime.ts` — `DOOR_EVENT_KEYS` + `dispatchDoor` (routing)
+- [Workflows](/guides/workflows) — the engine that runs each owned workflow
