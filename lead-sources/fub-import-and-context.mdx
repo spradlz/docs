@@ -1,0 +1,106 @@
+---
+title: "FUB → HouseLoop: Lead Import & Myli Context"
+description: "How a Follow Up Boss lead becomes a fully-contextualized HouseLoop lead — deterministic facts, real-time sync, and an on-demand Myli dossier. Governed by the watermark law: read-once, merge-forward."
+---
+
+<Accordion title="Changelog — last updated 2026-06-23" icon="clock-rotate-left">
+Newest first. Times Eastern. (Collapsed so it never grows past the page; the latest date always shows in the title above.)
+- **2026-06-23** — Architecture LOCKED: 3 layers (sync / facts / dossier) + the **Watermark Law** (read-once, merge-forward; cursor = `synced_at` not event date). Layers 1–3 are the active build. (Lee)
+- **2026-06-22** — Myli-context UI shipped: `[Lead Context] / [Follow Up Boss Activity]` toggle + FUB Activity panel (`LeadContextPanel.tsx`, Lee). FUB import workflow + enriched registration card, verified on James Ross 50308 (Benji).
+</Accordion>
+
+## Overview
+
+When a lead comes into HouseLoop from **Follow Up Boss**, this is the layer that turns it into a
+fully-contextualized HouseLoop lead — its facts, its live activity, and Myli's dossier on it.
+
+<Note>
+**This is the bridge, not the plumbing.** *How FUB data lands in our `fub.*` DB* is the
+[FUB Data System](/fub/scraper) (webhooks + scraper). **This page** is the layer above it. FUB is
+**lead source #1** — the whole pattern (import → facts → live sync → dossier) is source-agnostic and
+future sources (Zillow-direct, etc.) live under this same "Lead Sources" group.
+</Note>
+
+The model: one lead, three independent layers.
+
+```
+FUB lead (fub.* on Railway)
+   │
+   ├─ Layer 1  REAL-TIME SYNC ........ live counts + activity on the lead card (event-driven, no polling)
+   ├─ Layer 2  FACTS (deterministic) . the 12-domain fact store — structured, no LLM
+   └─ Layer 3  DOSSIER (on-demand LLM) . one Lead Context = [FUB section] + [HouseLoop section]
+```
+
+## ✅ Locked in place so far
+
+- **The Myli-context UI is LIVE** — the lead-detail `[Lead Context] / [Follow Up Boss Activity]` toggle
+  + the FUB Activity panel (`LeadContextPanel.tsx`). Verified on **James Ross 50308**.
+- **The FUB import workflow is LIVE** — Benji's pipeline pulls a FUB lead in, logs an enriched
+  registration card, source = `SRG-Follow Up Boss`. Verified on James Ross 50308.
+- **The architecture is LOCKED:** 3 layers above; **one** Lead Context (FUB section + HouseLoop section),
+  **not two dossiers**; dossier generation is **on-demand** (Sonnet once on import · Haiku delta on update ·
+  **never** auto-per-fact).
+- **The Watermark Law is LOCKED (universal):** read-once, merge-forward; the cursor watermarks on
+  **`synced_at` (when we got the row), not the event date.** Governs every LLM rollup, not just this one.
+
+## 🚧 Current Work In Progress — Layers 1–3 (2026-06-23, ACTIVE)
+
+The context on a pulled-in lead is incomplete today: James's Lead Context (facts) is **blank**, and the
+FUB Activity panel shows FUB's display count (**"Website (100)"**) instead of our real **~1,730** home
+views. Building, in order:
+
+| Layer | Build | Owner |
+|---|---|---|
+| **1 — real-time sync** | relay `NOTIFY` → `pgListener` → lead SSE → card updates live; panel reads the REAL `fub.*` counts | Lee |
+| **2 — facts extractor** | run the deterministic extractor on first pull → fill the 12-domain Lead Context (run it on James) | Lee / Adam (UI) |
+| **3 — dossier + watermark** | the FUB-section Sonnet pass on first pull + the on-demand Haiku delta-merge engine | Lee / Myli |
+
+Design SSOT (private): `GT_HOUSELOOP_FUB_LEAD_IMPORT_PRD.md` §4d.
+
+---
+
+## The architecture in detail
+
+### Layer 1 — Real-time sync (event-driven, NO polling)
+```
+Camp David fub.*  →  relay  →  Railway fub.*  ──NOTIFY fub_lead_changed(fub_person_id)──►
+   HouseLoop pgListener  →  lead-detail SSE (/api/leads/[id]/stream)  →  card updates instantly
+```
+The relay fires a Postgres **`NOTIFY`** on each write. HouseLoop's existing `pgListener.ts` + the
+lead-detail SSE stream push the change to any open card — **no polling** (HouseLoop law). The panel reads
+the **real counts** from `fub.zillow_home_activity` / `fub.notes` / etc., never FUB's display number.
+
+### Layer 2 — The Facts (deterministic extractor)
+On first pull, the extractor structures every FUB fact into HouseLoop's **12-domain fact store** — name,
+source, timeframe, price range, home views/saves/searches, Zillow Insights. **No LLM, fully structured.**
+
+### Layer 3 — One Lead Context + the dossier (on-demand LLM)
+| Section | Source | When it generates |
+|---|---|---|
+| **Follow Up Boss** | imported FUB history (notes, texts, calls, 1,730 views, saved searches, insights) | **once** on first pull — Sonnet, rich; then frozen until regenerated |
+| **HouseLoop** | everything happening in HouseLoop going forward | live |
+
+Myli reads the **union** (FUB KB + FUB dossier + live HouseLoop) for any action. Regen is **on-demand**,
+never auto-per-fact.
+
+## ⭐ The Watermark Law — read-once, merge-forward (universal)
+
+Governs **every** LLM rollup (dossier, facts, Hot Buyers, any summary): **never re-run an LLM over data
+it already consumed.** The dossier stores its text + a **`source_cursor`** (high-water mark of everything
+already baked in). Each regeneration:
+
+<Steps>
+  <Step title="Read only the delta">`SELECT … WHERE synced_at > source_cursor` — only rows we haven't summarized yet.</Step>
+  <Step title="Merge, don't re-summarize">Prompt = `[existing dossier] + [only the new rows]` → *"merge the new events in; leave the old as-is."*</Step>
+  <Step title="Advance the watermark">Write the updated dossier + `source_cursor = max(synced_at)` consumed.</Step>
+</Steps>
+
+First pull = full history (Sonnet, cursor = now). Every pull after = only the delta, merged with Haiku —
+cheap. The 1,730 old views are **never re-read.** Tokens paid **once per row, ever.**
+
+<Warning>
+**The gotcha that makes it correct:** watermark on **`synced_at` (when WE ingested the row), NOT the
+event's own date.** A home view from 2 years ago the scraper *just* backfilled is **new to us** —
+`synced_at > cursor` catches it. Watermark on the event date and you'd silently skip every freshly-
+backfilled historical row.
+</Warning>
