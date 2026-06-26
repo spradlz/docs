@@ -8,18 +8,22 @@ description: "The running work-in-progress log of building TC Loop — HouseLoop
 happens. It's the single place to see what's decided, what's built, what's staged, and what's next. Owner: Adam.
 </Info>
 
-## Status (last updated 2026-06-26)
+## Status (last updated 2026-06-26 PM)
 
-**Phase: BUILDING — foundation applied, first builder LIVE.** Migration 0253 is applied; the **TC Stages builder** is built and verified on localhost:3020. Next: TC Merge Fields.
+**Phase: BUILDING — status/milestone model LOCKED, foundation + loop engine LIVE.** Migration 0254 applied;
+the status model now **reuses the existing CRM stage system** (`hl_pipelines`/`hl_stages` + `StagesPage`),
+and the **milestone engine** (loop create + forward-only milestone advance) is built and proven against real
+data. Next: wire appointment-set → Loop birth + the TC loop-detail page.
 
 | Layer | State |
 |---|---|
 | Reverse-engineering (A-Frame + dotloop) | ✅ complete (see those sections) |
-| Architecture decisions | ✅ locked (below) |
-| Foundation data model (migration 0253) | ✅ applied (13 stages seeded, loop tables live) |
-| API endpoints | 🟡 `/api/tc/stages` live (GET/POST/PATCH/DELETE) |
-| TC Configure builders | 🟡 **Stages builder LIVE**; Merge/Templates next |
-| Loop + TC lead-detail | ⬜ not started |
+| Status + milestone model | ✅ **locked** (see PRD §12) |
+| Foundation data model (migration 0254) | ✅ applied (TC pipelines + stages + milestone templates) |
+| Status builder | ✅ **reuses `StagesPage`** scoped to TC (no fork) |
+| Loop engine + API | ✅ createLoop · completeMilestone (forward-only) · GET loop — proven |
+| Appointment-set → Loop birth wiring | 🟡 next (live appointments integration) |
+| Loop + TC lead-detail page | ⬜ not started |
 | Myli-TC (AI layer) | ⬜ not started (last) |
 
 ## What we're building
@@ -29,74 +33,135 @@ a Transaction Coordinator logs in and has everything inside TC Loop (Dashboard �
 Configure) and never touches the CRM pipeline. Built human-first — a person can run a loop entirely by hand;
 **Myli-TC is just another caller of the same API endpoints** (no AI backdoor).
 
+## The status + milestone model (LOCKED 2026-06-26)
+
+Built off 5 parallel research sweeps + a full recon of how appointments/outcomes/deals are wired today.
+The convergent, god-tier answer — **two axes, never one**:
+
+- **STATUS** = where the deal physically is (the stepper). A single FK pointer → a stages table. We **REUSE
+  `hl_pipelines`/`hl_stages` + the existing `StagesPage` builder, scoped to TC** (this is the textbook-correct
+  model — add/reorder/recolor a stage = an INSERT, no schema change). **No new stage table, no new builder.**
+- **MILESTONES** = the dated work that DRIVES status forward (the centerpiece). A separate events table
+  (`hl_tc_loop_event`), seeded per loop-side from a template. **Completing a milestone fires a guarded,
+  forward-only stage advance** (the proven Salesforce/HubSpot "task done → deal advances" pattern). Status
+  stays stored so a human can override; milestones drive it.
+
+**The status stages (reuse `hl_stages`; two TC pipelines):**
+- **TC Listing (sale):** `Pre-MLS → Active → Under Contract → Closed` + off-ramps `Off-Market · Expired · Withdrawn · Canceled`.
+- **TC Buyer (purchase):** `Active Buyer → Under Contract → Closed` + `Lost`.
+
+**The Loop is born at Appointment Set** — it's the container; you need it before you can run a CMA or store
+the agreement you're about to send. The agreement gate is **milestones inside the already-born Loop:**
+
+```
+🏠 Listing Loop (sale)                      🔑 Buyer Loop (purchase)
+Appointment Set ─► LOOP BORN (Pre-MLS)      Appointment Set ─► LOOP BORN (Active Buyer)
+  • Pre-Listing Packet Created                • Exclusive Buyer Agency Prepped
+    (= CMA + comparables + valuation            • Buyer Agreement Sent
+       + marketing packet — ONE milestone)      • Buyer Agreement Signed
+  • Listing Agreement Sent                    • Under Contract  → advances status
+  • Listing Agreement Signed → Active         • Closed
+  • Under Contract → Closed
+```
+
+**Deaths carry a cause** — one `lost_reason` on the loop terminal, so "real losses" filter cleanly:
+`didnt_sign` (lost at appointment) · `canceled_listing` (couldn't sell it) · `fell_through` (lost it under
+contract). Canceling a listing and falling out of contract are **not** the same death.
+
+**The conflation this fixes:** today an appointment outcome `listing_signed` silently advances the lead
+pipeline but creates **zero** transaction record (Deals tab stays empty); the buyer side has no agreement
+outcome at all. The appointment-outcome and the transaction-birth are one event modeled as two islands. The
+fix: **Appointment Set creates the Loop; the agreement gate (sent → signed) is a milestone pair that advances
+or kills it.** Full spec: `GT_HOUSELOOP_TRANSACTION_COORDINATION_PRD.md §12`.
+
 ## Architecture (locked)
 
 1. **API-first.** Every loop action is a REST endpoint. The human UI calls it; Myli calls the same one.
-2. **Role-gated `/tc/**` surface.** TC role → only TC Loop. Agent role → CRM. No CRM↔TC toggles; the role
-   decides the surface. (Sets up auth: TC role = TC routes only.)
-3. **Reuse the engine, scope to TC.** The builders are dedicated TC pages that reuse the existing builder
-   components/logic but save to TC-scoped data (a "TC folder"):
-   - **TC Stages** → reuse `components/settings/stages/StagesPage.tsx`; data = `hl_tc_stage` (side-aware buyer/seller).
-   - **TC Email + Text Templates** → reuse the `hl_templates` engine + template-builder components; `scope='tc'`.
+2. **Role-gated `/tc/**` surface.** TC role → only TC Loop. Agent role → CRM. No CRM↔TC toggles.
+3. **Reuse the engine, scope to TC** — dedicated TC pages reuse the existing components, save to TC-scoped data:
+   - **TC Stages** → reuse `components/settings/stages/StagesPage.tsx` + `PipelineSwitcher`; data = `hl_stages`
+     under the TC pipelines (`hl_pipelines.scope='tc'`). **Not a fork — the same builder.**
+   - **TC Email + Text Templates** → reuse the `hl_templates` engine; `scope='tc'`.
    - **TC Merge Fields** → extend the code catalog (`lib/merge-fields.ts`) with loop/property/agent/date tokens.
-4. **Status -> Stage is side-aware** (buyer vs seller), like buyer/seller lead pipelines but with TC stages.
-5. **The lead renders in TC view by role/surface**, not a toggle widget.
+4. **Status is side-aware** (TC Buyer vs TC Listing pipelines).
+5. **The lead/loop renders in TC view by role/surface**, not a toggle widget.
 6. **E-signature = Documenso** (dotloop e-sign isn't in its API).
 
-## Data model — migration 0253 (staged)
+## Data model — migrations 0253 + 0254
 
-`apps/houseloop-crm/db/migrations/0253_tc_loop_foundation.sql` (additive + reversible; runner `node db/migrate.mjs`
-against `HL_CRM_DATABASE_URL`):
+`apps/houseloop-crm/db/migrations/` (additive + reversible; runner `node db/migrate.mjs` against `HL_CRM_DATABASE_URL`):
 
-- **`hl_tc_stage`** (NEW) — the loop status -> stage, side-aware (`side: purchase | sale`), with `macro_stage`
-  (`pre_active · active · under_contract · sold · not_sold`), `color_hex`, `sort`, `system_type`, visibility.
-  Seeded both sides (buyer: Draft -> Agreement Sent -> Agreement Signed -> Under Contract -> Closed/Lost;
-  seller: Draft -> Listing Agreement Sent -> Coming Soon -> Active Listing -> Under Contract -> Closed/Withdrawn).
-- **`hl_transactions`** (THE LOOP, exists) — ADD `loop_name`, `loop_kind`, `transaction_type`, `tc_stage_id`,
-  `created_by_user_id`, `tc_assignee_user_id`.
-- **`hl_tc_loop_folder`** / **`hl_tc_loop_document`** (links `hl_contract_fill` + Documenso) /
-  **`hl_tc_loop_participant`** / **`hl_tc_loop_event`** (dates) — the loop child structure.
-- **`hl_templates`** — ADD `scope ('crm' | 'tc')` so the template builder folds into CRM vs TC.
-- Reused (not re-created): `hl_contract_template`/`_fill`, `hl_tc_email`, `hl_lead_activity` (the one run-log).
+**0253 (foundation):** `hl_transactions` loop columns (`loop_name`, `loop_kind`, `transaction_type`,
+`tc_stage_id`, `created_by_user_id`, `tc_assignee_user_id`) · the loop child tables `hl_tc_loop_folder` /
+`hl_tc_loop_document` (links `hl_contract_fill` + Documenso) / `hl_tc_loop_participant` / `hl_tc_loop_event` ·
+`hl_templates.scope ('crm'|'tc')`. *(The `hl_tc_stage` table from 0253 is **deprecated** — superseded by 0254;
+left in place, not dropped.)*
+
+**0254 (status + milestones — the LOCKED model):**
+- **`hl_pipelines.scope`** (`'crm'|'tc'`) + seeds **two TC pipelines** (`TC Buyer`, `TC Listing`) with the
+  status stages above into **`hl_stages`** — so `StagesPage` renders them, no new builder.
+- **Repoints `hl_transactions.tc_stage_id`** FK → `hl_stages` (the status pointer).
+- **`hl_transactions.lost_reason`** + `lost_at_stage_id` (the death cause).
+- **`hl_tc_milestone_template`** (per side; each row may carry `advances_to_stage_id`) + extends
+  **`hl_tc_loop_event`** with `template_id`, `milestone_key`, `advances_to_stage_id`, `completed_at`,
+  `completed_by` — a real milestone instance. Seeded both sides' chains.
+
+## The loop engine (built + proven)
+
+`apps/houseloop-crm/lib/tc/loop-engine.ts` — the human-first, API-first core:
+- **`createLoop({ leadId, side })`** — born into the side's first TC stage; instantiates the side's milestones
+  from the templates (one transaction).
+- **`completeMilestone({ transactionId, milestoneKey })`** — marks it done; if it carries
+  `advances_to_stage_id` and that stage is **forward** of the current one in the same pipeline, advances the
+  stored stage pointer. **Forward-only, idempotent, override-able.**
+- **`getLoopStatus` / `listMilestones`** — the loop-file readout.
+
+REST: `POST /api/tc/loops` · `GET /api/tc/loops/[id]` · `POST /api/tc/loops/[id]/milestone`. The UI and Myli-TC
+call the **same** endpoints. Proven against real data: a listing loop born at Pre-MLS advances to Active on
+`listing_agreement_signed`, and an earlier milestone completing later does **not** regress the status.
 
 ## Build checklist (order)
 
-1. ✅ Apply migration 0253
-2. ✅ **TC Configure shell + TC Stages builder** — LIVE at /tc/configure/stages (data→API→page, lint-clean, token-compliant)
-3. ⬜ **TC Merge Fields** (the spine — catalog + resolver, loop/property/agent/date tokens)
-4. ⬜ **TC Email Template Builder** (reuse template engine, `scope='tc'`)
-5. ⬜ **TC Text Template Builder**
-6. ⬜ **Contract Documents** (register the Single-Showing PDF + map fields -> merge tokens)
-7. ⬜ **`createLoop()` + the loop API verbs** (createLoop · addDocument · sendForSignature · advanceStage · sendTemplate · addParticipant · addEvent)
-8. ⬜ **TC Dashboard** (Open Loops · Tasks Due · Upcoming Dates)
-9. ⬜ **TC lead/loop detail** (the loop file rendered in the TC surface; 3-col TC · iPad · Myli-TC)
-10. ⬜ **Documenso wiring** (create/send/track + `document.signed` webhook)
-11. ⬜ **Myli-TC** — the AI calls the #7 endpoints; the single-showing flow becomes config, not bespoke code
+1. ✅ **Status/milestone model locked** (PRD §12)
+2. ✅ **Migration 0254** — TC pipelines/stages in `hl_stages` · milestone templates · `lost_reason` · repointed FK
+3. ✅ **TC Stages builder = reuse `StagesPage`** scoped to TC (ripped out the hand-rolled builder)
+4. ✅ **Loop engine + API** — createLoop · completeMilestone (forward-only) · getLoop
+5. 🟡 **Appointment-set → Loop birth** + buyer-side agreement outcomes + agreement-outcome advance (live appts integration)
+6. ⬜ **TC lead/loop detail page** (the loop file in the TC surface; 3-col TC · iPad · Myli-TC; status stepper + milestones)
+7. ⬜ **TC Merge Fields** (catalog + resolver: loop/property/agent/date tokens)
+8. ⬜ **TC Email + Text Template Builders** (reuse the `hl_templates` engine, `scope='tc'`)
+9. ⬜ **Contract Documents** (Single-Showing / Listing / Buyer Agency PDFs → map fields to merge tokens)
+10. ⬜ **TC Dashboard** (Open Loops · Tasks Due · Upcoming Dates)
+11. ⬜ **Documenso wiring** (create/send/track + `document.signed` webhook)
+12. ⬜ **Myli-TC** — the AI calls the same endpoints; flows become config, not bespoke code
 
 Every item ships as **data (migration) + REST API + a visible page**, verified on localhost:3020. Nothing hidden.
 
 ## First target flow (the MVP we build toward)
 
-Single Property Showing: appointment/trigger -> createLoop -> attach Single-Showing contract (filled via merge
-fields) -> send via Documenso -> lead signs -> file the PDF in the loop + advance stage to "Agreement Signed" +
-send a templated email/text. Then the non-exclusive / exclusive buyer agreements are the same flow, different doc.
+Listing or buyer appointment set → **createLoop** (born) → run CMA / prep agreement, stored in the loop →
+send the agreement via Documenso → client signs → **completeMilestone(agreement_signed)** advances status →
+the contract-to-close milestones carry it to Closed. Same flow both sides, different docs.
 
 ## Changelog
 
-### 2026-06-26 (PM) — first builder shipped
-- **Applied migration 0253** to the CRM DB (autorack): `hl_tc_stage` seeded both sides (6 buyer + 7 seller), `hl_transactions` loop columns, the 4 loop child tables, `hl_templates.scope`. Lead-purge cascade guard passed.
-- **Built the TC Stages API** — `app/api/tc/stages/route.ts` + `[id]/route.ts` (GET both sides grouped · POST create · PATCH rename/recolor/reorder/macro · DELETE with system-stage protection). Verified `ok:true` live.
-- **Built the TC Stages builder page** — `/tc/configure/stages` (`page.tsx` + `TcStagesBuilder.tsx` + a token-based CSS module). Side tabs (Buyer/Seller), color picker, inline rename, macro-stage dropdown, reorder, add, delete. Added **Configure → Stages** to the TC sidebar.
-- **Verified live** on localhost:3020 (screenshot): renders the seeded buyer stages, all controls working. Lint clean (zero-vibe-code rule satisfied via the CSS module).
-- Next: **TC Merge Fields** (the spine).
+### 2026-06-26 (PM, late) — status/milestone model locked; pivoted to reuse + built the engine
+- **Killed the hand-rolled TC Stages builder** (`TcStagesBuilder.tsx` + its API + page) — it duplicated the
+  existing `StagesPage`. Status now **reuses `hl_pipelines`/`hl_stages` + `StagesPage`**, scoped to TC.
+- **Locked the status + milestone model** (PRD §12) after 5 research sweeps + an appointments/outcomes/deals
+  recon: two axes (status = reused stages; milestones = a separate engine that drives status forward-only),
+  Loop born at Appointment Set, agreement gate as milestones, `lost_reason` carries the death cause.
+- **Migration 0254 applied** — TC Buyer + TC Listing pipelines with the locked stages, milestone-template
+  table + extended `hl_tc_loop_event`, `lost_reason`, repointed `tc_stage_id` → `hl_stages`. Verified seeds.
+- **Built + proved the loop engine** (`lib/tc/loop-engine.ts`) + REST (`/api/tc/loops` create · get ·
+  milestone-complete). Forward-only advance proven against real data; tsc + lint clean.
+- **Re-pointed TC Configure → Stages** at the real `StagesPage` (parametrized `PipelineSwitcher` with a
+  `basePath`; scoped the lead Stage Management to `scope='crm'` so TC pipelines don't leak in).
+- Next: wire **appointment-set → Loop birth** + buyer-side agreement outcomes, then the TC loop-detail page.
 
-### 2026-06-26
-- **Reverse-engineered A-Frame** (full: data model, 124 fields/219 choices, 139 task steps, 84 emails, all
-  lists, members, billing) and **dotloop** (full API matrix + live schemas). Both documented.
-- **Locked the architecture** (above): role-gated `/tc/**` surface, reuse-the-engine TC-scoped builders,
-  side-aware stages, API-first, Documenso e-sign, AI last.
-- **Wrote migration 0253** (foundation data model). Fixed a FK type (contract_fill_id INTEGER, matching
-  `hl_contract_fill.id` SERIAL). Added `hl_templates.scope`. Staged — not yet applied.
+### 2026-06-26 — reverse-engineering + foundation
+- **Reverse-engineered A-Frame** (full: data model, 124 fields/219 choices, 139 task steps, 84 emails) and
+  **dotloop** (full API matrix + live schemas). Both documented.
+- **Wrote + applied migration 0253** (foundation: loop columns + child tables + `hl_templates.scope`). Fixed
+  a FK type (`contract_fill_id INTEGER`, matching `hl_contract_fill.id` SERIAL).
 - **Scope lock**: `.claude/state/session-scope-tc-loop-foundation.lock`.
-- Status: holding for go to apply 0253 + build the TC Stages builder.
-
