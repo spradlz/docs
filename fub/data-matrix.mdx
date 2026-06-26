@@ -1,29 +1,139 @@
 ---
 title: "FUB Data & Signals Matrix"
-description: "Every FUB signal → one of our own canonical events. The coarse-type problem, the Zillow high-intent tag playbook, the insight notes, and the conversion rule."
+description: "Every Follow Up Boss signal → one of our own canonical events. The coarse-type problem, the three request types, Behavior-Based Follow-Up, the Zillow playbook catalog, and what we parse vs scrape."
 ---
 
 <Note>
-**Full matrix in progress.** This page is the public mirror of the private GT SSOT
-`GT_HOUSELOOP_FUB_EVENTS_AND_REQUEST_CARD_SSOT.md`. The structure below is locked; the detailed tables are
-being written in the next pass.
+**The principle (LOCKED).** Every FUB signal becomes **one of our OWN events** — minted via `logActivity()`
+into the one run-log `hl_lead_activity` (no new store, no fork). `fub.*` is the raw landing zone; our event
+store is the truth. Once a signal is our event it's our data, it renders on our [cards](/fub/request-cards),
+and it can trigger our follow-up. Public mirror of the private GT SSOT
+`GT_HOUSELOOP_FUB_EVENTS_AND_REQUEST_CARD_SSOT.md`.
 </Note>
 
-## The principle (LOCKED)
+## Parse vs scrape — where each piece comes from
 
-**Every FUB signal becomes one of OUR OWN events** — minted via `logActivity()` into the one run-log
-`hl_lead_activity` (no new store, no fork). `fub.*` is the raw landing zone; our event store is the truth.
-Once a signal is our event it's our data, it renders on our [cards](/fub/request-cards), and it can trigger
-our workflows.
+Mostly **direct webhook, not scraping** (see the [Data System](/fub/scraper) for the plumbing):
 
-## What this page will cover
+| Card data | How it arrives | Scrape needed? |
+| --- | --- | --- |
+| **Property inquiry / tour request** — address, city, zip, **MLS**, price, beds, message, source | `eventsCreated` webhook → `fub.events.property` (structured by FUB's API) | ❌ No |
+| **Property views / saves** | `notesCreated` webhook ("Property Viewed/Saved: \<url\>") → URL parsed | ⚠️ deep history = scraper |
+| **Saved searches** | **No webhook** (Zillow killed it Apr 2026) → an inquiry fires a timeline-walk → **scraper** | ✅ scraper only |
+| **Text/email/call bodies** | webhook says it happened; body masked → scraper unmasks | ✅ for the body |
+
+**One sentence:** the inquiry + tour card data is direct, structured webhook — no scraping, no gap. Only the
+**saved-search** card depends on the scraper. Every webhook FUB fires is logged in `fub.webhook_event_log`
+(query it for any lead).
+
+## The coarse-type problem — the root of everything
+
+FUB stores **all** lead-initiated property contact under one `type = "Property Inquiry"`. Whether the buyer
+asked to *tour*, asked you to *call them*, or asked about a *rental* — the type string is identical. The real
+intent lives **only in the message text + the `source`**. So one classifier (`classifyFubEvent`) reads the
+message + source and resolves the true intent — every surface uses that one verdict.
+
+## The three request types
+
+There are **three** distinct request intents — derived from the **message**, never from a FUB event type:
+
+| # | Request type | What the lead is saying | Message signal | Our event |
+| --- | --- | --- | --- | --- |
+| 1 | **Contact request** | "I have a general question / reach out to me" | *reach out · call me · like to talk · set up an appointment* | `contact_request` |
+| 2 | **Property inquiry** | "Specific question about THIS property" | *interested in \<addr\>* — no tour, no callback | `property_inquiry` |
+| 3 | **Property tour request** | "I want to tour / see THIS property" | *tour · showing · seeing \<addr\> on \<date\>* / ShowingTime | `tour_request` |
+
+**Classifier priority** within a `Property Inquiry` event: tour → contact → property_inquiry (default).
+
+<Warning>
+**FUB's `General Inquiry` (4,088) is a junk bucket — do NOT map it wholesale to "contact request."** 86% have
+**blank** messages; the rest are mostly **phone-call notifications** ("you received a phone call from… follow
+up") and **Zillow system messages** ("Listen to the call:", "Premier Agent is sending you this lead…"). Only a
+minority are genuine general questions. Parse it: real questions → `contact_request`, phone notices → the calls
+feed, system noise → dropped.
+</Warning>
+
+## The event-conversion matrix — every signal → our event
+
+| FUB signal | Arrives via | Volume (live) | → Our event |
+| --- | --- | --- | --- |
+| Property Inquiry (tour language) | `eventsCreated` webhook | 12,832 (shared) | `tour_request` |
+| Property Inquiry ("interested in") | `eventsCreated` | ↑ | `property_inquiry` |
+| Property Inquiry ("reach out / talk") | `eventsCreated` | ~311 | `contact_request` |
+| Property Inquiry (`source = Zillow Rentals`) | `eventsCreated` | ↑ | `rental_inquiry` |
+| Seller Inquiry | `eventsCreated` | 2,690 | `seller_inquiry` |
+| General Inquiry (real question) | `eventsCreated` | 4,088 (mostly junk) | `contact_request` (filtered) |
+| Virtually Toured Property | `eventsCreated` | 1,479 | `tour_request` (virtual) |
+| Viewed Property | `eventsCreated` | 115,892 | `property_viewed` |
+| Saved Property | `eventsCreated` | 3,270 | `property_saved` |
+| Registration | `eventsCreated` | 159 | `registration` |
+| Pre-Approval | `eventsCreated` | 73 | `pre_approval` |
+| Saved Property Search | **scraper** → `fub.saved_searches` | per-lead | `saved_search` |
+| note `Property Viewed/Saved: <url>` | `notesCreated` | 1.6M activity | `property_viewed` / `property_saved` |
+| note "may be interested … viewed N× in 7 days" | `notesCreated` (raw) | 2,976 | `behavior_repeat_views` |
+| note "now looking in \<ZIP\>" | `notesCreated` (raw) | 4,589 | `behavior_area_interest` |
+| Zillow ML tags (High-Intent, Reengaged, etc.) | `peopleUpdated` / `peopleTagsCreated` | see below | `behavior_*` |
+
+## Behavior-Based Follow-Up
+
+Two follow-up models — name them right:
+
+- **Time-Based Follow-Up** = a fixed cadence regardless of behavior ("new lead → text daily ×10 → Nurture Warm
+  → Nurture Cold"). The *timeline* drives it.
+- **Behavior-Based Follow-Up** = follow up triggered by what the lead **DID**. The *behavior* drives it. This is
+  the category for everything below. It is **not** "hot" (that collides with the Nurture-Hot stage, and a
+  behavior isn't a heat level) — it's a **behavioral trigger**.
+
+<Info>
+**We document, we do not replicate.** Zillow runs its own ML + playbooks inside FUB (tag → automation → note →
+13-day removal). We are not rebuilding those. We document **what each signal means** so the team + Myli
+understand the lead's behavior and can run **our** behavior-based follow-up off it.
+</Info>
+
+### The Behavior-Based Follow-Up events
+
+| Behavior (what the lead did) | FUB signal | What it means | Our event |
+| --- | --- | --- | --- |
+| **High-intent buyer** | tag `Zillow High Intent Buyer` (~828) | Zillow ML: 5× likelier to transact in 3 months | `behavior_high_intent_buyer` |
+| **High-intent seller** | tag `Zillow High-Intent Seller` (~73) | Zillow ML: likely to sell in 3 months | `behavior_high_intent_seller` |
+| **Re-engaged buyer** | tag `Zillow Reengaged Buyer` | searching again after ≥14 days inactive | `behavior_reengaged_buyer` |
+| **Specific-home interest** | tag `Zillow specific home interest` | repeatedly viewed specific homes | `behavior_specific_home_interest` |
+| **ZHL pre-qualified** | the 3 `ZHL connection: …` tags | referred + pre-qual'd by a Zillow Home Loans LO | `behavior_zhl_prequalified` |
+| **Repeat property views** | note "viewed N× in 7 days" (≥10) | hammering one home | `behavior_repeat_views` |
+| **Area interest** | note "now looking in \<ZIP\>" | shifted search area | `behavior_area_interest` |
+| **Property tour** | Property Inquiry (tour) | asked to tour a home | `tour_request` |
+| **Contact request** | Property/General Inquiry (reach out) | asked an agent to reach out | `contact_request` |
+| **Saved search** | scraper → `fub.saved_searches` | saved search criteria | `saved_search` |
+
+<Note>
+**`Zillow Smart List` is the "active now" window, NOT a behavior.** Every playbook stamps Smart List when a
+behavior fires and pulls it after 13 days. So Smart List present = *a behavior is in its active 13-day window —
+the lead is in active behavior-based follow-up right now.* We capture the add → `behavior_active` and the
+remove → `behavior_window_closed`. It is the state on top of a behavior.
+</Note>
+
+### The Zillow playbook catalog (what Zillow does, for reference)
+
+Every playbook follows the same shape: **trigger tag → adds `Zillow Smart List` + a note → removes Smart List
+after 13 days.** The trigger tag = WHY; the note = the play.
+
+| Playbook | Trigger tag(s) | The note (what it means) |
+| --- | --- | --- |
+| **High Intent Buyer** | `Zillow High Intent Buyer` | "5× as likely to transact in the next 3 months. View their viewed homes and reach out ASAP." |
+| **High Intent Seller** | `Zillow High-Intent Seller` | "Flagged as high-intent seller — likely to transact in next 3 months. Reach out ASAP." (also removes the trigger tag at 13d) |
+| **Reengage Buyer** | `Zillow Reengaged Buyer` | "Started searching again after ≥14 days inactive. Check recent saved searches / viewed properties to reconnect." |
+| **Specific Home Interest** | `Zillow specific home interest` | (note TBD) |
+| **ZHL Connection** | `ZHL connection: pre-approved` · `Zillow zhl Connection: Prequalified` · `ZHL connection: pre-qualified` | "Referred from a ZHL loan officer. Reach out to the LO to get up to speed, then introduce yourself to the customer." |
+
+## How each conversion runs
+
+One converter per signal class, all writing through `logActivity()` with the catalog kind:
 
 <Steps>
-  <Step title="The signal inventory">Every distinct FUB signal with live volume — Property Inquiry, Viewed/Saved Property, Seller Inquiry, saved searches, insight notes, ML intent tags — and the HouseLoop event kind each maps to.</Step>
-  <Step title="The coarse-type problem">FUB stores all property contact as one `type='Property Inquiry'`; the real intent (tour / inquiry / contact / rental / seller) lives only in the message + source. One `classifyFubEvent()` resolves it everywhere.</Step>
-  <Step title="The Zillow high-intent tag playbook">High Intent Buyer (permanent) / High Intent Seller (removed after 13 days) / Smart List (rolling 13-day) → `hot_buyer` / `hot_seller` / `smart_list_hot` events; tag removal is itself a "cooled off" signal.</Step>
-  <Step title="The insight notes">"may be interested … viewed N× in 7 days" + "now looking in &lt;area&gt;" arrive as notes, currently raw → parse into structured intent events.</Step>
+  <Step title="Events">`fub.events` → classify (`classifyFubEvent`) → `tour_request` / `property_inquiry` / `contact_request` / `rental_inquiry` / `seller_inquiry` / `property_viewed` / `property_saved`.</Step>
+  <Step title="Notes">`notesCreated` → Property Viewed/Saved + the two insight parsers (`behavior_repeat_views`, `behavior_area_interest`).</Step>
+  <Step title="Saved searches">`fub.saved_searches` → `saved_search` (minted, not read-live).</Step>
+  <Step title="Tags">`peopleUpdated` / `peopleTagsCreated` → the `behavior_*` events + Smart List active-window state via `fub.tag_history`.</Step>
 </Steps>
 
-See the [Data System](/fub/scraper) for how each signal physically arrives, and [Lead Import](/fub/lead-import)
-for how requests cross into the HouseLoop feed.
+Each fires at webhook-time (real-time) + a backfill pass for history.
