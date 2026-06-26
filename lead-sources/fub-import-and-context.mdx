@@ -1,10 +1,11 @@
 ---
 title: "FUB → HouseLoop: Lead Import & Myli Context"
-description: "How a Follow Up Boss lead becomes a fully-contextualized HouseLoop lead — deterministic facts, real-time sync, and an on-demand Myli dossier. Governed by the watermark law: read-once, merge-forward."
+description: "How a Follow Up Boss lead becomes a fully-contextualized HouseLoop lead — deterministic facts, real-time sync, an on-demand Myli dossier, and how its tour/contact requests cross into the HouseLoop activity feed. Governed by the watermark law: read-once, merge-forward."
 ---
 
-<Accordion title="Changelog — last updated 2026-06-23" icon="clock-rotate-left">
+<Accordion title="Changelog — last updated 2026-06-26" icon="clock-rotate-left">
 Newest first. Times Eastern. (Collapsed so it never grows past the page; the latest date always shows in the title above.)
+- **2026-06-26** — Incident + request-activity model (Benji). FIXED: Myli was texting FUB-imported leads **outside any workflow** — the canned lead-facing email/SMS in `request-alerts.ts` fired whenever no workflow owned the door (FUB sources are `workflow_id=null`). Removed the canned lead send entirely; **all lead comms now go through a Lead Flow workflow** (agent-facing alerts kept). DEFINED (build active): FUB tour/contact requests cross into the **HouseLoop activity feed** as their own per-inquiry events — see "Tour & Contact requests → the HouseLoop feed" below. PRD: `GT_HOUSELOOP_FUB_REQUEST_ACTIVITY_PRD.md`.
 - **2026-06-23** — Architecture LOCKED: 3 layers (sync / facts / dossier) + the **Watermark Law** (read-once, merge-forward; cursor = `synced_at` not event date). Layers 1–3 are the active build. (Lee)
 - **2026-06-22** — Myli-context UI shipped: `[Lead Context] / [Follow Up Boss Activity]` toggle + FUB Activity panel (`LeadContextPanel.tsx`, Lee). FUB import workflow + enriched registration card, verified on James Ross 50308 (Benji).
 </Accordion>
@@ -37,25 +38,44 @@ FUB lead (fub.* on Railway)
   + the FUB Activity panel (`LeadContextPanel.tsx`). Verified on **James Ross 50308**.
 - **The FUB import workflow is LIVE** — Benji's pipeline pulls a FUB lead in, logs an enriched
   registration card, source = `SRG-Follow Up Boss`. Verified on James Ross 50308.
+- **Lead comms go through workflows ONLY (2026-06-26)** — the legacy canned lead-facing ack in
+  `request-alerts.ts` is removed; a FUB lead's tour/contact ack is the job of the workflow bound to that
+  door in Lead Flow, never a hidden canned send. (Agent-facing alerts remain.)
 - **The architecture is LOCKED:** 3 layers above; **one** Lead Context (FUB section + HouseLoop section),
   **not two dossiers**; dossier generation is **on-demand** (Sonnet once on import · Haiku delta on update ·
   **never** auto-per-fact).
 - **The Watermark Law is LOCKED (universal):** read-once, merge-forward; the cursor watermarks on
   **`synced_at` (when we got the row), not the event date.** Governs every LLM rollup, not just this one.
 
-## 🚧 Current Work In Progress — Layers 1–3 (2026-06-23, ACTIVE)
+## Tour & Contact requests → the HouseLoop feed (the two-pipe rule)
 
-The context on a pulled-in lead is incomplete today: James's Lead Context (facts) is **blank**, and the
-FUB Activity panel shows FUB's display count (**"Website (100)"**) instead of our real **~1,730** home
-views. Building, in order:
+There are **two separate pipes** for a FUB lead's activity, and they do not feed each other:
+
+- **Pipe A — Myli's context** (the **Follow Up Boss Activity** panel): the lead's FULL FUB history —
+  texts, calls, notes, every property inquiry, Zillow views — read live from `fub.*` by link. **All FUB
+  history lives here.**
+- **Pipe B — the HouseLoop activity feed** (the **All** + **Website Activity** tabs, `hl_lead_activity`):
+  only **tour/contact REQUESTS** cross into here. FUB texts/calls/old activity never cross.
+
+The rules (LOCKED 2026-06-26):
+
+| Rule | Behavior |
+| --- | --- |
+| **One event per inquiry** | Each FUB tour/contact request becomes its **own** HouseLoop activity event (keyed per property), so a lead with 4 tour requests shows **4 request cards** — not one. |
+| **First touch vs request** | The lead's **first** touch = a `registration` (New Lead Registration). Every request **after** = a `tour_request` / `contact_request` event → shows under **Website Activity → Requests** + **All**. |
+| **Request SOURCE = the portal** | Each request carries the portal it came FROM — `fub.events.source` (e.g. **Zillow Preferred**, Homes.com, Opcity, realtor.com) for FUB, **HouseLoop** for native — shown as a badge on the row. This is **separate** from the LEAD source (which stays `SRG–Follow Up Boss`). |
+| **No backfill (watermark)** | Per the Watermark Law, only inquiries newer than a per-lead `synced_at` cursor (starting **now**) create HouseLoop events. Past FUB texts/tours/website activity are **not** mirrored into the HouseLoop feed — they stay in Pipe A. |
+
+## 🚧 Current Work In Progress (2026-06-26, ACTIVE)
 
 | Layer | Build | Owner |
 |---|---|---|
 | **1 — real-time sync** | relay `NOTIFY` → `pgListener` → lead SSE → card updates live; panel reads the REAL `fub.*` counts | Lee |
-| **2 — facts extractor** | run the deterministic extractor on first pull → fill the 12-domain Lead Context (run it on James) | Lee / Adam (UI) |
+| **2 — facts extractor** | run the deterministic extractor on first pull → fill the 12-domain Lead Context | Lee / Adam (UI) |
 | **3 — dossier + watermark** | the FUB-section Sonnet pass on first pull + the on-demand Haiku delta-merge engine | Lee / Myli |
+| **Requests → feed** | per-inquiry `tour_request`/`contact_request` events with portal source + the future-only watermark + a one-time backfill of recently-imported leads | Benji |
 
-Design SSOT (private): `GT_HOUSELOOP_FUB_LEAD_IMPORT_PRD.md` §4d.
+Design SSOT (private): `GT_HOUSELOOP_FUB_LEAD_IMPORT_PRD.md` §4d (import/context) + `GT_HOUSELOOP_FUB_REQUEST_ACTIVITY_PRD.md` (requests → feed).
 
 ---
 
@@ -85,9 +105,9 @@ never auto-per-fact.
 
 ## ⭐ The Watermark Law — read-once, merge-forward (universal)
 
-Governs **every** LLM rollup (dossier, facts, Hot Buyers, any summary): **never re-run an LLM over data
-it already consumed.** The dossier stores its text + a **`source_cursor`** (high-water mark of everything
-already baked in). Each regeneration:
+Governs **every** LLM rollup (dossier, facts, Hot Buyers, any summary) **and the requests→feed sync**:
+**never re-process data already consumed.** The dossier stores its text + a **`source_cursor`** (high-water
+mark of everything already baked in). Each regeneration:
 
 <Steps>
   <Step title="Read only the delta">`SELECT … WHERE synced_at > source_cursor` — only rows we haven't summarized yet.</Step>
