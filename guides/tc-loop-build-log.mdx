@@ -1,0 +1,95 @@
+---
+title: "TC Loop Build-Out (WIP Log)"
+description: "The running work-in-progress log of building TC Loop — HouseLoop's AI-driven Transaction Coordination product. Architecture decisions, data model, build checklist, and a dated changelog. Updated as the build progresses."
+---
+
+<Info>
+**Living document.** This is the build log for [TC Loop](/guides/transaction-coordination) — updated as work
+happens. It's the single place to see what's decided, what's built, what's staged, and what's next. Owner: Adam.
+</Info>
+
+## Status (last updated 2026-06-26)
+
+**Phase: FOUNDATION — staged, not yet applied.** Architecture is locked; the foundation migration is written;
+no UI/API code has been built yet. Holding for go to apply the migration and build the first builder.
+
+| Layer | State |
+|---|---|
+| Reverse-engineering (A-Frame + dotloop) | ✅ complete (see those sections) |
+| Architecture decisions | ✅ locked (below) |
+| Foundation data model (migration 0253) | 🟡 written + FK-fixed, **NOT applied** |
+| API endpoints | ⬜ not started |
+| TC Configure builders (Stages/Templates/Merge) | ⬜ not started |
+| Loop + TC lead-detail | ⬜ not started |
+| Myli-TC (AI layer) | ⬜ not started (last) |
+
+## What we're building
+
+TC Loop = HouseLoop's own dotloop + A-Frame + Documenso, AI-driven. A **self-contained, role-gated surface**:
+a Transaction Coordinator logs in and has everything inside TC Loop (Dashboard · Loops · lead/loop detail ·
+Configure) and never touches the CRM pipeline. Built human-first — a person can run a loop entirely by hand;
+**Myli-TC is just another caller of the same API endpoints** (no AI backdoor).
+
+## Architecture (locked)
+
+1. **API-first.** Every loop action is a REST endpoint. The human UI calls it; Myli calls the same one.
+2. **Role-gated `/tc/**` surface.** TC role → only TC Loop. Agent role → CRM. No CRM↔TC toggles; the role
+   decides the surface. (Sets up auth: TC role = TC routes only.)
+3. **Reuse the engine, scope to TC.** The builders are dedicated TC pages that reuse the existing builder
+   components/logic but save to TC-scoped data (a "TC folder"):
+   - **TC Stages** → reuse `components/settings/stages/StagesPage.tsx`; data = `hl_tc_stage` (side-aware buyer/seller).
+   - **TC Email + Text Templates** → reuse the `hl_templates` engine + template-builder components; `scope='tc'`.
+   - **TC Merge Fields** → extend the code catalog (`lib/merge-fields.ts`) with loop/property/agent/date tokens.
+4. **Status -> Stage is side-aware** (buyer vs seller), like buyer/seller lead pipelines but with TC stages.
+5. **The lead renders in TC view by role/surface**, not a toggle widget.
+6. **E-signature = Documenso** (dotloop e-sign isn't in its API).
+
+## Data model — migration 0253 (staged)
+
+`apps/houseloop-crm/db/migrations/0253_tc_loop_foundation.sql` (additive + reversible; runner `node db/migrate.mjs`
+against `HL_CRM_DATABASE_URL`):
+
+- **`hl_tc_stage`** (NEW) — the loop status -> stage, side-aware (`side: purchase | sale`), with `macro_stage`
+  (`pre_active · active · under_contract · sold · not_sold`), `color_hex`, `sort`, `system_type`, visibility.
+  Seeded both sides (buyer: Draft -> Agreement Sent -> Agreement Signed -> Under Contract -> Closed/Lost;
+  seller: Draft -> Listing Agreement Sent -> Coming Soon -> Active Listing -> Under Contract -> Closed/Withdrawn).
+- **`hl_transactions`** (THE LOOP, exists) — ADD `loop_name`, `loop_kind`, `transaction_type`, `tc_stage_id`,
+  `created_by_user_id`, `tc_assignee_user_id`.
+- **`hl_tc_loop_folder`** / **`hl_tc_loop_document`** (links `hl_contract_fill` + Documenso) /
+  **`hl_tc_loop_participant`** / **`hl_tc_loop_event`** (dates) — the loop child structure.
+- **`hl_templates`** — ADD `scope ('crm' | 'tc')` so the template builder folds into CRM vs TC.
+- Reused (not re-created): `hl_contract_template`/`_fill`, `hl_tc_email`, `hl_lead_activity` (the one run-log).
+
+## Build checklist (order)
+
+1. ⬜ Apply migration 0253
+2. ⬜ **TC Configure shell + TC Stages builder** (reuse StagesPage; first visible, human-editable page)
+3. ⬜ **TC Merge Fields** (the spine — catalog + resolver, loop/property/agent/date tokens)
+4. ⬜ **TC Email Template Builder** (reuse template engine, `scope='tc'`)
+5. ⬜ **TC Text Template Builder**
+6. ⬜ **Contract Documents** (register the Single-Showing PDF + map fields -> merge tokens)
+7. ⬜ **`createLoop()` + the loop API verbs** (createLoop · addDocument · sendForSignature · advanceStage · sendTemplate · addParticipant · addEvent)
+8. ⬜ **TC Dashboard** (Open Loops · Tasks Due · Upcoming Dates)
+9. ⬜ **TC lead/loop detail** (the loop file rendered in the TC surface; 3-col TC · iPad · Myli-TC)
+10. ⬜ **Documenso wiring** (create/send/track + `document.signed` webhook)
+11. ⬜ **Myli-TC** — the AI calls the #7 endpoints; the single-showing flow becomes config, not bespoke code
+
+Every item ships as **data (migration) + REST API + a visible page**, verified on localhost:3020. Nothing hidden.
+
+## First target flow (the MVP we build toward)
+
+Single Property Showing: appointment/trigger -> createLoop -> attach Single-Showing contract (filled via merge
+fields) -> send via Documenso -> lead signs -> file the PDF in the loop + advance stage to "Agreement Signed" +
+send a templated email/text. Then the non-exclusive / exclusive buyer agreements are the same flow, different doc.
+
+## Changelog
+
+### 2026-06-26
+- **Reverse-engineered A-Frame** (full: data model, 124 fields/219 choices, 139 task steps, 84 emails, all
+  lists, members, billing) and **dotloop** (full API matrix + live schemas). Both documented.
+- **Locked the architecture** (above): role-gated `/tc/**` surface, reuse-the-engine TC-scoped builders,
+  side-aware stages, API-first, Documenso e-sign, AI last.
+- **Wrote migration 0253** (foundation data model). Fixed a FK type (contract_fill_id INTEGER, matching
+  `hl_contract_fill.id` SERIAL). Added `hl_templates.scope`. Staged — not yet applied.
+- **Scope lock**: `.claude/state/session-scope-tc-loop-foundation.lock`.
+- Status: holding for go to apply 0253 + build the TC Stages builder.
