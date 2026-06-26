@@ -107,20 +107,25 @@ The **watchdog** (`fub-backfill-watchdog.mjs`) keeps both alive autonomously —
 1. **Liveness + un-wedge** — checks the HTTP endpoint AND does a real `connectOverCDP` probe (`isCdpConnectable`).
    A Chrome can answer HTTP while its DevTools websocket is **wedged** (too many stale tabs) — that's invisible to
    a naive ping and silently crash-loops the scraper (`connectOverCDP Timeout`). On a wedge, the watchdog
-   **force-relaunches** Chrome (the persistent profile keeps the FUB login).
-2. **Auto-login** — if a Chrome lands on `login.followupboss.com`, the watchdog runs **`fub-login-bot.mjs`** against
-   that Chrome's port. The bot fills the login form and **presses Enter** to submit (FUB's submit-button markup
-   varies and a button-click selector is unreliable), then waits for the redirect off the login page.
+   **force-relaunches** Chrome (the persistent profile keeps the login).
+2. **Auto-login (Google SSO)** — the real FUB login is **"Log in with Google"** (`zach@spradlingrealtygroup.com`).
+   When a Chrome lands on `login.followupboss.com`, the watchdog runs **`fub-login-bot.mjs`** against that Chrome's
+   port. The bot is **page-centric**: it navigates one page fresh to the FUB app and judges auth by where *that
+   page* lands — a URL-only "is any tab on /people?" check is a lie, because **stale tabs keep the authed URL after
+   a server-side logout**. The persistent profile normally still holds a live **Google session**, so navigating to
+   the FUB app **auto-completes SSO with no password**. If Google re-prompts, the bot types
+   `FUB_WEB_GOOGLE_PASSWORD`; if FUB shows its native email/password form instead, it falls back to
+   `FUB_WEB_PASSWORD`. A 2FA / device-verify challenge can't be auto-solved (exit 3) and alerts via `notify.sh`.
 3. **Worker freshness** — if a backfill worker's log is stale (>5 min), it restarts that worker.
 
 <Warning>
-**The autonomous login requires two environment variables** — `FUB_WEB_EMAIL` and `FUB_WEB_PASSWORD`
-(currently `zach@spradlingrealtygroup.com` + its FUB password). They live in the repo root `.env` and are
-set in the **`fub-watchdog` pm2 environment** on Camp David (the watchdog passes its own env to the login bot).
-If the FUB web password ever changes, update it in **both** places — `.env` *and* the watchdog's pm2 env
-(`pm2 restart fub-watchdog --update-env` after exporting the new value) — or autonomous login will fail and
-a Chrome will sit on the login screen until a human intervenes. 2FA / device-verify challenges cannot be
-auto-solved (login bot exits code 3) and will alert via `notify.sh`.
+**The autonomous login uses these environment variables:** `FUB_WEB_EMAIL` (`zach@spradlingrealtygroup.com` —
+the Google account), `FUB_WEB_GOOGLE_PASSWORD` (the Google Workspace password, typed only if Google re-prompts),
+and `FUB_WEB_PASSWORD` (the legacy FUB-native form password — fallback). They live in the repo root `.env`
+**and** in the **`fub-watchdog` pm2 environment** on Camp David (the watchdog passes its own env to the login
+bot). If the Google password changes, update it in **both** places — `.env` *and* the watchdog's pm2 env (export
+the new value, then `pm2 restart fub-watchdog --update-env`) — or autonomous login can fail and a Chrome may sit
+on the login screen until a human intervenes.
 </Warning>
 
 ### How body recovery works
@@ -180,13 +185,14 @@ stays scrape-backfilled.
 
 ## Change log
 
-- **2026-06-26** — **Watchdog self-healing hardened for both Chromes.** Three gaps that caused an outage +
-  a stuck Chrome B login were fixed: (1) the watchdog's auto-login only ever targeted Chrome A — it now
-  auto-logs-in **both** A (`:18800`) and B (`:18802`); (2) the liveness check only pinged HTTP, so a
-  **wedged-but-listening** Chrome (HTTP 200, websocket times out) crash-looped the scraper invisibly — added a
-  real `connectOverCDP` probe (`isCdpConnectable`) that force-relaunches a wedged Chrome; (3) `fub-login-bot.mjs`
-  now **presses Enter** to submit (the prior button-click selector timed out on FUB's live login page).
-  Autonomous login env vars (`FUB_WEB_EMAIL` / `FUB_WEB_PASSWORD`) documented above.
+- **2026-06-26** — **Watchdog self-healing hardened for both Chromes + Google-SSO autonomous login.** Gaps that
+  caused an outage + a stuck Chrome B login were fixed: (1) the watchdog's auto-login only ever targeted Chrome A —
+  it now auto-logs-in **both** A (`:18800`) and B (`:18802`); (2) the liveness check only pinged HTTP, so a
+  **wedged-but-listening** Chrome (HTTP 200, websocket times out) crash-looped the scraper invisibly — added a real
+  `connectOverCDP` probe (`isCdpConnectable`) that force-relaunches a wedged Chrome; (3) `fub-login-bot.mjs` rewritten
+  **page-centric + Google-SSO-first** — the real FUB login is "Log in with Google"; navigating to the FUB app
+  auto-completes SSO via the persistent Google session (verified live), with `FUB_WEB_GOOGLE_PASSWORD` /
+  `FUB_WEB_PASSWORD` as fallbacks. A URL-only auth check was being fooled by stale `/people` tabs after a logout.
 - **2026-06-22** — Documented the full system (webhooks + scraper split, the canonical "what comes from where"
   table, the relay, the HouseLoop FUB Activity panel). Rebuilt + backfilled the Camp David → Railway relay
   (`fub-relay.mjs` v2). Clarified `fub-webhook-sink` is a deliberately-stopped dead duplicate.
