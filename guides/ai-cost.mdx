@@ -1,0 +1,101 @@
+---
+title: "AI Cost & Attribution"
+description: "How every Anthropic and OpenAI dollar is split across HouseLoop, PlacedAgent, and Memory OS — and where caching saves money."
+---
+
+## The problem this solves
+
+Every AI call across the company used to run on **one shared API key** billing to a single default
+workspace. That made spend **unattributable** — you could not tell what HouseLoop cost vs. PlacedAgent vs.
+the agent-memory infrastructure. The in-app **AI Cost** page (`/ai-cost` in the CRM) even under-reported
+Anthropic to a few dollars, because it computed Anthropic spend from the internal run log (which only sees
+HouseLoop's *own* logged calls) instead of the provider's real bill.
+
+The fix: **segment spend at the source** by giving each product its own Anthropic workspace and OpenAI
+project, then read the **real billing** from each provider's admin API.
+
+## The three buckets
+
+Spend is attributed to one of three products by **which workspace / project its key belongs to**:
+
+| Bucket | What runs here | Anthropic workspace | OpenAI project |
+| --- | --- | --- | --- |
+| **HouseLoop** | CRM + website + FUB scraper (Myli replies, dossiers, AI search, SEO articles, AI vision) | `houseloop-app` | `HouseLoop` |
+| **PlacedAgent** | Recruiting (PlacedAgent app + dashboard AI-recruiting) | `placedagent-app` | `PlacedAgent` |
+| **Memory OS** | Agent infrastructure — memory crons, hive, brainstem, knowledge graph, Discord bots | `memory-os` | `Memory OS` |
+
+Anything still running on the legacy shared key lands in an **Unattributed (legacy)** bucket that drains
+toward $0 as each remaining caller is moved onto its workspace key.
+
+## How attribution works in code
+
+Each subsystem reads its **own** workspace/project key, falling back to the shared key so nothing breaks:
+
+```ts
+const key = process.env.ANTHROPIC_API_KEY_HOUSELOOP || process.env.ANTHROPIC_API_KEY;
+// PlacedAgent code uses ANTHROPIC_API_KEY_PLACEDAGENT; Memory OS uses ANTHROPIC_API_KEY_MEMORY.
+// OpenAI mirrors this with OPENAI_API_KEY_HOUSELOOP / _PLACEDAGENT / _MEMORY.
+```
+
+Locally-run jobs (the memory crons, the FUB scraper) read `.env` directly, so they attribute immediately.
+Deployed apps (CRM, website, PlacedAgent, dashboard) carry their workspace key in their Railway service
+environment.
+
+## The AI Cost dashboard
+
+`/ai-cost` shows **real billing pulled from the provider admin APIs** — not an internal estimate:
+
+- **Anthropic** `cost_report` grouped by `workspace_id`
+- **OpenAI** `organization/costs` grouped by `project_id`
+
+It renders one tab per bucket (HouseLoop · PlacedAgent · Memory OS · Unattributed), each with the
+Anthropic + OpenAI spend, token volume, **cache hit rate**, a per-model breakdown, and a daily chart. The
+HouseLoop tab additionally shows a **category breakdown** (AI Follow-Up, Dossiers, AI Search, SEO Articles,
+AI Vision, …) sourced from the internal run log.
+
+<Note>
+**Units gotchas** (the two traps when reading these APIs directly):
+Anthropic's `cost_report` `amount` is in **cents** — divide by 100. OpenAI's `costs` `amount.value` is a
+**USD decimal string** — `parseFloat` it. Both cost endpoints cap at **31 daily buckets per page**, so
+ranges longer than ~a month must paginate.
+</Note>
+
+The numbers on this page are the **single source of truth** for AI spend. If an internal table disagrees,
+the provider admin API wins.
+
+## Where caching saves money
+
+Anthropic **prompt caching** (`cache_control: ephemeral`) caches a stable prompt prefix for a 5-minute
+window; cached reads bill at ~10% of normal input price. It's applied where it pays off:
+
+- **Myli lead conversation** — the system prompt + tool definitions are cached on every turn, so a
+  multi-turn conversation only pays full price for the first turn.
+- **The shared model router** (`call-model.ts`) — caches the system prefix for single-shot calls
+  (e.g. the fact-extraction engine).
+
+Caching is a **safe no-op below the model's minimum cacheable size** (~1024 tokens), so it can be applied
+broadly without risk. It does **not** help small, high-frequency prompts — for those the lever is
+**frequency**, not caching.
+
+## AI Vision is already cost-bounded
+
+AI Vision (`gpt-4o`, photos sent at `detail: "low"`) is computed **exactly once per listing at ingest** and
+cached in the database (`Listing.visionTags`). It never re-runs on a page view, and the pipeline skips any
+listing that's already tagged. Steady-state vision cost is therefore bounded by **new-listing volume only**
+(~$0.006/listing); the large historical spend was the one-time catalog backfill.
+
+## The biggest lever: don't pay for low-value calls
+
+The single largest source of silent spend was the **LLM memory layer** — background jobs that called a
+cheap model on a schedule and on every file save to generate summaries. Because those prompts are small,
+caching can't help; the only lever is running them less often. The **deterministic** memory (progress,
+lock, and handoff files plus git history) delivers the continuity value at **$0** and is always on.
+
+## Summary of cost levers
+
+1. **Segment at the source** — per-product workspace/project keys make every dollar attributable.
+2. **Cache stable prefixes** — Myli + the model router cache system/tool prompts (Anthropic); OpenAI
+   caches long repeated prefixes automatically.
+3. **Compute once, store forever** — AI Vision and dossiers run once per entity and cache to the database.
+4. **Throttle low-value background LLM jobs** — frequency, not caching, is the lever for small prompts.
+5. **Read the real bill** — attribute and decide from the provider admin APIs, never an internal estimate.
