@@ -1,16 +1,29 @@
 ---
 title: "dotloop Integration"
-description: "How HouseLoop connects to dotloop via the Public API v2 (OAuth 2.0) to read a brokerage's loops, participants, documents, and folders — and how to download actual document CONTENT (the OAuth API only returns metadata). The base of the Transaction Coordination section."
+description: "How HouseLoop connects to dotloop via the Public API v2 (OAuth 2.0) to read a brokerage's loops, participants, folders, and documents — AND download actual document CONTENT (PDFs) straight from the API once the document scope is enabled. The base of the Transaction Coordination section."
 ---
 
 <Note>
 **Live + verified.** dotloop Public API v2 access is granted, the Application Client (OAuth 2.0) is
 created, and the brokerage account is connected — the CRM reads loops, profiles, participants, and
-loop detail end-to-end. **Document metadata reads via the OAuth API; actual document FILE content
-(PDFs) downloads via dotloop's web-app REST endpoint with a logged-in session — see
-[Downloading document content](#downloading-document-content-pdfs).** The remaining build is the
-bulk loop **sync** into a canonical table (an Inngest job); the read path documented here is live.
+loop detail end-to-end. **As of 2026-06-26, document FILE content (PDFs) downloads directly through
+the OAuth API** once the client carries the `document:*` scope — see
+[Downloading document content](#downloading-document-content-pdfs). The remaining build is the bulk
+loop **sync** into a canonical table (an Inngest job); the read + download path documented here is live.
 </Note>
+
+
+<Warning>
+**LESSON LEARNED — read this before you debug a dotloop 403 (so we never lose an hour again).** If
+a document download returns **403 "Access is denied"**, it is **NOT** a platform limitation and the
+fix is **NOT** a cookie/session workaround. It means the **OAuth token lacks the `document:*` scope**.
+The scope IS available — dotloop CS enabled `document:*` + `admin:read` on our client on 2026-06-22
+(see [Authorization & support thread](#authorization--support-thread-the-proof)). The catch: a token
+minted *before* the scope was turned on keeps its old scopes forever (refresh preserves them). **The
+fix is a fresh consent:** in the brokerage dotloop account → **My account → Apps → Remove App** on
+our app, then re-run `/api/dotloop/oauth/start` and **Approve** again. The new token carries
+`document:*` and the exact same download call returns the PDF. Proven end-to-end 2026-06-26.
+</Warning>
 
 ## What it does
 
@@ -57,30 +70,46 @@ dotloop uses three-legged OAuth 2.0 (`authorization_code` + `refresh_token` gran
 | Access-token lifetime | ~12 hours (refresh with the refresh token) |
 | Grants | `authorization_code`, `refresh_token` |
 
-The Client ID and Secret are stored as secrets (`DOTLOOP_CLIENT_ID` / `DOTLOOP_CLIENT_SECRET`) and
-are never committed or exposed client-side. The OAuth handshake and token refresh run server-side
-in the CRM. The connection (access + refresh token) is persisted in the CRM Postgres table
+There is **no `scope` parameter on the authorize request** — dotloop grants whatever the client is
+provisioned for at consent time, and returns the granted scopes on the token (`token.scope`). The
+Client ID and Secret are stored as secrets (`DOTLOOP_CLIENT_ID` / `DOTLOOP_CLIENT_SECRET`) and are
+never committed or exposed client-side. The OAuth handshake and token refresh run server-side in the
+CRM. The connection (access + refresh token + granted scopes) is persisted in the CRM Postgres table
 `hl_dotloop_connection`; `lib/dotloop/client.ts` → `getValidAccessToken()` auto-refreshes it.
 
 ## Access scopes
 
-The Application Client is provisioned with read + write on all five dotloop access domains:
+The Application Client is provisioned with these scopes (verified on the live token, 2026-06-26):
 
 | Scope | Covers |
 |---|---|
-| Account | account details |
-| Profile | the user's profiles |
-| Loop | the user's loops (transactions) |
-| Contact | the user's contacts |
-| Template | loop templates |
+| `account:*` | account details |
+| `profile:*` | the user's profiles |
+| `loop:*` | the user's loops (transactions) |
+| `contact:*` | the user's contacts |
+| `template:*` | loop templates |
+| `admin:read` | **office / all-profiles data (admin read)** |
+| `document:*` | **document file content — upload AND download** |
 
-<Note>
-dotloop locks a client's access scopes at creation — they cannot be widened later without creating
-a new client (which forces a re-authorization). The client is provisioned read + write across all
-five domains so future write-back (e.g. creating loops) never requires a re-auth, even though the
-initial integration only reads. **There is no "document-content" scope** — document *file* download
-is not a Public-API-v2 capability at all (see below), so re-provisioning would not unlock it.
-</Note>
+<Warning>
+**Scopes are NOT permanently locked at client creation — but widening them takes two manual steps.**
+The first integration was provisioned with only the first five scopes, and document download
+returned **403 "Access is denied."** It is fixed and proven. To add a scope to an existing client:
+
+1. **Email `apisupport@dotloop.com`** and ask them to enable the capability on your client (we
+   enabled **document download** + **admin read**). They flip it server-side and confirm.
+2. **Re-consent — this is the step everyone misses.** A token minted *before* the scope was enabled
+   keeps its old scopes forever (refresh preserves consent-time scopes), so it will keep 403-ing. You
+   must mint a **fresh** token:
+   - In the **brokerage** dotloop account → **My account → Apps**, click **Remove App** on our app.
+     (dotloop blocks re-consent with *"… has already been connected … remove this application … and
+     try again"* until you do this.)
+   - Re-run `/api/dotloop/oauth/start` and **Approve** the consent screen again — it now lists the
+     new permissions ("View your office data", "Download and upload loop documents"). The new token
+     carries `admin:read document:*`.
+
+Confirm with `/api/dotloop/status?probe=1` or by reading `hl_dotloop_connection.scopes`.
+</Warning>
 
 ## Read endpoints
 
@@ -96,7 +125,8 @@ responses are wrapped in `{ "data": [ ... ], "meta": { "total": N } }`.
 | `GET /profile/:id/loop/:loopId/detail` | loop detail — sectioned field map (address, financials, dates) |
 | `GET /profile/:id/loop/:loopId/participant` | participants on a loop (name, role, email) |
 | `GET /profile/:id/loop/:loopId/folder` | folders in a loop |
-| `GET /profile/:id/loop/:loopId/folder/:folderId/document` | documents in a folder — **METADATA ONLY** (`id, name, created, updated`); see [document content](#downloading-document-content-pdfs) for the PDF |
+| `GET /profile/:id/loop/:loopId/folder/:folderId/document` | documents in a folder (metadata: `id, name, created, updated`) |
+| `GET /profile/:id/loop/:loopId/folder/:folderId/document/:documentId` (`Accept: application/pdf`) | **the document's PDF content** — see [below](#downloading-document-content-pdfs) |
 
 ## Data model (what each call returns)
 
@@ -144,53 +174,58 @@ name + email + side-of-deal for everyone on the transaction.
 dotloop removes them from the loop's people — so `/participant` shows only the agent-of-record
 (often the team lead, e.g. Ana) + the clients, **not the agent who actually worked the deal**. That
 agent survives ONLY inside the signed contract PDF (the "Licensee Assisting Seller" / designated-agent
-field). To recover it you must download the document content — see below.
+field). To recover it, download the document content — now a direct API call (below).
 </Warning>
 
 ## Downloading document content (PDFs)
 
-**The OAuth Public API does NOT serve document file content — only metadata.** `GET
-/profile/:id/loop/:loopId/folder/:folderId/document/:documentId` returns `{ id, name, created,
-updated }`; requesting it with `Accept: application/pdf` returns **403 "Access is denied"**. This is
-a dotloop platform limit (their own spec documents no download endpoint; the OAuth scopes lock at
-client creation and none of them grant file content). Re-provisioning the OAuth client will **not**
-unlock it.
-
-**The actual PDF downloads from dotloop's WEB-APP REST endpoint, authenticated by a logged-in
-my.dotloop.com SESSION (cookies) — NOT the OAuth bearer token:**
+**The document's PDF downloads directly from the OAuth Public API** — once the token carries the
+`document:*` scope (see [Access scopes](#access-scopes)):
 
 ```
-GET https://www.dotloop.com/my/rest/v1_0/document/x.pdf?documentId=<documentId>-1
-Cookie: <a logged-in my.dotloop.com session>
+GET https://api-gateway.dotloop.com/public/v2/profile/:profileId/loop/:loopId/folder/:folderId/document/:documentId
+Authorization: Bearer <access_token>
+Accept: application/pdf
+→ 200, Content-Type: application/pdf, body = the PDF bytes
 ```
+
+Proven 2026-06-26: loop `223215989`, folder `161367432`, document `980358748`
+("Counter Offer Addendum") → a valid **192,990-byte PDF v1.7**.
 
 Notes, all tested:
 
-- **The OAuth bearer token does NOT work here** → `401` (with or without the header). This endpoint
-  belongs to the dotloop web app, gated by the web session, not the API gateway.
-- **Auth = a real-Chrome login** as the **loop-owning brokerage account
-  `ana@spradlingrealtygroup.com`** (creds in the vault). Per the no-headless-browsers law, use real
-  Chrome — log in, capture the session cookies, then fetch the URL with those cookies.
-- **You still need the OAuth API to find the IDs:** list folders + documents via
-  `/folder` → `/folder/:id/document` (metadata), then download each by `documentId` via the web-REST
-  endpoint above. `documentId=<fileId>-1` (the `-1` is the version suffix).
-- **Folder discovery for templates** (not loop docs): `GET /my/rest/v1_0/folder?type=DOCUMENT_TEMPLATE`
-  then `GET /my/rest/v1_0/folder/<folderId>/document`. The Spradling Master Folder is `227653290`.
-- Proven path: Adam pulled all 12 Spradling Master Folder contract templates this way →
-  `tools/houseloop-contracts/dotloop-forms/`.
+- **The `document:*` scope is required.** Without it the same call returns **403 "Access is denied"**
+  — that 403 is a *missing-scope* signal, **not** a platform limitation. Enable the scope + re-consent
+  (see the warning under [Access scopes](#access-scopes)).
+- **`Accept: application/pdf` is what switches metadata → file.** The same path with
+  `Accept: application/json` returns the document metadata (`id, name, created, updated`).
+- **Find the IDs via the read endpoints first:** `/folder` → `/folder/:id/document` (metadata) gives
+  you the `folderId` + `documentId` to download.
+- **Retry transient 500s.** The download endpoint occasionally returns a `500` with an empty body;
+  a single retry after ~0.75s succeeds. The helper does this automatically.
+- **Helper:** `lib/dotloop/client.ts` → `dotloop.downloadDocument(profileId, loopId, folderId, documentId, token)`
+  returns the PDF as a `Buffer` (handles the `Accept` header + the 500 retry).
 
 **Why this matters — the designated agent on departed-agent loops:** for a loop whose working agent
 has left the brokerage, the only programmatic source of that agent's name is the signed contract
-PDF. Download the loop's "Exclusive Right to Sell" (or buyer-rep) document via the web-REST endpoint
-→ `pdftotext` → read the "Licensee Assisting Seller" / designated-agent field. Example: loop
-`223215989` (Burton) shows only Ana as `LISTING_AGENT` in `/participant`, but its contract names the
-real listing agent (Jeremy David, since departed) — recoverable only from the PDF.
+PDF. Download the loop's "Exclusive Right to Sell" (or buyer-rep) document → `pdftotext` → read the
+"Licensee Assisting Seller" / designated-agent field. The agent that `/participant` no longer lists
+is recoverable straight from the PDF the API now serves.
+
+<Note>
+**Historical note (superseded).** Before the `document:*` scope was enabled (22–26 Jun 2026), the
+only way to get file content was dotloop's web-app REST endpoint
+(`www.dotloop.com/my/rest/v1_0/document/x.pdf?documentId=<id>-1`) authenticated by a logged-in
+my.dotloop.com **session cookie** (the OAuth bearer 401s there). That cookie-session workaround is
+**no longer needed** — use the OAuth API download above. The web endpoint remains a manual fallback
+only if the API is ever unavailable.
+</Note>
 
 ## Using dotloop as a confirmation source (resolver)
 
 dotloop is a **ground-truth confirmation layer**: per transaction it yields the **client name +
-email + role**, the **property address** (street/city/state/zip/county + MLS number), and the
-**price + close date**. To confirm a past client:
+email + role**, the **property address** (street/city/state/zip/county + MLS number), the
+**price + close date**, and now the **signed contract PDFs**. To confirm a past client:
 
 1. Take the loop's `Property Address` (or parse the loop `name`) → resolve to the same
    `identityKey` / `canonicalSlug` the website uses (see
@@ -213,6 +248,52 @@ confirmation step for the past-client resolver.
 4. Verify at `/api/dotloop/status?probe=1` — it reports the connected account, scopes, token expiry,
    and a live read of the first active profile's loop total.
 
+## Authorization & support thread (the proof)
+
+This is the record of how access was granted, kept here so it is **never re-litigated**. We are an
+approved dotloop **Integration Partner** — access was requested 2026-06-16 and granted on the
+developer account **`admin@houseloop.ai`**; the OAuth Application Client ("HouseLoop", Client ID
+`1a48c25d-…` — full ID + secret in the vault) was created and authorized by the brokerage account
+`ana@spradlingrealtygroup.com`. **Document download + Admin read were enabled by dotloop CS on
+2026-06-22.**
+
+**Official references they sent (the source of truth):**
+
+- Developer guide (the GitHub docs they linked): **[dotloop.github.io/public-api](https://dotloop.github.io/public-api/)**
+- API support contact: **`apisupport@dotloop.com`**
+- The guides attached to their onboarding emails: **"[Step 1] Getting Started with the dotloop Public
+  API (version 2.5)"** and **"[Step 2] dotloop Public API V2 Quick Start Guide"** (request from
+  `apisupport@dotloop.com` if you need the PDFs again).
+
+**The email that confirms document access (Gary, dotloop CS Technical Support → `admin@houseloop.ai`,
+2026-06-22):**
+
+```
+Hello Zach,
+
+Everything looks good on our end. We have enabled document downloads and Admin read scope,
+here is the documentation you need to get started using document download permissions.
+
+Best Regards
+Gary
+dotloop CS Technical Support
+```
+
+**Thread, condensed (oldest → newest):**
+
+| When | From | Said |
+|---|---|---|
+| 2026-06-16 | Randi Coffey (dotloop) | "dotloop V2 API access is **approved** for your dotloop account." Step 1: create a dedicated, company-domain account to house the API client(s); it can be free; must NOT be a personal account. |
+| 2026-06-22 12:16 | Zach → Randi | Created the dedicated account **`admin@houseloop.ai`** (HouseLoop AI LLC). Proceed with activating V2 + send onboarding. |
+| 2026-06-22 12:27 | dotloop CS | Turned on permissions under `admin@houseloop.ai`; build the client per "[Step 1] Getting Started (v2.5)" + "[Step 2] Quick Start"; ultimate source = the GitHub developer guide. |
+| 2026-06-22 12:58 | Zach → CS | API Client created: name **"HouseLoop"**, Client ID `1a48c25d-…`. Please verify + apply any additional permissions. |
+| 2026-06-22 17:06 | **Gary (dotloop CS)** | **"We have enabled document downloads and Admin read scope."** |
+
+**The dotloop document templates we pulled** (the Spradling Master Folder + buyer-rep / disclosure
+forms) live in the repo at `tools/houseloop-contracts/dotloop-forms/` — the Exclusive Buyer Agency
+contract, the two Missouri broker-rep agreements, ABA disclosures, the offer sheets, etc. These are
+the blank fillable templates used by the Contract Engine.
+
 ## References
 
 - dotloop developer guide (source of truth): [dotloop.github.io/public-api](https://dotloop.github.io/public-api/)
@@ -220,15 +301,16 @@ confirmation step for the past-client resolver.
 
 ## Change log
 
-- **2026-06-26** — Documented document-content download. The OAuth Public API v2 returns document
-  **metadata only** (PDF download → 403); the actual file comes from the dotloop **web-app REST
-  endpoint** `www.dotloop.com/my/rest/v1_0/document/x.pdf?documentId=<id>-1`, authenticated by a
-  logged-in my.dotloop.com **session** (the OAuth bearer is rejected → 401). Auth = real-Chrome login
-  as `ana@spradlingrealtygroup.com`. This is the only programmatic path to the designated agent on
-  departed-agent loops (the contract's "Licensee Assisting Seller").
+- **2026-06-26** — **Document download proven through the OAuth API.** dotloop CS enabled
+  `document:*` + `admin:read` on the client; after **removing the app from the brokerage account and
+  re-consenting** (a token minted before the scope was enabled keeps the old scopes and 403s), the
+  call `GET …/document/:id` with `Accept: application/pdf` returns the PDF bytes (proven: a
+  192,990-byte PDF on loop 223215989). Corrected the prior claim that document download is "not a
+  Public-API-v2 capability" / "scopes lock at creation" — both were wrong. Added
+  `dotloop.downloadDocument()` (with transient-500 retry). The cookie-session web endpoint is now a
+  superseded fallback.
 - **2026-06-22** — Live + verified. dotloop Public API v2 access granted on `admin@houseloop.ai`;
-  Application Client created (OAuth 2.0, read + write all scopes, redirect
+  Application Client created (OAuth 2.0, redirect
   `https://crm.houseloop.ai/api/dotloop/oauth/callback`). CRM OAuth routes + `hl_dotloop_connection`
   store + Integrations card shipped; brokerage account connected and reading loops/profiles/
-  participants/detail end-to-end. Documented the live data model + resolver play. Next: Inngest bulk
-  loop sync into a canonical table.
+  participants/detail end-to-end. Documented the live data model + resolver play.
