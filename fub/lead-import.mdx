@@ -1,0 +1,69 @@
+---
+title: "FUB → HouseLoop: Lead Import"
+description: "How a Follow Up Boss lead becomes a HouseLoop lead — the import workflow, real-time sync, and how its tour/contact requests cross into the HouseLoop activity feed (the two-pipe rule)."
+---
+
+<Accordion title="Changelog — last updated 2026-06-26" icon="clock-rotate-left">
+Newest first. Times Eastern.
+- **2026-06-26** — Incident + request-activity model (Benji). FIXED: Myli was texting FUB-imported leads **outside any workflow** — the canned lead-facing email/SMS in `request-alerts.ts` fired whenever no workflow owned the door (FUB sources are `workflow_id=null`). Removed the canned lead send entirely; **all lead comms now go through a Lead Flow workflow** (agent-facing alerts kept). SHIPPED + verified: FUB tour/contact requests now cross into the **HouseLoop activity feed** as their own per-inquiry events (verified on Abshiro — 4 Tour Request cards, each badged with its portal).
+- **2026-06-26** — Layer 1 real-time sync LOCKED (relay `pg_notify fub_lead_changed` → CRM `fubListener` → lead SSE, no polling) + the FUB Activity **count fix** (real counts, e.g. Website **3,923** not FUB's display 100). (Lee)
+- **2026-06-22** — FUB import workflow + enriched registration card, verified on James Ross 50308 (Benji).
+</Accordion>
+
+## Overview
+
+When a lead comes into HouseLoop from **Follow Up Boss**, this is the layer that turns it into a HouseLoop
+lead and surfaces its activity. *How FUB data physically lands in `fub.*`* is the
+[Data System](/fub/scraper) (webhooks + scraper); *what each signal becomes* is the
+[Data & Signals Matrix](/fub/data-matrix). This page is the **import pipeline** above them; Myli's brain on
+the lead is [Myli Context](/fub/myli-context).
+
+FUB is **lead source #1** — the pattern (import → live sync → requests-to-feed) is source-agnostic.
+
+## The import workflow
+
+The **FUB import workflow is LIVE** — on an inbound FUB inquiry it pulls the lead into HouseLoop, logs an
+enriched **registration** card, and links it by `hl_leads.fub_person_id` (source = `Zillow.com`, platform =
+`follow_up_boss`). Verified on **James Ross 50308**.
+
+<Warning>
+**Lead comms go through workflows ONLY (2026-06-26).** The legacy canned lead-facing ack in
+`request-alerts.ts` is removed. A FUB lead's tour/contact acknowledgement is the job of the **Lead Flow
+workflow** bound to that door — never a hidden canned send. Agent-facing alerts remain.
+</Warning>
+
+## Layer 1 — Real-time sync (event-driven, NO polling)
+
+```
+Camp David fub.*  →  relay  →  Railway fub.*  ──NOTIFY fub_lead_changed(fub_person_id)──►
+   HouseLoop fubListener  →  lead-detail SSE (/api/leads/[id]/stream)  →  card updates instantly
+```
+
+The relay fires a Postgres **`NOTIFY`** on each write. HouseLoop's `fubListener` + the lead-detail SSE stream
+push the change to any open card — **no polling** (HouseLoop law). The FUB Activity panel reads the **real
+counts** from `fub.zillow_home_activity` / `fub.notes` / etc. (e.g. Website **3,923**), never FUB's display
+number (capped at 100).
+
+## Tour & Contact requests → the HouseLoop feed (the two-pipe rule)
+
+A FUB lead's activity flows through **two separate pipes** that do not feed each other:
+
+- **Pipe A — Myli's context** (the **Follow Up Boss Activity** panel): the lead's FULL FUB history — texts,
+  calls, notes, every inquiry, Zillow views — read live from `fub.*` by link. All FUB history lives here.
+  See [Myli Context](/fub/myli-context).
+- **Pipe B — the HouseLoop activity feed** (the **All** + **Website Activity** tabs, `hl_lead_activity`):
+  only **tour/contact REQUESTS** cross into here. FUB texts/calls/old activity never cross.
+
+The rules (LOCKED 2026-06-26):
+
+| Rule | Behavior |
+| --- | --- |
+| **One event per inquiry** | Each FUB tour/contact request becomes its **own** HouseLoop activity event (keyed per property) — a lead with 4 tour requests shows **4 request cards**, not one. |
+| **First touch vs request** | The lead's **first** touch = a `registration`. Every request **after** = a `tour_request` / `contact_request` event → **Website Activity → Requests** + **All**. |
+| **Request SOURCE = the portal** | Each request carries the portal it came FROM — `fub.events.source` (Zillow Preferred, Homes.com, realtor.com…) for FUB, **HouseLoop** for native — as a badge on the row. **Separate** from the LEAD source. |
+| **No backfill (watermark)** | Only inquiries from a lead's HouseLoop engagement window (event date **≥ when they joined**) create request events. Past FUB activity stays in Pipe A. |
+
+<Info>
+The card these requests render as is the canonical [Request Card](/fub/request-cards). Design SSOT (private):
+`GT_HOUSELOOP_FUB_LEAD_IMPORT_PRD.md` §4d + `GT_HOUSELOOP_FUB_REQUEST_ACTIVITY_PRD.md`.
+</Info>
