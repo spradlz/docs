@@ -6,7 +6,8 @@ description: "How a Follow Up Boss lead becomes a fully-contextualized HouseLoop
 <Accordion title="Changelog — last updated 2026-06-26" icon="clock-rotate-left">
 Newest first. Times Eastern. (Collapsed so it never grows past the page; the latest date always shows in the title above.)
 - **2026-06-26** — Incident + request-activity model (Benji). FIXED: Myli was texting FUB-imported leads **outside any workflow** — the canned lead-facing email/SMS in `request-alerts.ts` fired whenever no workflow owned the door (FUB sources are `workflow_id=null`). Removed the canned lead send entirely; **all lead comms now go through a Lead Flow workflow** (agent-facing alerts kept). DEFINED (build active): FUB tour/contact requests cross into the **HouseLoop activity feed** as their own per-inquiry events — see "Tour & Contact requests → the HouseLoop feed" below. PRD: `GT_HOUSELOOP_FUB_REQUEST_ACTIVITY_PRD.md`.
-- **2026-06-23** — Architecture LOCKED: 3 layers (sync / facts / dossier) + the **Watermark Law** (read-once, merge-forward; cursor = `synced_at` not event date). Layers 1–3 are the active build. (Lee)
+- **2026-06-26** — Layers 1–3 progress (Lee): **Layer 1 real-time sync LOCKED** (relay `pg_notify fub_lead_changed` → CRM `fubListener` → lead SSE, no polling) + the FUB Activity **count fix** (real counts, e.g. Website **3,923** not FUB's display 100). **Dossier now READS FUB on-demand** (`loadFubBrief` → `buildLeadContext`, via `POST /api/leads/[id]/context`, recency/intent law + maxTokens 4000). Open: dossier watermark (read-once) + auto-fire-on-import.
+- **2026-06-23** — Architecture LOCKED: 3 layers (sync / facts / dossier) + the **Watermark Law** (read-once, merge-forward; cursor = `synced_at` not event date). (Lee)
 - **2026-06-22** — Myli-context UI shipped: `[Lead Context] / [Follow Up Boss Activity]` toggle + FUB Activity panel (`LeadContextPanel.tsx`, Lee). FUB import workflow + enriched registration card, verified on James Ross 50308 (Benji).
 </Accordion>
 
@@ -36,8 +37,15 @@ FUB lead (fub.* on Railway)
 
 - **The Myli-context UI is LIVE** — the lead-detail `[Lead Context] / [Follow Up Boss Activity]` toggle
   + the FUB Activity panel (`LeadContextPanel.tsx`). Verified on **James Ross 50308**.
-- **The FUB import workflow is LIVE** — Benji's pipeline pulls a FUB lead in, logs an enriched
-  registration card, source = `SRG-Follow Up Boss`. Verified on James Ross 50308.
+- **Layer 1 real-time sync is LOCKED** — relay `pg_notify fub_lead_changed` → CRM `fubListener` → lead
+  SSE, no polling. The FUB Activity panel shows the **real** `fub.*` counts (e.g. Website **3,923**, not
+  FUB's display 100).
+- **The dossier READS FUB on-demand** — `loadFubBrief` (profile, at-a-glance, texts/calls/notes,
+  saved searches, web rollup, `fub.events` inquiries/tour-requests) → `buildLeadContext`, via
+  `POST /api/leads/[id]/context`, under the recency/intent law. (Open: the watermark read-once cursor +
+  auto-fire-on-import.)
+- **The FUB import workflow is LIVE** — pulls a FUB lead in, logs an enriched registration card, source
+  = `SRG-Follow Up Boss`. Verified on James Ross 50308.
 - **Lead comms go through workflows ONLY (2026-06-26)** — the legacy canned lead-facing ack in
   `request-alerts.ts` is removed; a FUB lead's tour/contact ack is the job of the workflow bound to that
   door in Lead Flow, never a hidden canned send. (Agent-facing alerts remain.)
@@ -68,12 +76,12 @@ The rules (LOCKED 2026-06-26):
 
 ## 🚧 Current Work In Progress (2026-06-26, ACTIVE)
 
-| Layer | Build | Owner |
+| Layer | Build | Status / Owner |
 |---|---|---|
-| **1 — real-time sync** | relay `NOTIFY` → `pgListener` → lead SSE → card updates live; panel reads the REAL `fub.*` counts | Lee |
-| **2 — facts extractor** | run the deterministic extractor on first pull → fill the 12-domain Lead Context | Lee / Adam (UI) |
-| **3 — dossier + watermark** | the FUB-section Sonnet pass on first pull + the on-demand Haiku delta-merge engine | Lee / Myli |
-| **Requests → feed** | per-inquiry `tour_request`/`contact_request` events with portal source + the future-only watermark + a one-time backfill of recently-imported leads | Benji |
+| **1 — real-time sync** | relay `NOTIFY` → `fubListener` → lead SSE → card updates live; real `fub.*` counts | ✅ LOCKED (Lee) |
+| **2 — facts extractor** | deterministic extractor → fill the 12-domain Lead Context | Lee / Adam (UI) |
+| **3 — dossier + watermark** | dossier reads FUB on-demand (`loadFubBrief`→`buildLeadContext`); OPEN: watermark read-once + auto-fire-on-import | Lee / Myli |
+| **Requests → feed** | per-inquiry `tour_request`/`contact_request` events with portal source + the future-only watermark + a one-time backfill of recently-imported leads | Benji (active) |
 
 Design SSOT (private): `GT_HOUSELOOP_FUB_LEAD_IMPORT_PRD.md` §4d (import/context) + `GT_HOUSELOOP_FUB_REQUEST_ACTIVITY_PRD.md` (requests → feed).
 
@@ -84,11 +92,11 @@ Design SSOT (private): `GT_HOUSELOOP_FUB_LEAD_IMPORT_PRD.md` §4d (import/contex
 ### Layer 1 — Real-time sync (event-driven, NO polling)
 ```
 Camp David fub.*  →  relay  →  Railway fub.*  ──NOTIFY fub_lead_changed(fub_person_id)──►
-   HouseLoop pgListener  →  lead-detail SSE (/api/leads/[id]/stream)  →  card updates instantly
+   HouseLoop fubListener  →  lead-detail SSE (/api/leads/[id]/stream)  →  card updates instantly
 ```
-The relay fires a Postgres **`NOTIFY`** on each write. HouseLoop's existing `pgListener.ts` + the
-lead-detail SSE stream push the change to any open card — **no polling** (HouseLoop law). The panel reads
-the **real counts** from `fub.zillow_home_activity` / `fub.notes` / etc., never FUB's display number.
+The relay fires a Postgres **`NOTIFY`** on each write. HouseLoop's `fubListener` + the lead-detail SSE
+stream push the change to any open card — **no polling** (HouseLoop law). The panel reads the **real
+counts** from `fub.zillow_home_activity` / `fub.notes` / etc., never FUB's display number.
 
 ### Layer 2 — The Facts (deterministic extractor)
 On first pull, the extractor structures every FUB fact into HouseLoop's **12-domain fact store** — name,
@@ -97,7 +105,7 @@ source, timeframe, price range, home views/saves/searches, Zillow Insights. **No
 ### Layer 3 — One Lead Context + the dossier (on-demand LLM)
 | Section | Source | When it generates |
 |---|---|---|
-| **Follow Up Boss** | imported FUB history (notes, texts, calls, 1,730 views, saved searches, insights) | **once** on first pull — Sonnet, rich; then frozen until regenerated |
+| **Follow Up Boss** | imported FUB history (notes, texts, calls, views, saved searches, insights) via `loadFubBrief` | **on-demand** — `POST /api/leads/[id]/context` (Sonnet, rich) |
 | **HouseLoop** | everything happening in HouseLoop going forward | live |
 
 Myli reads the **union** (FUB KB + FUB dossier + live HouseLoop) for any action. Regen is **on-demand**,
@@ -116,7 +124,7 @@ mark of everything already baked in). Each regeneration:
 </Steps>
 
 First pull = full history (Sonnet, cursor = now). Every pull after = only the delta, merged with Haiku —
-cheap. The 1,730 old views are **never re-read.** Tokens paid **once per row, ever.**
+cheap. The old views are **never re-read.** Tokens paid **once per row, ever.**
 
 <Warning>
 **The gotcha that makes it correct:** watermark on **`synced_at` (when WE ingested the row), NOT the
