@@ -1,64 +1,95 @@
 ---
 title: "Past-Client Data Pipeline"
-description: "The end-to-end Spradling Group past-client pipeline: the S6 LLM resolver (named-evidence only) owns the output — household, deals, disposition, contacts, tags, and the FUB note itself; the transport layer just writes that finished block to the website, the CRM seller report, and Follow Up Boss. Live county deed is primary truth; agents and agent-family are auto-suppressed (DNC). Never a deterministic surname match, never hand-rolled note logic."
+description: "The end-to-end Spradling Group past-client pipeline. TWO tables the app reads: the PARENT (hl_srg_past_clients = the person + dossier + bucket) and the CHILD (hl_srg_past_client_homes = the ONE reconciled house SSOT — MLS + SISU + dotloop + contract facts in one flat row per house). Raw sources feed the child; the S6 resolver reads the child's facts, resolves who each house belongs to, and writes the dossier + bucket to the parent. dotloop CONTRACT licensee is the final-truth agent. Never a deterministic surname match, never hand-rolled note logic."
 ---
 
 <Accordion title="Changelog — last updated 2026-06-26" icon="clock-rotate-left">
 Newest first. Times Eastern. (Collapsed so it never grows past the page; the latest date always shows in the title above.)
-- **2026-06-26** — **Agent DO-NOT-CONTACT screen (Step 0).** We never reactivate our own SG agents or their family. The resolver loads the **agent roster** (distinct names in the SISU `agent` field, 117) and runs `checkAgent()` first: exact full-name match → **Agent DNC** (auto); surname-only match → DNC **only** with a real signal in the FUB notes/deals (an "Agent COI" note, an agent spouse/co-owner on the deed, or a deal where that agent repped the other side) — a surname coincidence is NOT DNC. On a DNC the card becomes a short suppression note, tags → `SRG Closed - Agent DNC`, bucket flips to `agent-dnc`. Proven on April Atkinson (agent) + James Duston (husband of agent Stephanie Duston). (Caleb)
-- **2026-06-26** — **Deed-lag + fresh-Repliers + chain of custody.** (1) **Live county deed is PRIMARY truth** for disposition, but a recent **real** MLS sale BEATS a lagging deed (deed recording trails a closing by weeks) — `deed_lag` flag; the **Arboridge artifact guard** (exact-list price + no buyer agent = a refi/relo, NOT a sale) still protects owned homes. (2) For a sold home the resolver fetches the **full MLS listing** for the true `CloseDate` (the address-history endpoint returns the contract date). (3) **Chain of custody:** every transaction line carries the SG agent who repped that deal (per-deal, from SISU/closings). (4) **KCMO → Jackson County** routing fixed in `county-owner-verify.mjs`. (5) The Audit Report links each client to their **Follow Up Boss profile**. (Caleb)
-- **2026-06-23 (PM2)** — **Resolver-owned dossier is LIVE + final tag taxonomy LOCKED.** S6 emits the finished `resolver_block` (contacts, transactions, disposition, tags, `note_markdown`); the dumb transport (`dossier-to-fub.mjs`) writes it to FUB verbatim. Tags: `HouseLoop Resolved` + `SRG Closed - <bucket>` + `SRG Closed - Lost Listing`. (Caleb)
+- **2026-06-26 (PM)** — **🏛️ SSOT CONSOLIDATION LOCKED + bucket resolution + dotloop CONTRACT = final truth.** (1) **Two tables the app reads:** PARENT `hl_srg_past_clients` (person + dossier + bucket) and CHILD `hl_srg_past_client_homes` (the ONE reconciled house SSOT — 1 row per house, all MLS + SISU + dotloop + contract facts merged). Raw sources (`sisu_transactions`, `hl_srg_mls_deals`, dotloop API) FEED the child; the app never reads them directly. `hl_srg_mls_deals` is retired as an SSOT. Consolidation PRD: `GT_HOUSELOOP_PASTCLIENT_TRANSACTIONS_SSOT_PRD.md`. (2) **Bucket is a RESOLVED OUTPUT** from the agent, precedence **dotloop CONTRACT licensee > SISU agent > MLS our_roles > Zach's manual recon**: Ana Only / Ana Handoff / Team / **Internal (SG Holdings, excluded)** / Agent DNC. Verified 5/5 (Earl=Team, Dallas=Ana Only, Nikki=Ana Handoff, Hicks/McCluer=Team). (3) **dotloop document download UNLOCKED** (OAuth `document:*` scope, re-consented) → download the signed contract → `pdftotext -layout` → **LICENSEE ASSISTING SELLER/BUYER = the real agent** even when the participant list dropped a departed agent (Earl→Jessica Rich, Burton→Jeremy David). (4) **Zach Spradling → Ana Spradling** (input error). (5) Contamination doctrine: a closing's `agent` is trusted ONLY when SISU-sourced; reverse-recon/orphan-* GUESSED agents are ignored; Zach's hand recon is the fallback. (Caleb)
+- **2026-06-26** — **Agent DO-NOT-CONTACT screen (Step 0).** We never reactivate our own SG agents or their family. The resolver loads the **agent roster** (distinct names in the SISU `agent` field, 117) and runs `checkAgent()` first: exact full-name match → **Agent DNC** (auto); surname-only match → DNC **only** with a real signal in the FUB notes/deals. Proven on April Atkinson + James Duston. (Caleb)
+- **2026-06-26** — **Deed-lag + fresh-Repliers + chain of custody.** Live county deed = primary disposition truth, but a recent real MLS sale beats a lagging deed (`deed_lag`); Arboridge artifact guard; full-MLS `CloseDate`; per-deal SG agent; KCMO→Jackson routing; Audit Report → FUB profile links. (Caleb)
+- **2026-06-23 (PM2)** — **Resolver-owned dossier is LIVE + final tag taxonomy LOCKED.** (Caleb)
 - **2026-06-23** — **🚧 ARCHITECTURE LOCK: the resolver OWNS the output; the transport is dumb.** (Caleb)
-- **2026-06-23** — dotloop recon layer + parcel-verified Repliers disposition (Sycamore trap). (Caleb)
 - **2026-06-22 (PM3)** — Households resolved ONLY by the S6 LLM resolver, on named evidence. (Caleb)
 - **2026-06-17 5:54 AM** — Original guide (`hl_sold_profiles`, superseded).
 </Accordion>
 
-This is the canonical developer reference for the **Spradling Realty Group past-client data project** — one of the largest data lifts in HouseLoop. It powers the CRM seller-report dashboard, every past-client home's `/home` page, **the Follow Up Boss past-client dossier**, and the **CRM Audit Report** (`Seller Report → Audit Report`). The internal strategy lives in `GT_HOUSELOOP_SG_PAST_CLIENTS_PRD.md` §12–§13; this page is the **end-to-end process a developer needs to operate it.**
+This is the canonical developer reference for the **Spradling Realty Group past-client data project** — one of the largest data lifts in HouseLoop. It powers the CRM seller-report dashboard, every past-client home's `/home` page, **the Follow Up Boss past-client dossier**, and the **CRM Audit Report** (`Seller Report → Audit Report`). The internal strategy lives in `GT_HOUSELOOP_SG_PAST_CLIENTS_PRD.md` §12–§13 and the SSOT-consolidation plan in `GT_HOUSELOOP_PASTCLIENT_TRANSACTIONS_SSOT_PRD.md`.
 
-## 🚧 CURRENT STATUS (2026-06-26)
+## 🏛️ THE DATA MODEL — two tables the app reads (Zach LOCKED 2026-06-26)
 
-The **resolver and the card format are dialed in and proven** on the hardest test cases (Nations, Todd Borgen, Jennifer Hutchens). The full book has **NOT** been swept yet — it was deliberately paused to (a) lock the card format and (b) wire **cost controls (prompt caching + single-shot)** before spending on 1,722 clients. ~69 test cards are resolved; the rest are untouched.
+> **One source of truth, two layers: the PERSON (parent) and the HOUSE (child). Nothing else.**
 
-**Next, in order:** lock the card format → caching/single-shot → measure $/client on a small batch → run the whole book **once**, cheap. Owner: Caleb.
+| Layer | Table | Grain | Holds |
+|---|---|---|---|
+| **PARENT — person** | `hl_srg_past_clients` | 1 / past client (~1,834) | the PERSON: name · contact · `bucket` · **`resolver_block` (the dossier)** · `resolution_status` · `website_hlid` · resolved current home. The resolver WRITES the dossier here. |
+| **CHILD — house (THE SSOT)** | `hl_srg_past_client_homes` | **1 / house (~2,259)** | the ONE reconciled house record — **all facts in one flat row:** MLS facts + SISU facts + dotloop facts (loop + **contract licensee** + parties) + value/photos. The resolver READS its facts. |
+
+**Grain (Zach 2026-06-26):** **one row per house.** A past client with multiple homes has multiple child rows. The *same* house can have multiple rows across its life (sold more than once over the years) — that's fine; each is its own transaction. **Each resolved home maps to exactly ONE HouseLoop website URL** — one `canonicalSlug` on the website `Listing`, generated/linked by the resolver. One house = one `/home/<canonicalSlug>`, always.
+
+**Raw INPUT tables — they FEED the child; the app NEVER reads them directly:**
+- `sisu_transactions` — raw SISU pipeline (agent, GCI, dates, status; 1,945 Closed)
+- `hl_srg_mls_deals` — raw MLS download (our_roles, price, close date, list agent) — **retired as an SSOT**, kept only as a raw staging input
+- **dotloop API** — loop → participants + the signed **contract** (the final-truth agent)
+
+**The flow (one direction):** raw sources → **reconciled into the child** (one flat row per house) → the **S6 resolver reads the child's facts** → resolves who the house belongs to (current home / bucket / disposition / agent) → **writes the dossier + bucket onto the parent**, and the derived fields onto the child. The seller report, the website, and the Audit Report read **parent JOIN child** — no JSON scratch files, no reading a raw source. (The denormalized `home_*` columns currently on the parent move OUT to the child; see the consolidation PRD.)
 
 ### THE ARCHITECTURE LAW (Zach LOCKED 2026-06-23) — the resolver owns the output, the transport is dumb
 
-> **The S6 LLM resolver OWNS the entire output.** Every byte that takes judgment is written by the resolver: the household, the **labeled contacts**, the **labeled transactions** (BOUGHT vs SOLD), the **disposition**, the **DNC screen**, the **tags**, AND the human **NOTE**.
+> **The S6 LLM resolver OWNS the entire output.** Household, **labeled contacts**, **labeled transactions** (BOUGHT vs SOLD), **disposition**, **DNC screen**, **bucket**, **tags**, AND the human **NOTE**.
 >
-> **The transport (`dossier-to-fub.mjs`) is DUMB** — it writes the resolver's finished block to FUB + the SSOT and NEVER re-derives anything. **If the output is wrong, fix the RESOLVER prompt/schema, re-run, re-transport.**
+> **The transport (`dossier-to-fub.mjs`) is DUMB** — it writes the resolver's finished block to FUB + the SSOT and NEVER re-derives anything. **If the output is wrong, fix the RESOLVER, re-run, re-transport.**
 
-Born from a day of regressions where hand-rolled JS (`roleOf`, `lastNameOf`, contact regex, current-home heuristic) broke what the resolver had right and burned ~$50. Never again: no judgment in the transport.
+## 🏷️ THE BUCKET — a resolved output (Zach LOCKED 2026-06-26)
+
+The `bucket` is **derived from who actually repped the deal**, never a pre-baked column or a tag (tags lie — "Agent COI" might be the *agent's* COI, not Ana's). The agent is determined **per deal, by precedence:**
+
+1. **dotloop CONTRACT licensee** (the signed `LICENSEE ASSISTING SELLER/BUYER`) — **the source of final truth**, overrides SISU
+2. **SISU `agent`** (Zach Spradling → Ana Spradling) — the working agent; proved equal to the contract's designated agent
+3. **MLS `our_roles`** (`list-ana`/`buy-ana` = Ana; `list-group`/`buy-group` = the team brand, NOT proof of a team agent — the Dallas bug)
+4. **Zach's manual recon** (his hand-verified ~36 fact-less deals) — fallback when 1–3 are empty
+
+| Bucket | Meaning |
+|---|---|
+| **Ana Only** | Ana is the agent on **every** deal |
+| **Ana Handoff** | Ana touched ≥1 deal **and** a named team agent worked another (Ana's relationship, handed off) |
+| **Team** | a named team agent only — **Ana never** on the deal (Earl Wilson = Jessica Rich) |
+| **Internal (SG Holdings)** | a Spradling Holdings / "Ana & Zach Spradling" principal flip — **our own investor deal, excluded from reactivation** |
+| **Agent DNC** | the client is an SG agent or agent family |
+
+## ⭐ dotloop CONTRACT = the source of final truth for the agent (Zach LOCKED 2026-06-26)
+
+The participant list **lies on departed-agent loops** — when a team agent leaves, dotloop DELETES them, leaving only Ana-of-record. The real agent survives ONLY inside the signed contract PDF (`LICENSEE ASSISTING SELLER/BUYER`). dotloop CS enabled **document download** on our OAuth client (`document:*` scope; Adam removed the app + re-consented to mint a doc-scoped token — a refresh does NOT pick up a newly-enabled scope, you must re-authorize). The chain, **all OAuth API, no Chrome**:
+
+```
+loop → GET /folder → find the Exclusive-Right-to-Sell / buyer-rep doc
+     → GET /folder/:fid/document/:did  with  Accept: application/pdf   (=> 200, PDF bytes)
+     → pdftotext -layout → the name on the line above "LICENSEE ASSISTING SELLER|BUYER"
+```
+
+Use `apps/houseloop-crm/lib/dotloop/client.ts → dotloop.downloadDocument()` (handles the Accept header + a transient-500 retry). Helper: `tools/houseloop-cards/dotloop-contract-agent.mjs` → `contractAgent(profileId, loopId)`. **Proven: Earl → Jessica Rich (confirms SISU), Burton → Jeremy David (recovers the departed agent SISU lost).** Full API details: [dotloop Integration](/guides/dotloop-integration). dotloop also confirms the **client + address + parties** (recon truth).
 
 ## THE LIVE-DEED DISPOSITION — county deed is primary truth
 
 For every home the client bought, the resolver re-derives the disposition **live** (never a stored flag):
 
-1. **County deed** (`verifyOwner()` in `county-owner-verify.mjs`; Johnson/Wyandotte KS + Jackson/Clay/Cass MO) is **primary truth.** `owner_match` (client on the deed) = they own it; `owner_differs` (a stranger owns it) = they sold/moved.
+1. **County deed** (`verifyOwner()` in `county-owner-verify.mjs`; Johnson/Wyandotte KS + Jackson/Clay/Cass MO) is **primary truth.** `owner_match` = they own it; `owner_differs` = they sold/moved.
 2. **Repliers** gives the clean sold date/price/office; **OpenWeb Ninja** fills the listing/buyer **agent names** Repliers lacks.
-3. **DEED-LAG RULE (the Nations case):** county deed recording trails a closing by weeks, so a deed still showing the client does **not** mean they didn't sell. A **recent, real** MLS sale (arm's-length: negotiated price and/or a buyer agent) **BEATS** a lagging deed → `sold=true`, `deed_lag=true`, note appends "(deed not yet recorded)."
-4. **ARBORIDGE ARTIFACT GUARD:** a "sale" priced **exactly** at list with **no buyer agent** is a non-arm's-length artifact (refi/relo/quitclaim), NOT a sale → the deed (owner_match) wins, the home stays owned. (Chari still owns 3216 SW Arboridge.)
-5. For a sold home, fetch the **full MLS listing** (`repliersSoldCheck(mls)`) for the real `raw.CloseDate` — the address-history endpoint returns the contract date, not the close.
+3. **DEED-LAG RULE (the Nations case):** a **recent, real** MLS sale (arm's-length: negotiated price and/or a buyer agent) **BEATS** a lagging deed → `sold=true`, `deed_lag=true`.
+4. **ARBORIDGE ARTIFACT GUARD:** a "sale" priced **exactly** at list with **no buyer agent** is a non-arm's-length artifact (refi/relo/quitclaim), NOT a sale → the deed wins.
+5. For a sold home, fetch the **full MLS listing** (`repliersSoldCheck(mls)`) for the real `raw.CloseDate`.
 
-**⚠️ PARCEL LAW (the Sycamore trap):** Repliers' `addressKey` ignores ZIP, county, and the N/S/E/W directional → it MERGES different houses sharing street#+name. A re-sale counts only if the PARCEL matches: zip + county + neighborhood + legal description + coordinates within ~150m.
+**⚠️ PARCEL LAW (the Sycamore trap):** Repliers' `addressKey` ignores ZIP, county, and directional → it MERGES different houses. A re-sale counts only if the PARCEL matches: zip + county + neighborhood + legal + coords within ~150m.
 
 ## CHAIN OF CUSTODY — the agent on every deal
 
-Every `transactions[]` line carries `agent` = the **Spradling Group agent who repped US on THAT specific deal** (per-deal, not per-client — an Ana-handoff client shows Ana on the early deals and the handoff agent later). Source: SISU `agent` of the matching closing, else the closing's `agent`; fallback `"SRG"`. It renders as `— <agent>` on every transaction line in the FUB note and as the **Agent (chain of custody)** column in the Audit Report.
+Every `transactions[]` line carries `agent` = the **Spradling Group agent who repped US on THAT specific deal** (per-deal). Source precedence: dotloop contract licensee → SISU `agent` → closing `agent` → `"SRG"`. It renders as `— <agent>` on every transaction line and as the **Agent (chain of custody)** column in the Audit Report.
 
 ## 🚫 AGENT DO-NOT-CONTACT SCREEN (Step 0) — never reactivate our own agents
 
-We never market to our own SG agents or their immediate family. Before anything else the resolver:
-
-- Loads the **agent roster** = distinct names in the SISU `agent` field (the agents who repped our deals).
-- `checkAgent()`: **exact full-name match** → the person IS an agent → **Agent DNC** (auto). **Surname-only match** → POSSIBLE agent-family → DNC **only** with a confirming signal in the FUB notes/deals: an "Agent COI" note, an agent spouse/co-owner on the deed, or a deal where that agent repped the OTHER side. A surname coincidence with **no** signal stays a normal client.
-- On DNC: `note_markdown` becomes a short **"DO NOT CONTACT — Agent / Agent Family (reason)"** card (no reactivation dossier), `tags=["HouseLoop Resolved","SRG Closed - Agent DNC"]`, and the CRM **bucket flips to `agent-dnc`**.
-
-Proven: **April Atkinson** (exact agent match; the resolver even flagged her $0-GCI "closing" as an internal agent record) and **James Duston** (surname `Duston` + the COI note + the `DUSTON JAMES & STEPHANIE` deed + SISU lead-source `agent coi` → husband of agent Stephanie Duston).
+Before anything else the resolver loads the **agent roster** (distinct names in the SISU `agent` field) and runs `checkAgent()`: **exact full-name match** → **Agent DNC** (auto); **surname-only match** → DNC **only** with a confirming signal (an "Agent COI" note, an agent spouse/co-owner on the deed, or a deal where that agent repped the OTHER side). On DNC: a short suppression note, `tags=["HouseLoop Resolved","SRG Closed - Agent DNC"]`, bucket → `agent-dnc`. Proven: **April Atkinson** + **James Duston** (husband of agent Stephanie Duston).
 
 ## THE CARD — the Follow Up Boss note format (LOCKED)
-
-The `note_markdown` is EXACTLY these sections, nothing else (no free-form reasoning or data-quality musings — those go in `card_errors`, internal):
 
 ```
 HouseLoop · Spradling Group Past Client — <Bucket>
@@ -72,61 +103,48 @@ TRANSACTIONS WITH US
 
 CURRENT
 • Current home: <addr> — county-deed confirmed (<owner>).   (or: Current residence: not yet verified)
-• Still owns: <addr> (investment) · <addr> (investment)
-• SELLER LEAD — <addr> sold <date> for $<price>, listed by <agent> (<broker>) — we lost this listing.  (only when deed-proven)
+• Still owns: <addr> (investment)
+• SELLER LEAD — <addr> sold <date> for $<price>, listed by <agent> (<broker>) — we lost this listing.  (deed-proven only)
 
 DOSSIER
-<2–4 sentence "know them before you call" brief: who they are, our history + which agent, where they stand
- now, and the one actionable angle. Grounded only in the facts — never invented.>
+<2–4 sentence "know them before you call" brief, grounded only in the facts>
 ```
 
-A **DNC** card replaces all of the above with the short suppression note.
+The header bucket label + tags are forced deterministic from the resolved bucket (the LLM can't drift them). A **DNC** or **Internal (SG Holdings)** card replaces all of the above with a short suppression note.
 
 ## The Audit Report (`Seller Report → Audit Report`)
 
-A full-width CRM page (`apps/houseloop-crm/components/seller-report/AuditReport.tsx`, fed by `/api/settings/seller-report/audit` reading `resolver_block` live). It's the "gold" audit layout, intentionally separate from the tokenized CRM table (an ESLint exception), with the fonts/buttons/header tokenized. A sticky jump bar: **All · Transaction History · Resolution Matrix · Follow-Up Boss Notes**.
-- **Transaction History** — every deal + the Agent (chain of custody) column + the live deed verdict.
-- **Resolution Matrix** — per client: bucket, status, current residence, per-home deed verdicts, lost listings (with agent), contacts, tags.
-- **Follow-Up Boss Notes** — every note verbatim.
-- **Each client name links to their Follow Up Boss profile** (`https://spradlinggroup.followupboss.com/2/people/view/<fub_id>`).
+A full-width CRM page (`AuditReport.tsx`, fed by `/api/settings/seller-report/audit` reading `resolver_block` live). Gold layout, sticky jump bar: **All · Transaction History · Resolution Matrix · Follow-Up Boss Notes**. Each client name links to their **Follow Up Boss profile** (`https://spradlinggroup.followupboss.com/2/people/view/<fub_id>`).
 
-## The resolver's output block — `resolver_block` jsonb on `hl_srg_past_clients`
+## The resolver's output block — `resolver_block` jsonb on `hl_srg_past_clients` (the parent)
 
-`contacts[]` · `transactions[]` (with `agent`) · `disposition` (current_residence, still_owns, lost_listings) · `dispositions[]` (per-home live deed verdict, for the Audit Report) · `dnc` (`{is_dnc, reason}`) · `tags[]` · `note_markdown`. `resolution_status` gates the transport: `resolved` → written to FUB; `needs_review` → held; `complete` → transported. ⚠️ Write to **`resolver_block`**, never the pre-existing `dossier` TEXT column (Myli's case-file). Migration `0243` declares the columns.
+`contacts[]` · `transactions[]` (with `agent`) · `disposition` · `dispositions[]` (per-home deed verdict) · `dnc` · `bucket` + `bucket_basis` · `tags[]` · `note_markdown`. `resolution_status` gates the transport: `resolved` → FUB; `needs_review` → held. ⚠️ Write to **`resolver_block`**, never the pre-existing `dossier` TEXT column (Myli's case-file).
 
 ### 🔖 FUB TAG TAXONOMY (Zach LOCKED 2026-06-23)
 
 | Tag | On which leads |
 |---|---|
 | `HouseLoop Resolved` | **every** resolved client |
-| `SRG Closed - Ana Only` / `Ana Handoff` / `Team` / `Agent DNC` | the `bucket` |
+| `SRG Closed - Ana Only` / `Ana Handoff` / `Team` / `Internal (SG Holdings)` / `Agent DNC` | the `bucket` |
 | `SRG Closed - Lost Listing` | a home re-sold by another agent (seller-engagement lead) |
 
-Tags are **ATOMIC** — never bake combinations into one tag; FUB smart lists AND them (e.g. `Ana Only` + `Lost Listing` = "Ana's seller leads").
+Tags are **ATOMIC** — never bake combinations into one tag; FUB smart lists AND them.
 
 ## The one rule that governs everything: resolve first, enrich second
 
-A past-client home is never enriched, slugged, or surfaced until it has been resolved to a client and signed off. Per-home lifecycle: `(1) RESOLVE → (2) SIGN-OFF → (3) BACKFILL (Ninja → master) → (4) CANONICAL SLUG → (5) SELLER REPORT`.
-
-## The canonical tables
-
-| Table | Database | Grain | Role |
-|---|---|---|---|
-| **`hl_srg_past_clients`** | CRM (*autorack*) | 1 row / past client (~1,834) | the PERSON: name, `bucket`, `fub_id`, `resolver_block` + `resolution_status`. |
-| **`hl_srg_past_client_homes`** | CRM (*autorack*) | 1 row / resolved home (~2,259) | THE MASTER SNAPSHOT — owns the data. |
-| **`Listing`** | WEB (*centerbeam*) = PROD | 1 row / house (~354K) | the website house, `/home/<canonicalSlug>`. |
+A past-client home is never enriched, slugged, or surfaced until it has been resolved to a client and signed off. Per-home lifecycle: `(1) RECONCILE FACTS → (2) RESOLVE → (3) SIGN-OFF → (4) BACKFILL value/photos → (5) CANONICAL SLUG (one /home URL) → (6) SELLER REPORT`.
 
 ## Key files
 
 | Concern | Where |
 |---|---|
 | **Resolver (THE authority)** | `tools/houseloop-cards/s6-investigator.mjs` |
+| dotloop CONTRACT agent (final truth) | `tools/houseloop-cards/dotloop-contract-agent.mjs` · `lib/dotloop/client.ts → downloadDocument()` |
 | Live county deed | `tools/houseloop-cards/county-owner-verify.mjs` (`verifyOwner`) |
 | Repliers parcel-verified sold-check | `tools/houseloop-cards/repliers-sold-check.mjs` |
 | Ninja sold agents | `tools/houseloop-cards/ninja-sold.mjs` |
 | Transport (dumb writer → FUB + SSOT) | `tools/houseloop-cards/dossier-to-fub.mjs` |
 | The book runner (resumable, confidence-gated) | `tools/houseloop-cards/resolve-all-past-clients.mjs` |
 | Audit Report page + API | `apps/houseloop-crm/components/seller-report/AuditReport.tsx` · `app/api/settings/seller-report/audit/route.ts` |
-| Recon: dotloop API | `apps/houseloop-crm/lib/dotloop/client.ts` |
 
-The full strategy is private — `GT_HOUSELOOP_SG_PAST_CLIENTS_PRD.md` §12–§13.
+Private strategy: `GT_HOUSELOOP_SG_PAST_CLIENTS_PRD.md` §12–§13. SSOT consolidation: `GT_HOUSELOOP_PASTCLIENT_TRANSACTIONS_SSOT_PRD.md`.
