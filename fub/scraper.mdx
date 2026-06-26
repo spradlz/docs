@@ -75,20 +75,52 @@ bodies a human can see in the FUB UI, writing them to Camp David `fub.*` (`conte
 
 | pm2 name | script | role |
 |---|---|---|
-| **fub-backfill-a / -b** | `fub-parallel-scraper.mjs` | Master scraper — pending-first from `fub.rehydration_log` |
+| **fub-backfill-a / -b** | `fub-parallel-scraper.mjs` | Master scraper — pending-first from `fub.rehydration_log`. **`-a` uses Chrome A (CDP `:18800`), `-b` uses Chrome B (CDP `:18802`)** |
 | **fub-webhook-scraper** | `fub-webhook-scraper.mjs` | Real-time — polls `fub.rehydration_queue` (`FOR UPDATE SKIP LOCKED`), scrapes webhook-triggered leads |
-| **fub-watchdog** | `fub-backfill-watchdog.mjs` | Restarts a stalled backfill worker |
+| **fub-watchdog** | `fub-backfill-watchdog.mjs` | **Self-healing** — every 60s relaunches a dead/wedged Chrome (A **and** B), auto-logs-in either Chrome that lands on a login screen, and restarts a stalled backfill worker |
 | **fub-relay** | `tools/fub-sync/fub-relay.mjs` | Camp David `fub.*` → Railway `fub.*` mirror (all tables/columns) |
 
 Scraping logic lives in **`fub-scraper-lib.mjs`** (`scrapePersonFull`, `scrapeEmailCards`, `matchAndUpdateEmails`,
 `applyApiTexts`, `matchAndUpdateMessages`, `refreshLeadCounts`). Repo SSOT: `tools/fub-scraper/` — deploy with
-`tools/fub-scraper/deploy.sh`; never hand-edit files on the box. **It is tricky — do not poke the Chrome on port
-18800 (shared with the live scrapers) without knowing what you're doing.**
+`tools/fub-scraper/deploy.sh`; never hand-edit files on the box. **It is tricky — do not poke the Chrome on ports
+18800 / 18802 (shared with the live scrapers) without knowing what you're doing.**
 
 <Warning>
 `fub-webhook-sink` is a **dead, redundant duplicate** that OOM-crash-looped and was **deliberately stopped
 2026-06-02**. It is *supposed* to be off — it is NOT the live scraper. The live ones are `fub-backfill-a/b`
-+ `fub-webhook-scraper`. Reading its "down/crashed" status as a live failure is a known trap.
++ `fub-webhook-scraper`. Reading its "down/crashed" status as a live failure is a known trap. (Likewise
+`fub-sync` is the retired v1 relay — stopped on purpose; the live relay is `fub-relay`.)
+</Warning>
+
+### Self-healing watchdog + autonomous login (the TWO Chromes)
+
+There are **two authenticated Chrome instances**, each a separate persistent profile, so the two backfill
+workers don't fight over one browser:
+
+| Chrome | CDP port | profile | used by |
+|---|---|---|---|
+| **A** | `18800` | `/Users/lee/.chrome-fub-profile` | `fub-backfill-a` + `fub-webhook-scraper` |
+| **B** | `18802` | `/Users/lee/.chrome-fub-profile-2` | `fub-backfill-b` |
+
+The **watchdog** (`fub-backfill-watchdog.mjs`) keeps both alive autonomously — every 60s it, **for each Chrome**:
+
+1. **Liveness + un-wedge** — checks the HTTP endpoint AND does a real `connectOverCDP` probe (`isCdpConnectable`).
+   A Chrome can answer HTTP while its DevTools websocket is **wedged** (too many stale tabs) — that's invisible to
+   a naive ping and silently crash-loops the scraper (`connectOverCDP Timeout`). On a wedge, the watchdog
+   **force-relaunches** Chrome (the persistent profile keeps the FUB login).
+2. **Auto-login** — if a Chrome lands on `login.followupboss.com`, the watchdog runs **`fub-login-bot.mjs`** against
+   that Chrome's port. The bot fills the login form and **presses Enter** to submit (FUB's submit-button markup
+   varies and a button-click selector is unreliable), then waits for the redirect off the login page.
+3. **Worker freshness** — if a backfill worker's log is stale (>5 min), it restarts that worker.
+
+<Warning>
+**The autonomous login requires two environment variables** — `FUB_WEB_EMAIL` and `FUB_WEB_PASSWORD`
+(currently `zach@spradlingrealtygroup.com` + its FUB password). They live in the repo root `.env` and are
+set in the **`fub-watchdog` pm2 environment** on Camp David (the watchdog passes its own env to the login bot).
+If the FUB web password ever changes, update it in **both** places — `.env` *and* the watchdog's pm2 env
+(`pm2 restart fub-watchdog --update-env` after exporting the new value) — or autonomous login will fail and
+a Chrome will sit on the login screen until a human intervenes. 2FA / device-verify challenges cannot be
+auto-solved (login bot exits code 3) and will alert via `notify.sh`.
 </Warning>
 
 ### How body recovery works
@@ -118,8 +150,14 @@ hidden count is often expected.
 ## Health check
 
 ```bash
-# processes (live = fub-backfill-a/b + fub-webhook-scraper + fub-relay online; fub-webhook-sink is SUPPOSED to be stopped)
+# processes (live = fub-backfill-a/b + fub-webhook-scraper + fub-relay + fub-watchdog online;
+#            fub-webhook-sink + fub-sync are SUPPOSED to be stopped)
 ssh lee@192.168.1.211 "PATH=/opt/homebrew/bin:\$PATH pm2 list" | grep fub
+# both authenticated Chromes reachable? (CDP HTTP — but a 200 here does NOT prove the websocket is healthy)
+ssh lee@192.168.1.211 "curl -s --max-time 5 http://127.0.0.1:18800/json/version | head -1; \
+                       curl -s --max-time 5 http://127.0.0.1:18802/json/version | head -1"
+# either Chrome parked on a login screen? (the watchdog auto-resolves this within ~60s)
+ssh lee@192.168.1.211 "for p in 18800 18802; do curl -s --max-time 5 http://127.0.0.1:\$p/json | grep -o 'login.followupboss' | head -1; done"
 # webhooks live? (MUST send X-System or you see 0)
 curl -s -u "$FUB_API_KEY:" -H "X-System: BossLoop" -H "X-System-Key: $FUB_SYSTEM_KEY" https://api.followupboss.com/v1/webhooks
 # body recovery + backlog
@@ -128,6 +166,9 @@ ssh lee@192.168.1.211 "PGPASSWORD=*** psql -h localhost -U bossloop -d bossloop 
          count(*) FILTER (WHERE content_status IS DISTINCT FROM 'visible') hidden
   FROM fub.emails WHERE synced_at > now()-interval '48 hours';\""
 ```
+
+The MCP tools `mcp__camp-david__fub_backfill_status` (read the `health` verdict per scraper + the live
+heartbeat) and `mcp__camp-david__fub_chrome_restart` (clean-restart Chrome A's session) are the fast path.
 
 ## Open item (2026-06-22)
 
@@ -139,6 +180,13 @@ stays scrape-backfilled.
 
 ## Change log
 
+- **2026-06-26** — **Watchdog self-healing hardened for both Chromes.** Three gaps that caused an outage +
+  a stuck Chrome B login were fixed: (1) the watchdog's auto-login only ever targeted Chrome A — it now
+  auto-logs-in **both** A (`:18800`) and B (`:18802`); (2) the liveness check only pinged HTTP, so a
+  **wedged-but-listening** Chrome (HTTP 200, websocket times out) crash-looped the scraper invisibly — added a
+  real `connectOverCDP` probe (`isCdpConnectable`) that force-relaunches a wedged Chrome; (3) `fub-login-bot.mjs`
+  now **presses Enter** to submit (the prior button-click selector timed out on FUB's live login page).
+  Autonomous login env vars (`FUB_WEB_EMAIL` / `FUB_WEB_PASSWORD`) documented above.
 - **2026-06-22** — Documented the full system (webhooks + scraper split, the canonical "what comes from where"
   table, the relay, the HouseLoop FUB Activity panel). Rebuilt + backfilled the Camp David → Railway relay
   (`fub-relay.mjs` v2). Clarified `fub-webhook-sink` is a deliberately-stopped dead duplicate.
