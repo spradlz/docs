@@ -1,13 +1,14 @@
 ---
 title: "Past-Client Data Pipeline"
-description: "The end-to-end Spradling Group past-client pipeline. TWO tables the app reads: the PARENT (hl_srg_past_clients = the person + dossier + bucket) and the CHILD (hl_srg_past_client_homes = the ONE reconciled house SSOT). Five raw sources feed it (MLS, SISU, recon notes, dotloop contracts, the FUB scraper mirror); the S6 resolver reads the facts, resolves who each house belongs to, and writes the dossier + bucket to the parent. dotloop CONTRACT licensee is the final-truth agent. Includes the full database + table matrix."
+description: "The end-to-end Spradling Group past-client pipeline. TWO tables the app reads: the PARENT (hl_srg_past_clients = the person + dossier + bucket) and the CHILD (hl_srg_past_client_homes = the ONE reconciled house SSOT). Five raw sources feed it (MLS, SISU, recon notes, dotloop contracts, the FUB scraper mirror); the S6 resolver reads the facts, resolves who each house belongs to, and writes the dossier + bucket to the parent. dotloop CONTRACT licensee is the final-truth agent. Includes the visual whiteboard + full database/table matrix."
 ---
 
 <Accordion title="Changelog — last updated 2026-06-26" icon="clock-rotate-left">
-Newest first. Times Eastern. (Collapsed so it never grows past the page; the latest date always shows in the title above.)
-- **2026-06-26 (PM2)** — **Full database + table matrix locked** (5 sources, the FUB scraper mirror's real+Camp-David+Railway structure, the 4 databases with host names, `client_reconciliation_notes` as the recon source). Mirrors the whiteboard. (Caleb)
-- **2026-06-26 (PM)** — **🏛️ SSOT CONSOLIDATION LOCKED + bucket resolution + dotloop CONTRACT = final truth.** (1) Two tables the app reads: PARENT `hl_srg_past_clients` + CHILD `hl_srg_past_client_homes` (the ONE reconciled house SSOT). Raw sources FEED the child. `hl_srg_mls_deals` retired as an SSOT. PRD `GT_HOUSELOOP_PASTCLIENT_TRANSACTIONS_SSOT_PRD.md`. (2) Bucket = RESOLVED OUTPUT, precedence **dotloop CONTRACT > SISU > MLS > manual recon**: Ana Only / Ana Handoff / Team / **Internal (SG Holdings, excluded)** / Agent DNC. Verified 5/5. (3) **dotloop document download UNLOCKED** (`document:*` scope) → contract → `pdftotext -layout` → LICENSEE ASSISTING SELLER/BUYER = the real agent (Earl→Jessica, Burton→Jeremy David). (4) Zach Spradling → Ana Spradling. (5) closing `agent` trusted ONLY when SISU-sourced. (Caleb)
-- **2026-06-26** — **Agent DO-NOT-CONTACT screen (Step 0)** + **deed-lag / fresh-Repliers / chain of custody** + KCMO→Jackson routing + Audit Report FUB links. (Caleb)
+Newest first. Times Eastern.
+- **2026-06-26 (PM3)** — **Visual whiteboard added** (Mermaid: each database as a dashed box, its tables inside, the reconcile→resolve flow). Matches Zach's whiteboard. (Caleb)
+- **2026-06-26 (PM2)** — **Full database + table matrix locked** (5 sources, the FUB scraper mirror real+Camp-David+Railway structure, 4 databases with hosts, `client_reconciliation_notes` as the recon source). (Caleb)
+- **2026-06-26 (PM)** — **🏛️ SSOT CONSOLIDATION LOCKED + bucket resolution + dotloop CONTRACT = final truth.** Two app tables (parent + child); raw sources feed the child; `hl_srg_mls_deals` retired as SSOT. Bucket precedence **dotloop CONTRACT > SISU > MLS > manual recon**; Internal (SG Holdings) excluded. dotloop `document:*` download unlocked → LICENSEE ASSISTING SELLER/BUYER = the real agent (Earl→Jessica, Burton→Jeremy). Zach Spradling → Ana. (Caleb)
+- **2026-06-26** — Agent DNC screen (Step 0) + deed-lag / fresh-Repliers / chain of custody + KCMO→Jackson + Audit Report FUB links. (Caleb)
 - **2026-06-23 (PM2)** — Resolver-owned dossier LIVE + tag taxonomy LOCKED. (Caleb)
 - **2026-06-23** — 🚧 ARCHITECTURE LOCK: the resolver OWNS the output; the transport is dumb. (Caleb)
 - **2026-06-22 (PM3)** — Households resolved ONLY by the S6 LLM resolver, on named evidence. (Caleb)
@@ -15,6 +16,57 @@ Newest first. Times Eastern. (Collapsed so it never grows past the page; the lat
 </Accordion>
 
 This is the canonical developer reference for the **Spradling Realty Group past-client data project**. It powers the CRM seller-report dashboard, every past-client home's `/home` page, **the Follow Up Boss past-client dossier**, and the **CRM Audit Report**. Internal strategy: `GT_HOUSELOOP_SG_PAST_CLIENTS_PRD.md` §12–§13. SSOT consolidation: `GT_HOUSELOOP_PASTCLIENT_TRANSACTIONS_SSOT_PRD.md`.
+
+## 🖼️ THE WHITEBOARD — the databases & the flow
+
+Each **dashed box is a database** (with its host); the boxes inside are its **tables**. Arrows are the data flow: the four house-level **sources** reconcile into the **child**, the resolver resolves up to the **parent** (+ reads FUB for the person), and links one `Listing` per house.
+
+```mermaid
+flowchart TB
+  DLAPI(["dotloop API · download the contract PDF"])
+
+  subgraph CRM["CRM DB · autorack.proxy.rlwy.net (Railway)"]
+    MLS["hl_srg_mls_deals · SOURCE: all MLS data"]
+    SISU["sisu_transactions · SOURCE: closing truth"]
+    RECON["client_reconciliation_notes · SOURCE: manual recon"]
+    DLC["hl_srg_dotloop_contracts (NEW) · SOURCE: dotloop contract licensee"]
+    CHILD["hl_srg_past_client_homes · CHILD MASTER · 1 row per house · reconciled SSOT"]
+    PARENT["hl_srg_past_clients · PARENT · person + dossier + bucket"]
+  end
+
+  subgraph FUBCD["FUB mirror · Camp David · 192.168.1.211 / bossloop"]
+    FUBCDt["fub.* — people notes calls texts emails events deals · the resolver READS here"]
+  end
+
+  subgraph FUBRW["FUB mirror · Railway · yamabiko.proxy.rlwy.net"]
+    FUBRWt["fub.* — synced copy · what Railway apps read"]
+  end
+
+  subgraph WEB["Website DB · centerbeam.proxy.rlwy.net (Railway)"]
+    LISTING["Listing · one /home slug per house"]
+  end
+
+  REALFUB(["REAL Follow Up Boss SaaS · upstream truth + write target"])
+
+  DLAPI --> DLC
+  MLS --> CHILD
+  SISU --> CHILD
+  RECON --> CHILD
+  DLC --> CHILD
+  CHILD -->|resolver resolves| PARENT
+  FUBCDt -->|dossier + DNC signal| PARENT
+  PARENT -->|dossier note| REALFUB
+  REALFUB -.scraped.-> FUBCDt
+  FUBCDt -.sync.-> FUBRWt
+  CHILD -->|1 slug per house| LISTING
+
+  style CRM stroke:#1a73e8,stroke-width:2px,stroke-dasharray:6 4,fill:#f7fbff
+  style FUBCD stroke:#777,stroke-width:2px,stroke-dasharray:6 4,fill:#fafafa
+  style FUBRW stroke:#777,stroke-width:2px,stroke-dasharray:6 4,fill:#fafafa
+  style WEB stroke:#137333,stroke-width:2px,stroke-dasharray:6 4,fill:#f6fff8
+```
+
+**The single source list — every database we read from:** `CRM` (autorack), `FUB mirror Camp David` (192.168.1.211/bossloop), `FUB mirror Railway` (yamabiko), `Website` (centerbeam), and the `REAL Follow Up Boss` SaaS. Details + hosts in the matrix below.
 
 ## 🏛️ THE DATA MODEL — two tables the app reads (Zach LOCKED 2026-06-26)
 
@@ -25,25 +77,23 @@ This is the canonical developer reference for the **Spradling Realty Group past-
 | **PARENT — person** | `hl_srg_past_clients` | 1 / past client (~1,834) | the PERSON: name · contact · `bucket` · **`resolver_block` (the dossier)** · `website_hlid`. The resolver WRITES the dossier here. |
 | **CHILD — house (THE SSOT)** | `hl_srg_past_client_homes` | **1 / house (~2,256)** | the ONE reconciled house record — **all facts in one flat row** (MLS + SISU + dotloop + contract + value/photos) with `*_source` provenance. The resolver READS its facts. |
 
-**Grain (Zach 2026-06-26):** **one row per house.** A past client with multiple homes has multiple child rows; the *same* house can have multiple rows across its life (sold more than once). **Each resolved home → exactly ONE `/home/<canonicalSlug>`** on the website `Listing` (generated/linked by the resolver).
+**Grain (Zach 2026-06-26):** **one row per house.** A past client with multiple homes has multiple child rows; the *same* house can have multiple rows across its life (sold more than once). **Each resolved home → exactly ONE `/home/<canonicalSlug>`** on the website `Listing`.
 
 **The 5 SOURCES OF TRUTH — they FEED the child/parent; the app NEVER reads them directly:**
-- `hl_srg_mls_deals` (CRM) — MLS facts (our_roles, price, close date, list agent) — **retired as an SSOT**, raw staging only
+- `hl_srg_mls_deals` (CRM) — MLS facts — **retired as an SSOT**, raw staging only
 - `sisu_transactions` (CRM) — SISU facts (agent, GCI, dates, status; 1,945 Closed)
 - `client_reconciliation_notes` (CRM, 446) — Zach's hand-verified recon
 - `hl_srg_dotloop_contracts` (CRM, **NEW — harvest target**) — the signed contract licensee + parties (final-truth agent)
-- `fub.*` (the FUB scraper mirror — see the matrix) — the **person** source: notes, comms, contact info, the agent-COI/DNC signal → feeds the **PARENT** dossier
+- `fub.*` (the FUB scraper mirror) — the **person** source: notes, comms, contact info, the agent-COI/DNC signal → feeds the **PARENT** dossier
 
-**The flow (one direction):** sources → **reconciled into the child** (one flat row per house, with field-level precedence + provenance) → the **S6 resolver reads the child's facts** (+ FUB for the person) → resolves who the house belongs to → **writes the dossier + bucket to the parent**, derived fields to the child, and links **one `Listing` slug per house**. Seller report + website + Audit read **parent JOIN child** — no JSON scratch, no reading a raw source.
-
-## 🗄️ THE DATABASES + FULL TABLE MATRIX (for the whiteboard)
+## 🗄️ THE DATABASES + FULL TABLE MATRIX
 
 **Four databases (+ the FUB SaaS):**
 
 | DB | Host (env var) | Holds |
 |---|---|---|
 | **CRM** (Railway) | `autorack.proxy.rlwy.net:53570` (`HL_CRM_DATABASE_URL`) | parent + child + every source table (MLS, SISU, recon, dotloop conn) |
-| **FUB mirror — Camp David** | `192.168.1.211:5432/bossloop` (`DATABASE_URL`) | `fub.*` — the **scraped** copy; the FUB scraper writes here, the resolver reads here |
+| **FUB mirror — Camp David** | `192.168.1.211:5432/bossloop` (`DATABASE_URL`) | `fub.*` — the **scraped** copy; the scraper writes here, the resolver reads here |
 | **FUB mirror — Railway** | `yamabiko.proxy.rlwy.net:40035` (`FUB_RAILWAY_DATABASE_URL`) | `fub.*` — a **synced copy** for Railway apps (identical — 49,225 people) |
 | **Website** (Railway) | `centerbeam.proxy.rlwy.net:23509` (`HOUSELOOP_DATABASE_URL`) | `Listing` — the public `/home/<canonicalSlug>` house |
 | **REAL Follow Up Boss** | the FUB SaaS (`FUB_API_KEY`) | upstream truth + the **write target** (the dossier note → real FUB → re-scraped into both mirrors) |
@@ -66,11 +116,11 @@ This is the canonical developer reference for the **Spradling Realty Group past-
 
 ### THE ARCHITECTURE LAW (Zach LOCKED 2026-06-23) — the resolver owns the output, the transport is dumb
 
-> **The S6 LLM resolver OWNS the entire output.** Household, **labeled contacts**, **labeled transactions**, **disposition**, **DNC screen**, **bucket**, **tags**, AND the human **NOTE**. **The transport (`dossier-to-fub.mjs`) is DUMB** — writes the finished block to FUB + the SSOT, never re-derives. If the output is wrong, fix the RESOLVER.
+> **The S6 LLM resolver OWNS the entire output.** Household, contacts, transactions, disposition, DNC, bucket, tags, AND the human NOTE. **The transport (`dossier-to-fub.mjs`) is DUMB** — writes the finished block to FUB + the SSOT, never re-derives. If the output is wrong, fix the RESOLVER.
 
 ## 🏷️ THE BUCKET — a resolved output (Zach LOCKED 2026-06-26)
 
-Derived from **who actually repped the deal**, never a pre-baked column or a tag. Agent precedence: **dotloop CONTRACT licensee > SISU `agent` (Zach→Ana) > MLS `our_roles` (`*-ana`=Ana; `*-group`=brand, NOT a team agent — the Dallas bug) > Zach's manual recon.**
+Derived from **who actually repped the deal**. Agent precedence: **dotloop CONTRACT licensee > SISU `agent` (Zach→Ana) > MLS `our_roles` (`*-ana`=Ana; `*-group`=brand, NOT a team agent — the Dallas bug) > Zach's manual recon.**
 
 | Bucket | Meaning |
 |---|---|
@@ -90,15 +140,15 @@ loop → GET /folder → find the Exclusive-Right-to-Sell / buyer-rep doc
      → pdftotext -layout → the name on the line above "LICENSEE ASSISTING SELLER|BUYER"
 ```
 
-Use `lib/dotloop/client.ts → dotloop.downloadDocument()` (Accept + 500 retry). Helper: `tools/houseloop-cards/dotloop-contract-agent.mjs → contractAgent(profileId, loopId)`. Proven: Earl → Jessica Rich (confirms SISU), Burton → Jeremy David (recovers the departed agent). Details: [dotloop Integration](/guides/dotloop-integration).
+Use `lib/dotloop/client.ts → dotloop.downloadDocument()` (Accept + 500 retry). Helper: `tools/houseloop-cards/dotloop-contract-agent.mjs → contractAgent(profileId, loopId)`. Proven: Earl → Jessica Rich, Burton → Jeremy David. Details: [dotloop Integration](/guides/dotloop-integration).
 
 ## THE LIVE-DEED DISPOSITION — county deed is primary truth
 
-For every home the client bought, the resolver re-derives the disposition **live**: (1) **County deed** (`verifyOwner()`; Johnson/Wyandotte KS + Jackson/Clay/Cass MO) — `owner_match` = owns, `owner_differs` = sold/moved. (2) **Repliers** = clean sold date/price; **Ninja** = agent names. (3) **DEED-LAG:** a recent real arm's-length MLS sale BEATS a lagging deed (`deed_lag`). (4) **ARBORIDGE GUARD:** exact-list price + no buyer agent = artifact, deed wins. (5) Full MLS listing for the real `CloseDate`. **⚠️ PARCEL LAW:** match zip + county + neighborhood + legal + coords ~150m.
+(1) **County deed** (`verifyOwner()`; Johnson/Wyandotte KS + Jackson/Clay/Cass MO) — `owner_match` = owns, `owner_differs` = sold/moved. (2) **Repliers** = clean sold date/price; **Ninja** = agent names. (3) **DEED-LAG:** a recent real arm's-length MLS sale BEATS a lagging deed (`deed_lag`). (4) **ARBORIDGE GUARD:** exact-list price + no buyer agent = artifact, deed wins. (5) Full MLS listing for the real `CloseDate`. **⚠️ PARCEL LAW:** match zip + county + neighborhood + legal + coords ~150m.
 
 ## 🚫 AGENT DO-NOT-CONTACT SCREEN (Step 0)
 
-The resolver loads the **agent roster** (distinct SISU `agent` names) and runs `checkAgent()`: exact full-name match → **Agent DNC** (auto); surname-only → DNC **only** with a confirming signal (COI note, agent spouse on the deed, that agent repped the other side). Proven: April Atkinson, James Duston.
+The resolver loads the **agent roster** (distinct SISU `agent` names) and runs `checkAgent()`: exact full-name match → **Agent DNC**; surname-only → DNC **only** with a confirming signal (COI note, agent spouse on the deed, that agent repped the other side). Proven: April Atkinson, James Duston.
 
 ## THE CARD — the Follow Up Boss note format (LOCKED)
 
@@ -121,7 +171,7 @@ DOSSIER
 <2–4 sentence "know them before you call" brief, grounded only in the facts>
 ```
 
-The header bucket label + tags are forced deterministic from the resolved bucket. A **DNC** or **Internal (SG Holdings)** card replaces all of it with a short suppression note.
+A **DNC** or **Internal (SG Holdings)** card replaces all of it with a short suppression note.
 
 ## The Audit Report (`Seller Report → Audit Report`)
 
@@ -129,22 +179,22 @@ Full-width CRM page (`AuditReport.tsx`, reads `resolver_block` live). Jump bar: 
 
 ## The resolver's output block — `resolver_block` jsonb on `hl_srg_past_clients`
 
-`contacts[]` · `transactions[]` (with `agent`) · `disposition` · `dispositions[]` · `dnc` · `bucket` + `bucket_basis` · `tags[]` · `note_markdown`. `resolution_status`: `resolved` → FUB; `needs_review` → held. ⚠️ Write to `resolver_block`, never the `dossier` TEXT column (Myli's case-file).
+`contacts[]` · `transactions[]` (with `agent`) · `disposition` · `dispositions[]` · `dnc` · `bucket` + `bucket_basis` · `tags[]` · `note_markdown`. ⚠️ Write to `resolver_block`, never the `dossier` TEXT column (Myli's case-file).
 
 ### 🔖 FUB TAG TAXONOMY (Zach LOCKED 2026-06-23)
 
-`HouseLoop Resolved` (every resolved client) · `SRG Closed - Ana Only` / `Ana Handoff` / `Team` / `Internal (SG Holdings)` / `Agent DNC` (the bucket) · `SRG Closed - Lost Listing` (re-sold by another agent). Tags are **ATOMIC** — FUB smart lists AND them.
+`HouseLoop Resolved` (every resolved client) · `SRG Closed - Ana Only` / `Ana Handoff` / `Team` / `Internal (SG Holdings)` / `Agent DNC` (the bucket) · `SRG Closed - Lost Listing`. Tags are **ATOMIC** — FUB smart lists AND them.
 
 ## Key files
 
 | Concern | Where |
 |---|---|
 | **Resolver (THE authority)** | `tools/houseloop-cards/s6-investigator.mjs` |
-| dotloop CONTRACT agent (final truth) | `tools/houseloop-cards/dotloop-contract-agent.mjs` · `lib/dotloop/client.ts → downloadDocument()` |
+| dotloop CONTRACT agent | `tools/houseloop-cards/dotloop-contract-agent.mjs` · `lib/dotloop/client.ts → downloadDocument()` |
 | Live county deed | `tools/houseloop-cards/county-owner-verify.mjs` |
 | Repliers sold-check · Ninja agents | `repliers-sold-check.mjs` · `ninja-sold.mjs` |
 | Transport (dumb writer → FUB + SSOT) | `tools/houseloop-cards/dossier-to-fub.mjs` |
 | Book runner | `tools/houseloop-cards/resolve-all-past-clients.mjs` |
 | Audit Report | `apps/houseloop-crm/components/seller-report/AuditReport.tsx` |
 
-SSOT consolidation + the full matrix + reconcile precedence: `GT_HOUSELOOP_PASTCLIENT_TRANSACTIONS_SSOT_PRD.md`.
+SSOT consolidation + reconcile precedence: `GT_HOUSELOOP_PASTCLIENT_TRANSACTIONS_SSOT_PRD.md`.
