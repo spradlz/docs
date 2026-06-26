@@ -1,0 +1,106 @@
+---
+title: "A-Frame: Architecture & Rebuild Guide"
+description: "How A-Frame (aframeonline.com) transaction-coordination software is built — architecture, the live API contract, and a from-scratch rebuild roadmap. Internal reverse-engineering reference for the HouseLoop TC platform."
+---
+
+<Info>
+**Internal reverse-engineering reference.** A-Frame (AFrameSoftware LLC) is closed-source, proprietary
+software with no public API docs or GitHub. Everything here was extracted **live** from the running system
+(logged-in account, Spradling Group team 3474) on 2026-06-26 by intercepting its JSON APIs and server-rendered
+builders. This is the ground truth — there is nothing external to triangulate against. Documented so a
+developer can rebuild an equivalent TC platform from scratch.
+
+This subsection: **Architecture & Rebuild** (this page) · [Data Model](/guides/aframe-data-model) ·
+[Workflow & Templates](/guides/aframe-workflow-and-templates) · [Email Library](/guides/aframe-email-library).
+</Info>
+
+## What A-Frame is
+
+A purpose-built **Transaction Coordination (TC) + CRM** for real-estate teams. Each transaction is the core
+record; a TC works it from contract to close through a phased task checklist, a document checklist, milestone
+dates, and templated emails. The mental model that unlocks the whole thing:
+
+> **A-Frame is a CRM lead-detail page, retargeted at a *transaction* instead of a *lead*.**
+
+Same shape as the HouseLoop CRM. The TC-specific concepts to add are a **Status→Stage** model, a **custom-field
+tree**, and **folder-grouped** Tasks / Documents / Dates with per-role visibility.
+
+## Architecture
+
+A-Frame is a **hybrid** — a legacy Java/Struts monolith with a modern React shell bolted on:
+
+| Layer | URL pattern | Tech | Used for |
+|---|---|---|---|
+| Legacy app | `/afs/app/<Name>.action` | Java **Struts** server-rendered JSP | Transaction detail, Templates, Lists, Client Portal, Import |
+| React shell | `/afs/app/r/<route>` | React SPA | Transaction list, Admin (Team Info), Analytics |
+| API v1 | `/afs/api/v1/...` | JSON | Powers the transaction detail (fields, events, tasks, attachments, contacts) |
+| API v2 | `/afs/api/v2/...` | JSON (RFC-7807 errors) | Powers the React admin (team, statuses, session) |
+
+**Auth:** session cookie, same-origin; no bearer tokens. Naming convention: **transaction = "xaction"** in
+every payload and endpoint.
+
+<Warning>
+Don't copy the hybrid. A-Frame bolted React onto a ~15-year-old Struts core, which is why it has two nav
+styles and `.action` pages next to `/r/` pages. We build the entire TC surface natively in the Next.js CRM —
+one stack. Their split is an accident of history, not a design.
+</Warning>
+
+## The live API contract (what we intercepted)
+
+### v2 — React admin
+| Endpoint | Returns |
+|---|---|
+| `GET /afs/api/v2/session-info/my` | logged-in user/session |
+| `GET /afs/api/v2/team` | fat team-config object (settings, visibility matrix, goals, billing) |
+| `GET /afs/api/v2/xaction-statuses` | the status builder (status → stage rows) |
+| `GET /afs/api/v2/time-zones` | tz list |
+| `GET /afs/api/v2/notifications/my/count` | notification badge |
+
+### v1 — transaction detail
+| Endpoint | Returns |
+|---|---|
+| `GET /afs/api/v1/functional/xaction-fields/context?xactionId=` | the whole custom-field tree + values + the xaction core record |
+| `GET /afs/api/v1/functional/event-widget/xaction?xactionId=&daysOut=&daysPrior=` | transaction dates/events, keyed by day |
+| `GET /afs/api/v1/events/progress/xaction/{id}` | event completion stats |
+| `GET /afs/api/v1/tasks/progress/xaction/{id}` | task completion stats per task-folder |
+| `GET /afs/api/v1/xaction-attachments/progress/xaction/{id}` | document completion stats per attachment-folder |
+| `GET /afs/api/v1/app-users/{id}` · `POST /afs/api/v1/app-users/lookup` | contacts (buyer/seller/agent/lender/…) |
+
+### Builder content (legacy, server-rendered)
+Each admin builder list loads via `POST /afs/app/<Type>TemplatesWidget_show.action`; each item's body via
+`GET /afs/app/<Type>TemplateWidget_show.action?templateId=`. Types: `Attachment`, `Event` (dates), `Task`,
+`Letter` (email). Field defs: `AdminFields.action`. Lists: `AdminListContactCategories.action`.
+
+## The screens to mirror
+
+- **Transaction list** (`/r/search-transactions`): columns Status · Address · Side · B/S · Price · Close ·
+  task/doc/people count chips · Agents. Saved-view tabs: Upcoming Closings · Next Month · All · Buyers ·
+  Sellers · Referrals.
+- **Transaction detail** (`XactionDetail_edit.action`) — 3 columns: **left** = the custom-field collections
+  (Transaction Summary, etc.); **middle** = Notes / Activities / Attachments / Tasks / Participants + the task
+  checklist; **right** = Dates Quick View (the milestone events).
+- **Admin builders** (`/r/admin-team/*` + `.action`): Team Info (Company · Default Visibility · Attachment
+  Folders · Field Overrides · Reminders & Dates · Payouts · Team Goals) · Team Members · Billing · Templates
+  (Attachment / Transaction Date / Task / Email-Letter / Field Definitions) · Lists · Client Portal · Import.
+
+## Rebuild roadmap (from scratch)
+
+To reconstruct an equivalent TC platform:
+
+1. **Core entity — Transaction** (§ [Data Model](/guides/aframe-data-model)): address, side (BUYER/SELLER),
+   status, price, closing date, property type, source. One row per deal.
+2. **Status → Stage** (the spine): a fixed `stage` enum (`PRE_ACTIVE · ACTIVE · UNDER_CONTRACT · SOLD ·
+   NOT_SOLD`) and a user-built `status` list bound to stages, each with color + sort + per-role visibility +
+   an optional `systemType` binding so logic survives renames.
+3. **Custom-field tree**: `Collection → Group → Field` (types CHOICE/TEXT/TEXTAREA + system types), each field
+   carrying a merge code. Drives the left column of the detail view and the email merge fields.
+4. **Folder-grouped Tasks, Documents, Dates**: each a list of completable items in named folders, with per-role
+   visibility. Task folders = the phased pipeline (Buyer/Seller 8-stage, Listing 5-stage).
+5. **Template engine**: Email/Letter, Task, Attachment, Date templates, with `$Token` merge resolution against
+   the field tree + participants + property. Emails attach to tasks as actions.
+6. **Contacts / participants** with roles (buyer/seller/agent/lender/title/inspector).
+7. **Visibility / client portal**: every sub-record (activity/attachment/email/event/task) has agent-visible
+   and buyer-seller-visible flags; team-level defaults seed them.
+
+For how each maps onto the existing HouseLoop CRM (what we reuse vs. build new), see the internal recon dossier
+(`.claude/reports/aframe-recon/AFRAME_REVERSE_ENGINEERING.md`, §10).

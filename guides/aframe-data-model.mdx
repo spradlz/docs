@@ -1,0 +1,148 @@
+---
+title: "A-Frame: Data Model"
+description: "Every entity, table, and field in A-Frame's transaction-coordination system — the Transaction (xaction) record, Status→Stage, the custom-field tree, events, tasks, attachments, contacts, and team settings. Reverse-engineered from the live APIs."
+---
+
+<Info>Internal reverse-engineering reference (A-Frame, team 3474, 2026-06-26). Pairs with [Architecture & Rebuild](/guides/aframe-overview), [Workflow & Templates](/guides/aframe-workflow-and-templates), and the [Email Library](/guides/aframe-email-library).</Info>
+
+## Entity: Transaction ("xaction") — the core record
+
+From `GET /afs/api/v1/functional/xaction-fields/context?xactionId=`:
+
+```
+xaction {
+  xactionId
+  xactionStatus { ...see Status→Stage }
+  address { address1, address2, city, state, zip, country, county, latitude, longitude }
+  xactionSide          // BUYER | SELLER
+  closingDate          // e.g. 2026-7-3
+  closedDate           // null until closed
+  currentPrice         // e.g. 304000
+  timeZone { zoneId, fullName, shortName }
+  editDateTime
+}
+```
+
+Plus, on the same context call:
+- `xactionPropTypes` — Commercial · Condo · Duplex · Land/Lot · New Construction · Other · Patio/Villa · Single Family · Townhouse
+- `xactionSources` — Agent Provided Lead · OpCity · Team Provided Lead · Zillow Flex
+
+## Entity: Status → Stage ⭐ (the core TC concept)
+
+**Two levels.** A fixed system `stage` enum, and a user-built `status` list bound to stages.
+
+**Stages (fixed):** `PRE_ACTIVE · ACTIVE · UNDER_CONTRACT · SOLD · NOT_SOLD`
+
+**Status schema** (`GET /afs/api/v2/xaction-statuses`):
+```
+{ xactionStatusId, name, sort, xactionStage, colorHex,
+  agentVisible, buyerSellerVisible, xactionStatusSystemType }
+```
+
+The live status list (the status builder content):
+
+| sort | Status | Stage | Color | systemType | agent? | buyer/seller? |
+|---|---|---|---|---|---|---|
+| 0 | Coming Soon | PRE_ACTIVE | `#555555` | — | ✓ | ✓ |
+| 1 | Active | ACTIVE | `#008000` | `SYSTEM_ACTIVE` | ✓ | ✓ |
+| 2 | Under Contract | UNDER_CONTRACT | `#000080` | — | ✓ | ✓ |
+| 3 | Pending | UNDER_CONTRACT | `#FF7A06` | — | ✓ | ✓ |
+| 4 | Referral | ACTIVE | `#E100D6` | — | ✓ | ✗ |
+| 5 | Closed | SOLD | `#FF0000` | `SYSTEM_CLOSED` | ✓ | ✗ |
+| 6 | Expired | NOT_SOLD | `#000000` | — | ✗ | ✗ |
+| 7 | Cancelled | NOT_SOLD | `#000000` | `SYSTEM_FELL_APART` | ✗ | ✗ |
+| 8 | Tmp Off Market | PRE_ACTIVE | `#000000` | — | ✓ | ✓ |
+| 9 | Draft | PRE_ACTIVE | `#77DEC7` | `SYSTEM_DRAFT` | ✗ | ✗ |
+| 10 | DELETE | NOT_SOLD | `#000000` | — | ✓ | ✓ |
+
+<Note>
+**The `systemType` trick.** Statuses are user-renamable and re-colorable, but a few are *bound* to system
+behavior (`SYSTEM_DRAFT`, `SYSTEM_ACTIVE`, `SYSTEM_CLOSED`, `SYSTEM_FELL_APART`). The user can rename "Closed"
+to anything; the engine still knows it's the closed one via the bound type. This is how you let users customize
+the words while keeping the logic stable — copy it exactly.
+</Note>
+
+## Entity: Custom-field tree ⭐ (Field Definitions)
+
+A **3-level tree**: `Collection → Group → Field`. Field = `{ label, fieldType, mergeFieldCode, fieldChoices[] }`.
+Field types: `CHOICE` (each choice can carry a color), `TEXT`, `TEXTAREA`, and system types `SYS_MLS_ID`,
+`SYS_PROP_TYPE`, `SYS_LOCKBOX_ID`. Each field's `mergeFieldCode` (e.g. `_TransactionStatus`) is how it injects
+into email templates as a `$f_…` token.
+
+The live intake schema (7 collections):
+
+```
+Transaction Summary
+  Transaction Info:  Transaction Status[CHOICE], PDF Pin, Sisu ID, Dotloop Name,
+                     Shared Dotloop with LA[CHOICE], Additional Intake Details[TEXTAREA], Transaction Intake Done By
+  Property Info:     Mls Id[SYS_MLS_ID], Property Type[SYS_PROP_TYPE], Sq Ft, Year Built,
+                     House Access Notes, Lockbox Id[SYS_LOCKBOX_ID], Additional Property Details[TEXTAREA]
+  Documents:         Missing Documents/Items[TEXTAREA], Document Notes[TEXTAREA]
+Client Info
+  Buyer/Seller Information: Main Contact for TC, Preferred Contact Method, Important info for TC staff[TEXTAREA]
+Contract Info
+  Contract Details:  Contract Title, Buyer Contingency?[CHOICE], Additional Buyer Contingency Details[TEXTAREA]
+  EMD Info:          Earnest Money Held By, Amount, Type[CHOICE], Status[CHOICE], EMD Receipt[CHOICE],
+                     Refundable[CHOICE], Additional EMD[CHOICE]+Amount+Status+Refundable, EMD Notes[TEXTAREA]
+  Lead Based Paint:  House Built Before 1978?[CHOICE], LBP Disclosure[CHOICE]
+  HOA:               Is There An HOA?[CHOICE], HOA Dues Amount, Paid When[CHOICE], HOA Docs[CHOICE]
+  Home Warranty:     Is There A Home Warranty[CHOICE], Cost, Trade Call, Paid By[CHOICE], Ordered By[CHOICE], Details[TEXTAREA]
+Inspections
+  Inspections Summary: Does client want inspections?[CHOICE], Inspections Wanted[TEXTAREA], Preferred Dates/Times,
+                       Inspection Summary[CHOICE], Notes[TEXTAREA], Notice[CHOICE], Repair Notes[TEXTAREA]
+  Inspections:         Home, Radon, Termite, Sewer, Sewer Cleaning, Structural, Roof, Mold, Septic, Pool, Chimney  (all CHOICE)
+Financing
+  Lending:           Lending Notes[TEXTAREA], Financing Type[CHOICE], Pre-Approval Letter[CHOICE], Proof of Funds[CHOICE],
+                     Appraisal Ordered During Inspections?[CHOICE], Appraisal Status[CHOICE], Confirmed Clear to Close?[CHOICE], Closing Cost
+  Title:             Spouse On Title?[CHOICE], Title Commitment[CHOICE], Title Notes[TEXTAREA], Remote Closing?[CHOICE],
+                     Remote Closing Instructions[TEXTAREA], Important info TC's need (buyers/sellers)[TEXTAREA]
+Commission
+  Commission Breakdown: Commission Type[CHOICE], Buying Side Commission, Buying Side %, Listing Side Commission, …
+Listing Summary (7th collection — same Collection→Group→Field pattern)
+```
+
+The processing-status custom CHOICE field (Processing · Paused · Waiting for Closing · Closed · Cancelled) is a
+*team-defined* field — distinct from the structural Status→Stage spine above. A-Frame has both; don't conflate.
+
+## Entities: Events (dates) · Tasks · Attachments — all folder-grouped
+
+One shared shape, three feeds: items grouped in named folders, each item completable + per-role visibility.
+
+- **Events = Transaction Dates** (`event-widget`): `{ eventId, xaction, title, location, color, allDayEvent,
+  startDate, startTime, durationMinutes, timeZone, completed, omitted }`, returned bucketed by calendar day.
+  These are the "Dates Quick View" (Under Contract, EMD Due, Appraisal, Final Walkthrough, Close, Possession,
+  Expire). `completed`/`omitted` drive the checklist.
+- **Tasks** (`tasks/progress`): grouped by task-folder; each folder reports
+  `{count, countCompleted, countInProgress, countOpen, percentageComplete}`. Task folders = the phased pipeline.
+- **Attachments / Documents** (`xaction-attachments/progress`): grouped by attachment-folder; each
+  `{count, countCompleted, countOpen, percentageComplete}`. The document "complete-a-file" checklist.
+
+## Entity: Contacts ("app-users")
+
+People on a transaction (buyer, seller, co-agent, lender, title, inspector…). `GET /afs/api/v1/app-users/{id}`,
+looked up via `POST /afs/api/v1/app-users/lookup`. Categorized by **Lists** (buyer list / agent list / lender
+list) — typed contact rolodexes.
+
+## Entity: Team / Settings (`GET /afs/api/v2/team`)
+
+Global TC configuration:
+
+- Identity: `teamId, company, name, phone1, address1/city/state/zip, website, logoUrl, timeZone`.
+- Billing: `billingStatus, billingPlan, stripeCustomerId, subscriptionValidUntil`.
+- Goals: `goalXactions, goalVolume`. Flags: `tcAccount`, `effectiveDateOverrideString` ("Contract Date"),
+  `reminderLeadTime`.
+- **`teamSettings` — the default visibility matrix** (the key builder concept):
+  ```
+  default<Agent|BuyerSeller>VisibleXaction<Activities|Attachments|Emails|Events|Tasks>   // booleans
+  dateFormatDisplay: DATE_LONG_DAY_LAST
+  defaultXactionFolders: string[]   // attachment folders seeded on each new transaction
+  ```
+  Every transaction sub-record carries agent-visible + buyer/seller-visible flags; the team sets the defaults,
+  each item can override. This is the foundation of the client portal.
+
+## Merge fields
+
+210 distinct `$Token`s across the 84 email templates, in four families — `$f_<Field>` (custom fields),
+`$d_<Date>` (events), role-contact (`$Buyer-…`, `$Seller-…`, `$TitleCompany-…`, `$Lender-…`, `$User…-…`), and
+property (`$PropertyFullAddress`, `$ContractPrice`). The `$f_`/`$d_` prefixes map 1:1 onto the custom-field and
+date collections. Full ranked inventory in the [Email Library](/guides/aframe-email-library).
