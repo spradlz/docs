@@ -1,0 +1,71 @@
+---
+title: "Documenso"
+description: "Documenso — the open-source, self-hosted e-signature engine that powers TC Loop's signing layer. Why we use it (dotloop e-sign isn't in the API), how it's deployed, its API/flow, and how HouseLoop eSignature white-labels it."
+---
+
+<Info>
+Documenso is the **engine**; [HouseLoop eSignature](/guides/esignature) is our **white-labeled pipeline** built on
+top of it. This page covers the engine; that page covers how TC Loop fills + sends + files a contract through it.
+</Info>
+
+## What it is
+
+[Documenso](https://documenso.com) is an **open-source, self-hostable e-signature platform** (the
+"open-source DocuSign"). It provides signing fields, multi-signer routing, audit trails, and a tamper-evident,
+digitally-certified signed PDF — the legal substance of e-signature — with **no per-document fees and no
+third-party branding**.
+
+## Why TC Loop uses it
+
+**dotloop has e-signature in its product, but NOT in its public API.** The dotloop API can read/write loops,
+folders, documents, and participants, and it can *download* a signed PDF — but there is **no endpoint to
+initiate or track a signature request** (see the [dotloop API matrix](/guides/dotloop-api-matrix#e-signature)).
+A-Frame has no e-sign at all. So to make TC Loop **AI-driven end-to-end**, we own the signing layer ourselves:
+
+- **Self-hosted** → $0/document, unlimited volume, no SaaS dependency.
+- **White-labeled** → signers see *HouseLoop eSignature*, not a third-party "powered by".
+- **API-first** → an AI agent (Myli-TC) can create a document, place fields, add signers, and send — fully
+  programmatically. That is impossible through dotloop's API and is the whole point.
+
+## Deployment
+
+- **Self-hosted Documenso** (Docker), branded as **HouseLoop eSignature**.
+- Credentials/config live in the vault; the instance is the signing backend for TC Loop.
+- The signed, certified PDF is the artifact we then **file into the dotloop loop folder** (via the dotloop
+  document upload endpoint) for eXp / SkySlope compliance.
+
+## The API / flow
+
+Documenso exposes a REST API (+ webhooks) that the TC Loop pipeline drives:
+
+```
+1. Create document        — upload the filled contract PDF
+2. Add recipients          — signer(s) by name + email + signing order
+3. Place fields            — signature / date / text fields at coordinates
+                             (TC Loop pre-detects these with CommonForms)
+4. Send for signature      — Documenso emails each signer a signing link (HouseLoop-branded)
+5. Webhook: document.signed — fires when all signers complete
+6. Download signed PDF      — the certified, tamper-evident artifact
+7. File into the loop       — upload to the dotloop loop folder
+```
+
+Documenso webhooks (`document.created`, `document.sent`, `document.opened`, `document.signed`,
+`document.completed`) let TC Loop advance the loop's stage and run the next task the moment signing finishes —
+no polling, same pattern as the [dotloop webhooks](/guides/dotloop-api-matrix#webhooks-real-time-events).
+
+## Where it sits in TC Loop
+
+```
+Contract PDF
+  → detect fields (CommonForms)      ← TC Loop
+  → fill from lead (pdf-lib)         ← TC Loop
+  → create + send (Documenso)        ← THIS engine (HouseLoop eSignature)
+  → signer signs                     ← Documenso
+  → webhook: signed                  ← Documenso → TC Loop
+  → download certified PDF           ← Documenso
+  → file into loop folder            ← dotloop API
+  → advance stage + run next task    ← A-Frame coordination model, driven by Myli-TC
+```
+
+See [HouseLoop eSignature](/guides/esignature) for the full fill-and-send pipeline, and the
+[TC Loop](/guides/transaction-coordination) overview for how the three pillars fuse.
