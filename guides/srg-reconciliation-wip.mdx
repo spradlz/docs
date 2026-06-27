@@ -1,127 +1,100 @@
 ---
 title: "SRG Past-Client Reconciliation — Build-Out (WIP Log)"
-description: "The running work-in-progress log of building the SRG past-client resolver. The confidence-tier cost model, the deed-as-router doctrine, the deterministic engine, the cross-county mover-finder, and a dated changelog."
+description: "The running work-in-progress log of building the SRG past-client resolver. THE LAW: the child table hl_srg_past_client_homes is the single source of truth — every resolved fact is written there; the Audit Report, FUB note, and /home all render from it. The agent comes from the SISU → dotloop CONTRACT → FUB waterfall. Built one step at a time."
 ---
 
 <Info>
-**Living document.** Build log for the SRG past-client resolver. Owner: Caleb.
-Governing PRD: `GT_HOUSELOOP_PASTCLIENT_DETERMINISTIC_RESOLVER_PRD.md`. Settled architecture: [SRG Past-Client Reconciliation](/guides/past-client-data-pipeline).
+**Living document — THIS Mintlify page is the working WIP. We work off of THIS.**
+**Last updated:** 2026-06-27 10:57 AM EDT (Caleb).
+**Working out of:** `GT/GT - ACTIVE/GT_HOUSELOOP_PASTCLIENT_SSOT_PRD.md` — the ONE governing file (internal).
+Settled architecture: [SRG Past-Client Reconciliation](/guides/past-client-data-pipeline). Lesson: `.claude/lessons/pastclient-ssot-drift.md`.
+**Current step:** Step 1 — extract the `resolver_block` JSON → write into the CHILD columns; test on Metman / Nations / Bazalgette. (Holding for Zach sign-off.)
 </Info>
 
-## Status (last updated 2026-06-27)
+## 🛑 THE LAW (locked 2026-06-27 10:57 AM EDT — read this first, it overrides everything below)
 
-| Piece | State |
-|---|---|
-| Confidence matrix — classify all 1,834 by the data we hold | ✅ built |
-| Deterministic GREEN resolver (`deterministic-resolve.mjs`) | ✅ built + writing |
-| MLS-cross-ref address (`hl_srg_mls_deals` join, 100%) | ✅ wired |
-| County deed as the router (still-there vs moved) | ✅ wired |
-| `not_found` fix in the 4 covered counties | ✅ done |
-| Cross-county mover-finder (`mover-finder.mjs`) | ✅ built (Johnson/Wyandotte/Clay/Cass) |
-| **Banked: 547 dossiers (495 still-there LOCKED + 52 movers)** | ✅ in DB |
-| Jackson owner-name search · Platte/Lafayette/Douglas adapters | ⏳ deferred |
-| Paced assessor backfill (recover ~80 rate-limited) | ⏳ next |
-| YELLOW dotloop probe · RED LLM on the ~48 · grow eval | ⏳ next |
+**`hl_srg_past_client_homes` (the CHILD) is THE single source of truth. EVERY resolved fact is WRITTEN there as a
+column. The Audit Report, the FUB note, and the `/home` page all RENDER from the child. Nothing is "resolved" until
+it is written into the child table.** The parent `hl_srg_past_clients` holds the person + `bucket` + a `resolver_block`
+that is a **DERIVED render of the child** — never the place truth lives.
 
-## The model (locked 2026-06-27)
+<Warning>
+**The drift this corrects (the 2-day mistake).** A parallel "cheap deterministic resolver" was writing a rendered JSON
+blob (`resolver_block`) onto the PARENT while the CHILD master sat EMPTY (`determined_agent` = NULL book-wide). The
+truth lived in a buggy render. Symptoms: "SRG"/"Past Agent Referrals" placeholder agents shown as real (the dotloop
+CONTRACT step was never called), false lost listings (homes WE sold flagged "lost" — Bazalgette), conflated buyer/listing
+agents (Metman), duplicate house rows. **Fix: write the resolved truth INTO the child; render everything FROM it.**
+</Warning>
 
-**Make SISU complete.** SISU is canon for *which deals exist*; each source fills one blank:
+## The data model (two tables, one SSOT)
 
-- **SISU** — the deal spine (client, $, close date).
-- **MLS** (`hl_srg_mls_deals`, 100% join by `mls_number`) — the **true address / city / zip** (SISU's address is unreliable; always cross-reference the MLS closing).
-- **FUB** — notes / investigative (current home, referral, moved out of state).
-- **dotloop** — the signed contract → the real agent.
-- **County deed** — disposition truth: who's on title now. **The router.**
-- **Google Places** — geo normalizer when MLS lacks a zip.
-
-## The confidence-tier cost play
-
-| Tier | Definition | Engine | Cost |
+| Layer | Table | Grain | Holds |
 |---|---|---|---|
-| 🟢 **GREEN** | 1–2 deals · real named agent · triangulated MLS home | `deterministic-resolve.mjs` | **$0** |
-| 🟡 **YELLOW** | 1–2 deals · agent is Ana-only | assembly + one `dotloop_contract` probe | cheap |
-| 🔴 **RED** | 3+ deals, ambiguous agents, or missing triangulation | `s6-investigator.mjs` (Sonnet) | ~$0.30–0.50 |
+| PARENT — person | `hl_srg_past_clients` | 1 / person (~1,834) | name · contact · `bucket` · `website_hlid` · `resolver_block` (**derived render**) |
+| **CHILD — house = THE SSOT** | `hl_srg_past_client_homes` | **1 / house (~2,256)** | the ONE reconciled row — all facts flat + `*_source` provenance. **`determined_agent` + `determined_agent_role` + `determined_agent_source`, disposition, `sold_not_by_us` MUST be populated here.** |
 
-**Within GREEN, the county deed is the router** — and the split is FACT, not a guess: `owner_match` → lock free (still-there); `owner_differs` → moved → mover-finder; `ambiguous` (trust/LLC) → likely theirs, med; `not_found`/`out_of_coverage` → coverage pass.
+**5 sources feed the child; the app never reads them directly:** `hl_srg_mls_deals` (MLS, retired as SSOT) ·
+`sisu_transactions` (SISU agent/dates/status) · `client_reconciliation_notes` (Zach's recon) ·
+`hl_srg_dotloop_contracts` (signed-contract licensee) · `fub.*` (the person: notes/comms/DNC signal → parent).
 
-## The numbers (clean dry-run, 766 BUY-LAST GREEN)
+## The agent waterfall (LOCKED — "no agent = not resolved"; never SRG/placeholder/MLS-listing)
 
-- **522 still-there + 107 moved = 82% known to hard fact**, no LLM. 86 uncheckable (52 fringe-county, 34 harder edge cases). A mover is *not* "unknown" — we know for a fact they left; only the new address is open.
+1. **SISU `agent`** (client first+last + amount). Zach → Ana. Not `closings.agent` (MLS-polluted).
+2. **No real SISU agent → dotloop CONTRACT** → the signed **Licensee Assisting Seller/Buyer** = final truth.
+   `dotloop-contract-agent.mjs → contractAgent(loopId, profileId)`. The participant list lies on departed-agent loops;
+   the real agent survives only in the signed PDF. **`Past Agent Referrals` and `SRG` are PLACEHOLDERS that TRIGGER this
+   step — never the displayed agent.** Proven: Earl → Jessica Rich, Burton → Jeremy David.
+3. **No dotloop → FUB** `Team Exit - <name>` + notes/texts/calls. 4. **Still nothing → not resolved → investigation.**
+   Keep the departed agent — the relationship is the asset. **Ben Froeschl is never the agent.**
 
-## The mover-finder — free, cross-county, deed-verified
+Precedence on the child `determined_agent`: **dotloop CONTRACT > SISU > MLS list_agent > recon.**
 
-When a client's old-home deed shows a different owner, `mover-finder.mjs` searches **every covered county by owner name** and returns their new address straight off the deed (find + verify in one — the parcel is owned by a first+last-name match). No paid skip-trace.
+## Disposition + lost listings
 
-- **Counties live:** Johnson (AIMS), Wyandotte (Tyler quick search), Clay (ArcGIS owner LIKE), **Cass (WFS deedhold)**.
-- **Ranked match** (exact > nickname > prefix) — excludes "TRAN, TU" for a client named "Tuyet".
-- **Multiples → drill in:** returns the candidate **addresses** (not just names) for a confident pick; a passed spouse/co-owner name auto-resolves.
-- **Confidence:** high (one match, address in hand) · ambiguous (candidates + addresses) · unknown (out of covered metro → outreach asks the client).
-- **Proven:** Anthony Kuchta → 19008 W 189th St, Spring Hill (deed: KUCHTA, LYNDA & ANTHONY).
+- **Disposition:** live county deed PRIMARY (owner_match = owns / owner_differs = moved) > Repliers (sold date/price) >
+  Ninja (agents). Deed-lag beats a lagging deed; Arboridge guard. Mover-finder (cross-county by owner name,
+  deed-verified) finds the new home; else "moved — unknown, ask them."
+- **A LOST LISTING is bigger than the new address** — it's a seller lead; we don't need where they moved, just a text ask.
+- **Lost-listing rule (Bazalgette):** ONLY a home we BOUGHT for them that THEY later sold through a NON-SRG agent.
+  **If WE sold the address, it is NEVER lost** (a same-date buyer agent is the other side of OUR sale; a years-later
+  resale is a stranger's deal). Match by house# + street token, not raw string.
 
-Every mover's dossier carries structured move data — `moved` · `last_known_address` · `new_address` (deed-verified or "unknown — find out") · `confidence` — so the **LLM writes the re-engagement message from the data** (we provide the data, not the message).
+## The plan — one thing at a time (Zach signs off each step)
 
-**Gaps (deferred):** Jackson owner-name search (`owner_info LIKE` 400s on the ParcelViewer layer — needs a different endpoint); Platte/Lafayette/Douglas fringe-county deed adapters.
+1. **Step 0 — the ONE PRD + architecture + scope lock + lesson.** ✅
+2. **Step 1 — EXTRACT the existing `resolver_block` JSON → WRITE into the CHILD columns**; dedupe to one row per house;
+   **test on Metman / Nations / Bazalgette.** ◀ CURRENT (holding for sign-off)
+3. **Step 2 — fill agent gaps via the dotloop-CONTRACT waterfall** (no card stays "SRG"/"Past Agent Referrals").
+4. **Step 3 — render the Audit Report + FUB note FROM the child** (kill the hand-written blob as the source).
+5. **Step 4 — verify** Metman / Nations / Bazalgette (child row + render). Zach signs off.
+6. **Step 5 — sweep the book** via `resolve-all-past-clients.mjs`; RED 3+/ambiguous → `s6-investigator.mjs`.
 
-## The full-book tier map (all 1,834)
+## The card (a render of the child)
 
-The deterministic GREEN tier is the *easy third*. The whole book breaks down as:
+```
+HouseLoop · Spradling Group Past Client — <Bucket>
+Resolved <MM/DD/YYYY>
+CONTACTS            • <name> — <phone> · <email>
+TRANSACTIONS WITH US• <BOUGHT/SOLD> <date> <address>  $<price>  — <determined_agent>
+LOST TRANSACTIONS   • LOST·SOLD <date> <address>  $<price>  — <list_agent> (<broker>) · buyer <buyer_agent> — sold without us
+STILL OWNS          • <address> (investment)
+CURRENT RESIDENCE   • <deed-confirmed addr> | sold & moved — unverified, text to ask where they landed
+DOSSIER             <2-4 sentence brief, facts only — no data-quality musing>
+```
 
-| Bucket | Count | Engine |
-|---|---|---|
-| 🟢 **GREEN buy-last** | **809** | deterministic, $0 (in progress) |
-| 🔴 **RED missing MLS triangulation** | 445 | needs triangulation (no `mls_number` → no home) — the biggest unlock, next |
-| 🟡 **YELLOW Ana-only** | 260 | assembly + dotloop agent probe |
-| **SELL-LAST** (sold last home) | 200 | mover-finder for current home |
-| 🔴 **RED 3+ deals** | 48 | LLM (`s6-investigator`) |
-| 🚫 **agent/employee DNC** | 8 | excluded |
-| **ZERO deals** | 8 | edge |
+## Key files
 
-## The DNC roster — "ever an SG agent/employee"
-
-**A past client who is a previous SG agent or employee is do-not-contact.** DNC is derived from *identity*, never from a tag:
-
-- **Roster (130 names)** = SISU agent field (closers) ∪ FUB tags `Agent:` / `Team Exit -` / `Imported Agent:`. FUB is the agent/employee *history* (Team Exit = departed agents, ISA = employees).
-- **DNC = an exact full-name match** to that roster → **8 real** (Mark Tallent, April Atkinson, Zak Zimmerman, Megan Young…), marked `bucket='agent-dnc'`.
-- A **surname collision alone is NOT DNC** — an earlier bug benched ~100 real clients that way; fixed, they're back in GREEN.
-- ⛔ We **never** use any literal "DNC" / "Do Not Contact" FUB tag — those were rogue-applied and are ignored entirely.
-- dotloop's loop index is metadata-only (no stored participant roster); participants are pullable via the API if ever needed.
-
-## The agent resolution waterfall (LOCKED — accuracy is the only benchmark)
-
-**Every closing resolves to a REAL human agent. Never "SRG", never an MLS-listing agent, never a placeholder. "No agent = not resolved."** The agent comes from a strict waterfall:
-
-1. **SISU `agent`** — precise match on the client's actual SISU deal (client first + last + amount). The source of truth.
-2. **No SISU agent → dotloop contract** for the property → the signed **Licensee** (authoritative; settles ambiguity).
-3. **No dotloop → FUB** — the `Team Exit - <name>` tag plus the notes, texts, calls, and full scraper record, to find who actually worked the client (an agent who left the team and closed them outside it).
-4. **Still nothing → not resolved → investigation tier.**
-
-**The Ben Froeschl rule:** `Agent: Ben Froeschl` is *never* the agent of record — he was the sales manager and never closed a deal; default attribution was dumped on him. Exclude him everywhere. A client tagged both `Agent: Ben Froeschl` and `Team Exit - Alexis Miller` (e.g. Jerry Hall) → the agent is **Alexis Miller**.
-
-**Keep the departed agent — the relationship is the asset.** A past agent who left SRG is still the agent of record; the reactivation message references them ("you worked with Alexis on my team, she helped you buy 123 Main"). The client doesn't care they left — they feel a realtor who knows their history.
-
-**Why this is locked:** the agent was pulled from `closings.agent` (MLS-polluted: `spradlinggp` vs `anasprad`) → 42 cards showed the wrong agent, Ana-Only was miscounted (260 vs the true **461** from the SISU `bucket` column), and a non-SISU `fub-address-sweep` record (Jerry Hall, MLS-listing agent "John Tramble") was wrongly resolved. Agent/bucket come from SISU; only a real human name is acceptable.
-
-## Doctrine locked (principles, not rules)
-
-1. **SISU's address is unreliable — cross-reference the MLS closing** for every transaction's address/geo.
-2. **Never assert a current home the deed contradicts** (the Nations error). Sold/moved ≠ knowing where they live now.
-3. **No SISU = not a deal** — never invent a transaction or lost listing from a Repliers/dotloop-only signal.
-4. **A new address is only asserted when a county deed `owner_match` confirms it** — same bar as the still-there tier.
-5. **Card format:** `CONTACTS → TRANSACTIONS WITH US → CURRENT (deed-confirmed / moved) → DOSSIER`.
-
-## Operational lesson — assessors rate-limit
-
-County assessors throttle under rapid sequential load. Run the resolver **solo and paced** (`--pace <ms>`, default 600ms) — never alongside concurrent county diagnostics. Throttling can only flip confirm→uncheckable, **never fake an `owner_match`**, so locked rows are always valid. Recover throttled rows with `--write --unresolved --pace 800` after a cooldown.
-
-## What's left
-
-1. Paced assessor backfill → recover the ~80 rate-limited → ~629 resolved.
-2. Jackson owner-search + fringe-county adapters + spouse auto-pick.
-3. YELLOW dotloop probe · RED LLM on the ~48 · grow the ground-truth eval.
-
-**Cost target:** book LLM spend ~$900 → **≤ ~$50** (RED tier only).
+Resolver authority: `s6-investigator.mjs` · Book runner: `resolve-all-past-clients.mjs` ·
+dotloop CONTRACT agent: `dotloop-contract-agent.mjs` (`lib/dotloop/client.ts → downloadDocument()`) ·
+County deed: `county-owner-verify.mjs` · Repliers/Ninja: `repliers-sold-check.mjs` / `ninja-sold.mjs` ·
+Mover: `mover-finder.mjs` · Transport (dumb): `dossier-to-fub.mjs` · Audit render: `apps/houseloop-crm/components/seller-report/AuditReport.tsx`.
 
 ## Changelog
 
-- **2026-06-27 (PM)** — Built the **deterministic confidence-tier** resolver (replaces "unleash the LLM on everything"): MLS-cross-ref address + county-deed router + Places fallback. Fixed `not_found` in all 4 covered counties (suffix-blind). Built the **cross-county mover-finder** (Johnson/Wyandotte/Clay/Cass, ranked match, drill-in). Banked **547 dossiers (495 still-there locked + 52 movers, 13 new-addresses-found)**, $0 LLM. Added pacing after the assessors rate-limited.
-- **2026-06-26** — dotloop contract download wired (recovers departed agents); loop index (17,455 loops); reconciled-SSOT schema.
+- **2026-06-27 10:57 AM EDT** — **🛑 SSOT LAW LOCKED.** Corrected the 2-day drift: the CHILD `hl_srg_past_client_homes`
+  is the single source of truth; every resolved fact is written there; the Audit/note/`/home` render from it. Agent =
+  SISU → dotloop CONTRACT → FUB; "SRG"/"Past Agent Referrals" are placeholders that trigger the contract pull.
+  Lost-listing rule fixed (if we sold it, never lost — Bazalgette/Metman). One governing file:
+  `GT_HOUSELOOP_PASTCLIENT_SSOT_PRD.md`. (Caleb)
+- **2026-06-27 (PM)** — (superseded) deterministic confidence-tier resolver; wrote renders to the parent, not the child.
+- **2026-06-26** — dotloop contract download wired (recovers departed agents); loop index; reconciled-SSOT schema.
