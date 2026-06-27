@@ -1,6 +1,6 @@
 ---
 title: "FUB Data & Signals Matrix"
-description: "Every Follow Up Boss signal → one of our own canonical events. The coarse-type problem, the three request types, Behavior-Based Follow-Up, the Zillow playbook catalog, and the landing plan."
+description: "Every Follow Up Boss signal → one of our own canonical events. The coarse-type problem, the request types, the Behavior-Based Follow-Up event catalog (one-to-one Zillow ↔ HouseLoop parity), and the one card."
 ---
 
 <Note>
@@ -26,7 +26,7 @@ FUB stores **all** lead-initiated property contact under one `type = "Property I
 **only in the message + the `source`**. One classifier (`classifyFubEvent`) resolves it; every surface uses
 that one verdict.
 
-## The three request types
+## The request types
 
 Derived from the **message**, never from a FUB event type:
 
@@ -52,11 +52,12 @@ Zillow system messages. Parse it: real questions → `contact_request`, phone no
 | Seller Inquiry | `eventsCreated` | 2,690 | `seller_inquiry` |
 | General Inquiry (real question) | `eventsCreated` | 4,088 (mostly junk) | `contact_request` (filtered) |
 | Virtually Toured Property | `eventsCreated` | 1,479 | `tour_request` (virtual) |
-| ⭐ **Property VIEWED** (note) | **`notesCreated`** "Property Viewed: \<url\>" | live (latest today) | `property_viewed` |
-| ⭐ **Property SAVED** (note) | **`notesCreated`** "Property Saved: \<url\>" | live (latest today) | `property_saved` |
+| ⭐ **Property VIEWED** (note) | **`notesCreated`** "Property Viewed: \<url\>" | live (latest today) | `property_view` |
+| ⭐ **Property SAVED** (note) | **`notesCreated`** "Property Saved: \<url\>" | live (latest today) | `save_home` |
+| ⭐ **Property SHARED** (scraper) | scraper → `fub.zillow_home_activity` | live | `shared_home` |
 | ~~Viewed/Saved Property (event)~~ | ~~`eventsCreated`~~ | **DEAD — frozen May 21** | — (use the note rows) |
 | Registration | `eventsCreated` | 159 | `registration` |
-| Pre-Approval | `eventsCreated` | 73 | `pre_approval` |
+| Pre-Approval | `eventsCreated` | 73 | `behavior_prequalified` |
 | Saved Property Search | **scraper** → `fub.saved_searches` | per-lead | `saved_search` |
 | note "may be interested … viewed N× in 7 days" | `notesCreated` (raw) | 2,976 | `behavior_repeat_views` |
 | note "now looking in \<ZIP\>" | `notesCreated` (raw) | 4,589 | `behavior_area_interest` |
@@ -64,8 +65,8 @@ Zillow system messages. Parse it: real questions → `contact_request`, phone no
 
 <Warning>
 **Views & saves arrive ONLY as `notesCreated` notes now.** The `Viewed Property` / `Saved Property` **event
-types died May 21** (Premier Agent change — every row frozen at that date). So `property_viewed` /
-`property_saved` are minted from the NOTE path, never the dead event type.
+types died May 21** (Premier Agent change — every row frozen at that date). So `property_view` /
+`save_home` are minted from the NOTE path, never the dead event type.
 </Warning>
 
 ## Behavior-Based Follow-Up
@@ -78,20 +79,54 @@ types died May 21** (Premier Agent change — every row frozen at that date). So
 signal means** so the team + Myli understand the behavior and run **our** follow-up off it.
 </Info>
 
-### The Behavior-Based Follow-Up events
+### Every behavior event is a first-class event = ONE card (LOCKED 2026-06-26)
 
-| Behavior | FUB signal | What it means | Our event |
+Every event below is a **first-class HouseLoop event** and renders through the **one** `ActivityHeroCard` —
+identical on **All · Website Activity · Follow Up Boss Activity**. Each card carries three things: the
+**house** (address + photo + link), **what it is** (the event), and the **source** badge — **`Zillow.com`**
+(came in through FUB/Zillow) or **`HouseLoop.ai`** (native HouseLoop). Add an event to the catalog
+(`activity-badges.ts` / `BEHAVIOR_BADGES`) → it gets a card on every surface automatically — no per-type
+hardcoding (`ALL_FEED_IS_EVERYTHING` law).
+
+### One-to-one parity — Zillow ↔ HouseLoop (LOCKED 2026-06-26)
+
+**Same event catalog on both platforms; only the source differs.** A home viewed on Zillow and a home viewed
+on houseloop.ai are the **same `kind`** (`property_view`) — the **source badge** (`Zillow.com` vs
+`HouseLoop.ai`) tells them apart. The one asymmetry: **liked home is HouseLoop-only** (Zillow has no "like").
+The pre-qualified event is the same `kind`, branded per platform — **ZHL** on Zillow, **Lending Loop** on HouseLoop.
+
+| Event | `kind` | Zillow.com | HouseLoop.ai |
 | --- | --- | --- | --- |
-| **High-intent buyer** | tag `Zillow High Intent Buyer` | 5× likelier to transact in 3 months | `behavior_high_intent_buyer` |
-| **High-intent seller** | tag `Zillow High-Intent Seller` | likely to sell in 3 months | `behavior_high_intent_seller` |
-| **Re-engaged buyer** | tag `Zillow Reengaged Buyer` | searching again after ≥14 days inactive | `behavior_reengaged_buyer` |
-| **Specific-home interest** | tag `Zillow specific home interest` | repeatedly viewed specific homes | `behavior_specific_home_interest` |
-| **ZHL pre-qualified** | the 3 `ZHL connection: …` tags | referred + pre-qual'd by a ZHL LO | `behavior_zhl_prequalified` |
-| **Repeat property views** | note "viewed N× in 7 days" | hammering one home | `behavior_repeat_views` |
-| **Area interest** | note "now looking in \<ZIP\>" | shifted search area | `behavior_area_interest` |
-| **Property tour** | Property Inquiry (tour) | asked to tour a home | `tour_request` |
-| **Contact request** | Property/General Inquiry (reach out) | asked an agent to reach out | `contact_request` |
-| **Saved search** | scraper → `fub.saved_searches` | saved search criteria | `saved_search` |
+| **Viewed home** | `property_view` | ✅ | ✅ |
+| **Saved home** | `save_home` | ✅ | ✅ |
+| **Liked home** | `liked_home` | — *(no "like" on Zillow)* | ✅ |
+| **Shared home** | `shared_home` | ✅ | ✅ |
+| **Repeat property views** | `behavior_repeat_views` | ✅ | ✅ |
+| **Area interest** | `behavior_area_interest` | ✅ | ✅ |
+| **Property tour** | `tour_request` | ✅ | ✅ |
+| **Property inquiry** | `property_inquiry` | ✅ | ✅ |
+| **Contact request** | `contact_request` | ✅ | ✅ |
+| **Saved search** | `saved_search` | ✅ | ✅ |
+| **High-intent buyer** | `behavior_high_intent_buyer` | ✅ | ✅ |
+| **High-intent seller** | `behavior_high_intent_seller` | ✅ | ✅ |
+| **Re-engaged buyer** | `behavior_reengaged_buyer` | ✅ | ✅ |
+| **Specific-home interest** | `behavior_specific_home_interest` | ✅ | ✅ |
+| **Pre-qualified** | `behavior_prequalified` | ✅ *(ZHL pre-qualified)* | ✅ *(Lending Loop pre-qualified)* |
+
+### Where the Zillow side of each event is minted from (the FUB signal)
+
+| Event | FUB / Zillow signal it's minted from |
+| --- | --- |
+| Viewed / Saved home | `notesCreated` "Property Viewed/Saved: \<url\>" → `fub.zillow_home_activity` |
+| Shared home | scraper "shared" signal → `fub.zillow_home_activity` |
+| Repeat property views | note "viewed N× in 7 days" |
+| Area interest | note "now looking in \<ZIP\>" |
+| Property tour / inquiry / contact | `fub.events` Property Inquiry → `classifyFubEvent(message)` |
+| Saved search | scraper → `fub.saved_searches` |
+| High-intent buyer / seller | tag `Zillow High Intent Buyer` / `Zillow High-Intent Seller` |
+| Re-engaged buyer | tag `Zillow Reengaged Buyer` |
+| Specific-home interest | tag `Zillow specific home interest` |
+| Pre-qualified | the 3 `ZHL connection: …` tags (HouseLoop side: Lending Loop pre-qual) |
 
 **`Zillow Smart List` = the "active now" 13-day window, NOT a behavior.** Add → `behavior_active`, remove →
 `behavior_window_closed`.
@@ -131,10 +166,10 @@ The matrix is the map; this is the scope lock.
     **nothing fires** until a real workflow replaces the stub. Real workflows get built per-trigger later.
   </Step>
   <Step title="Every event is a HERO card">
-    Each behavior event renders as a first-class **hero card** — the **house + what the behavior is** (tour
-    request · contact request · saved search · viewed N× in 7 days · high-intent buyer/seller · re-engaged).
-    Same card family as the tour request, kind-driven by the behavior badge. A saved search = a **hero saved
-    search** (criteria + matched homes + engagement).
+    Each behavior event renders as a first-class **hero card** (`ActivityHeroCard`) — the **house + what the
+    behavior is + the source** (Zillow.com / HouseLoop.ai). Same card for every event kind, catalog-driven,
+    identical on All · Website Activity · Follow Up Boss Activity. A saved search = a **hero saved search**
+    (criteria + matched homes + engagement).
   </Step>
   <Step title="The UI — the 'Follow Up Boss' backfill (lead detail, tablet view)">
     A **"Follow Up Boss"** control on the lead-detail FUB Activity panel backfills all the lead's FUB history
@@ -151,7 +186,8 @@ One converter per signal class, all writing through `logActivity()`:
 
 <Steps>
   <Step title="Events">`fub.events` → `classifyFubEvent` → tour / inquiry / contact / rental / seller.</Step>
-  <Step title="Notes">`notesCreated` → `property_viewed` / `property_saved` + the insight parsers (`behavior_repeat_views`, `behavior_area_interest`).</Step>
+  <Step title="Notes">`notesCreated` → `property_view` / `save_home` + the insight parsers (`behavior_repeat_views`, `behavior_area_interest`).</Step>
+  <Step title="Home activity">`fub.zillow_home_activity` → `property_view` / `save_home` / `shared_home` (deduped per home, with the photo).</Step>
   <Step title="Saved searches">`fub.saved_searches` → `saved_search` (minted, not read-live).</Step>
   <Step title="Tags">`peopleUpdated` / `peopleTagsCreated` → the `behavior_*` events + Smart List window via `fub.tag_history`.</Step>
 </Steps>
