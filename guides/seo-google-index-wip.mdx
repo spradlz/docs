@@ -1,0 +1,67 @@
+---
+title: "SEO Google Index — Build-Out (WIP Log)"
+description: "The running work-in-progress log for getting HouseLoop's ~234k property pages discovered + indexed by Google: the GSC sitemap-submit pipeline, the weekly coverage monitor, and a dated changelog."
+---
+
+<Info>
+**Living document.** Build log for the GSC index pipeline. Owner: Benji (GSC automation + sitemap submit);
+Lee owns the canonical/identity/fork prerequisites. Governing PRD:
+`GT/GT - ACTIVE/GT_HOUSELOOP_SEO_INDEXING_PRD.md`. Creds + diagnostics: [Google Search Console](/guides/google-search-console).
+</Info>
+
+## The finding (measured from GSC's own API, 2026-06-27)
+
+> **"Google can't index what it can't discover."** The homepage is indexed and crawled daily — but the
+> **sitemap was never submitted to GSC**, so Google has **never crawled a single `/home/<slug>` property
+> page** ("URL is unknown to Google, last crawl = NEVER"). ~234k property pages (11 child sitemaps × ~21k)
+> contribute ~nothing. 28-day traffic ≈ 31 clicks / 2,259 impressions, essentially all homepage.
+
+Diagnostic: `node tools/seo/gsc-report.mjs` (reads GSC's own sitemaps / URL-inspection / search-analytics).
+
+## Status (last updated 2026-06-27)
+
+| Piece | State |
+|---|---|
+| Diagnose via GSC API (`gsc-report.mjs`) — confirmed 0 sitemaps registered, 0 property pages crawled | ✅ done (Lee) |
+| **Submit script** `tools/seo/gsc-submit-sitemap.mjs` (SA write-token mint → PUT sitemap-index) | ✅ built + tested |
+| Test result | ⛔ **403** — SA mints a valid token but is **not a GSC owner yet** (the one blocker) |
+| **Add SA `houseloop-master@…` as GSC Owner** (GSC → Settings → Users & permissions) | ⏳ **needs Zach** (one-time UI) |
+| Run submit → expect **204**, sitemap shows Submitted+processed | ⏳ blocked on the owner-add |
+| Weekly Inngest monitor (re-submit + coverage report → Run Log + Telegram Zach) | ⏳ building |
+| Watch a property page flip unknown → crawled → indexed | ⏳ post-submit (weeks) |
+
+## The build
+
+### 1. Submit script — `tools/seo/gsc-submit-sitemap.mjs` (✅ built + tested)
+Mints an SA access token (the SA acts **as itself** — JWT `iss`=SA email, **no `sub`** impersonation, scope
+`https://www.googleapis.com/auth/webmasters`, RS256-signed — mirrors `lib/google/dwd.ts` minus the DWD
+subject), then `PUT`s `https://houseloop.ai/sitemap-index.xml` to
+`webmasters/v3/sites/sc-domain:houseloop.ai/sitemaps/<encoded>` — expects **204**. `--status` reads current
+state without submitting. Tested 2026-06-27 → token mint OK, returns 403 (SA lacks property access).
+
+### 2. The one human step (blocker)
+The SA mints a valid write token but isn't a GSC owner. An **existing owner** must add it (one-time):
+**GSC → pick the `houseloop.ai` Domain property → Settings → Users and permissions → Add user →
+`houseloop-master@houseloop-496200.iam.gserviceaccount.com` → Owner.** Then re-run the submit script → 204.
+
+### 3. Weekly Inngest monitor (building)
+Per `INNGEST_OR_IT_DOESNT_EXIST`: a registered weekly fn that re-submits the sitemap + pulls the
+coverage / URL-inspection report (indexed vs excluded + reasons), stores a row, and Telegram-pings Zach.
+Registered in `apps/houseloop-web/app/api/inngest/route.ts`, captured in the Run Log.
+
+## Done looks like
+Sitemap **Submitted + processed** in GSC with child counts · `gsc-report.mjs` shows a property page flip
+**unknown → crawled** (then **indexed** over the following weeks) · the weekly Inngest run appears in the Run
+Log + pings Zach · this WIP log tracks the climb.
+
+## Out of scope
+Rebuilding the sitemap (it's healthy: 11 children, ~234k URLs, fresh) · buying authority/backlinks · the
+canonical/fork/identity prerequisites (Lee's `GT_HOUSELOOP_HOME_IDENTITY_PRD.md`; absolute `metadataBase`
+canonicals already shipped).
+
+## Changelog
+
+- **2026-06-27** — Root finding confirmed via GSC API (0 sitemaps registered, every property page "unknown
+  to Google"). Built + tested `tools/seo/gsc-submit-sitemap.mjs` (SA-as-itself write token → PUT). Test
+  returned 403 = the SA needs GSC-owner access (the one blocker, surfaced to Zach). Weekly Inngest monitor +
+  this WIP doc started. Handoff from Lee (#10941); PRD `GT_HOUSELOOP_SEO_INDEXING_PRD.md`.
