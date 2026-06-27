@@ -47,6 +47,10 @@ flowchart TB
     LISTING["Listing · one /home slug per house"]
   end
 
+  subgraph DASH["CRM Seller-Report surfaces (read-only)"]
+    AUDIT["/settings/seller-report (dashboard)\n+ /settings/seller-report/audit (Audit Report)\nTransaction History · Resolution Matrix · FUB Notes\n→ read ONLY from parent + child"]
+  end
+
   REALFUB(["REAL Follow Up Boss SaaS · upstream truth + write target"])
 
   DLAPI --> DLC
@@ -60,14 +64,48 @@ flowchart TB
   REALFUB -.scraped.-> FUBCDt
   FUBCDt -.sync.-> FUBRWt
   CHILD -->|1 slug per house| LISTING
+  PARENT -->|person·bucket·contacts| AUDIT
+  CHILD -->|deals·determined_agent·disposition| AUDIT
 
   style CRM stroke:#1a73e8,stroke-width:2px,stroke-dasharray:6 4,fill:#f7fbff
   style FUBCD stroke:#777,stroke-width:2px,stroke-dasharray:6 4,fill:#fafafa
   style FUBRW stroke:#777,stroke-width:2px,stroke-dasharray:6 4,fill:#fafafa
+  style DASH stroke:#8430ce,stroke-width:2px,stroke-dasharray:6 4,fill:#faf7ff
   style WEB stroke:#137333,stroke-width:2px,stroke-dasharray:6 4,fill:#f6fff8
 ```
 
 **The single source list — every database we read from:** `CRM` (autorack), `FUB mirror Camp David` (192.168.1.211/bossloop), `FUB mirror Railway` (yamabiko), `Website` (centerbeam), and the `REAL Follow Up Boss` SaaS. Details + hosts in the matrix below.
+
+## 🖥️ THE TWO CRM SURFACES READ ONLY FROM THE TWO TABLES (Zach LOCKED 2026-06-27 11:51 AM EDT)
+
+Both Seller-Report surfaces render **only** from the two tables — the PARENT `hl_srg_past_clients` (person ·
+contact · bucket) and the CHILD `hl_srg_past_client_homes` (**THE SSOT** — one row per house-deal ·
+`determined_agent` · disposition). Neither reads a hand-written `resolver_block` blob as the source of
+transactions/agents anymore. Source of truth = the two tables. (The dashboard's UI is mid-rebuild — polish
+comes AFTER the data reads correctly from the two tables.)
+
+| Surface | URL |
+|---|---|
+| Seller-Report **dashboard** | `/settings/seller-report` |
+| **Audit Report** | `/settings/seller-report/audit` |
+
+**The Audit Report's three sections — all derived from the two tables:**
+
+| Section | Source |
+|---|---|
+| **Transaction History** | CHILD rows — `address` · `role` (BOUGHT/SOLD) · **`determined_agent`** · `original_price` · `transaction_date` · disposition |
+| **Resolution Matrix** | CHILD (the per-home resolution) + PARENT (`bucket` / `resolution_status`) |
+| **Follow-Up Boss Notes** | rendered FROM the CHILD rows + PARENT contacts (the 6-section card) |
+
+**Dependency chain (Audit Report):**
+`app/(crm)/settings/seller-report/audit/page.tsx` → `components/seller-report/AuditReport.tsx` →
+`app/api/settings/seller-report/audit/route.ts` → `SELECT … FROM hl_srg_past_clients` **+** `hl_srg_past_client_homes`.
+
+**The agent shown on every transaction = the CHILD `determined_agent`**, resolved via the waterfall
+(SISU real agent → dotloop CONTRACT → FUB `Team Exit -` tag). A placeholder ("SRG", "Past Agent Referrals")
+is NEVER displayed — it triggers the waterfall. The Step-1 writer that populates the child is
+`tools/houseloop-cards/extract-to-child.mjs`. Internal governing file: `GT_HOUSELOOP_PASTCLIENT_SSOT_PRD.md`.
+
 
 ## 🏛️ THE DATA MODEL — two tables the app reads (Zach LOCKED 2026-06-26)
 
