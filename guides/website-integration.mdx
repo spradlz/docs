@@ -1,0 +1,90 @@
+---
+title: "Website Integration"
+description: "How houseloop.ai (the public website) connects to the CRM — listings, addresses, property data, pixel engagement, and how external/Zillow homes resolve to our owned listing pages."
+---
+
+<Info>
+**This is the section overview.** "Website Integration" is the bridge between the public website
+(`houseloop.ai`) and the CRM. The card list below is **generated automatically from the nav** — add a page
+to this group in `docs.json` and republish, and it appears here. Don't hand-edit the cards.
+</Info>
+
+## What this section covers
+
+The website is our Zillow: one owned `Listing` record per home, each rendering a permanent
+`/home/<canonicalSlug>` page. The CRM is our contact book. "Website Integration" is everything that keeps
+those two in sync — how a home becomes a listing, how it's addressed, how its value/photos/history are
+filled, how on-page engagement is tracked, and how an outside home (e.g. one a lead viewed on Zillow)
+resolves back to our listing page.
+
+{/* AUTO-INDEX:START — generated from the docs.json nav group "Website Integration". Do not edit by hand; add a page to the group and republish. */}
+<CardGroup cols={2}>
+  <Card title="Listing Lifecycle: Intake → Disposition" href="/guides/listing-lifecycle">
+    The whole life of a home on HouseLoop — how a new listing is taken in, how it's dispositioned when it sells, and how every step resolves to ONE canonical address and ONE permanent URL.
+  </Card>
+  <Card title="Listing Intake Pipeline" href="/guides/listing-intake-pipeline">
+    How a new Repliers listing runs through our entire process and lands on houseloop.ai — one workflow, every step, end to end.
+  </Card>
+  <Card title="Property Data Model & Address Identity" href="/guides/property-data-and-address-identity">
+    How HouseLoop keys homes by address — the ONE address-keyed table model, how an address becomes a stable USPS-conformed identifier, how the resolver matches an incoming listing to one owned home, and the ONE reconciliation engine (identityKey → LLM sieve → Redfin) used for every address.
+  </Card>
+  <Card title="Address Model & Carry-Forward — Build-Out (WIP Log)" href="/guides/address-model-wip">
+    The running work-in-progress log for the canonical-home-as-accumulator model: how a home carries its banked history (sold/tax/schools/value) forward across listing cycles, the enrichment carry-forward merge on collapse, the read-layer quarantinedAt fix + stable canonical, and a dated changelog.
+  </Card>
+  <Card title="Website Pixel Tracking" href="/guides/pixel-tracking">
+    HouseLoop's first-party tracking pixel — capture visitor behavior on your site and link anonymous activity to leads. No third party.
+  </Card>
+  <Card title="Saved Search Alerts" href="/guides/saved-search-alerts">
+    How HouseLoop's saved search alert engine works — architecture, email delivery, Inngest crons, and the Listing query model.
+  </Card>
+  <Card title="Sold Data & Price History" href="/guides/sold-data-and-price-history">
+    How HouseLoop detects sold listings in real time (the Repliers webhook Sc→Sld transition), builds the permanent sold page, and renders price history. The single source of truth, and why there is no backfill cron.
+  </Card>
+  <Card title="Listings Search & Map API" href="/guides/listings-search-and-map">
+    The public houseloop.ai read endpoints Myli (or any client) can call to search listings, drive the map, read the home shelves, and power location autocomplete. All GET, all driven by one shared query envelope.
+  </Card>
+  <Card title="Coming Soon Listings" href="/guides/coming-soon">
+    How HouseLoop detects and surfaces Coming Soon (pre-market) listings — including the lastStatus=Cs signal that makes it work, the filter, and the card pill.
+  </Card>
+</CardGroup>
+{/* AUTO-INDEX:END */}
+
+## The matching contract (read this before "why didn't this home link?")
+
+A constant question across the CRM and the website: **"this lead looked at a home on Zillow — why does it /
+doesn't it link to a HouseLoop page?"** The answer is one rule with two parts.
+
+<Steps>
+  <Step title="A home can only link if WE carry it">
+    Our `Listing` table is the Heartland MLS IDX feed — the **Kansas City metro**. If a lead viewed a home
+    in Topeka, Lawrence, Eudora, or anywhere outside our MLS, that home is **not on HouseLoop at all** — it
+    was never in our feed. There is nothing to link to, and the link correctly grays out. This is coverage,
+    not a bug. A `zpid` wouldn't change it: a Topeka home has a Zillow id too, but it's still not in our table.
+  </Step>
+  <Step title="If we carry it, we match by MLS# first, then address">
+    - **MLS number** (when the source provides one) → exact match to `hl_heartlandmls_<mls>` / `Listing.mlsId`.
+    - **Otherwise address** → house number + ZIP + the distinctive street word. This is
+      **suffix-abbreviation-proof** (it never compares "Ave" vs "Avenue", "Trfy" vs "Trafficway", "Rd" vs
+      "Road") and **ordinal-proof** (it treats "27th" and "27" as the same). Same address = same home, always.
+  </Step>
+</Steps>
+
+<Warning>
+**We do NOT join on Zillow's `zpid`.** Zillow ids every home with a `zpid`, but our `Listing` table stores
+`mlsId`, not `zpid`. So the join key is **MLS# → else address**, never the Zillow id. Adding a `zpid` column
+(backfilled from our existing Zillow enrichment) would tighten precision on edge cases — it would **not**
+expand coverage, because the ceiling is "is this home in our MLS feed," not "can we match the key."
+</Warning>
+
+The canonical home for the address/identity logic is
+[Property Data & Address Identity](/guides/property-data-and-address-identity). The same matcher backs two
+surfaces, so they must stay identical:
+
+- **CRM lead-activity cards** — the "View on HouseLoop" link on a home a lead browsed.
+- **Website /home engagement** — seeding real views/likes/saves onto a listing's on-page counts.
+
+<Info>
+**Owners:** Lee owns the website render + the FUB-home → `Listing` resolver (the "View on HouseLoop" link).
+Benji owns the FUB-home-activity → on-page engagement seeding (`/home` views/likes/saves). Both use the
+**same** address/MLS matcher above — one resolver, two surfaces, never two divergent copies.
+</Info>
