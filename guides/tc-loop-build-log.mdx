@@ -11,20 +11,20 @@ Canonical spec: `GT_HOUSELOOP_TRANSACTION_COORDINATION_PRD.md` §12 (status/mile
 
 ## Status (last updated 2026-06-27)
 
-**Phase: Configure template builders DONE (incl. dynamic dates); next is runtime.** Engine done. Configure
-builders all live: **Stages ✅, Milestones ✅ (full set + offset engine), Tasks ✅ (139 A-Frame steps + the
-dynamic-date rule + collapsible folders + phase filter)**. Next: per-loop instantiation + the live cascade
-(runtime, with loop-birth), then Merge Fields, Email/Text templates, Forms.
+**Phase: Configure template builders DONE; next is runtime.** Engine done. Configure builders all live:
+**Stages ✅, Milestones ✅ (full set + offset engine), Tasks ✅ (139 A-Frame steps + dynamic-date rule + phase
+bands + filter)**. Next: per-loop instantiation + the live cascade (runtime, with loop-birth), then Merge
+Fields, Email/Text templates, Forms.
 
 | Layer | State |
 |---|---|
 | Reverse-engineering (A-Frame + dotloop) | ✅ complete |
 | Status + milestone model | ✅ **locked** (PRD §12 + §13) |
-| Foundation data model (migrations 0253–0258) | ✅ applied |
+| Foundation data model (migrations 0253–0259) | ✅ applied |
 | Loop engine + API | ✅ createLoop · completeMilestone (forward-only) · GET loop |
 | **Configure → Stages** builder | ✅ reuses `StagesPage` scoped to TC |
 | **Configure → Milestones** builder | ✅ full set (14 buyer / 16 seller) + offset engine, editable |
-| **Configure → Tasks** builder | ✅ 139 tasks + **dynamic-date rule** + collapsible folders + phase filter |
+| **Configure → Tasks** builder | ✅ 139 tasks + **dynamic-date rule** + blue phase bands + phase filter |
 | Dynamic-date engine (`lib/tc/date-engine.ts`) | ✅ pure `computeDue`, 13/13 tests (business/calendar/holiday roll) |
 | **Configure → Merge Fields / Email / Text / Forms** | ⬜ |
 | TC surface tables — row kebab + bulk-delete | ✅ (CRM-wide convention + lint rule) |
@@ -39,6 +39,28 @@ Configure) and never touches the CRM pipeline. Built human-first — a person ca
 **Myli-TC is just another caller of the same API endpoints** (no AI backdoor). Every layer is editable +
 behind a REST API so Myli drives it the same way a human does.
 
+## ⭐ A-Frame parity doctrine (LOCKED 2026-06-27)
+
+**Right now the stages, milestones, and tasks are an EXACT MIRROR of A-Frame** — the TC software the team runs
+on today. Names, phases, anchors, offsets, and assignees are lifted verbatim from the A-Frame recon. The **only**
+thing that's ours is the UI chrome (the blue section bands, pills, tables). The content is A-Frame's.
+
+**Why parity:** mirror A-Frame 1:1 so we can understand exactly how it operates and measure parity before we
+change anything. While in parity mode, a divergence in task content is a bug, not a feature.
+
+**Two deliberate, Zach-approved cleanups (label/UI only — not content):** (1) the listing pre-market phase
+labels were renamed from meaningless "Pre-Live: Stage 1…5" to A-Frame's real time phrases, with the two
+ambiguous ranges hard-set to single numbers; (2) the UI chrome is HouseLoop-native. The tasks themselves are
+untouched.
+
+**No per-task instruction manuals.** Verified from the recon: A-Frame's task `description` field is empty on all
+templates, and individual steps carry no how-to field — only name · due/anchor · assignee · (optional linked
+email). There was nothing to import, and we are **not** building an instructions layer now.
+
+**Future (deferred):** this A-Frame-mirrored set eventually converts to a **HouseLoop-native TC set** (rebranded
+names, possibly per-task instructions / Myli playbooks) — a later pass, only when we choose to "HouseLoop-ify"
+it. Until then every task stays A-Frame-faithful.
+
 ## How A-Frame actually works — the 3-layer engine + dynamic dates (LOCKED 2026-06-27)
 
 Grounded in the A-Frame recon (`.claude/reports/aframe-recon/TC_MILESTONE_TASK_MAP.md`) + the TC-software
@@ -48,9 +70,10 @@ Three layers + an offset engine:
 1. **STATUS (11)** — the headline word. = our **Stages**. ~5/side.
 2. **DATES — 4 KEY DATES you ENTER drive everything:** `effective` (Under Contract) · `inspection_end` ·
    `closing` · `on_market`. These are the **milestones'** anchors.
-3. **TASKS (~139, in phase folders)** — every task = a **relative rule** (`anchor + offset`), grouped into
-   phases (Intake · Contract Review · Scheduling · Communication · Compliance · Inspections · Appraisal ·
-   Closing; listing adds Pre-Live Stages 1–5).
+3. **TASKS (139, in phase folders)** — every task = a **relative rule** (`anchor + offset`), grouped into
+   phases. Buyer = Intake · Contract Review · Scheduling · Communication · Compliance · Inspections · Appraisal
+   · Closing. Listing adds the **pre-market run-up** (chronologically first): **Within 24h of ERTS Signed · 10
+   Days Before Going Live · 5 Days Before Going Live · Listing Goes Live · Weekend After Going Live**.
 
 **Dynamic dates = the offset engine done right (mig 0258 + `lib/tc/date-engine.ts`):** a task/milestone stores
 a RELATIVE rule, and the due date **computes from the live key date — so it cascades when the key date moves.**
@@ -63,6 +86,9 @@ non-working day → next/prev business day) · versioned **holiday calendar** (U
 
 > **Status = headline · Milestones = the key dates that drive everything · Tasks = the auto-scheduled
 > checklist hanging off those dates.** Enter 4 dates → the whole plan schedules; move one → it all re-shifts.
+
+### Task counts (A-Frame parity)
+58 buyer + 81 listing = **139** (the exact A-Frame total). Listing's 81 = 57 contract-to-close + 24 pre-market.
 
 ### The full milestone set (mig 0256, Configure → Milestones)
 `hl_tc_milestone_template`. **KEY DATE** (`is_key_date`) = entered per loop, drives offsets. `▸` = advances status.
@@ -83,13 +109,13 @@ non-working day → next/prev business day) · versioned **holiday calendar** (U
 1. **API-first.** Every loop action is a REST endpoint; UI + Myli call the same one.
 2. **Role-gated `/tc/**` surface.** No CRM↔TC toggles.
 3. **Reuse the engine, scope to TC. Never hand-roll** — every Configure page is identical (Add/Refresh header
-   + `PipelineSwitcher` + `HlDataTable`; modals = `HlFormModal`; filters = `HlFilterPills`; no KPI cards on a
-   template editor).
+   + `PipelineSwitcher` + `HlDataTable`; modals = `HlFormModal`; filters = `HlFilterPills`; section headers =
+   the shared blue `SectionBand`; no KPI cards on a template editor).
 4. **Side-aware** (TC Buyer vs TC Listing).
 5. **E-signature = Documenso.**
 6. **Real CRM tables** — `HlDataTable` (`hl/table-requires-actions`) + canonical `HlFormModal` modals.
 
-## Data model — migrations 0253–0258
+## Data model — migrations 0253–0259
 
 `apps/houseloop-crm/db/migrations/` (additive + reversible; `node db/migrate.mjs` against `HL_CRM_DATABASE_URL`):
 - **0253** — foundation: loop columns + child tables + `hl_templates.scope`.
@@ -98,6 +124,7 @@ non-working day → next/prev business day) · versioned **holiday calendar** (U
 - **0256** — full milestone set + offset-engine columns (`anchor`, `is_key_date`).
 - **0257** — `hl_tc_task_template` (139 A-Frame tasks).
 - **0258** — task **date-rule** (`day_unit`, `business_day_def`, weekend/holiday roll, `skip_holidays`, chains: `anchor_type`/`anchor_task_id`/`anchor_on`, `is_conditional`, `task_type`) · `hl_tc_phase` **folders** (`is_gated`) · `hl_holiday_calendar` (US_FEDERAL).
+- **0259** — listing pre-market phase **label rename** (real A-Frame time phrases; 7-10→10, 3-4→5) + Stage-3 offsets −4d→−5d. Label-only; `phase_key` join key unchanged.
 
 ## The loop engine + date engine (built + proven)
 
@@ -107,6 +134,20 @@ non-working day → next/prev business day) · versioned **holiday calendar** (U
 - REST: `/api/tc/loops[/:id]` · `/api/tc/milestones[/:id]` · `/api/tc/tasks[/:id]`.
 
 ## Changelog
+
+### 2026-06-27 — Section bands + Workflows header + pre-market rename
+- **Shared `SectionBand`** (`components/table/SectionBand.tsx`) — extracted the canonical blue attached-table
+  header (was a local copy inside the Workflows table) into one reusable component. Used by Workflows + TC Tasks.
+- **Configure → Tasks** — replaced the vibe-coded gray chevron phase folders with the blue `SectionBand`
+  attached flush per phase ("Intake 8"); dropped the "Showing N of M" toolbar (`HlDataTable` gained
+  `hideToolbar`/`flushTop`). Phase filter pills stay.
+- **Workflows** — moved the floating "Create Workflow" button up into the navy page header
+  (`WorkflowsHeaderActions`, mirrors TC Tasks' "Add Task"). Commit `e6ca6772bf`.
+- **Pre-market phase rename (mig 0259)** — the listing pre-market phases were seeded with meaningless bare
+  labels ("Pre-Live: Stage 1…5"). Renamed to A-Frame's real time phrases — **Within 24h of ERTS Signed · 10
+  Days Before Going Live · 5 Days Before Going Live · Listing Goes Live · Weekend After Going Live** — and
+  de-ambiguated the ranges (7-10→10, 3-4→5; Stage-3 task offsets snapped −4d→−5d so the date matches the label).
+  Label-only; tasks unchanged. Commit `74a4aa5d77`.
 
 ### 2026-06-27 — Dynamic dates + folders + phase filter (Configure → Tasks)
 - **Research** (3 agents → `.claude/reports/tc-dynamic-dates-research-2026-06-27.md`): Open To Close is the
@@ -118,11 +159,9 @@ non-working day → next/prev business day) · versioned **holiday calendar** (U
   **folder system** `hl_tc_phase` (gating-ready `is_gated`).
 - **`lib/tc/date-engine.ts`** — pure `computeDue`; **13/13 tests** (Friday-closing precise Sat-counts, weekend
   + holiday roll chain, month clamp, roll-off, null anchor).
-- **Configure → Tasks** — collapsible **phase folders** + **phase filter pills** (`HlFilterPills`, new canonical
-  generic filter-pill — reuse not fork) + full **date-rule modal** (anchor/chain, offset + counted-as,
-  business-day basis, weekend/holiday roll, conditional, type). API carries it all. Playwright-verified.
-- **Runtime is next:** per-loop instantiation + live cascade (recompute on key-date change, audit, sticky
-  overrides), folder gating enforcement, the TC loop-detail page. Commit `dafd8beb5b`.
+- **Configure → Tasks** — phase **filter pills** (`HlFilterPills`, new canonical generic filter-pill — reuse
+  not fork) + full **date-rule modal** (anchor/chain, offset + counted-as, business-day basis, weekend/holiday
+  roll, conditional, type). API carries it all. Playwright-verified. Commit `dafd8beb5b`.
 
 ### 2026-06-27 — Task layer (Configure → Tasks): the 139 A-Frame checklist steps
 - **Migration 0257** — `hl_tc_task_template` seeded with all 139 A-Frame tasks (58 buyer / 81 sale), generated
