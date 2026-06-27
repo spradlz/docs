@@ -18,8 +18,15 @@ HouseLoop keys every home by its **address** — not by the MLS number, not by a
 
 **The two claims in this page that say "~75 ZIP-drift forks" and "rung 2 (lat/lng) already collapses drift" are WRONG/understated.** Real same-home fork count ≈ **2,957+** (the ~75 was only the *ZIP-differ* subset; most forks are **dropped directionals** — e.g. `928 NE 87th` vs `928 87th` — and **suffix variants** at the *same* ZIP, which rung 2 does NOT catch). The older numbers later in this page are left for history but superseded here.
 
-**Running progress + the full effort:** see [Home Identity & URL — WIP Log](/guides/home-identity-and-url-wip). Past-client mint queue (the 2,258 seed, tagged BIND / FORKED / NEEDS_MINT): `.claude/reports/pastclient-homes-mint-list-2026-06-27.csv`.
+**Running progress + the full effort:** see [De-Forking](#de-forking) (below). Past-client mint queue (the 2,258 seed, tagged BIND / FORKED / NEEDS_MINT): `.claude/reports/pastclient-homes-mint-list-2026-06-27.csv`.
 </Note>
+
+<Check>
+**Update 2026-06-27 — the permanent fix below is now BUILT, deployed, and verified.** Forks are prevented at
+intake and swept by an autonomous, reversible engine; **1,588 backlog forks already merged**. The sections that
+describe the fix as "not yet built" and the phased migration plan are kept for history — see **[De-Forking](#de-forking)**
+at the bottom for the shipped, verified system.
+</Check>
 
 <Warning>
 **The home id is the address, hashed — not an independent id (read [The HouseLoop Property ID](#the-houseloop-property-id-and-the-zip-drift-fork-it-cant-yet-prevent) below).** Our stable id is `HLP- + md5(identityKey)`, and `identityKey` contains the **ZIP**. So when two sources disagree on a home's ZIP (Zillow `64119` vs the MLS `64118` for the *same* house), the home hashes to **two ids → two slugs → two pages**. City drift is handled; **ZIP drift is not** — there are ~75 such forks live today. This is the root cause behind "we have the house but it didn't resolve," and it was previously undocumented.
@@ -108,7 +115,7 @@ The **USPS-preferred city** for a ZIP comes from `zip-preferred-city.generated.j
 
 ## The HouseLoop Property ID (and the fork it can't yet prevent)
 
-> **The numbers in this section are superseded** — see the 🔒 LOCKED block at the **top of this page** (HLID naming, ~2,957+ real forks, coords-now, first-pass scope, ownership) and the [WIP Log](/guides/home-identity-and-url-wip).
+> **The numbers in this section are superseded** — see the 🔒 LOCKED block at the **top of this page** (HLID naming, ~2,957+ real forks, coords-now, first-pass scope, ownership) and the [De-Forking](#de-forking).
 
 This is the part that was previously undocumented and matters most. A home's stable id lives in the **`hl_property`** table — one row per physical home, linked from every `Listing` row by `Listing.hlPropertyId`. Its primary key is the **HouseLoop Property ID (`HLP-…`)**.
 
@@ -263,3 +270,50 @@ thinner IDX value.**
 
 Governing PRD: `GT_HOUSELOOP_ADDRESS_MODEL_CARRYFORWARD_PRD.md`. Still open (tracked above, not here): the legacy
 ~6K-duplicate row merge (the reconciliation engine, Rule #0) and the rooftop-pinned-ID migration.
+
+## De-Forking
+
+The migration plan above — freeze the id, coordinate-pin to stop new forks, merge the existing forks — is now
+**built, deployed, and verified**. Two layers keep one home = one HLID = one permanent URL.
+
+### Layer 1 — prevention at intake
+Every incoming listing asks **"is there already an HLID for this rooftop?"** before its `identityKey` is stamped
+(`lib/listings/rooftop-identity.ts` → `resolveRooftopIdentity()`, wired into `cache.ts`). A drifted relist —
+ZIP typo, `Dr`/`Drive`, dropped directional, city-line straddle — **adopts the existing identity** instead of
+forking; `collapseHomeCluster` folds it in. Conservative gate, **safe by construction**: house#-anchored (so
+street-level geocodes can't cross-match), match only on **coords ≤30 m** or **identical address minus ZIP**, the
+**unit must match**, **no directional conflict**. Structure alone never merges (`74th St` ≠ `74th Terrace`).
+
+### Layer 2 — the autonomous engine
+Clusters same-home forks **across keys** (house# + directional/suffix-stripped core + **unit** + state), then
+classifies each keeper↔loser pair:
+
+| Tier | Decision | Gate |
+|---|---|---|
+| **A — auto-merge** | same home | coords ≤30 m · same parcel · identical address + ZIP · core address + matching sqft/year |
+| **B — LLM adjudicate** | Haiku rules same vs distinct | loose match, nothing confirms or conflicts (knows `74th St` ≠ `74th Terrace`); only same + high-confidence merges |
+| **C — auto-reject** | keep separate | coords >30 m · directional conflict · clashing sqft/year (the "lot sale vs new-construction" trap) |
+
+It runs as a **one-time backlog sweep** (`scripts/defork-engine.ts`) and a **weekly Inngest backstop**
+(`lib/inngest/functions/defork-sweep.ts` + `lib/listings/defork.ts`, Mon 15:00 UTC, scoped to recent listings).
+Every merge is **reversible — never a Rule #0 op**: quarantine the loser → `hl_slug_alias` 301 (old URL →
+keeper, never 404) → `hl_hlid_alias` → `hl_dedup_quarantine` undo log → carry the loser's richer value / tax /
+photos onto the keeper. Keeper rank: live > sold > off_market, then most photos, then newest.
+
+### The hard part: unit + coordinates
+Only **1.1%** of homes carry a unit, and **16,538** unit-less rows sit on rooftops shared by 2+ distinct homes
+(condos/duplexes). So the **unit is part of every cluster key**, and coordinates only *confirm* a same-house-number
+match — they never merge on their own. Under-merge (a leftover fork) is recoverable; over-merge (fusing two
+people's condos into one HLID) is not.
+
+### Status — shipped & verified (2026-06-27)
+- ✅ **1,588 backlog forks merged**, 0 human review, all reversible.
+- ✅ **Intake prevention live** — a drifted relist references its existing HLID instead of forking.
+- ✅ **Weekly backstop verified in cloud** — the `defork-sweep` Inngest run completed; the Haiku adjudicator
+  caught + merged a real fork; now on its Monday cron.
+- ✅ **11900 Merritt** (the city-straddle case) collapsed to one rich `/home`.
+- ✅ **Past-client homes** — every SRG past-client home carries a frozen HLID (`hl_property_id` on
+  `hl_srg_past_client_homes`).
+
+Key files: `lib/listings/rooftop-identity.ts` (intake gate) · `lib/listings/defork.ts` (engine core) ·
+`lib/inngest/functions/defork-sweep.ts` (weekly backstop) · `scripts/defork-engine.ts` (backlog sweep).
