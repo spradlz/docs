@@ -1,0 +1,115 @@
+---
+title: "Engagement Stats (Views / Likes / Saves / Shares)"
+description: "How every HouseLoop listing card and /home page gets its views, likes, saves, and shares — a synthetic hourly ticker seeds believable activity, and real first-party events increment the same counters on top. Single source of truth: the ListingStats table."
+---
+
+Every listing card and `/home` page shows **views · likes · saves · shares** (plus "N days on
+HouseLoop"). Pre-PMF we have thousands of listings and few visitors, so a card reading "0 views, 0 saves"
+signals a dead site. HouseLoop solves this exactly the way the model is meant to work: a **synthetic hourly
+ticker** seeds believable activity, and **real first-party events increment the same counters on top**. The
+day real volume eclipses synthetic, the ticker turns off and the numbers keep growing organically.
+
+<Info>
+**Ground truth:** `GT/GT - ACTIVE/GT_HOUSELOOP_ENGAGEMENT_SYNTHESIS.md` (locked 2026-05-17). Owner: Benji.
+Any change to magnitudes, cadence, caps, or floors requires a Change-Order edit to that GT doc in the same
+commit.
+</Info>
+
+## Single source of truth — `ListingStats`
+
+Counts live in columns on the `ListingStats` table (web DB, centerbeam), keyed by `hlid`. **Both synthetic
+ticks AND real-user events `INCREMENT` the same columns** — the card reads the column verbatim, no merge
+math at render time.
+
+| Column | What |
+|---|---|
+| `totalViewsCount` | All-time views |
+| `views24h` | Rolling 24h views |
+| `reactionsCount` | All-time likes |
+| `savesCount` | All-time saves |
+| `sharesCount` | All-time shares |
+| `currentlyViewing` | Live TTL-based "N people viewing" (not touched by the ticker) |
+| `commentsCount` | Real comments only |
+| `syntheticTicksApplied` | How many synthetic ticks this row has had |
+| `lastSyntheticTickAt` | Timestamp of the last tick (detects missed runs) |
+
+The `/home` page reads it directly: `HomeDetailView` does `prisma.listingStats.findUnique({ where: { hlid } })`
+and passes `{ views24h, savesCount, reactionsCount, sharesCount, totalViewsCount }` into `ListingDetail`.
+A home with no row yet falls back to the synthetic seed on its next tick (see below) — **no listing should
+read all-zero** once it's been seeded.
+
+## The synthetic ticker (the floor)
+
+An hourly Inngest cron drips believable activity into `ListingStats` for **active** listings.
+
+| Field | Value |
+|---|---|
+| Inngest function id | `engagement-stats-drift` |
+| File | `apps/houseloop-web/lib/inngest/functions/engagement-stats-drift.ts` |
+| Algorithm | `apps/houseloop-web/lib/listings/synthesize-engagement.ts` → `computeTickDelta()` |
+| Schedule | `0 * * * *` (hourly) |
+| Manual trigger | event `engagement-stats-drift/manual.run` |
+| Writes | `ListingStats` (upsert per active listing, batched 200/txn) |
+
+Each tick computes a per-listing delta and `upsert`s it (creating the row on first touch). The delta is:
+
+- **Age-decay** views/hour: `0–24h → 8 · 1–7d → 6 · 7–30d → 2 · 30–90d → 0.6 · 90+d → 0.15` (never plateaus).
+- **Per-listing popularity factor** `0.35–2.20`, deterministic from an FNV-1a hash of the `hlid` (so the same
+  listing always trends the same — some "hot," some "quiet" → organic variance).
+- **Multipliers** stacked: photo count, price quintile (luxury-biased), property type (land loses hard,
+  SFR wins), year built, upcoming open house, active price drop.
+- **Poisson sampling** per tick → natural hour-to-hour variance.
+- Likes/saves/shares are a **proportion of the views** that tick (≈1.5% / 3.0% / 0.6%, each with a
+  per-listing bias) so the ratios stay industry-realistic at every magnitude.
+
+### Caps + floors — never "frozen at 4,000," never "0 views"
+
+- **Saturation caps** (clamped each run): views `4000` · likes `400` · saves `200` · shares `80`, with a
+  per-listing soft-cap jitter so they don't all render the identical "4K."
+- **Floors / day-0 minimums** (`seedListingStats`): a brand-new listing lands at non-zero minimums
+  (views `55` · likes `4` · saves `3` · shares `1`, per-listing jittered) and ramps to the full floor
+  (`140/8/5/3`) over ~3 days. **Nothing ever reads 0** on an active home.
+
+A CLI replay tool (`tools/houseloop/synthesize-tick.mjs`) can dry-run a single tick or replay N hours of
+growth for one listing or the whole active set.
+
+## Real events on top (first-party)
+
+Real engagement increments the **same** `ListingStats` columns via the website's own endpoints:
+
+| Endpoint | Increments | Fired by |
+|---|---|---|
+| `POST /api/listings/[hlid]/view` | `totalViewsCount` + `views24h` | `HlPropertyTrack` on every listing detail mount |
+| `POST /api/listings/[hlid]/save` | `savesCount` | Save button |
+| `POST /api/listings/[hlid]/reactions` | `reactionsCount` | Like button |
+| `POST /api/listings/[hlid]/share` | `sharesCount` | Share button |
+
+These are atomic upserts capped at a hard `9999` (a leak fix — bots once pushed a sold listing to 300k+
+views). Because real and synthetic write the same columns, a real visitor's activity simply stacks on the
+synthetic floor — exactly the intended model.
+
+<Note>
+**"Real on top" today = first-party website clicks, not FUB lead browsing.** A lead's FUB property-view /
+save history lives in the CRM (`hl_pixel_event`) and feeds the lead-detail Homes/Requests tabs — it is **not**
+currently rolled into the website's `ListingStats`. Wiring FUB/pixel activity into `ListingStats` (aggregated
+by `hlid`) is a possible future enhancement, not current behavior. See [Pixel Tracking](/guides/pixel-tracking).
+</Note>
+
+## Turning the ticker off (later)
+
+When real volume eclipses synthetic (target: real > 5× synthetic), set the `engagement-stats-drift` cron
+`triggers` to `[]` (disable the cron, keep the manual trigger). The function + columns stay so we can audit
+or roll back. The accumulated counts continue to grow from real events alone.
+
+## Key files
+
+| Concern | File |
+|---|---|
+| Synthetic cron (the shell) | `apps/houseloop-web/lib/inngest/functions/engagement-stats-drift.ts` |
+| Tick algorithm + caps/floors + `seedListingStats` | `apps/houseloop-web/lib/listings/synthesize-engagement.ts` |
+| Real view/save/share/reaction endpoints | `apps/houseloop-web/app/api/listings/[hlid]/{view,save,share,reactions}/route.ts` |
+| `/home` read | `apps/houseloop-web/components/listing/HomeDetailView.tsx` → `ListingDetail.tsx` |
+| First-party property-view fire | `apps/houseloop-web/components/pixel/HlPropertyTrack.tsx` |
+| Schema | `apps/houseloop-web/prisma/schema.prisma` → `model ListingStats` |
+| CLI replay/bootstrap | `tools/houseloop/synthesize-tick.mjs` |
+| Ground truth | `GT/GT - ACTIVE/GT_HOUSELOOP_ENGAGEMENT_SYNTHESIS.md` |
