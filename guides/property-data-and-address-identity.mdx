@@ -6,7 +6,17 @@ description: "How HouseLoop keys homes by address — the ONE address-keyed tabl
 HouseLoop keys every home by its **address** — not by the MLS number, not by a per-source id. This page documents the property data model, how addresses are normalized into a stable identifier, **what our home id actually is** (and where it breaks), how the resolver matches an incoming listing to the one home we already own, and **the one engine we use to reconcile any address to that home**.
 
 <Note>
-**Current status (be precise).** The address resolver runs on the live ingest path, so it prevents **new** duplicates going forward. The historical data still contains pre-existing duplicate rows (the same physical home stored more than once from before the resolver existed); a careful, verified, **reversible** collapse of those is **in progress**. So "one home = one row" is the model the resolver enforces forward, and the engine below is bringing the existing rows to that state.
+**Current status (be precise — corrected 2026-06-27).** "One home = one row" is the *target* model, **not** today's reality. The home id is still `md5(address)`, so the resolver does **not** reliably prevent forks: a home forks whenever any source spells its address differently (ZIP **or** directional **or** suffix drift). Live proof: **`928 NE 87th Terrace, 64155` is split into TWO ids/slugs/pages right now** — `928-ne-87th-terrace` ($215k) and `928-87th-terrace` (a dropped "NE", same ZIP) — and the coordinate rung did **not** collapse them. A naive coordinate scan flags **thousands** of forked rooftops (inflated by unit-less multi-unit buildings; the true figure needs unit-aware dedup). The permanent fix — minting a frozen **HLID** once per rooftop — is locked but **not yet built**. See the locked correction below.
+</Note>
+
+<Note>
+**🔒 LOCKED 2026-06-27 (Zach) — "the rooftop is the identity," and the ID is named HLID.** SSOT: `GT_HOUSELOOP_HOME_IDENTITY_SSOT.md`. The four locked calls:
+1. **The home id is `HLID`** (one per physical house, opaque, minted once, frozen forever — our `zpid`). `HLP-` was only the internal `hl_property` column string and is being renamed to `HLID`. Address/ZIP/MLS#/status are mutable attributes; the HLID never moves.
+2. **Identity is pinned to the rooftop by coordinates now** (lat/lng ~25 m + unit; parcel # later) — never re-derived from the address.
+3. **One HLID → one slug → one permanent `/home` URL.** Many listings (every MLS cycle) hang under the one HLID.
+4. **First pass (in progress):** mint a frozen HLID for every **live** home — coming soon (751) + active (11,027) + under contract (4,992) = **~16,770** — plus the ~2,258 SRG past-client sold homes (the seed). The ~337k sold base is a later coordinate-merge pass.
+
+**The two claims in this page that say "~75 ZIP-drift forks" and "rung 2 (lat/lng) already collapses drift" are WRONG/understated** — 928 (above) is the counter-example. They are left inline for history but are superseded by this block.
 </Note>
 
 <Warning>
