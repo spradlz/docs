@@ -8,47 +8,73 @@ description: "The running work-in-progress log of building FUB → first-class H
 Owner: Lee. Full detail: the [Data & Signals Matrix](/fub/data-matrix).
 </Info>
 
-## Status (last updated 2026-06-26 PM)
+## Status (last updated 2026-06-26 PM, late)
 
-**Phase: BUILDING — converter foundation proven; scraper blocker BEATEN.**
+**Phase: BUILDING — full backfill pipeline shipped; verifying the first lead end-to-end.**
+
+When a request (tour / inquiry) pulls a FUB lead into HouseLoop, the import function now **backfills the
+lead's entire FUB behavioral history** into first-class `hl_lead_activity` events in the same pass — minted
+once, idempotently, through the real Inngest pipeline.
 
 | Layer | State |
 |---|---|
 | `classifyFubEvent` — the one classifier | ✅ proven (James, Juan) |
-| `convertFubSignal` — events/notes/home-activity/searches/tags → events | ✅ proven (dry-run) |
+| `convertFubSignal` — home-activity / notes / searches / tags → events | ✅ proven (dry-run, 349 events for James) |
 | `BEHAVIOR_BADGES` catalog rows | ✅ |
-| **Scraper fix — complete home activity via API intercept (242 → 506)** | ✅ deployed + LIVE |
-| Enqueue-full-scrape-when-a-lead-arrives | ✅ already wired |
-| Batch the home-activity save (one INSERT) | 🟡 next |
-| **P5 — backfill: mint first-class `hl_lead_activity` events** | ⬜ |
-| Forward webhook converters · pre-seed triggers · hero card | ⬜ |
+| **Scraper fix — complete home activity via API intercept (242 → 534)** | ✅ deployed + LIVE |
+| Enqueue-full-scrape-when-a-lead-arrives | ✅ wired |
+| **Batched home-activity save (one INSERT, not 500 one-by-one)** | ✅ shipped — 418 rows land in one instant pass |
+| **`photo` column on `fub.zillow_home_activity`** | ✅ shipped — 272 homes carry their photo |
+| **P5 — backfill minted into the Inngest `fub-lead-import` step** | ✅ deployed (idempotent `backfill-behavior` step) |
+| **Backfill = behavior-only (requests owned by the import's inquiry spine)** | ✅ deployed — kills double-logged tours |
+| **Verify on the lead detail (James, the first real lead)** | 🟡 in progress — dispatching through the live pipeline |
+| Forward webhook converters (gated to existing leads) | ⬜ next |
+| Pre-seed trigger tokens → "Coming Soon" stubs | ⬜ |
+| Behavior HERO card (generalize `RequestCard` + the captured photo) | ⬜ |
 | Real workflows on behavior events | ⬜ later |
 
 ## What we're building
 
 Every FUB signal (tour, contact, saved search, view/save/share, Zillow intent tags, insight notes) becomes a
-first-class `hl_lead_activity` event. **Requests create the lead; behavior events backfill it completely on
-pull-in + stay updated forward.** Behavior-Based Follow-Up, not "hot." We document Zillow's playbooks; we don't
-replicate them.
+first-class `hl_lead_activity` event. **A request creates the lead; the backfill completes its entire behavioral
+history on pull-in, and forward webhooks keep it current.** Behavior-Based Follow-Up, not "hot." We document
+Zillow's playbooks; we don't replicate them.
+
+## The two-writer split (why there are no double tours)
+
+The import function owns the **request spine** — the inquiry that created the lead is logged once, keyed
+`fub_request` / `fubreq|<event-id>`. The **backfill owns behavior only**: views/saves
+(`fub.zillow_home_activity`), Zillow-Insight notes, saved searches, and signal tags. The backfill deliberately
+does **not** re-mint request events — doing so logged each tour twice under a second source key. One concept,
+one writer, one source key. (`logActivity` dedupes on `(source_table, source_id)`, so each writer's re-runs add
+zero rows.)
 
 ## Build checklist
 
 1. ✅ `classifyFubEvent` — one classifier
 2. ✅ `convertFubSignal` + `BEHAVIOR_BADGES` catalog
-3. ✅ **Scraper fix** — intercept FUB's `/api/v1/events?hasProperty=true` (defeats the virtualized DOM); 242 → 506 on James (386 viewed · 35 saved · 70 shared). Deployed + live for all leads.
-4. 🟡 Batch `saveZillowHomeActivity` (507 one-by-one inserts/lead is slow now we get 5× more rows)
-5. ⬜ P5 — per-lead backfill → mint first-class events → verify on the lead detail
-6. ⬜ Forward webhook converters (gated to existing leads)
-7. ⬜ Pre-seed trigger tokens → "Coming Soon" stubs
-8. ⬜ Behavior HERO card (generalize `RequestCard`; add the photo we now capture)
-9. ⬜ `photo` column on `fub.zillow_home_activity`
+3. ✅ **Scraper fix** — intercept FUB's `/api/v1/events?hasProperty=true` (defeats the virtualized DOM); 242 → 534 on James. Deployed + live for all leads.
+4. ✅ **Batched `saveZillowHomeActivity`** — one multi-row INSERT; 418 rows land instantly instead of 500 one-by-one
+5. ✅ **`photo` column** on `fub.zillow_home_activity` (non-destructive ADD COLUMN); scraper persists `images[0].uri`
+6. ✅ **P5 backfill** wired into the Inngest `fub-lead-import` function as an idempotent `backfill-behavior` step
+7. ✅ **Backfill = behavior-only** — requests stay with the import's inquiry spine; no double-logged tours
+8. 🟡 **Verify on James** — dispatch `fub/lead.import` through the live pipeline → confirm ~349 behavior events land clean on the lead detail
+9. ⬜ Forward webhook converters (gated to existing leads)
+10. ⬜ Pre-seed trigger tokens → "Coming Soon" stubs
+11. ⬜ Behavior HERO card (generalize `RequestCard`; add the captured photo)
 
 ## Changelog
+
+### 2026-06-26 (PM, late) — the full backfill pipeline
+- **Batched the home-activity save** — 500 one-by-one inserts/lead → a single multi-row INSERT. James lands 418 rows in one instant pass (no more per-row stall).
+- **Added the `photo` column** to `fub.zillow_home_activity` and wired `images[0].uri` through the scraper → 272 of James's homes carry their photo, so the hero cards are right the first time.
+- **Minted P5 into the Inngest import** — `backfillFubBehavior(fubPersonId, leadId)` runs as an idempotent `backfill-behavior` step inside `fub-lead-import`. On pull-in, the lead's complete FUB behavior history becomes first-class events through the real pipeline (Run Log visible). Dry-run on James: **349 events** (274 views, 41 saves, 15 area-interest, 8 repeat-views, 5 saved-searches, 2 tours, inquiry, rental, behavior tags).
+- **Split the writers** — pulled `convertEvent` out of the backfill so request events (tour/inquiry/contact) are owned solely by the import's inquiry spine. The backfill now mints behavior only; this kills the double-logged tour cards.
 
 ### 2026-06-26 (PM, late) — scraper fix (the hard blocker)
 FUB's Home Activity modal is virtualized (~30 cards in the DOM) → old scrape capped at 242. Rewrote
 `scrapeZillowHomeActivity` to intercept FUB's own `/api/v1/events?hasProperty=true` while scrolling → build
-from JSON, not the DOM. **James 242 → 506** (richer data + the home photo + a new "shared" signal). Deployed via
+from JSON, not the DOM. **James 242 → 534** (richer data + the home photo + a new "shared" signal). Deployed via
 `deploy.sh`; workers reloaded; verified live. Checkpoint: `.claude/checkpoints/fub-behavior-events-scraper-wip-2026-06-26.md`.
 
 ### 2026-06-26 (PM) — converter foundation
