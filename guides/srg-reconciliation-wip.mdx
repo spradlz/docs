@@ -5,11 +5,42 @@ description: "The running work-in-progress log of building the SRG past-client r
 
 <Info>
 **Living document — THIS Mintlify page is the working WIP. We work off of THIS.**
-**Last updated:** 2026-06-27 12:12 PM EDT (Caleb).
+**Last updated:** 2026-06-27 PM EDT (Caleb).
 **Working out of:** `GT/GT - ACTIVE/GT_HOUSELOOP_PASTCLIENT_SSOT_PRD.md` — the ONE governing file (internal).
 Settled architecture: [SRG Past-Client Reconciliation](/guides/past-client-data-pipeline). Lesson: `.claude/lessons/pastclient-ssot-drift.md`.
-**Current step:** Step 1 IN PROGRESS — `extract-to-child.mjs` writes the resolved truth into the CHILD `hl_srg_past_client_homes` (agent via SISU→FUB-TeamExit waterfall, deduped 1 row/house, disposition guard: if WE sold it, never a lost listing). Proving clients 1–5 perfect before the book sweep. The Audit Report API now reads from parent + child.
+**Current step:** DATA HYGIENE — the prior resolver output was found CONTAMINATED and has been QUARANTINED out of the canonical tables (see the Resolver Quarantine section below). Next: rebuild the children field-by-field from clean sources (match-only, no add/no delete), provenance-stamped. Lee owns the parallel HLID home-identity mint.
 </Info>
+
+## 🧹 RESOLVER QUARANTINE — the contaminated blob is OUT of the canonical tables (Zach LOCKED 2026-06-27 PM)
+
+<Warning>
+**The prior resolver output is CONTAMINATED and was MOVED OUT of the parent into a quarantine table.** The old
+resolver wrote `hl_srg_past_clients.resolver_block` (jsonb) + `resolution_status`. That data carries **placeholder
+agents** ("SRG", "Past Agent Referrals" — the exact thing the agent law forbids), and its internal `resolved_at` is
+**unreliable**: it claims 2026-06-27 for 1,453 rows while the row's `updated_at` proves it was actually last written
+**Jun 11–20** — i.e. it predates the agent-source law and is stale, not "today's clean work."
+</Warning>
+
+**Where it lives now:** **`hl_srg_resolver_quarantine`** (CRM DB, autorack). Columns: `past_client_id` (PK) ·
+`resolver_block` · `resolution_status` · `quarantined_at` · `reason`. **1,508 rows (1,493 blocks) moved in,
+verified count-exact, nothing deleted, fully reversible.** Created Phase 1, 2026-06-27 PM.
+
+**The rule (LOCKED):**
+1. **Canonical tables stay clean as fuck.** `hl_srg_past_clients` (parent) + `hl_srg_past_client_homes` (child)
+   hold ONLY source-verified, provenance-stamped truth — never a derived/guessed blob.
+2. **`hl_srg_resolver_quarantine` is NOT a source of truth.** Never render from it, never project it into the
+   canonical tables.
+3. **Use it ONLY for post-resolve research** — when the clean source resolver genuinely **can't match** a deal, you
+   MAY consult the quarantine blob as a *research hint*. It's a lead, never an answer; re-verify against the canonical
+   source before anything touches a canonical row.
+
+**Still open (gated):** Phase 2 — `DROP COLUMN resolver_block, resolution_status` off `hl_srg_past_clients`.
+Requires (a) repoint `audit/route.ts` off the blob (it still reads contacts/summary from it), then (b) **Rule #0
+typed Zach approval naming the table.** Note: `.claude/checkpoints/resolver-quarantine-2026-06-27.md`.
+
+**The no-add/no-delete/match-only law (Zach LOCKED 2026-06-27):** we do NOT add houses, we do NOT delete houses — we
+MATCH houses. Every children operation is MATCH → UPDATE an existing row. Anything found in dotloop/MLS/Zillow must
+match a house already on the canonical children list; external sources resolve/enrich, never grow the set.
 
 ## 🛑 THE LAW (locked 2026-06-27 10:57 AM EDT — read this first, it overrides everything below)
 
