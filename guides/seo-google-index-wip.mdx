@@ -25,11 +25,11 @@ Diagnostic: `node tools/seo/gsc-report.mjs` (reads GSC's own sitemaps / URL-insp
 | Diagnose via GSC API (`gsc-report.mjs`) — confirmed 0 sitemaps registered, 0 property pages crawled | ✅ done (Lee) |
 | **Submit script** `tools/seo/gsc-submit-sitemap.mjs` (SA write-token mint → PUT sitemap-index) | ✅ built + tested |
 | Add SA `houseloop-master@…` as a GSC **Owner** | ✅ done (Zach/Lee) |
-| **Submit the sitemap → HTTP 204** (sitemap registered + downloaded by Google) | ✅ **DONE 2026-06-27** |
-| Weekly Inngest monitor `seoIndexMonitor` (re-submit + coverage → Run Log + Telegram Zach) | ✅ built + registered + build green + pushed |
-| Verify-run the monitor through Inngest (post Railway deploy) | ⏳ next (after deploy) |
+| **Submit the sitemap → HTTP 204** (registered + downloaded by Google) | ✅ **DONE 2026-06-27** |
+| Weekly Inngest monitor `seoIndexMonitor` (re-submit + coverage → Run Log + Telegram Zach) | ✅ built + registered + deployed |
+| **Verify-run through Inngest** (real run in the Run Log) | ✅ **DONE** — run_id `01KW517NWQS4ATAE9G0G8MVDVZ`, success |
 | Absolute canonicals (`metadataBase`) | ✅ shipped (Lee) |
-| Watch a property page flip unknown → crawled → indexed | ⏳ the climb (days→weeks) |
+| Watch a property page flip unknown → crawled → indexed | ⏳ the climb (days→weeks, the monitor's job) |
 
 ## What's live
 
@@ -40,18 +40,22 @@ Mints an SA access token (the SA acts **as itself** — JWT `iss`=SA email, **no
 registered, `lastDownloaded=2026-06-27`, 0 warnings / 0 errors, Google processing. `--status` reads without
 submitting. (Earlier 403 → fixed by adding the SA as a GSC Owner.)
 
-### 2. Weekly monitor — `lib/inngest/functions/seo-index-monitor.ts` (✅ built, ⏳ verify-run)
+### 2. Weekly monitor — `lib/inngest/functions/seo-index-monitor.ts` (✅ DONE + verify-run)
 Registered Inngest fn `seo-index-monitor` (cron `0 14 * * 1` = Mon 14:00 UTC ≈ 8am CT, + manual event
 `seo-index-monitor/manual.run`). Each run: re-submits the sitemap, pulls GSC's index data (sitemap child
 counts + a sample live `/home` page's crawl/index verdict + 28-day traffic), and Telegram-pings Zach the
 climb. Auto-captured in the CRM Run Log (capture-fn subscribes to `function.finished`). Auth via the new
-`mintSAAccessToken()` in `lib/google/dwd.ts`. **After the Railway deploy:** `curl -X PUT
-https://houseloop.ai/api/inngest` to re-sync, then Invoke `seo-index-monitor/manual.run` to verify the first run.
+`mintSAAccessToken()` in `lib/google/dwd.ts`.
+
+**Verified 2026-06-27** — dispatched `seo-index-monitor/manual.run` → ran in Inngest cloud, run_id
+`01KW517NWQS4ATAE9G0G8MVDVZ`, **status=success**, in the Run Log. Payload: `submit ok 204`, sitemap errors 0,
+sample page baseline `coverage="URL is unknown to Google" · lastCrawl=NEVER` (the expected pre-crawl
+baseline), traffic 31 clicks / 2,259 impressions.
 
 ## Done looks like
-Sitemap **Submitted + processed** in GSC with child counts ✅ · `gsc-report.mjs` shows a property page flip
-**unknown → crawled** (then **indexed** over the following weeks) ⏳ · the weekly Inngest run appears in the
-Run Log + pings Zach ⏳ (verify-run pending deploy) · this WIP log tracks the climb.
+Sitemap **Submitted + processed** in GSC with child counts ✅ · the weekly Inngest run in the Run Log + pings
+Zach ✅ · `gsc-report.mjs` shows a property page flip **unknown → crawled → indexed** ⏳ (the climb the
+monitor tracks) · this WIP log tracks it.
 
 ## Out of scope
 Rebuilding the sitemap (healthy: 11 children, ~234k URLs) · buying authority/backlinks · the canonical/fork/
@@ -59,11 +63,11 @@ identity prerequisites (Lee's `GT_HOUSELOOP_HOME_IDENTITY_PRD.md`).
 
 ## Changelog
 
-- **2026-06-27 (PM)** — **Sitemap SUBMITTED (204).** SA added as GSC Owner; `gsc-submit-sitemap.mjs` returned
-  204 — sitemap-index.xml registered + downloaded by Google same day. Built + registered the weekly
-  `seoIndexMonitor` Inngest fn (re-submit + coverage report → Run Log + Telegram Zach) via a new
-  `mintSAAccessToken()` (SA-as-itself) in `dwd.ts`; build green; pushed houseloop-app. Verify-run pending the
-  Railway deploy.
+- **2026-06-27 (PM)** — **Pipeline complete + verified.** Sitemap submitted (204, downloaded by Google).
+  Built + registered the weekly `seoIndexMonitor` Inngest fn (re-submit + coverage → Run Log + Telegram) via
+  a new `mintSAAccessToken()` (SA-as-itself) in `dwd.ts`; deployed; **verify-ran in Inngest cloud (run_id
+  01KW517NWQS4ATAE9G0G8MVDVZ, success)** — re-submit 204, baseline captured. Weekly cron now tracks the
+  crawl→index climb. WIP + engagement-stats docs shipped.
 - **2026-06-27 (AM)** — Root finding confirmed via GSC API (0 sitemaps registered, every property page
   "unknown to Google"). Built + tested `gsc-submit-sitemap.mjs` (403 → SA needed owner access). Handoff from
   Lee (#10941); PRD `GT_HOUSELOOP_SEO_INDEXING_PRD.md`.
