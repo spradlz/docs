@@ -6,16 +6,17 @@ description: "The running work-in-progress log of building TC Loop — HouseLoop
 <Info>
 **Living document.** This is the build log for [TC Loop](/guides/transaction-coordination) — updated as work
 happens. It's the single place to see what's decided, what's built, what's staged, and what's next. Owner: Adam.
-Canonical spec: `GT_HOUSELOOP_TRANSACTION_COORDINATION_PRD.md` §12–§14.
+Canonical spec: `GT_HOUSELOOP_TRANSACTION_COORDINATION_PRD.md` §12–§14. UI spec:
+`.claude/checkpoints/tc-loop-detail-3lane-2026-06-27.md`.
 </Info>
 
 ## Status (last updated 2026-06-27)
 
-**Phase 1 — Configure template builders: DONE.** The A-Frame engine is reverse-engineered and rebuilt as
-editable, API-first Configure builders.
-**Phase 2 — Build our own dotloop (owned end-to-end): STARTING (G1).** We are NOT mirroring dotloop or handing
-it our documents — we own the whole stack: documents, forms, fill, **self-hosted Documenso e-signature**, the
-compliance archive, and a direct **SkySlope/eXp** push. dotloop drops out of the critical path.
+**Phase 1 — Configure template builders: DONE.** A-Frame engine reverse-engineered + rebuilt as editable,
+API-first Configure builders.
+**Phase 2 — Build our own dotloop (owned end-to-end): BUILDING (G1 = the TC loop page).** We own the whole
+stack: documents, forms, fill, **self-hosted Documenso e-signature**, the compliance archive, and a direct
+**SkySlope/eXp** push. dotloop drops out of the critical path.
 
 ### Phase 1 — engine + Configure (✅ done)
 | Layer | State |
@@ -23,7 +24,7 @@ compliance archive, and a direct **SkySlope/eXp** push. dotloop drops out of the
 | Reverse-engineering (A-Frame + dotloop) | ✅ complete |
 | Status + milestone + task model | ✅ **locked** (PRD §12 + §13), A-Frame parity (§13.6) |
 | Foundation data model (migrations 0253–0262) | ✅ applied |
-| Loop engine + API | ✅ createLoop · completeMilestone (forward-only) · GET loop |
+| Loop engine + API | ✅ createLoop (instantiates milestones + tasks) · completeMilestone · GET loop bundle |
 | **Configure → Stages / Milestones / Tasks** | ✅ built, editable, reuse CRM components |
 | Dynamic-date engine (`lib/tc/date-engine.ts`) | ✅ pure `computeDue`, 13/13 tests |
 | Platform re-brand switch (`{{platform.tc}}`) | ✅ one setting flips A-Frame → TC Loop |
@@ -31,12 +32,43 @@ compliance archive, and a direct **SkySlope/eXp** push. dotloop drops out of the
 ### Phase 2 — our own dotloop (the build gates, PRD §14)
 | Gate | What | State |
 |---|---|---|
-| **G1** | Loop-detail page, **dotloop-styled**, on real data (Documents · People · Tasks) + instantiate folders/tasks at `createLoop` | 🟡 next |
+| **G1** | The **TC loop page** = TC view of the lead-detail: 3-lane page in the `(tc)` shell + the `Agent ⇄ TC` surface toggle | 🟡 building |
 | **G2** | Forms + fill — our PDF templates + data-fill (skeleton built) → filled PDF into a folder | ⬜ |
 | **G3** | E-sign — **Documenso self-host**: place fields → send → store sealed signed PDF + audit cert | ⬜ |
 | **G4** | Runtime cascade — `computeLoopSchedule` fills dates from the 4 key dates; recompute on change | ⬜ (mig 0262 ready) |
 | **G5** | **SkySlope / eXp** integration — push signed docs for brokerage compliance | ⬜ |
 | **G6** | Myli-TC — autonomous fill → sign → file via the same endpoints | ⬜ |
+
+## ⭐ TC Loop UI — the Agent⇄TC surface switch + 3-lane page (LOCKED 2026-06-27)
+
+The TC loop detail **is the TC view of the lead-detail page** — same 3-lane shell, re-pointed at a loop.
+
+**The `Agent | TC` toggle is a SURFACE SWITCH, not an in-place panel swap.** Flipping it changes the whole app
+shell — the entire left menu + context switch — by NAVIGATING between two route groups, carrying the person/loop:
+- **Agent mode** = `/leads/[id]` → `(crm)` layout + CRM sidebar (Leads, Workflows…).
+- **TC mode** = `/tc/transactions/[loopId]` → `(tc)` layout + **TcSidebar** (Loops, Forms, Configure…).
+- The whole-menu switch is free (separate Next route groups). **TC view = the FULL `/tc` surface** — no lite
+  view, nothing to get stuck in.
+- **Permission: TC + Admin ONLY** get the toggle; agents never see it → no hijacking the TC's work.
+  *(Parked for later: an agent read-only PEEK that stays in the CRM and can view-but-not-edit.)*
+- Toggle component: `components/leads/detail/AgentTcToggle.tsx` (being repurposed into the surface router).
+- Lead has no loop yet → the TC pill triggers **Create Loop**, then routes to the new loop.
+
+**The TC loop page = 3 lanes** (mirrors the lead-detail; reuse the shared components, never hand-roll):
+- **LEFT `TcLoopLane`** — loop profile: address · parties (buyer/seller/agents) · key dates · assigned TC.
+- **MIDDLE `TcCenterLane`** — ① **stage stepper** on top (TC pipeline, side-aware) ② **bottom tab strip**.
+- **RIGHT** — reuse **`MyliLane`** (the AI lane → Myli-TC).
+
+**6 KPI cards (this deal, never system totals):** Last Contact · Stage · Under Contract (days) · Days to Close ·
+Docs Signed (X/Y) · Awaiting Signature. (Same `StatStrip`/`StatCard` 6-grid as the lead view.)
+
+**9 bottom tabs (mirror the lead view, swap 2):** **All · Texts · Calls · Emails · Notes · Tasks · Appointments
+· Documents · People.** (Website→**Documents**, Deals→**People**; Notes kept — TC needs per-client/doc notes.)
+Comms tabs (Texts/Calls/Emails/Appointments) **reuse the existing streams** by `leadId`; Tasks/Documents/People
+render on the canonical **`HlDataTable`**; group headers use the shared **`SectionBand`**.
+
+> The earlier single-scroll `components/tc/LoopDetail.tsx` was **rejected** (hand-rolled tables, not the
+> canonical components) — it's being replaced by this 3-lane page.
 
 ## ⭐ Build our own dotloop — owned end-to-end (LOCKED 2026-06-27)
 
@@ -60,7 +92,7 @@ the critical path; at most it's a **legacy importer** (read historical SRG loops
 | Compliance archive | signed PDF + completion certificate, immutable, retained | our storage (R2) — to build |
 | Broker integration | push signed docs to **SkySlope (eXp)** | to build |
 | People / Tasks | participants + the A-Frame dated checklist | `hl_tc_loop_participant` ✅ · `hl_tc_loop_task` (mig 0262) ✅ |
-| The UI | loop-detail page **looks like dotloop**, powered by our engine | ref: `.claude/reports/aframe-recon/DOTLOOP_LOOP_LAYOUT.md` — to build |
+| The UI | the TC loop page (3-lane, looks like the lead-detail) | spec above + `.claude/reports/aframe-recon/DOTLOOP_LOOP_LAYOUT.md` |
 
 ### E-signature = Documenso (self-hosted) + the compliance bar
 US e-signatures are governed by the **ESIGN Act (federal) + UETA** (both adopted by **Kansas and Missouri**). An
@@ -82,13 +114,6 @@ pay **$0 per signature**. (Chosen over SignWell for ownership + no per-sig cost 
 
 **dotloop's role now:** legacy historical-loop import only (read-only API in `lib/dotloop/client.ts`).
 Documenso replaces it for signing; SkySlope is the compliance destination.
-
-## What we're building
-
-TC Loop = HouseLoop's own dotloop + the A-Frame engine + our Documenso e-sign, AI-driven. A **self-contained,
-role-gated surface**: a Transaction Coordinator logs in and has everything inside TC Loop (Dashboard · Loops ·
-lead/loop detail · Configure) and never touches the CRM pipeline. Built human-first — a person can run a loop
-entirely by hand; **Myli-TC is just another caller of the same API endpoints** (no AI backdoor).
 
 ## ⭐ A-Frame parity doctrine (LOCKED 2026-06-27)
 
@@ -129,9 +154,10 @@ signed offset · `day_unit` · `business_day_def` (TRID precise/general) · week
 ## Architecture (locked)
 
 1. **API-first.** Every loop action is a REST endpoint; UI + Myli call the same one.
-2. **Role-gated `/tc/**` surface.** No CRM↔TC toggles.
+2. **Role-gated `/tc` surface + an `Agent ⇄ TC` SURFACE-SWITCH toggle** (TC/Admin only) that routes
+   `/leads/[id]` ⇄ `/tc/transactions/[loopId]` — the whole shell switches, not an in-place panel.
 3. **Reuse CRM components. Never hand-roll** — `StagesPage`, `PipelineSwitcher`, `HlDataTable`, `HlFormModal`,
-   `HlFilterPills`, the shared blue `SectionBand`; no KPI cards on a template editor.
+   `HlFilterPills`, `SectionBand`, the lead-detail lanes + comms streams + `MyliLane`.
 4. **Side-aware** (TC Buyer vs TC Listing).
 5. **E-signature = Documenso, self-hosted** (own data, $0/sig, cert-sealed, ESIGN/UETA). dotloop NOT in the path.
 6. **We own documents end-to-end** → push to SkySlope for compliance.
@@ -151,14 +177,20 @@ signed offset · `day_unit` · `business_day_def` (TRID precise/general) · week
 
 ## Changelog
 
+### 2026-06-27 — LOCKED: TC loop UI = Agent⇄TC surface switch + 3-lane page
+- The TC loop detail is the **TC view of the lead-detail page**. The `Agent | TC` toggle is a **surface switch**
+  (whole left menu + context flip via route groups), **TC/Admin only**; agents are walled off (read-only peek
+  parked for later). TC view = the full `/tc` surface (no lite view). 3-lane page: `TcLoopLane` · `TcCenterLane`
+  (stage stepper + 9 TC bottom tabs) · reused `MyliLane`; 6 deal-KPI cards. Reuses comms streams + HlDataTable +
+  SectionBand. The earlier hand-rolled single-scroll `LoopDetail.tsx` is rejected/replaced. Spec:
+  `.claude/checkpoints/tc-loop-detail-3lane-2026-06-27.md`.
+
 ### 2026-06-27 — LOCKED: build our own dotloop, owned end-to-end (Documenso self-host)
 - **Architecture pivot (Zach):** stop mirroring dotloop — own the whole stack. dotloop can't fill/sign via API
   and SkySlope/eXp compliance needs us to own documents end-to-end, so dotloop leaves the critical path (legacy
   import only). **E-sign = Documenso, self-hosted** (own data, $0/sig, PAdES cert seal + audit trail, ESIGN/UETA
-  compliant). Forms + fill are already skeletoned (`lib/tc/fill-contract.ts` + `tools/houseloop-contracts/`).
-  Captured the live dotloop loop layout as the UI reference (`DOTLOOP_LOOP_LAYOUT.md`). 6 build gates (G1–G6) in
-  PRD §14. **Migration 0262** adds the per-loop task instance table + key-date anchor mapping. G1 (dotloop-styled
-  loop-detail page on real data) is next.
+  compliant). Forms + fill already skeletoned. **Migration 0262** adds the per-loop task instance table + key-date
+  anchor mapping. G1 (the TC loop page) is the active build.
 
 ### 2026-06-27 — Platform re-brand token (`{{platform.tc}}`)
 - The A-Frame platform self-reference in the ~60 task labels is now a merge-field token (mig 0260/0261 +
