@@ -1,6 +1,6 @@
 ---
 title: "SRG Past-Client Reconciliation — Build-Out (WIP Log)"
-description: "The running work-in-progress log of building the SRG past-client resolver. The confidence-tier cost model, the deed-as-router doctrine, the deterministic engine, the free mover-finder, and a dated changelog."
+description: "The running work-in-progress log of building the SRG past-client resolver. The confidence-tier cost model, the deed-as-router doctrine, the deterministic engine, the cross-county mover-finder, and a dated changelog."
 ---
 
 <Info>
@@ -13,97 +13,76 @@ Governing PRD: `GT_HOUSELOOP_PASTCLIENT_DETERMINISTIC_RESOLVER_PRD.md`. Settled 
 | Piece | State |
 |---|---|
 | Confidence matrix — classify all 1,834 by the data we hold | ✅ built |
-| Deterministic GREEN resolver (`deterministic-resolve.mjs`) | ✅ built, dry-run proven |
+| Deterministic GREEN resolver (`deterministic-resolve.mjs`) | ✅ built + writing |
 | MLS-cross-ref address (`hl_srg_mls_deals` join, 100%) | ✅ wired |
-| County deed as the router (still-there vs moved) | ✅ wired (`verifyOwner`) |
-| Google Places geo fallback | ✅ wired |
-| Fix `not_found` matching in the 4 covered counties | ⏳ next |
-| Add Platte / Lafayette / Douglas county adapters | ⏳ next |
-| Write-lock the still-there tier | ⏳ next |
-| Mover-finder (gis_name_search + FUB, deed-verified, free) | ⏳ next |
-| YELLOW dotloop-agent probe · RED LLM on the ~48 | ⏳ next |
-| Eval harness + ground-truth (`resolver-eval.mjs`) | ✅ green; grow to ~68 |
+| County deed as the router (still-there vs moved) | ✅ wired |
+| `not_found` fix in the 4 covered counties | ✅ done |
+| Cross-county mover-finder (`mover-finder.mjs`) | ✅ built (Johnson/Wyandotte/Clay/Cass) |
+| **Banked: 547 dossiers (495 still-there LOCKED + 52 movers)** | ✅ in DB |
+| Jackson owner-name search · Platte/Lafayette/Douglas adapters | ⏳ deferred |
+| Paced assessor backfill (recover ~80 rate-limited) | ⏳ next |
+| YELLOW dotloop probe · RED LLM on the ~48 · grow eval | ⏳ next |
 
 ## The model (locked 2026-06-27)
 
-**Make SISU complete.** SISU is canon for *which deals exist*, but it's full of blanks; each source fills one kind:
+**Make SISU complete.** SISU is canon for *which deals exist*; each source fills one blank:
 
-- **SISU** — the deal spine (client, $, close date). A deal exists or it doesn't.
-- **MLS** (`hl_srg_mls_deals`, joins 100% by `mls_number`) — the **true address / city / zip** (SISU's address is unreliable, always cross-reference the MLS closing).
-- **FUB** — the notes / investigative layer (current home, referral, moved out of state).
-- **dotloop** — the signed contract → the real agent (recovers departed agents) when an agent is in question.
+- **SISU** — the deal spine (client, $, close date).
+- **MLS** (`hl_srg_mls_deals`, 100% join by `mls_number`) — the **true address / city / zip** (SISU's address is unreliable; always cross-reference the MLS closing).
+- **FUB** — notes / investigative (current home, referral, moved out of state).
+- **dotloop** — the signed contract → the real agent.
 - **County deed** — disposition truth: who's on title now. **The router.**
 - **Google Places** — geo normalizer when MLS lacks a zip.
 
 ## The confidence-tier cost play
 
-Instead of paying the ~$0.50 LLM resolver on all 1,834, classify each client and resolve the cheapest way:
-
 | Tier | Definition | Engine | Cost |
 |---|---|---|---|
-| 🟢 **GREEN** | 1–2 deals · real named agent · triangulated MLS home | `deterministic-resolve.mjs` (pure assembly) | **$0** |
-| 🟡 **YELLOW** | 1–2 deals · agent is Ana-only (departed agent hidden) | assembly + one `dotloop_contract` probe | cheap |
-| 🔴 **RED** | 3+ deals, ambiguous agents, or a deal missing triangulation | `s6-investigator.mjs` (Sonnet) | ~$0.30–0.50 |
-| 🚫 **DNC** | surname on the SRG agent roster + COI signal | DNC card | n/a |
+| 🟢 **GREEN** | 1–2 deals · real named agent · triangulated MLS home | `deterministic-resolve.mjs` | **$0** |
+| 🟡 **YELLOW** | 1–2 deals · agent is Ana-only | assembly + one `dotloop_contract` probe | cheap |
+| 🔴 **RED** | 3+ deals, ambiguous agents, or missing triangulation | `s6-investigator.mjs` (Sonnet) | ~$0.30–0.50 |
 
-**Within GREEN, the deed is the router** — and the split is FACT, not a guess:
+**Within GREEN, the county deed is the router** — and the split is FACT, not a guess: `owner_match` → lock free (still-there); `owner_differs` → moved → mover-finder; `ambiguous` (trust/LLC) → likely theirs, med; `not_found`/`out_of_coverage` → coverage pass.
 
-- **`owner_match`** (client on title) → **lock free, high confidence** — current home = the bought address, deed-confirmed.
-- **`owner_differs`** (someone else on title) → **MOVED** — never assert the old address; route to the mover-finder.
-- **`ambiguous`** (trust/LLC) → likely still theirs, med, lockable.
-- **`not_found` / `out_of_coverage`** → can't verify → coverage pass (below).
+## The numbers (clean dry-run, 766 BUY-LAST GREEN)
 
-## The numbers (measured 2026-06-27)
+- **522 still-there + 107 moved = 82% known to hard fact**, no LLM. 86 uncheckable (52 fringe-county, 34 harder edge cases). A mover is *not* "unknown" — we know for a fact they left; only the new address is open.
 
-- Deal distribution: 1 deal **1,430** · 2 deals **348** · 3+ deals **48** · 0 deals **8** (total 1,834).
-- GREEN eligible **~1,046**; BUY-LAST GREEN **766**.
-- 60-client sample: **30 still-there + 15 moved = 75% known to FACT** · 3 trust · 12 uncheckable.
-- **A mover is not "unknown"** — we know for a fact they left; only the new address is open.
+## The mover-finder — free, cross-county, deed-verified
 
-## The "uncheckable" is recoverable — not out of area
+When a client's old-home deed shows a different owner, `mover-finder.mjs` searches **every covered county by owner name** and returns their new address straight off the deed (find + verify in one — the parcel is owned by a first+last-name match). No paid skip-trace.
 
-On the 12/60 sample, two fixable causes:
+- **Counties live:** Johnson (AIMS), Wyandotte (Tyler quick search), Clay (ArcGIS owner LIKE), **Cass (WFS deedhold)**.
+- **Ranked match** (exact > nickname > prefix) — excludes "TRAN, TU" for a client named "Tuyet".
+- **Multiples → drill in:** returns the candidate **addresses** (not just names) for a confident pick; a passed spouse/co-owner name auto-resolves.
+- **Confidence:** high (one match, address in hand) · ambiguous (candidates + addresses) · unknown (out of covered metro → outreach asks the client).
+- **Proven:** Anthony Kuchta → 19008 W 189th St, Spring Hill (deed: KUCHTA, LYNDA & ANTHONY).
 
-| Cause | Share | What it is |
-|---|---|---|
-| `not_found` | ~75% | a county we **already cover** (Johnson/Jackson/Cass/Wyandotte) — the lookup missed the parcel (address-format). **Fix the matching.** |
-| `out_of_coverage` | ~25% | KC-metro fringe county with no scraper yet — **Platte MO, Lafayette MO (Odessa), Douglas KS (Baldwin City)**. Build the adapters. |
+Every mover's dossier carries structured move data — `moved` · `last_known_address` · `new_address` (deed-verified or "unknown — find out") · `confidence` — so the **LLM writes the re-engagement message from the data** (we provide the data, not the message).
 
-Target: **75% → ~95%** of the book resolved to known fact, free.
-
-## The mover-finder — free, no paid skip-trace
-
-For every `owner_differs` (moved) client, find the new home with free tools. **The county deed is always the verifier.**
-
-1. **`gis_name_search(surname, county)`** — returns every parcel that surname *owns* in-county. Find **and** verify in one shot (deed-level). The strongest signal; expand across the 5 covered counties.
-2. **FUB notes/addresses** + **truepeoplesearch** (real-Chrome) — propose a candidate new address.
-3. **Verify every candidate** through `verifyOwner()` → only an `owner_match` promotes it to the confirmed current home; otherwise `current_residence = sold_moved_UNVERIFIED` (never a lie).
-4. **Outreach backstop** (downstream CRM lane) — the humble reactivation message surfaces the new address from the client directly.
+**Gaps (deferred):** Jackson owner-name search (`owner_info LIKE` 400s on the ParcelViewer layer — needs a different endpoint); Platte/Lafayette/Douglas fringe-county deed adapters.
 
 ## Doctrine locked (principles, not rules)
 
 1. **SISU's address is unreliable — cross-reference the MLS closing** for every transaction's address/geo.
 2. **Never assert a current home the deed contradicts** (the Nations error). Sold/moved ≠ knowing where they live now.
-3. **No SISU = not a deal** — never invent a transaction or lost listing from a Repliers or dotloop-only signal.
-4. **Chain-of-custody agent = the agent on OUR client's side** (buyer client → buying agent; seller client → listing agent).
-5. **Card format:** `CONTACTS → TRANSACTIONS WITH US → CURRENT (deed-confirmed) → DOSSIER`.
+3. **No SISU = not a deal** — never invent a transaction or lost listing from a Repliers/dotloop-only signal.
+4. **A new address is only asserted when a county deed `owner_match` confirms it** — same bar as the still-there tier.
+5. **Card format:** `CONTACTS → TRANSACTIONS WITH US → CURRENT (deed-confirmed / moved) → DOSSIER`.
 
-## The eval set
+## Operational lesson — assessors rate-limit
 
-`resolver-ground-truth.mjs` holds Zach's verified answers; `resolver-eval.mjs` diffs the resolver's `resolver_block` against them. Grow it to ~68 known-correct clients before the full book run.
+County assessors throttle under rapid sequential load. Run the resolver **solo and paced** (`--pace <ms>`, default 600ms) — never alongside concurrent county diagnostics. Throttling can only flip confirm→uncheckable, **never fake an `owner_match`**, so locked rows are always valid. Recover throttled rows with `--write --unresolved --pace 800` after a cooldown.
 
-## What's left (work down the PRD §6)
+## What's left
 
-1. Fix `not_found` matching in the 4 covered counties.
-2. Add Platte / Lafayette / Douglas adapters.
-3. Write-lock the still-there tier (`--write`).
-4. Build the mover-finder.
-5. YELLOW dotloop probe · RED LLM on the ~48.
-6. Keep `resolver-eval.mjs` green; grow ground-truth to ~68.
+1. Paced assessor backfill → recover the ~80 rate-limited → ~629 resolved.
+2. Jackson owner-search + fringe-county adapters + spouse auto-pick.
+3. YELLOW dotloop probe · RED LLM on the ~48 · grow the ground-truth eval.
 
 **Cost target:** book LLM spend ~$900 → **≤ ~$50** (RED tier only).
 
 ## Changelog
 
-- **2026-06-27 (PM)** — Pivot to the **deterministic confidence-tier** model (replaces the earlier "unleash the LLM investigator on everything"). Built `deterministic-resolve.mjs`: MLS-cross-ref address + county-deed router + Places geo fallback + 5-section note + DNC pre-filter. Proven on dry-run (perfect locks; caught movers before any false write). Locked "make SISU complete" + "the deed is the router". Wrote the governing PRD.
+- **2026-06-27 (PM)** — Built the **deterministic confidence-tier** resolver (replaces "unleash the LLM on everything"): MLS-cross-ref address + county-deed router + Places fallback. Fixed `not_found` in all 4 covered counties (suffix-blind). Built the **cross-county mover-finder** (Johnson/Wyandotte/Clay/Cass, ranked match, drill-in). Banked **547 dossiers (495 still-there locked + 52 movers, 13 new-addresses-found)**, $0 LLM. Added pacing after the assessors rate-limited.
 - **2026-06-26** — dotloop contract download wired (recovers departed agents); loop index (17,455 loops); reconciled-SSOT schema.
