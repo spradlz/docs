@@ -1,0 +1,61 @@
+---
+title: "Google Search Console"
+description: "HouseLoop's Search Console setup — the verified property, the API credentials, the read-only reporting token vs the service-account write path, the gsc-report diagnostic tool, and the live finding that the sitemap was never submitted (so Google has never crawled our property pages)."
+---
+
+<Info>
+**Why this page exists:** so the GSC setup never gets lost again. The property, the creds, the tool, and the
+open action all live here. Canonical SEO context: [Property Data & Address Identity](/guides/property-data-and-address-identity).
+</Info>
+
+## The property
+- **Property:** `sc-domain:houseloop.ai` — a **Domain property**, **auto-verified via Cloudflare DNS** (no HTML
+  tag/file needed). Verified 2026-05-25.
+- **Project:** `houseloop-496200` · OAuth client `753242193019-…`.
+
+## Credentials (in `.env`, mirrored in the Master Login Credentials sheet)
+| Purpose | Key | Scope / note |
+|---|---|---|
+| Read reporting (sitemaps, URL inspection, analytics) | `GSC_REFRESH_TOKEN` | `webmasters.readonly` — minted 2026-05-25 |
+| OAuth client for the refresh token | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | houseloop-496200 (#753242193019) |
+| Write path (submit sitemaps, etc.) | `HOUSELOOP_GCP_SA_KEY_PATH` → `houseloop-master@houseloop-496200.iam.gserviceaccount.com` | mints a `webmasters` (write) token, **but must be ADDED as a user/owner on the GSC property first** |
+
+<Warning>
+**The read token cannot submit sitemaps** (`webmasters.readonly` → 403 "insufficient scopes" on any write). The
+service account mints a valid **write** token, but until `houseloop-master@houseloop-496200.iam.gserviceaccount.com`
+is added under **GSC → Settings → Users and permissions** (Owner), writes 403 with "User does not have sufficient
+permission for site." Add it once → all GSC writes (sitemap submit, weekly automation) work programmatically forever.
+</Warning>
+
+## The diagnostic tool
+`tools/seo/gsc-report.mjs` (read-only — uses `GSC_REFRESH_TOKEN`). Pulls Google's OWN data:
+- **Sitemaps** GSC has processed (+ submitted/indexed counts, errors).
+- **URL Inspection** per page — `verdict`, `coverageState`, `lastCrawlTime`, Google's chosen canonical.
+- **Search analytics** — clicks/impressions (are we showing in results at all).
+
+```bash
+node tools/seo/gsc-report.mjs
+```
+
+## ⚠️ Live finding (2026-06-27) — the #1 indexing blocker
+Google's own data, pulled via the tool:
+
+- **Homepage `/`** → ✅ "Submitted and indexed," crawled daily, clean canonical.
+- **A property page `/home/<slug>`** → ❌ **"URL is unknown to Google," last crawl = NEVER.**
+- **Sitemaps registered in GSC → NONE.** The sitemap is declared in `robots.txt` but was **never submitted to GSC**,
+  and Google has not discovered it on its own.
+- **Traffic:** ~31 clicks / ~2,259 impressions / 28d — essentially all the homepage. **The ~234k property pages
+  contribute ~nothing because Google has never crawled a single one.**
+
+**Root cause:** the sitemap (`https://houseloop.ai/sitemap-index.xml`, ~234k URLs across 11 children) was never
+submitted to Search Console, so Google doesn't know our property pages exist. This is the highest-impact SEO fix —
+bigger than the canonical/fork issues.
+
+**The fix (two paths):**
+1. **Fastest (manual, ~30s):** GSC → **Sitemaps** → enter `sitemap-index.xml` → **Submit**.
+2. **Durable (programmatic):** add the service account as a GSC Owner (above), then `PUT
+   .../sites/sc-domain:houseloop.ai/sitemaps/<encoded sitemap url>` with an SA write token — wire it into a weekly
+   submit + Coverage report.
+
+After submitting, re-run `gsc-report.mjs` over the next days/weeks to watch property pages move from "unknown" →
+"crawled" → "indexed."
