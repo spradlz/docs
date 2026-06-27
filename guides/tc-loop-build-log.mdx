@@ -11,25 +11,26 @@ Canonical spec: `GT_HOUSELOOP_TRANSACTION_COORDINATION_PRD.md` §12 (status/mile
 
 ## Status (last updated 2026-06-27)
 
-**Phase: BUILDING the Configure foundation builders.** Engine done (status/milestone model, migration 0254,
-loop engine + REST). Configure builders: Stages ✅, **Milestones ✅ (full set seeded + offset engine)**. Next
-is the **Task layer** (the ~139 A-Frame checklist steps), then Merge Fields, Email/Text templates, Forms.
+**Phase: Configure foundation builders DONE; next is runtime.** Engine done (status/milestone model, loop
+engine + REST). Configure template builders all live: **Stages ✅, Milestones ✅ (full set + offset engine),
+Tasks ✅ (139 A-Frame steps)**. Next: per-loop instantiation (runtime), then Merge Fields, Email/Text
+templates, Forms.
 
 | Layer | State |
 |---|---|
 | Reverse-engineering (A-Frame + dotloop) | ✅ complete |
 | Status + milestone model | ✅ **locked** (PRD §12 + §13) |
-| Foundation data model (migrations 0253–0256) | ✅ applied |
+| Foundation data model (migrations 0253–0257) | ✅ applied |
 | Loop engine + API | ✅ createLoop · completeMilestone (forward-only) · GET loop |
 | **Configure → Stages** builder | ✅ reuses `StagesPage` scoped to TC (`/tc/configure/stages`) |
 | **Configure → Milestones** builder | ✅ full set (14 buyer / 16 seller) + offset engine, editable (`/tc/configure/milestones`) |
-| **Configure → Tasks** builder | 🟡 **next** (the ~139 A-Frame checklist steps under each phase) |
+| **Configure → Tasks** builder | ✅ 139 A-Frame tasks (58 buyer / 81 sale), editable (`/tc/configure/tasks`) |
 | **Configure → Merge Fields** builder | ⬜ |
 | **Configure → Email / Text Templates** builders | ⬜ (reuse `hl_templates`, `scope='tc'`) |
 | **Configure → Forms** (contract documents) | ⬜ |
 | TC surface tables — row kebab + bulk-delete | ✅ Loops table + Email Queue (CRM-wide convention + lint rule) |
-| Appointment-set → Loop birth wiring (runtime) | ⬜ after the builders |
-| Loop + TC lead-detail page · Myli-TC | ⬜ not started |
+| **Runtime: per-loop instantiation** (milestones + tasks → due dates) | 🟡 next |
+| Appointment-set → Loop birth · TC loop-detail page · Myli-TC | ⬜ |
 
 ## What we're building
 
@@ -48,7 +49,8 @@ every one with its anchor + offset + assignee). A-Frame runs on **three layers +
 2. **DATES — only 4 KEY DATES you ENTER drive everything:** `effective` (Under Contract) · `inspection_end`
    (Inspection Period Ends) · `closing` · `on_market` (listing live). These are the **milestones'** anchors.
 3. **TASKS (~139, in 8 phase folders/side)** — every task = `anchor date ± offset days`, grouped into phases
-   (Intake · Contract Review · Scheduling · Communication · Compliance · Inspections · Appraisal · Closing).
+   (Intake · Contract Review · Scheduling · Communication · Compliance · Inspections · Appraisal · Closing;
+   listing adds Pre-Live Stages 1–5).
 
 **The offset engine is the trick:** enter the 4 key dates once → the system auto-schedules every milestone +
 task (`anchor + offset`). e.g. Title Commitment = `effective+10`, Appraisal = `effective+25`, CDA = `closing−14`.
@@ -72,11 +74,15 @@ else is `anchor + offset`. `▸` = completing it advances the status (forward-on
   **Inspection Period Ends** `[KEY]` · Inspection Resolution `insp+5` · Title Commitment `eff+10` · Appraisal
   `eff+25` · Clear to Close `close−3` · Final Walkthrough `close−1` · **Closing** `[KEY] ▸` · Funded · Possession.
 
-### The Task layer (next build)
-The ~139 A-Frame tasks become a `hl_tc_task_template` layer UNDER milestones: `side · phase · label · anchor ·
-offset · assignee_role · email_template? · sort`. At loop creation each active task instantiates with a
-computed due date (anchor + offset), grouped by phase. A Configure → Tasks builder (same management-table +
-`HlFormModal` pattern) makes them editable; Myli uses the same API. Full plan: PRD §13.3.
+> The buyer agreement sequence (Single Property → Exclusive) is **milestones, not stages** — signing the
+> Exclusive advances the buyer to `Active Buyer`. No upstream "Showing" stage (re-confirmed 2026-06-27).
+
+### The Task layer (built — Configure → Tasks)
+The 139 A-Frame tasks live in `hl_tc_task_template` (mig 0257) UNDER milestones: `side · phase · label · anchor
+· offset · assignee_role · email_template? · sort · is_active` — 58 buyer / 81 sale, across the 8 phase folders
++ listing pre-live stages, seeded straight from the recon. Editable in **Configure → Tasks** (same shell as
+Stages/Milestones). API `/api/tc/tasks[/:id]`. 🟡 Next (runtime): at `createLoop`, instantiate active tasks
+(+ milestones) into per-loop instances with computed due dates (anchor date + offset), grouped by phase.
 
 ## The status + milestone model (LOCKED 2026-06-26 — two axes)
 
@@ -95,43 +101,54 @@ computed due date (anchor + offset), grouped by phase. A Configure → Tasks bui
 2. **Role-gated `/tc/**` surface.** TC role → only TC Loop. No CRM↔TC toggles.
 3. **Reuse the engine, scope to TC** — Stages reuse `StagesPage`; Milestones/Tasks reuse the management-table
    + `HlFormModal` pattern on TC-scoped data; Email/Text templates reuse `hl_templates` (`scope='tc'`); Merge
-   Fields extend the code catalog.
+   Fields extend the code catalog. **Never hand-roll — every Configure page is identical** (Add/Refresh header
+   + `PipelineSwitcher` + `HlDataTable`; no KPI cards on a template editor).
 4. **Status is side-aware** (TC Buyer vs TC Listing; milestones + tasks are per-side too).
 5. **E-signature = Documenso.**
 6. **Tables are real CRM tables** — every `<HlDataTable>` ships the ⋮ kebab + select-all bulk-delete
    (`hl/table-requires-actions`); modals use the canonical blue-header `HlFormModal`.
 
-## Data model — migrations 0253–0256
+## Data model — migrations 0253–0257
 
 `apps/houseloop-crm/db/migrations/` (additive + reversible; runner `node db/migrate.mjs` against `HL_CRM_DATABASE_URL`):
 - **0253** — foundation: `hl_transactions` loop columns + child tables (`hl_tc_loop_folder/_document/_participant/_event`) + `hl_templates.scope`.
 - **0254** — TC pipelines (`TC Buyer`/`TC Listing`) in `hl_stages` · repoint `tc_stage_id` → `hl_stages` · `lost_reason` · `hl_tc_milestone_template` + extend `hl_tc_loop_event`.
 - **0255** — milestone `color` + `icon`.
 - **0256** — the **full milestone set** (14 buyer / 16 seller) + the **offset-engine columns** (`anchor`, `is_key_date`).
+- **0257** — `hl_tc_task_template` (the 139 A-Frame tasks: `side · phase · label · anchor · offset · assignee_role · sort`).
 
 ## The loop engine (built + proven)
 
 `lib/tc/loop-engine.ts`: `createLoop({ leadId, side })` (born into first stage + instantiates milestones) ·
 `completeMilestone({ transactionId, milestoneKey })` (forward-only, idempotent advance) · `getLoopStatus` /
 `listMilestones`. REST: `POST /api/tc/loops` · `GET /api/tc/loops/[id]` · `POST /api/tc/loops/[id]/milestone`.
-Milestones: `/api/tc/milestones` (GET `?side` · POST · PATCH reorder) · `/[id]` (PATCH · DELETE, guarded).
+Milestones: `/api/tc/milestones[/:id]`. Tasks: `/api/tc/tasks[/:id]`.
 
 ## Changelog
+
+### 2026-06-27 — Task layer (Configure → Tasks): the 139 A-Frame checklist steps
+- **Migration 0257** — `hl_tc_task_template` seeded with all **139 A-Frame tasks** (58 buyer / 81 sale, across
+  the 8 phase folders + listing pre-live stages), generated straight from the recon map (not hand-typed).
+  Each task = `phase · anchor · offset · assignee_role`.
+- **API** `/api/tc/tasks[/:id]` (GET `?side[&phase]` · POST · PATCH reorder · PATCH/:id · DELETE).
+- **Configure → Tasks builder** MIRRORS the Stages/Milestones shell exactly (reused, no hand-roll): Add/Refresh
+  header + `PipelineSwitcher` (TC Buyer / TC Listing) + `HlDataTable` (TASK · PHASE · TIMING · ASSIGNEE · ACTIVE,
+  kebab + bulk-delete + drag-reorder + toggle) + canonical `HlFormModal` editor (label · phase · anchor · offset
+  · assignee · active). No KPI cards (template editor). Added **Tasks** to the TC Configure nav.
+  Playwright-verified live (58/58 buyer).
+- **Also (UI parity fixes):** Milestones page now mirrors the Stages shell exactly (reused `StageMetricsRow` via
+  a generalized `cards` prop + `PipelineSwitcher` via a generalized `param` prop; killed hand-rolled `hl-sf-tabs`);
+  then **removed the KPI cards** from both template editors (counting config rows is noise — loop-health KPIs
+  belong on the future TC Dashboard).
+- **Next (runtime):** per-loop instantiation at `createLoop` (computed due dates), then the TC loop-detail page.
 
 ### 2026-06-27 — A-Frame 3-layer engine reverse-engineered + full milestone set seeded
 - **Reverse-engineered exactly how A-Frame works** (status / dates / tasks + the offset engine) and persisted
   it — recon artifact `.claude/reports/aframe-recon/TC_MILESTONE_TASK_MAP.md` (139 tasks w/ anchor+offset+assignee)
   + PRD §13. *(Root-cause fix: the granular model had been locked verbally but never written down, and was
   lost in a compaction. Now durable.)*
-- **Migration 0256** — seeded the **full milestone set** (14 buyer / 16 seller: EMD, inspections, title,
-  appraisal, clear-to-close, walkthrough, funded, possession…) and added the **offset-engine columns**
-  `anchor` + `is_key_date`. Cleaned one orphan 0254 key (guarded).
-- **Milestones builder is now fully editable** to the model: a "key date the TC enters" toggle + an
-  "Anchored To" dropdown (Loop Start / Under Contract / Inspection End / Closing / On-Market) + offset, plus
-  color/icon/advances/active. API (`/api/tc/milestones[/:id]`) carries `anchor` + `is_key_date`. Table shows
-  a TIMING column (`Key date` badge or `+Nd · anchor`).
-- **Next:** the Task layer (`hl_tc_task_template` from the recon map + Configure → Tasks builder + per-loop
-  instantiation with computed due dates).
+- **Migration 0256** — seeded the **full milestone set** (14 buyer / 16 seller) + the **offset-engine columns**
+  `anchor` + `is_key_date`. Milestones builder fully editable to the model (key-date toggle + anchored-to + offset).
 
 ### 2026-06-26 (PM, late) — Milestones builder (Configure → Milestones)
 - Built the per-side Milestones builder at `/tc/configure/milestones` (Buyer/Listing tabs, Advances-To
