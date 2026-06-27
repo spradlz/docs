@@ -124,6 +124,39 @@ So `HLP-2816F8920DC0` for *411 NW 71st Terrace* is literally `md5("411 nw 71st t
 
 **The durable fix (not yet built).** The id must be **minted once per physical home and pinned** — assigned on first sighting, after which the address/ZIP/MLS# become *attributes* that can change without changing the id. When a drifted address arrives, the resolver looks up the existing home (coords / street / **parcel**) and **reuses its HLP** instead of re-hashing the new address. `hl_property` already carries the columns for the truly-stable key — **`parcel_number` and `upi`** (the county parcel id, which survives ZIP/address/MLS changes the way `zpid` does) — they are simply not yet populated or keyed on. Two complementary moves close it: (a) **turn on Smarty** so the ZIP is USPS-corrected before it enters the key (stops new forks at the source), and (b) **mint-once on parcel/UPI** so identity stops being `md5(address)`. Until then, HLP remains `md5(address)` and ZIP drift remains a fork risk. Merging the ~75 existing forks is a reversible reconciliation pass (Rule #0 typed approval).
 
+## The permanent URL — the SEO moat (why identity is a minted id, not the MLS# or the address)
+
+The single most important property of a home's URL is that it **never changes for the life of the home** — across relists, MLS# changes, ZIP corrections, status changes. This is not polish; it **is** the local-SEO strategy.
+
+**Why a changing URL kills SEO.** Google accrues ranking authority to a *specific URL* over time. If the URL changes when a home relists (new MLS#) or its address is corrected (ZIP fix), Google must **re-index it from scratch** — the authority that URL earned is lost, and the old + new URLs split credit as **duplicate content**. Zillow and Redfin dominate local search for exactly this reason: each home has **one permanent URL** (`…/<zpid>`, `…/home/<id>`) indexed and compounding authority for years across dozens of listing cycles. The URL is pinned to a **minted, immutable id** — never the MLS#, never the raw address.
+
+**So the identity in the URL must be a minted-once HL-ID:**
+
+- **NOT the MLS#** — it changes every relist (a home has several over its life), so the URL would re-index every cycle.
+- **NOT the raw address / canonical slug** — it gets corrected (ZIP drift), so the URL would change and re-index.
+- **= a minted, opaque `HLP-…`** assigned on first sighting and **frozen forever**. Address, ZIP, MLS#, status are mutable attributes; the id (and the URL) never move.
+
+<Warning>
+**Today this is an active SEO liability, not just data hygiene.** The current URL is `/home/<canonicalSlug>` with **no permanent id** — identity *is* the slug, and the slug carries the ZIP. When the slug changes (ZIP drift, or dedup picking a different keeper), the URL changes and Google re-indexes from zero. The ~75 ZIP-drift forks are ~75 duplicate-content pairs splitting authority between two URLs for one home. Pinning identity to a minted id fixes the SEO moat and the fork in one move.
+</Warning>
+
+## Migration plan — making it real without breaking anything
+
+The fix is **coordinate-pinned identity + a frozen, permanent slug**, rolled out in additive, reversible phases. Coordinates are the spine (free from Repliers, 100% coverage) — **no county lookups, no USPS dependency, no mass URL change**. Existing `HLP-` ids are **grandfathered as frozen strings** — never re-minted — so nothing the CRM or Google already points at moves.
+
+**Guardrails (every phase):** additive (old path keeps working) · reversible (each merge writes `hl_dedup_quarantine` + `hl_slug_alias`/`hl_hlid_alias` so it can be undone) · **301 never 404** (any URL that does change redirects, so authority transfers) · **shadow-first** (run in report-only mode, eyeball the diff, before executing) · destructive prod merges = **Rule #0 typed approval**.
+
+| Phase | What | Breaks anything? |
+|---|---|---|
+| **0 — Freeze the id** | Stop *recomputing* `hlPropertyId`. Add a guard in `linkListingToProperty`: never re-derive/overwrite an existing home's `HLP` or its `canonical_slug`. | No — purely defensive, zero user-visible change. |
+| **1 — Coordinate-pin (stop new forks)** | Change `linkListingToProperty` to find-or-create `hl_property` by **lat/lng ~25 m + unit FIRST**, then `identity_key`. Match → reuse the existing `HLP`; mint a fresh **opaque** id only for a genuinely new rooftop. | No — existing homes resolve to their own row → same `HLP`, same URL. Only brand-new homes mint. New forks stop dead. |
+| **2 — Merge the ~75 existing forks** | One coord pass: group rows within ~25 m + same unit with different `HLP`s → keep one → repoint losers → `hl_slug_alias` 301s the old slug → keeper. Shadow-report first, then execute (Rule #0). | Only ~75 URLs redirect (301, authority preserved). Reversible. |
+| **3 — (optional, later) id-in-URL** | Move to `/home/<slug>/<HLP>` (full Zillow/Redfin pattern); old `/home/<slug>` 301s to it; sitemap + `rel=canonical` emit the new form. | Mass 301 — only do it deliberately, behind a flag, verified on a sample. **Not required** to fix the bug; phases 0–2 already make the URL permanent by freezing the slug. |
+
+**The key insight that makes it safe:** phases 0–2 fix identity *and* the SEO problem **without changing a single existing URL** — because freezing each home's `canonical_slug` means the URL is already permanent, and coordinate-pinning means it can never fork again. The id-in-URL (phase 3) is the belt-and-suspenders Zillow pattern we can adopt later, not a prerequisite.
+
+**Outside addresses (FUB/Zillow-browsed)** ride the same resolver: resolve once at ingest by coordinate (or the drift-tolerant street match when coordinates are absent), store the home's `HLP`, render from it.
+
 ## The reconciliation engine — the ONE way we reconcile an address
 
 There is exactly **one** engine that reconciles any address (a new listing, a sold disposition, a past client, the full historical backfill) to the one canonical HouseLoop home. It is a three-stage funnel — cheapest and most certain first, escalating only for what the prior stage can't settle:
