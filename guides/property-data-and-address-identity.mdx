@@ -213,3 +213,39 @@ Geographic appreciation (`lib/valuation/appreciation.ts`) drifts an anchor value
 | Geographic appreciation model (value drift) | `lib/valuation/appreciation.ts` |
 | `/home` page + canonical redirect | `app/home/[slug]/page.tsx` |
 | Sitemap (one URL per home) | `app/sitemap.ts` |
+
+## Carry-forward enrichment — the home as an accumulator (shipped 2026-06-27)
+
+> **The canonical home is an ACCUMULATOR, not a snapshot.** The IDX feed (Repliers) only ever sends the
+> *current* listing — never the home's past. **We are the system of record for a home's banked history.** One
+> slug = one home = the full life of data, carried forward across every listing cycle. (The Zillow/Redfin ZPID
+> model: the property is the permanent record; each listing is just an event on it.)
+
+A home's **banked history** = sold history · tax history · GreatSchools · HouseLoop value + value history (+
+close price, school district). When the same address re-lists under a new MLS#, the new live row **inherits
+everything we already banked** — it never renders blank just because the feed sent only today's snapshot.
+
+**Root cause that was fixed:** ingest upserts by `hlid = hl_heartlandmls_<MLS#>` (the *listing*), so a relist
+created a new BLANK row; `collapseHomeCluster` then soft-deleted the older cycles **without copying their
+enrichment** — the history was stranded on the dead row and the live relist showed blank. (Same-row IDX
+re-syncs were already improvement-only, so they never wiped history; the gap was only the relist → new-row →
+collapse path.)
+
+**The build (forward-only — Benji):**
+- **Carry-forward on collapse (`carryForwardEnrichment`, `cache.ts`):** before `collapseHomeCluster` retires the
+  older cycles, it COALESCE-merges their banked fields onto the **winner** — `closePrice · zestimate(+Low/High) ·
+  rentZestimate · annualTaxAmount · schoolDistrict · elementary/middle/highSchool · taxHistory ·
+  schoolsGreatSchools · valueHistory`. Per field the value comes from the **newest donor cycle that has it**; the
+  winner keeps its own non-null values, we only fill gaps. **Photos are NOT inherited** — a live relist shows its
+  own current gallery (Repliers refreshes within seconds), never a sold cycle's stale photos.
+- **Read layer honors `quarantinedAt` + a stable canonical:** every resolver/sitemap query now filters
+  `quarantinedAt IS NULL` (not just `deletedAt`), and the winner `ORDER` has a stable `hlid ASC` tiebreak — so two
+  un-merged cycles with the same status + date pick the **same** row every request and the canonical 308 target
+  can't flip (no SEO bleed).
+
+**The precedence rule (baked in):** current listing facts (price/status/beds) → the newest row; history /
+enrichment → keep-existing-else-inherit; **Caleb's past-client backfill = ground truth, never overwritten by a
+thinner IDX value.**
+
+Governing PRD: `GT_HOUSELOOP_ADDRESS_MODEL_CARRYFORWARD_PRD.md`. Still open (tracked above, not here): the legacy
+~6K-duplicate row merge (the reconciliation engine, Rule #0) and the rooftop-pinned-ID migration.
