@@ -1,13 +1,17 @@
 ---
 title: "Property Data Model & Address Identity"
-description: "How HouseLoop keys homes by address — the ONE address-keyed table model, how an address becomes a stable USPS-conformed identifier, how the resolver matches an incoming listing to one owned home, and the ONE reconciliation engine (identityKey → LLM sieve → Redfin) used for every address."
+description: "How HouseLoop keys homes by address — the ONE address-keyed table model, how an address becomes a stable identifier, how the resolver matches an incoming listing to one owned home, the HouseLoop Property ID (and the ZIP-drift fork it can't yet prevent), and the ONE reconciliation engine used for every address."
 ---
 
-HouseLoop keys every home by its **address** — not by the MLS number, not by a per-source id. This page documents the property data model, how addresses are normalized into a stable identifier, how the resolver matches an incoming listing to the one home we already own, and **the one engine we use to reconcile any address to that home**.
+HouseLoop keys every home by its **address** — not by the MLS number, not by a per-source id. This page documents the property data model, how addresses are normalized into a stable identifier, **what our home id actually is** (and where it breaks), how the resolver matches an incoming listing to the one home we already own, and **the one engine we use to reconcile any address to that home**.
 
 <Note>
 **Current status (be precise).** The address resolver runs on the live ingest path, so it prevents **new** duplicates going forward. The historical data still contains pre-existing duplicate rows (the same physical home stored more than once from before the resolver existed); a careful, verified, **reversible** collapse of those is **in progress**. So "one home = one row" is the model the resolver enforces forward, and the engine below is bringing the existing rows to that state.
 </Note>
+
+<Warning>
+**The home id is the address, hashed — not an independent id (read [The HouseLoop Property ID](#the-houseloop-property-id-and-the-zip-drift-fork-it-cant-yet-prevent) below).** Our stable id is `HLP- + md5(identityKey)`, and `identityKey` contains the **ZIP**. So when two sources disagree on a home's ZIP (Zillow `64119` vs the MLS `64118` for the *same* house), the home hashes to **two ids → two slugs → two pages**. City drift is handled; **ZIP drift is not** — there are ~75 such forks live today. This is the root cause behind "we have the house but it didn't resolve," and it was previously undocumented.
+</Warning>
 
 ## The one table (the target model)
 
@@ -48,9 +52,13 @@ Same physical home → same slug, regardless of which spelling a source sent. Ha
 - A non-canonical variant (`…-rd-…` when canonical is `…-road-…`) **308-redirects** to the canonical URL; the page sets `rel=canonical`.
 - The sitemap emits **one URL per home** (distinct `canonicalSlug`).
 
-## Address as a USPS-conformed unique ID
+## Address as a (would-be) USPS-conformed unique ID
 
-The deterministic layer can't fix everything: two sources may disagree on the **city** ("Baldwin" vs "Baldwin City" for the same ZIP) or on a suffix abbreviation. USPS is the ground truth for "is this a single deliverable address," so addresses conform to USPS. This is the `lib/listings/address-identity.ts` service.
+The deterministic layer can't fix everything: two sources may disagree on the **city** ("Baldwin" vs "Baldwin City" for the same ZIP) or on a suffix abbreviation. USPS is the ground truth for "is this a single deliverable address," so the *intent* is that addresses conform to USPS. This is the `lib/listings/address-identity.ts` service.
+
+<Warning>
+**USPS/CASS conformance is currently OFF in production.** `validateAddress` has no `SMARTY_AUTH_ID/TOKEN` (and no Google fallback configured), so it runs in **offline** mode — addresses are normalized deterministically (Layer 1/2) but are **not** USPS/CASS-corrected. That means a source's **raw ZIP becomes part of the identity** as-is; nobody is correcting Zillow's `64119` to the postal-correct `64118`. This is precisely why ZIP drift (below) is unmitigated for any source that lacks coordinates. The "USPS-conformed id" is the intended model, not today's reality.
+</Warning>
 
 ### Layer 2 — the city-independent identity key (free)
 
@@ -60,11 +68,13 @@ The **USPS-preferred city** for a ZIP comes from `zip-preferred-city.generated.j
 
 <Note>
 **Why city is never part of the key.** KC-metro ZIPs straddle municipal lines: `66215` is **Lenexa** per USPS but **Overland Park** per Zillow; `66216` shows as both **Shawnee** and **Shawnee Mission**. If the city were in the match key, the same home would split into two records the moment two sources disagreed on the label. The ZIP pins the geography and the house number pins the home — the city is a display attribute, never an identifier.
+
+**But the ZIP is in the key, and ZIP *also* drifts between sources.** City drift is solved by excluding city; ZIP drift is the same problem one level down and is **not** solved (see [the ZIP-drift fork](#the-houseloop-property-id-and-the-zip-drift-fork-it-cant-yet-prevent)).
 </Note>
 
-### Layer 3 — CASS validation (paid, reserved)
+### Layer 3 — CASS validation (paid, reserved — and currently OFF)
 
-`validateAddress(parts)` standardizes against USPS via a pluggable provider — **Smarty** → **Google Address Validation** → **offline** — returning the standardized address, preferred city, ZIP+4, and the **DPV delivery-point key**. It never throws; with no provider it degrades to the offline result. Reserved for new ingest + the ambiguous residual, never a blind sweep of the whole base.
+`validateAddress(parts)` standardizes against USPS via a pluggable provider — **Smarty** → **Google Address Validation** → **offline** — returning the standardized address, preferred city, ZIP+4, and the **DPV delivery-point key**. It never throws; with no provider it degrades to the offline result. **Today there is no provider configured, so it always returns the offline result** (see the warning above). Intended for new ingest + the ambiguous residual, never a blind sweep of the whole base.
 
 ## The resolver — matching an incoming listing to one owned home
 
@@ -76,9 +86,43 @@ The **USPS-preferred city** for a ZIP comes from `zip-preferred-city.generated.j
 
 **Where it runs (live, forward).** The resolver is wired into the ingest path (`lib/listings/cache.ts`): every Repliers sync resolves the incoming address **before** the upsert. If we already own the home under a different `hlid` (a relist under a new MLS number), the write targets that owned row — so going forward the home updates in place instead of forking a new duplicate.
 
+<Note>
+**Rung 2 (lat/lng) is what actually holds single-slug together — not USPS.** Because USPS conformance is off, rung 1 (`identityKey`) keys on the raw source ZIP and *misses* across ZIP drift. What rescues the listing path is rung 2: **100% of `Listing` rows carry coordinates** (Repliers supplies them free), so two ZIP-drifted records on the same rooftop still collapse to one home via the ~25 m match. **Any source without coordinates loses this safety net** — see below.
+</Note>
+
 <Warning>
 **Why duplicates existed.** The ingest historically upserted by `hlid = hl_heartlandmls_<mlsNumber>` — keyed on the MLS number, not the address — so every relist under a new MLS number forked a second row. The resolver fixes this **for new ingests**; the **pre-existing** duplicate rows are collapsed by the reconciliation engine below.
 </Warning>
+
+## The HouseLoop Property ID (and the ZIP-drift fork it can't yet prevent)
+
+This is the part that was previously undocumented and matters most. A home's stable id lives in the **`hl_property`** table — one row per physical home, linked from every `Listing` row by `Listing.hlPropertyId`. Its primary key is the **HouseLoop Property ID (`HLP-…`)**.
+
+<Warning>
+**The HouseLoop ID is a hash OF the address — not an independent identifier.** It is generated (`lib/listings/cache.ts`) as:
+
+```
+hlPropertyId = "HLP-" + md5(identityKey).slice(0,12)      // identityKey = canonical street + unit + ZIP5
+```
+
+So `HLP-2816F8920DC0` for *411 NW 71st Terrace* is literally `md5("411 nw 71st terrace::64118")`. The id is **the address in a costume** — it is *re-derived*, every time, from `street + zip`. We do **not** have a Zillow-`zpid`-style opaque id that is minted once and survives address/ZIP changes.
+</Warning>
+
+**The consequence — ZIP drift forks a home.** Because the id (and the slug, and `identityKey`) all contain the **ZIP**, and sources disagree on a home's ZIP (Zillow: `411 NW 71st Ter, Kansas City, 64119`; MLS: `411 NW 71st Terrace, Gladstone, 64118` — the *same* house), the same physical home hashes to **two HouseLoop ids → two slugs → two pages.**
+
+| Field | Zillow says | Our MLS (Repliers) says |
+|---|---|---|
+| Street | 411 NW 71st **Ter** | 411 NW 71st **Terrace** |
+| City | Kansas City | **Gladstone** |
+| ZIP | **64119** | **64118** |
+| → `identityKey` | `411 nw 71st terrace::64119` | `411 nw 71st terrace::64118` |
+| → HouseLoop ID | `HLP-<hash of 64119>` | `HLP-2816F8920DC0` |
+
+- **What keeps it from being worse:** rung 2 (lat/lng ~25 m) + 100% coordinate coverage collapse ZIP-drifted **listings** on the Repliers ingest path. (Within a consistent ZIP it already works perfectly — e.g. all three MLS cycles of 411 share the one id `HLP-2816F8920DC0`.)
+- **Where it still breaks:** any source **without coordinates** — a home a lead browsed on Zillow (FUB activity carries the Zillow address + ZIP, no lat/lng), a hand-typed address. Its `identityKey`/HLP won't match the home we own, so it fails to resolve (or, uncaught, mints a fork).
+- **Live blast radius today:** **~75 homes** are already forked into multiple slugs by ZIP drift (same street + city, different ZIP). Small against ~354k, but real — the single-slug guarantee genuinely cracks on ZIP drift.
+
+**The durable fix (not yet built).** The id must be **minted once per physical home and pinned** — assigned on first sighting, after which the address/ZIP/MLS# become *attributes* that can change without changing the id. When a drifted address arrives, the resolver looks up the existing home (coords / street / **parcel**) and **reuses its HLP** instead of re-hashing the new address. `hl_property` already carries the columns for the truly-stable key — **`parcel_number` and `upi`** (the county parcel id, which survives ZIP/address/MLS changes the way `zpid` does) — they are simply not yet populated or keyed on. Two complementary moves close it: (a) **turn on Smarty** so the ZIP is USPS-corrected before it enters the key (stops new forks at the source), and (b) **mint-once on parcel/UPI** so identity stops being `md5(address)`. Until then, HLP remains `md5(address)` and ZIP drift remains a fork risk. Merging the ~75 existing forks is a reversible reconciliation pass (Rule #0 typed approval).
 
 ## The reconciliation engine — the ONE way we reconcile an address
 
@@ -104,6 +148,12 @@ The **keeper** of each group is chosen by completeness: most enriched (value his
 
 The same engine runs on the live path: when an incoming new or sold listing can't be confidently reconciled against a home we already own, the LLM sieve (and, last, Redfin) resolves it **once**, and the resulting perfect address is stored on the canonical record — so the next time that address appears, it resolves instantly against our own data and never needs an external lookup again.
 
+## Resolving an OUTSIDE address (Zillow-browsed homes, typed addresses)
+
+A home a lead **browsed on Zillow** (captured via FUB activity) is **not** a listing-intake event: it arrives as Zillow's address text — Zillow's ZIP, often a different city, usually **no MLS#** and **no coordinates**. It never runs through `resolveHome`, and even if it did, rung 1 misses on ZIP drift and rung 2 can't fire without coordinates. That is why a home we genuinely own (e.g. `411 NW 71st Terrace`) can fail to link from a lead's browsing history.
+
+The correct resolution for these is the same one-resolver principle: match on the address parts that **don't** drift — **house number + directional + street name + suffix** — region-gated (same ZIP, same city, or same 3-digit ZIP prefix) so a cross-metro collision can't produce a wrong link, and resolve **once at ingest**, storing the resulting `hlPropertyId`/slug on the activity so nothing is re-matched at read time. (Today the CRM lead-activity card does a drift-tolerant read-time match as a stopgap; the durable version folds this into `resolveHome` as a street-based rung and stores the id.)
+
 ## Data sources for a home
 
 Each field has exactly one authoritative source:
@@ -121,6 +171,7 @@ Geographic appreciation (`lib/valuation/appreciation.ts`) drifts an anchor value
 |---|---|
 | Deterministic normalizer (suffix/directional) | `lib/listings/canonical-address.ts` |
 | Address-as-ID service (identityKey, preferredCity, validateAddress) | `lib/listings/address-identity.ts` |
+| HouseLoop Property ID mint (`HLP- + md5(identityKey)`) + `hl_property` upsert | `lib/listings/cache.ts` |
 | Address resolver (identity → coords → mint) | `lib/listings/resolve-home.ts` |
 | Reconciliation engine — stage 2 (LLM sieve) | `scripts/twin-sieve.ts` |
 | Reconciliation engine — stage 3 (Redfin, last resort) | `tools/houseloop-reconcile/redfin-adjudicate.mjs` |
