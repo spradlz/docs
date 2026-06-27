@@ -42,6 +42,29 @@ typed Zach approval naming the table.** Note: `.claude/checkpoints/resolver-quar
 MATCH houses. Every children operation is MATCH → UPDATE an existing row. Anything found in dotloop/MLS/Zillow must
 match a house already on the canonical children list; external sources resolve/enrich, never grow the set.
 
+## 🏛️ THE 2-LAYER ARCHITECTURE (Zach LOCKED 2026-06-27 PM) — 6 source tables → resolver → 2 read tables
+
+**Not "2 tables instead of 6" — "6 SOURCE tables FEED 2 CANONICAL read tables."** Both stay.
+
+- **SOURCE (system of record, raw, never bulk-copied):** `sisu_transactions` · `hl_srg_mls_deals` ·
+  `hl_srg_dotloop_contracts` · `Listing` (Repliers) · `fub.*` (Camp David). The resolver READS these.
+- **READ MODEL (the 2 canonical tables):** PARENT (person + dossier) · CHILD (house facts + dossier). The card +
+  AI clone read **ONLY** these. Resolve ONCE, materialize on the child, read forever — never re-JOIN 6 tables at read time.
+
+**Two separate resolver processes:**
+1. **PERSON → PARENT (LLM):** query FUB for all of a person's FUB IDs (one human, 2–3 dupe records) → LLM connects them
+   → ONE dossier → PARENT.
+2. **HOUSE → CHILD (deterministic attach):** dotloop contract + MLS closing sheet + SISU → CHILD. No LLM. Agent falls
+   out of the contract/SISU; disposition = stored `sale_history` (sold-after-our-sale → moved → not-us → lost listing),
+   ≤1 county lookup, NO 50-deed swarm.
+
+<Warning>
+**THE NO-BIAS RULE.** Most child rows carry a STALE `determined_agent` from prior runs **while the source columns are
+EMPTY** (`sisu_agent`/`dl_loop_id`/`mls_number` = NULL) — a guessed agent on top of no evidence (the "50 times"
+pattern). **The resolver runs BLIND: never shown the prior agent/disposition/dossier; it tees up ONLY raw source
+evidence and resolves independently.** Showing the model the prior answer is not a test.
+</Warning>
+
 ## 🛑 THE LAW (locked 2026-06-27 10:57 AM EDT — read this first, it overrides everything below)
 
 **`hl_srg_past_client_homes` (the CHILD) is THE single source of truth. EVERY resolved fact is WRITTEN there as a
