@@ -1,213 +1,182 @@
 ---
 title: "TC Loop Build-Out (WIP Log)"
-description: "The running work-in-progress log of building TC Loop — HouseLoop's AI-driven Transaction Coordination product. Architecture decisions, data model, build checklist, and a dated changelog. Updated as the build progresses."
+description: "The running work-in-progress log of building TC Loop — HouseLoop's own Transaction Coordination platform (our own dotloop, owned end-to-end). Architecture decisions, data model, build gates, and a dated changelog."
 ---
 
 <Info>
 **Living document.** This is the build log for [TC Loop](/guides/transaction-coordination) — updated as work
 happens. It's the single place to see what's decided, what's built, what's staged, and what's next. Owner: Adam.
-Canonical spec: `GT_HOUSELOOP_TRANSACTION_COORDINATION_PRD.md` §12 (status/milestone model) + §13 (A-Frame engine).
+Canonical spec: `GT_HOUSELOOP_TRANSACTION_COORDINATION_PRD.md` §12–§14.
 </Info>
 
 ## Status (last updated 2026-06-27)
 
-**Phase: Configure template builders DONE; next is runtime.** Engine done. Configure builders all live:
-**Stages ✅, Milestones ✅ (full set + offset engine), Tasks ✅ (139 A-Frame steps + dynamic-date rule + phase
-bands + filter)**. Next: per-loop instantiation + the live cascade (runtime, with loop-birth), then Merge
-Fields, Email/Text templates, Forms.
+**Phase 1 — Configure template builders: DONE.** The A-Frame engine is reverse-engineered and rebuilt as
+editable, API-first Configure builders.
+**Phase 2 — Build our own dotloop (owned end-to-end): STARTING (G1).** We are NOT mirroring dotloop or handing
+it our documents — we own the whole stack: documents, forms, fill, **self-hosted Documenso e-signature**, the
+compliance archive, and a direct **SkySlope/eXp** push. dotloop drops out of the critical path.
 
+### Phase 1 — engine + Configure (✅ done)
 | Layer | State |
 |---|---|
 | Reverse-engineering (A-Frame + dotloop) | ✅ complete |
-| Status + milestone model | ✅ **locked** (PRD §12 + §13) |
-| Foundation data model (migrations 0253–0261) | ✅ applied |
+| Status + milestone + task model | ✅ **locked** (PRD §12 + §13), A-Frame parity (§13.6) |
+| Foundation data model (migrations 0253–0262) | ✅ applied |
 | Loop engine + API | ✅ createLoop · completeMilestone (forward-only) · GET loop |
-| **Configure → Stages** builder | ✅ reuses `StagesPage` scoped to TC |
-| **Configure → Milestones** builder | ✅ full set (14 buyer / 16 seller) + offset engine, editable |
-| **Configure → Tasks** builder | ✅ 139 tasks + **dynamic-date rule** + blue phase bands + phase filter |
-| Dynamic-date engine (`lib/tc/date-engine.ts`) | ✅ pure `computeDue`, 13/13 tests (business/calendar/holiday roll) |
+| **Configure → Stages / Milestones / Tasks** | ✅ built, editable, reuse CRM components |
+| Dynamic-date engine (`lib/tc/date-engine.ts`) | ✅ pure `computeDue`, 13/13 tests |
 | Platform re-brand switch (`{{platform.tc}}`) | ✅ one setting flips A-Frame → TC Loop |
-| **Configure → Merge Fields / Email / Text / Forms** | ⬜ |
-| TC surface tables — row kebab + bulk-delete | ✅ (CRM-wide convention + lint rule) |
-| **Runtime: per-loop instantiation + live cascade** | 🟡 next |
-| Appointment-set → Loop birth · TC loop-detail page · Myli-TC | ⬜ |
+
+### Phase 2 — our own dotloop (the build gates, PRD §14)
+| Gate | What | State |
+|---|---|---|
+| **G1** | Loop-detail page, **dotloop-styled**, on real data (Documents · People · Tasks) + instantiate folders/tasks at `createLoop` | 🟡 next |
+| **G2** | Forms + fill — our PDF templates + data-fill (skeleton built) → filled PDF into a folder | ⬜ |
+| **G3** | E-sign — **Documenso self-host**: place fields → send → store sealed signed PDF + audit cert | ⬜ |
+| **G4** | Runtime cascade — `computeLoopSchedule` fills dates from the 4 key dates; recompute on change | ⬜ (mig 0262 ready) |
+| **G5** | **SkySlope / eXp** integration — push signed docs for brokerage compliance | ⬜ |
+| **G6** | Myli-TC — autonomous fill → sign → file via the same endpoints | ⬜ |
+
+## ⭐ Build our own dotloop — owned end-to-end (LOCKED 2026-06-27)
+
+**The decision:** TC Loop is **our own dotloop**, built and owned **end-to-end on our side**. We do NOT hand
+dotloop our finished documents — that would just make it "a very expensive filing cabinet." dotloop is OUT of
+the critical path; at most it's a **legacy importer** (read historical SRG loops via the API we already have).
+
+**Why own it — the two hard reasons dotloop can't satisfy:**
+1. **dotloop can't fill or sign via API.** No API-fillable smart fields, and you can't place signature fields or
+   trigger a signature through its public API (UI-only). So Myli could never run a contract through dotloop.
+2. **SkySlope / eXp compliance requires we own the documents end-to-end** — we must push signed docs **directly
+   to SkySlope**, only possible if the documents live on our side.
+
+**The stack — all ours, reusing CRM components:**
+| Layer | What | Where |
+|---|---|---|
+| Loop | container + status/stage | `hl_transactions` + `hl_tc_stage` ✅ |
+| Documents | folders + document lines (**our source of truth**) | `hl_tc_loop_folder` / `hl_tc_loop_document` ✅ |
+| Forms + fill | our PDF templates + data-fill (Myli supplies values) | `lib/tc/{contract-forms,fill-contract,template-store}.ts` + `tools/houseloop-contracts/` — pdf-lib **drawText overlay** (not AcroForm) · `field-maps/` · `vision-field-builder.mjs` auto-maps fields · `{{signature/date/initial}}` e-sign tags ✅ skeleton |
+| E-signature | place fields · send · seal · audit | **Documenso, SELF-HOSTED** — to build |
+| Compliance archive | signed PDF + completion certificate, immutable, retained | our storage (R2) — to build |
+| Broker integration | push signed docs to **SkySlope (eXp)** | to build |
+| People / Tasks | participants + the A-Frame dated checklist | `hl_tc_loop_participant` ✅ · `hl_tc_loop_task` (mig 0262) ✅ |
+| The UI | loop-detail page **looks like dotloop**, powered by our engine | ref: `.claude/reports/aframe-recon/DOTLOOP_LOOP_LAYOUT.md` — to build |
+
+### E-signature = Documenso (self-hosted) + the compliance bar
+US e-signatures are governed by the **ESIGN Act (federal) + UETA** (both adopted by **Kansas and Missouri**). An
+e-signature is legally binding for agency/purchase contracts when we capture:
+1. **Intent to sign** · 2. **Consent** to do business electronically (a disclosure the signer agrees to) ·
+3. **Attribution** — the signature is provably tied to the signer (email/identity verify + IP + **timestamp**) ·
+4. **Integrity + retention** — the record is **tamper-evident** (document hash / digital seal) and retained,
+reproducible.
+
+The legal backbone is the **audit trail / completion certificate** (who · when · IP · email-verified · doc hash
+· event log) plus the **sealed** final PDF. US real estate does **not** require an RFC-3161 trusted-timestamp
+authority (that's EU/eIDAS) — a reliable system timestamp + audit log + seal is the accepted standard (what
+dotloop/DocuSign use). Broker **record retention** (KS/MO ~3 yrs) → we store the signed doc + certificate
+immutably.
+
+**Documenso provides all of it** — audit log, PDF digital-signature/certificate seal, completion certificate,
+and an API to place fields, send, and webhook on completion — and is **self-hostable**, so we own the data and
+pay **$0 per signature**. (Chosen over SignWell for ownership + no per-sig cost + SkySlope-grade control.)
+
+**dotloop's role now:** legacy historical-loop import only (read-only API in `lib/dotloop/client.ts`).
+Documenso replaces it for signing; SkySlope is the compliance destination.
 
 ## What we're building
 
-TC Loop = HouseLoop's own dotloop + A-Frame + Documenso, AI-driven. A **self-contained, role-gated surface**:
-a Transaction Coordinator logs in and has everything inside TC Loop (Dashboard · Loops · lead/loop detail ·
-Configure) and never touches the CRM pipeline. Built human-first — a person can run a loop entirely by hand;
-**Myli-TC is just another caller of the same API endpoints** (no AI backdoor). Every layer is editable +
-behind a REST API so Myli drives it the same way a human does.
+TC Loop = HouseLoop's own dotloop + the A-Frame engine + our Documenso e-sign, AI-driven. A **self-contained,
+role-gated surface**: a Transaction Coordinator logs in and has everything inside TC Loop (Dashboard · Loops ·
+lead/loop detail · Configure) and never touches the CRM pipeline. Built human-first — a person can run a loop
+entirely by hand; **Myli-TC is just another caller of the same API endpoints** (no AI backdoor).
 
 ## ⭐ A-Frame parity doctrine (LOCKED 2026-06-27)
 
-**Right now the stages, milestones, and tasks are an EXACT MIRROR of A-Frame** — the TC software the team runs
-on today. Names, phases, anchors, offsets, and assignees are lifted verbatim from the A-Frame recon. The **only**
-thing that's ours is the UI chrome (the blue section bands, pills, tables). The content is A-Frame's.
-
-**Why parity:** mirror A-Frame 1:1 so we can understand exactly how it operates and measure parity before we
-change anything. While in parity mode, a divergence in task content is a bug, not a feature.
-
-**Two deliberate, Zach-approved cleanups (label/UI only — not content):** (1) the listing pre-market phase
-labels were renamed from meaningless "Pre-Live: Stage 1…5" to A-Frame's real time phrases, with the two
-ambiguous ranges hard-set to single numbers; (2) the UI chrome is HouseLoop-native. The tasks themselves are
-untouched.
-
-**No per-task instruction manuals.** Verified from the recon: A-Frame's task `description` field is empty on all
-templates, and individual steps carry no how-to field — only name · due/anchor · assignee · (optional linked
-email). There was nothing to import, and we are **not** building an instructions layer now.
-
-**Future (deferred):** this A-Frame-mirrored set eventually converts to a **HouseLoop-native TC set** (rebranded
-names, possibly per-task instructions / Myli playbooks) — a later pass, only when we choose to "HouseLoop-ify"
-it. Until then every task stays A-Frame-faithful.
+The stages, milestones, and tasks are an **EXACT MIRROR of A-Frame** right now (names, phases, anchors, offsets,
+assignees lifted verbatim from the recon). The only thing that's ours is the UI chrome. **Why:** mirror A-Frame
+1:1 to understand + measure it before changing anything; a divergence in task content is a bug, not a feature.
+**No per-task instruction manuals** — A-Frame's task `description` is empty and steps carry no how-to field
+(verified); we're not building one. **Future (deferred):** convert to a HouseLoop-native set only when we
+"HouseLoop-ify" it.
 
 ### Re-platforming switch — `{{platform.tc}}` (mig 0260/0261)
+The ~60 task labels that name the platform itself store the token **`{{platform.tc}}`**, resolved at display
+time from `hl_settings` `tc_platform` → `value.name` (default **"AFRAME"**). Flip that one value to **"TC Loop"**
+to re-platform every label at once. Only the platform word is tokenized — SLACK/DOTLOOP/SKYSLOPE/FUB/SISU stay
+literal. Code: `lib/tc/platform.ts` (pure) + `lib/tc/platform-settings.ts` (server). Parity-safe today.
 
-The day we drop A-Frame, the task labels shouldn't need a 60-row find/replace. So the platform self-reference is
-a **merge-field token**. The ~60 task labels that name the TC platform itself ("AFRAME: Change Status",
-"AFRAME/SLACK: …", "DOTLOOP/AFRAME: …", "…into AFrame") store **`{{platform.tc}}`** instead of the literal word.
+## How A-Frame works — the 3-layer engine + dynamic dates
 
-- It resolves at **display time** from one setting — `hl_settings` key `tc_platform` → `value.name` (default
-  **"AFRAME"**). Code: `lib/tc/platform.ts` (`resolveTcPlatform`, pure/client-safe) + `lib/tc/platform-settings.ts`
-  (`getTcPlatformName`, server read).
-- **Parity-safe:** it resolves to "AFRAME" today, so the screen is unchanged. **The flip is one value** —
-  set `tc_platform.name` to **"TC Loop"** and all ~60 labels read "TC Loop: …" at once. (Flipped manually for
-  now; a Configure field can expose it later.)
-- **Only the platform self-reference is tokenized.** Real external tools stay literal: SLACK · DOTLOOP ·
-  SKYSLOPE · FOLLOW UP BOSS · SISU · GMAIL · CANVA · MLS · CALENDAR. So `AFRAME/SLACK:` →
-  `{{platform.tc}}/SLACK:` (only the A-Frame half flips). The edit modal keeps the **raw token**; only read-only
-  display resolves it, so saving never bakes the resolved value back in.
-
-## How A-Frame actually works — the 3-layer engine + dynamic dates (LOCKED 2026-06-27)
-
-Grounded in the A-Frame recon (`.claude/reports/aframe-recon/TC_MILESTONE_TASK_MAP.md`) + the TC-software
-research (`.claude/reports/tc-dynamic-dates-research-2026-06-27.md` — Open To Close gold reference + TRID).
 Three layers + an offset engine:
-
-1. **STATUS (11)** — the headline word. = our **Stages**. ~5/side.
+1. **STATUS** — the headline word = our **Stages** (~5/side).
 2. **DATES — 4 KEY DATES you ENTER drive everything:** `effective` (Under Contract) · `inspection_end` ·
-   `closing` · `on_market`. These are the **milestones'** anchors.
-3. **TASKS (139, in phase folders)** — every task = a **relative rule** (`anchor + offset`), grouped into
-   phases. Buyer = Intake · Contract Review · Scheduling · Communication · Compliance · Inspections · Appraisal
-   · Closing. Listing adds the **pre-market run-up** (chronologically first): **Within 24h of ERTS Signed · 10
-   Days Before Going Live · 5 Days Before Going Live · Listing Goes Live · Weekend After Going Live**.
+   `closing` · `on_market` — the milestones' anchors.
+3. **TASKS (139, in phase folders)** — each = a **relative rule** (`anchor + offset`). Buyer = Intake · Contract
+   Review · Scheduling · Communication · Compliance · Inspections · Appraisal · Closing. Listing adds the
+   pre-market run-up: Within 24h of ERTS Signed · 10 Days Before Going Live · 5 Days Before Going Live · Listing
+   Goes Live · Weekend After Going Live.
 
-**Dynamic dates = the offset engine done right (mig 0258 + `lib/tc/date-engine.ts`):** a task/milestone stores
-a RELATIVE rule, and the due date **computes from the live key date — so it cascades when the key date moves.**
-The rule: `anchor` (a key date) **or** another task (single-hop chain) · signed offset · **`day_unit`**
-(calendar / business / calendar-skip-weekend / week / month) · **`business_day_def`** (TRID `precise` counts
-Saturday, skips Sun + federal holidays; `general` skips Sat too) · **weekend/holiday roll** (lands on a
-non-working day → next/prev business day) · versioned **holiday calendar** (US_FEDERAL). Plus **conditional
-"If Applicable"** tasks (~25% — LBP/HOA/VA) + `task_type` (action/document). Engine proven: 13/13 unit tests
-(Friday-closing Sat-counts, weekend+holiday roll chain, month clamp).
+**Dynamic dates (mig 0258 + `lib/tc/date-engine.ts`):** a task/milestone stores a RELATIVE rule; the due date
+**computes from the live key date and cascades when it moves.** Rule = anchor (key date) or task→task chain ·
+signed offset · `day_unit` · `business_day_def` (TRID precise/general) · weekend/holiday roll · holiday calendar
+(US_FEDERAL) · conditional "If Applicable" · `task_type`. Proven: 13/13 unit tests.
 
-> **Status = headline · Milestones = the key dates that drive everything · Tasks = the auto-scheduled
-> checklist hanging off those dates.** Enter 4 dates → the whole plan schedules; move one → it all re-shifts.
+> **Status = headline · Milestones = the key dates · Tasks = the auto-scheduled checklist.** Enter 4 dates → the
+> plan schedules; move one → it all re-shifts.
 
-### Task counts (A-Frame parity)
-58 buyer + 81 listing = **139** (the exact A-Frame total). Listing's 81 = 57 contract-to-close + 24 pre-market.
-
-### The full milestone set (mig 0256, Configure → Milestones)
-`hl_tc_milestone_template`. **KEY DATE** (`is_key_date`) = entered per loop, drives offsets. `▸` = advances status.
-- **🔑 Buyer (14):** Exclusive Buyer Agency Prepped · Buyer Agreement Sent · Buyer Agreement Signed ·
-  **Under Contract** `[KEY] ▸` · EMD Due `eff+3` · **Inspection Period Ends** `[KEY]` · Inspection Resolution
-  `insp+5` · Title Commitment `eff+10` · Appraisal Received `eff+25` · Clear to Close `close−3` · Final
-  Walkthrough `close−1` · **Closing** `[KEY] ▸` · Funded · Possession.
-- **🏠 Seller/Listing (16):** Pre-Listing Packet (CMA) · Listing Agreement Sent · Listing Agreement Signed ·
-  Photos/Media `onmkt−4` · **On-Market** `[KEY] ▸Active` · **Under Contract** `[KEY] ▸` · EMD Received `eff+3` ·
-  **Inspection Period Ends** `[KEY]` · Inspection Resolution `insp+5` · Title Commitment `eff+10` · Appraisal
-  `eff+25` · Clear to Close `close−3` · Final Walkthrough `close−1` · **Closing** `[KEY] ▸` · Funded · Possession.
-
-> Buyer agreements (Single Property → Exclusive) are **milestones, not stages** — signing the Exclusive advances
-> to `Active Buyer`. No upstream "Showing" stage (re-confirmed 2026-06-27).
+**Task counts (A-Frame parity):** 58 buyer + 81 listing = **139**. Listing's 81 = 57 contract-to-close + 24 pre-market.
 
 ## Architecture (locked)
 
 1. **API-first.** Every loop action is a REST endpoint; UI + Myli call the same one.
 2. **Role-gated `/tc/**` surface.** No CRM↔TC toggles.
-3. **Reuse the engine, scope to TC. Never hand-roll** — every Configure page is identical (Add/Refresh header
-   + `PipelineSwitcher` + `HlDataTable`; modals = `HlFormModal`; filters = `HlFilterPills`; section headers =
-   the shared blue `SectionBand`; no KPI cards on a template editor).
+3. **Reuse CRM components. Never hand-roll** — `StagesPage`, `PipelineSwitcher`, `HlDataTable`, `HlFormModal`,
+   `HlFilterPills`, the shared blue `SectionBand`; no KPI cards on a template editor.
 4. **Side-aware** (TC Buyer vs TC Listing).
-5. **E-signature = Documenso.**
-6. **Real CRM tables** — `HlDataTable` (`hl/table-requires-actions`) + canonical `HlFormModal` modals.
+5. **E-signature = Documenso, self-hosted** (own data, $0/sig, cert-sealed, ESIGN/UETA). dotloop NOT in the path.
+6. **We own documents end-to-end** → push to SkySlope for compliance.
 
-## Data model — migrations 0253–0261
+## Data model — migrations 0253–0262
 
 `apps/houseloop-crm/db/migrations/` (additive + reversible; `node db/migrate.mjs` against `HL_CRM_DATABASE_URL`):
-- **0253** — foundation: loop columns + child tables + `hl_templates.scope`.
-- **0254** — TC pipelines in `hl_stages` · repoint `tc_stage_id` · `lost_reason` · `hl_tc_milestone_template` + extend `hl_tc_loop_event`.
+- **0253** — foundation: loop columns + child tables (`hl_tc_loop_folder/_document/_participant/_event`) + `hl_templates.scope`.
+- **0254** — TC pipelines · repoint `tc_stage_id` · `lost_reason` · `hl_tc_milestone_template`.
 - **0255** — milestone `color` + `icon`.
 - **0256** — full milestone set + offset-engine columns (`anchor`, `is_key_date`).
 - **0257** — `hl_tc_task_template` (139 A-Frame tasks).
-- **0258** — task **date-rule** (`day_unit`, `business_day_def`, weekend/holiday roll, `skip_holidays`, chains: `anchor_type`/`anchor_task_id`/`anchor_on`, `is_conditional`, `task_type`) · `hl_tc_phase` **folders** (`is_gated`) · `hl_holiday_calendar` (US_FEDERAL).
-- **0259** — listing pre-market phase **label rename** (real A-Frame time phrases; 7-10→10, 3-4→5) + Stage-3 offsets −4d→−5d. Label-only; `phase_key` join key unchanged.
-- **0260 / 0261** — **platform token**: `hl_settings` `tc_platform` switch (default "AFRAME") + tokenize the A-Frame self-reference in task labels to `{{platform.tc}}` (0260 caps prefixes, 0261 mixed-case prose).
-
-## The loop engine + date engine (built + proven)
-
-- `lib/tc/loop-engine.ts`: `createLoop` · `completeMilestone` (forward-only) · `getLoopStatus`/`listMilestones`.
-- `lib/tc/date-engine.ts`: pure `computeDue(anchor, rule, holidays)` — calendar/business/week/month + TRID
-  business-day defs + weekend/holiday rollover. **13/13 unit tests** (`npx tsx lib/tc/date-engine.test.ts`).
-- `lib/tc/platform.ts` (pure resolver) + `lib/tc/platform-settings.ts` (server read) — the `{{platform.tc}}`
-  re-brand switch.
-- REST: `/api/tc/loops[/:id]` · `/api/tc/milestones[/:id]` · `/api/tc/tasks[/:id]`.
+- **0258** — task **date-rule** + `hl_tc_phase` **folders** + `hl_holiday_calendar` (US_FEDERAL).
+- **0259** — listing pre-market phase label rename + Stage-3 offsets −4d→−5d.
+- **0260 / 0261** — `{{platform.tc}}` token + `hl_settings` `tc_platform` switch.
+- **0262** — **`hl_tc_loop_task`** (per-loop task instances, snapshot rule + computed `due_date` + `is_overridden`) + `provides_anchor` on key milestones (maps a key-date milestone → the anchor it feeds).
 
 ## Changelog
 
+### 2026-06-27 — LOCKED: build our own dotloop, owned end-to-end (Documenso self-host)
+- **Architecture pivot (Zach):** stop mirroring dotloop — own the whole stack. dotloop can't fill/sign via API
+  and SkySlope/eXp compliance needs us to own documents end-to-end, so dotloop leaves the critical path (legacy
+  import only). **E-sign = Documenso, self-hosted** (own data, $0/sig, PAdES cert seal + audit trail, ESIGN/UETA
+  compliant). Forms + fill are already skeletoned (`lib/tc/fill-contract.ts` + `tools/houseloop-contracts/`).
+  Captured the live dotloop loop layout as the UI reference (`DOTLOOP_LOOP_LAYOUT.md`). 6 build gates (G1–G6) in
+  PRD §14. **Migration 0262** adds the per-loop task instance table + key-date anchor mapping. G1 (dotloop-styled
+  loop-detail page on real data) is next.
+
 ### 2026-06-27 — Platform re-brand token (`{{platform.tc}}`)
-- The A-Frame platform self-reference in the ~60 task labels is now a merge-field token, so dropping A-Frame is a
-  one-setting flip instead of a 60-row rename. Mig **0260** (caps prefixes) + **0261** (mixed-case prose) +
-  `hl_settings` `tc_platform` switch (default "AFRAME"). Resolves at display time (`lib/tc/platform.ts` pure +
-  `lib/tc/platform-settings.ts` server). Parity-safe (renders "AFRAME" today); flip `value.name` → "TC Loop" to
-  re-platform everything. Only the platform word is tokenized — SLACK/DOTLOOP/SKYSLOPE/FUB/SISU stay literal.
-  Commit `a1023b3c60`.
+- The A-Frame platform self-reference in the ~60 task labels is now a merge-field token (mig 0260/0261 +
+  `hl_settings` `tc_platform`), so dropping A-Frame is a one-setting flip. Parity-safe. Commit `a1023b3c60`.
 
 ### 2026-06-27 — Section bands + Workflows header + pre-market rename
-- **Shared `SectionBand`** (`components/table/SectionBand.tsx`) — extracted the canonical blue attached-table
-  header (was a local copy inside the Workflows table) into one reusable component. Used by Workflows + TC Tasks.
-- **Configure → Tasks** — replaced the vibe-coded gray chevron phase folders with the blue `SectionBand`
-  attached flush per phase ("Intake 8"); dropped the "Showing N of M" toolbar (`HlDataTable` gained
-  `hideToolbar`/`flushTop`). Phase filter pills stay.
-- **Workflows** — moved the floating "Create Workflow" button up into the navy page header
-  (`WorkflowsHeaderActions`, mirrors TC Tasks' "Add Task"). Commit `e6ca6772bf`.
-- **Pre-market phase rename (mig 0259)** — the listing pre-market phases were seeded with meaningless bare
-  labels ("Pre-Live: Stage 1…5"). Renamed to A-Frame's real time phrases — **Within 24h of ERTS Signed · 10
-  Days Before Going Live · 5 Days Before Going Live · Listing Goes Live · Weekend After Going Live** — and
-  de-ambiguated the ranges (7-10→10, 3-4→5; Stage-3 task offsets snapped −4d→−5d so the date matches the label).
-  Label-only; tasks unchanged. Commit `74a4aa5d77`.
+- Shared blue `SectionBand` (extracted from Workflows) now used by Workflows + TC Tasks. TC Tasks: chevron
+  folders → blue band, "Showing N of M" dropped. Workflows: "Create Workflow" → navy header. Pre-market phases
+  renamed to real A-Frame time phrases (mig 0259). Commits `e6ca6772bf`, `74a4aa5d77`.
 
 ### 2026-06-27 — Dynamic dates + folders + phase filter (Configure → Tasks)
-- **Research** (3 agents → `.claude/reports/tc-dynamic-dates-research-2026-06-27.md`): Open To Close is the
-  gold reference; TCWorkflow confirms automatic cascade; TRID has two business-day defs; manual dates should be
-  sticky with a drift "re-link" nudge. Validated our anchor+offset model.
-- **Migration 0258** — task **relative-date rule** (anchor or single-hop task→task **chain** · `day_unit`
-  calendar/business/skip-weekend/week/month · `business_day_def` precise|general · weekend/holiday **roll** ·
-  `skip_holidays` + `hl_holiday_calendar` US_FEDERAL) · **conditional "If Applicable"** · `task_type` ·
-  **folder system** `hl_tc_phase` (gating-ready `is_gated`).
-- **`lib/tc/date-engine.ts`** — pure `computeDue`; **13/13 tests** (Friday-closing precise Sat-counts, weekend
-  + holiday roll chain, month clamp, roll-off, null anchor).
-- **Configure → Tasks** — phase **filter pills** (`HlFilterPills`, new canonical generic filter-pill — reuse
-  not fork) + full **date-rule modal** (anchor/chain, offset + counted-as, business-day basis, weekend/holiday
-  roll, conditional, type). API carries it all. Playwright-verified. Commit `dafd8beb5b`.
+- Mig 0258 relative-date rule + `hl_tc_phase` folders + holiday calendar; `lib/tc/date-engine.ts` `computeDue`
+  (13/13 tests); Configure → Tasks filter pills + date-rule modal. Commit `dafd8beb5b`.
 
-### 2026-06-27 — Task layer (Configure → Tasks): the 139 A-Frame checklist steps
-- **Migration 0257** — `hl_tc_task_template` seeded with all 139 A-Frame tasks (58 buyer / 81 sale), generated
-  from the recon map. API `/api/tc/tasks[/:id]`. Configure → Tasks builder mirrors the Stages/Milestones shell.
-- Also: Milestones page mirrors the Stages shell exactly; removed the meaningless KPI cards from template editors.
+### 2026-06-27 — Task layer + A-Frame engine + full milestone set
+- Mig 0257 (139 A-Frame tasks) + Configure → Tasks builder. Mig 0256 full milestone set (14 buyer / 16 seller) +
+  offset engine; A-Frame 3-layer engine reverse-engineered + persisted (PRD §13 + recon).
 
-### 2026-06-27 — A-Frame 3-layer engine reverse-engineered + full milestone set seeded
-- Reverse-engineered A-Frame (status/dates/tasks + offset engine) → recon artifact + PRD §13. Migration 0256:
-  full milestone set (14 buyer / 16 seller) + offset-engine columns. Milestones builder fully editable.
-
-### 2026-06-26 (PM, late) — Milestones builder · table row-actions sweep · canonical HlFormModal
-- Per-side Milestones builder. Every CRM table got the ⋮ kebab + bulk-delete (`hl/table-requires-actions`).
-  All Configure modals use the canonical blue-header `HlFormModal`.
-
-### 2026-06-26 (PM, late) — status/milestone model locked; pivoted to reuse + built the engine
-- Killed the hand-rolled TC Stages builder → reuse `StagesPage`. Locked the two-axis model (PRD §12).
-  Migration 0254. Built + proved the loop engine.
-
-### 2026-06-26 — reverse-engineering + foundation
-- Reverse-engineered A-Frame + dotloop. Migration 0253. Scope lock.
+### 2026-06-26 — Milestones builder · table actions · HlFormModal · model locked · foundation
+- Per-side Milestones builder; CRM-wide table kebab + bulk-delete; canonical blue-header `HlFormModal`; two-axis
+  status/milestone model locked (PRD §12); loop engine built (mig 0253/0254); A-Frame + dotloop reverse-engineered.
