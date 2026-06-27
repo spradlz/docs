@@ -1,0 +1,52 @@
+---
+title: "Home Identity & Permanent URL — Build-Out (WIP Log)"
+description: "The running work-in-progress log for HouseLoop's home-identity + SEO permalink work: making the home id a minted, rooftop-pinned HL-ID (not md5(address)), the URL permanent, canonicals absolute, duplicate-content forks killed, and the site indexable. Canonical ground truth lives in Property Data & Address Identity; this is the dated build log."
+---
+
+<Info>
+**Canonical ground truth** for this work is [Property Data & Address Identity](/guides/property-data-and-address-identity)
+(the model + the law) and the private GT SSOT `GT_HOUSELOOP_HOME_IDENTITY_SSOT.md`. This page is the **dated build
+log** — what's shipped, what's open, what's gated. Sibling: [Address Model & Carry-Forward (WIP)](/guides/address-model-wip)
+(Benji's enrichment carry-forward work — distinct lane, cross-linked).
+</Info>
+
+## The thesis (one line)
+**The rooftop is the identity.** Every house gets ONE minted, frozen HouseLoop ID pinned to its lat/lng — not
+`md5(address)`. The home URL is permanent (never re-indexes), which is the entire local-SEO moat. Address, ZIP,
+MLS#, status are mutable attributes; the id and the URL never move.
+
+## Why (the bug)
+`hlPropertyId = "HLP-" + md5(identityKey)` where `identityKey = canonical street + unit + ZIP5`. The id **is** the
+address, hashed — and ZIP is in it. Sources disagree on a home's ZIP (Zillow `411 NW 71st Ter, Kansas City, 64119`
+vs MLS `411 NW 71st Terrace, Gladstone, 64118` — the same house), so the home hashes to two ids → two slugs → two
+pages. **~75 such forks are live** (each a duplicate-content pair splitting Google authority). Google barely indexes
+the site, compounded by **relative canonical tags** (no `metadataBase`).
+
+## Architecture truth (measured)
+- The **live URL identity = `Listing.canonicalSlug`** (`/home/[slug]` resolves by it). `hl_property`/`hlPropertyId`
+  is a **side table** not wired to any URL/render path → low blast radius to fix.
+- One `/home/<canonicalSlug>` per home already shipped (2026-06-18 URL collapse); `/listings/*` 301s in; the route
+  301s a variant slug → the stored canonical. We **reuse** this — no new 301 campaign.
+- 100% of listings carry coordinates (free from Repliers) → coordinates are the drift-proof spine.
+
+## Build log
+
+### 2026-06-27 — sprint opened (Lee, owns end-to-end)
+- ✅ **Absolute canonicals.** Added `metadataBase: new URL("https://houseloop.ai")` to `app/layout.tsx` — every
+  canonical + og:url is now absolute site-wide (fixes the relative-canonical indexing defect). Ships next deploy.
+- ✅ **Docs.** Updated [Property Data & Address Identity](/guides/property-data-and-address-identity) with the
+  `md5(address)` finding, the Smarty-off reality, "lat/lng rung is load-bearing," the permanent-URL/SEO-moat section,
+  and the migration table. GT SSOT + PRD written.
+- 🟡 **Phase B — freeze the slug** (`cache.ts`): never recompute `canonicalSlug` once set → URL stops changing on
+  drift. [in progress]
+- 🟡 **Phase C — coordinate-pin** (`cache.ts linkListingToProperty`): find-or-create `hl_property` by lat/lng ~25 m
+  + unit first → reuse the existing HLP, mint opaque only for a new rooftop. Stops NEW forks. [in progress]
+- ⏳ **Phase D — kill the ~75 forks** (duplicate content): shadow-report → **Rule #0 typed approval (names `Listing`)**
+  → quarantine losers + `hl_slug_alias` 301 (reversible). [gated]
+- ⏳ **Phase E — Google Search Console**: verify houseloop.ai, submit `sitemap-index.xml`, read the Coverage report.
+  Needs Zach's Google account. [gated]
+- ⏳ **Phase F (optional)** — id-in-URL `/home/<slug>/<HLP>` (full Zillow pattern). Not required; deferred.
+
+## Guardrails
+Additive · reversible (`hl_dedup_quarantine` + `hl_slug_alias`/`hl_hlid_alias`) · **301 never 404** · shadow-first ·
+no county lookups · no URL-format change this sprint · destructive prod merge = Rule #0 typed Zach approval.
