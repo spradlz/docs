@@ -1,119 +1,109 @@
 ---
 title: "SRG Past-Client Reconciliation — Build-Out (WIP Log)"
-description: "The running work-in-progress log of building the SRG past-client resolver. Status, build checklist, doctrine, the cost engine, the eval + ground-truth cases, and a dated changelog."
+description: "The running work-in-progress log of building the SRG past-client resolver. The confidence-tier cost model, the deed-as-router doctrine, the deterministic engine, the free mover-finder, and a dated changelog."
 ---
 
 <Info>
-**Living document.** Build log for the SRG past-client resolver — facts + tools + principles + an eval harness.
-Owner: Caleb. Settled architecture: [SRG Past-Client Reconciliation](/guides/past-client-data-pipeline).
+**Living document.** Build log for the SRG past-client resolver. Owner: Caleb.
+Governing PRD: `GT_HOUSELOOP_PASTCLIENT_DETERMINISTIC_RESOLVER_PRD.md`. Settled architecture: [SRG Past-Client Reconciliation](/guides/past-client-data-pipeline).
 </Info>
 
 ## Status (last updated 2026-06-27)
 
 | Piece | State |
 |---|---|
-| Resolver intelligence (facts + tools + principles, no if/then) | ✅ built |
-| Eval harness + 5 ground-truth cases (`resolver-eval.mjs`) | ✅ Sonnet 5/5 green |
-| Investigator search sandbox (10 live tools) | ✅ wired |
-| dotloop contract download + loop index (17,455 loops) | ✅ live |
-| Pre-fetch (cut tool calls 23 → 8/lead) | ✅ built |
-| Model cascade (Haiku → escalate weak to Sonnet) | 🟡 built, verifying |
-| Migrations 0250 (reconciled SSOT cols) + 0251 (loop index) | ✅ applied |
-| Child write-back (flat columns mirror the dossier) | ⏳ agent-attribution fix pending |
-| Grow ground-truth set to ~68 | ⏳ next |
-| **Run the book (1,834)** | ⏳ after ground-truth |
+| Confidence matrix — classify all 1,834 by the data we hold | ✅ built |
+| Deterministic GREEN resolver (`deterministic-resolve.mjs`) | ✅ built, dry-run proven |
+| MLS-cross-ref address (`hl_srg_mls_deals` join, 100%) | ✅ wired |
+| County deed as the router (still-there vs moved) | ✅ wired (`verifyOwner`) |
+| Google Places geo fallback | ✅ wired |
+| Fix `not_found` matching in the 4 covered counties | ⏳ next |
+| Add Platte / Lafayette / Douglas county adapters | ⏳ next |
+| Write-lock the still-there tier | ⏳ next |
+| Mover-finder (gis_name_search + FUB, deed-verified, free) | ⏳ next |
+| YELLOW dotloop-agent probe · RED LLM on the ~48 | ⏳ next |
+| Eval harness + ground-truth (`resolver-eval.mjs`) | ✅ green; grow to ~68 |
 
-## 🧠 The architecture pivot (the big one)
+## The model (locked 2026-06-27)
 
-We **killed the if/then approach.** The resolver was a growing pile of hand-written rules that contradicted each
-other — classic whack-a-mole. The new model, locked 2026-06-27:
+**Make SISU complete.** SISU is canon for *which deals exist*, but it's full of blanks; each source fills one kind:
 
-> **Give the LLM the facts + every tool + a few PRINCIPLES (guardrails) + let it investigate. Then a ground-truth
-> eval harness catches it when it's wrong, so we fix the *principle* once instead of bolting on rule #47.**
+- **SISU** — the deal spine (client, $, close date). A deal exists or it doesn't.
+- **MLS** (`hl_srg_mls_deals`, joins 100% by `mls_number`) — the **true address / city / zip** (SISU's address is unreliable, always cross-reference the MLS closing).
+- **FUB** — the notes / investigative layer (current home, referral, moved out of state).
+- **dotloop** — the signed contract → the real agent (recovers departed agents) when an agent is in question.
+- **County deed** — disposition truth: who's on title now. **The router.**
+- **Google Places** — geo normalizer when MLS lacks a zip.
 
-The model is **not** lacking intelligence — when it got Nations' "current home" wrong, it had *faithfully followed
-a bad rule we gave it* (and even flagged its own uncertainty). The fix is always a principle or a missing fact,
-never another `if`.
+## The confidence-tier cost play
 
-## 🔎 The investigator (how it works now)
+Instead of paying the ~$0.50 LLM resolver on all 1,834, classify each client and resolve the cheapest way:
 
-The resolver (`tools/houseloop-cards/s6-investigator.mjs`) is an **agentic investigator** with the whole filing
-cabinet. Per client it gets a starting dossier, then **searches every source itself and triangulates**:
-
-| Tool | What it searches |
-|---|---|
-| `dotloop_loop_search` / `dotloop_contract` | every dotloop loop by name/address; the signed contract licensee (recovers departed agents) |
-| `mls_search` / `mls_listing_history` | our MLS by anything; listing history at an address (finds **Cancelled** listings) |
-| `sisu_search` | SISU paid closings |
-| `fub_search` | Follow Up Boss people + note text |
-| `county_owner` / `gis_name_search` | live county deed; surname → owned parcels |
-| `repliers_lookup` / `ninja_agents` | confirm a sale + find the competitor agent |
-
-## 📏 Doctrine locked this session (the principles, not rules)
-
-1. **Current home = the last RESIDENTIAL home in the transaction history (still owned), OR an explicit "they live
-   at X" note. NEVER a county/GIS surname guess** — a surname-owned parcel is usually an investment or a canceled
-   listing. If the last residential deal sold and no note says where they went → **UNKNOWN** (honest).
-2. **A Cancelled / Expired / Withdrawn listing of ours = a LOST OPPORTUNITY** (we had it, it didn't close) — surfaced
-   from `mls_listing_history`, never a current home. *(Nations 724 S Cherry = Ana's cancelled listing.)*
-3. **Chain-of-custody agent = the agent on OUR CLIENT'S side of the deal** — buyer client → the buying agent; seller
-   client → the listing agent. **Never the other side's agent.** *(Hutchens BOUGHT 1676 → April Atkinson, NOT the
-   seller's agent Stephanie Duston.)*
-4. **dotloop's loop list (by surname) is the most complete record of a client's deals with us** — it catches deals
-   the MLS/SISU attribution dropped. Build the transaction history from the UNION of SISU + MLS + dotloop.
-5. **Card format:** `CONTACTS → TRANSACTIONS WITH US (oldest→newest) → LOST TRANSACTION (most recent, competitor) →
-   LOST OPPORTUNITY (canceled listings) → CURRENT → DOSSIER`.
-
-## 💰 The cost engine
-
-The cost driver is **tool turns** (each re-sends context), not the model. Two levers:
-
-- **Pre-fetch** — the full dotloop loop list + MLS listing history at every address are pulled deterministically
-  ($0 LLM) into the dossier as sections `[9]`/`[10]`, so the model reads them instead of re-deriving via 20+ calls.
-  Cut tool calls **23 → 8/lead.**
-- **Model cascade** (`CASCADE=1`) — run **Haiku + pre-fetch** first (~$0.08/lead); if the output is **weak** (no
-  current residence, a deal with no agent, low confidence, unparsed) **escalate that one client to Sonnet**.
-
-**Measured costs (the 5 ground-truth complex cases):**
-
-| Engine | $/lead | Book (1,834) | Accuracy |
+| Tier | Definition | Engine | Cost |
 |---|---|---|---|
-| Sonnet (all) | ~$0.42 | ~$880 | 5/5 ✅ (consistent) |
-| Haiku + pre-fetch (all) | ~$0.08 | ~$145 | 3/5 (inconsistent — fails Hutchens-class) |
-| **Cascade (Haiku → Sonnet on weak)** | **~$0.12** | **~$220** | targeting 5/5 (Sonnet rescues the misses) |
+| 🟢 **GREEN** | 1–2 deals · real named agent · triangulated MLS home | `deterministic-resolve.mjs` (pure assembly) | **$0** |
+| 🟡 **YELLOW** | 1–2 deals · agent is Ana-only (departed agent hidden) | assembly + one `dotloop_contract` probe | cheap |
+| 🔴 **RED** | 3+ deals, ambiguous agents, or a deal missing triangulation | `s6-investigator.mjs` (Sonnet) | ~$0.30–0.50 |
+| 🚫 **DNC** | surname on the SRG agent roster + COI signal | DNC card | n/a |
 
-## ✅ The ground-truth cases (the eval set)
+**Within GREEN, the deed is the router** — and the split is FACT, not a guess:
 
-`resolver-ground-truth.mjs` — Zach's verified answers; `resolver-eval.mjs` diffs the resolver's `resolver_block`
-against them. Current set (5):
+- **`owner_match`** (client on title) → **lock free, high confidence** — current home = the bought address, deed-confirmed.
+- **`owner_differs`** (someone else on title) → **MOVED** — never assert the old address; route to the mover-finder.
+- **`ambiguous`** (trust/LLC) → likely still theirs, med, lockable.
+- **`not_found` / `out_of_coverage`** → can't verify → coverage pass (below).
 
-- **Nations** — Ana-only; current home UNKNOWN (last residence sold); 724 S Cherry = canceled-listing LOST
-  OPPORTUNITY; 301 E 68 = lost transaction (Audrie King); 2 Fourplexes held.
-- **Burton** — Team; lost listing (Jeremy David → KW, departed agent recovered from the contract).
-- **Chari** — Ana-only; current home 3216 Arboridge (deed-confirmed, Arboridge guard held); 3 KC rentals.
-- **Bazalgette** — Ana-only; relocated to Lake Havasu AZ (out-of-coverage, honest).
-- **Hutchens** — Team; all 3 deals April Atkinson (our side); 1676 = investment; Stephanie Duston was the *seller*.
+## The numbers (measured 2026-06-27)
 
-## 🛠️ Lessons / corrections logged this session
+- Deal distribution: 1 deal **1,430** · 2 deals **348** · 3+ deals **48** · 0 deals **8** (total 1,834).
+- GREEN eligible **~1,046**; BUY-LAST GREEN **766**.
+- 60-client sample: **30 still-there + 15 moved = 75% known to FACT** · 3 trust · 12 uncheckable.
+- **A mover is not "unknown"** — we know for a fact they left; only the new address is open.
 
-- An env-var bug (`e()` reads the `.env` file, not `process.env`) meant early "Haiku"/"Opus" model tests **actually
-  ran on Sonnet** — invalidated and re-run for real. Fixed: `process.env.RESOLVER_MODEL` read first.
-- The JSON verdict parser was brittle (crashed a whole client on Opus's formatting) → hardened to extract the first
-  balanced object and never crash.
-- Real Haiku **is** ~3.4× cheaper than Sonnet (the earlier "no savings" claim was the env-bug Sonnet).
+## The "uncheckable" is recoverable — not out of area
 
-## ⏳ What's left
+On the 12/60 sample, two fixable causes:
 
-1. **Cascade** — finish verifying it lands 5/5 on the eval (Haiku does the cheap majority, Sonnet rescues Hutchens-class).
-2. **Child write-back** — make the flat `hl_srg_past_client_homes` columns mirror the dossier's `transactions[].agent`
-   (currently can fall back to the raw MLS list-agent).
-3. **Grow the ground-truth set to ~68** — Zach's known-correct clients, the guardrail before the book.
-4. **Run the book** (1,834) on the cascade, eval-watched.
+| Cause | Share | What it is |
+|---|---|---|
+| `not_found` | ~75% | a county we **already cover** (Johnson/Jackson/Cass/Wyandotte) — the lookup missed the parcel (address-format). **Fix the matching.** |
+| `out_of_coverage` | ~25% | KC-metro fringe county with no scraper yet — **Platte MO, Lafayette MO (Odessa), Douglas KS (Baldwin City)**. Build the adapters. |
+
+Target: **75% → ~95%** of the book resolved to known fact, free.
+
+## The mover-finder — free, no paid skip-trace
+
+For every `owner_differs` (moved) client, find the new home with free tools. **The county deed is always the verifier.**
+
+1. **`gis_name_search(surname, county)`** — returns every parcel that surname *owns* in-county. Find **and** verify in one shot (deed-level). The strongest signal; expand across the 5 covered counties.
+2. **FUB notes/addresses** + **truepeoplesearch** (real-Chrome) — propose a candidate new address.
+3. **Verify every candidate** through `verifyOwner()` → only an `owner_match` promotes it to the confirmed current home; otherwise `current_residence = sold_moved_UNVERIFIED` (never a lie).
+4. **Outreach backstop** (downstream CRM lane) — the humble reactivation message surfaces the new address from the client directly.
+
+## Doctrine locked (principles, not rules)
+
+1. **SISU's address is unreliable — cross-reference the MLS closing** for every transaction's address/geo.
+2. **Never assert a current home the deed contradicts** (the Nations error). Sold/moved ≠ knowing where they live now.
+3. **No SISU = not a deal** — never invent a transaction or lost listing from a Repliers or dotloop-only signal.
+4. **Chain-of-custody agent = the agent on OUR client's side** (buyer client → buying agent; seller client → listing agent).
+5. **Card format:** `CONTACTS → TRANSACTIONS WITH US → CURRENT (deed-confirmed) → DOSSIER`.
+
+## The eval set
+
+`resolver-ground-truth.mjs` holds Zach's verified answers; `resolver-eval.mjs` diffs the resolver's `resolver_block` against them. Grow it to ~68 known-correct clients before the full book run.
+
+## What's left (work down the PRD §6)
+
+1. Fix `not_found` matching in the 4 covered counties.
+2. Add Platte / Lafayette / Douglas adapters.
+3. Write-lock the still-there tier (`--write`).
+4. Build the mover-finder.
+5. YELLOW dotloop probe · RED LLM on the ~48.
+6. Keep `resolver-eval.mjs` green; grow ground-truth to ~68.
+
+**Cost target:** book LLM spend ~$900 → **≤ ~$50** (RED tier only).
 
 ## Changelog
 
-- **2026-06-27** — Architecture pivot (facts + tools + principles + eval). Built the eval harness + 5 cases,
-  the investigator search sandbox, pre-fetch, the model cascade, hardened the JSON parser. Locked the current-home,
-  canceled-listing, chain-of-custody, and card-format doctrine. Cost solved: cascade ~$220 book.
-- **2026-06-26** — dotloop contract download wired (recovers departed agents); loop index (17,455 loops);
-  migrations 0250/0251; reconciled-SSOT schema.
+- **2026-06-27 (PM)** — Pivot to the **deterministic confidence-tier** model (replaces the earlier "unleash the LLM investigator on everything"). Built `deterministic-resolve.mjs`: MLS-cross-ref address + county-deed router + Places geo fallback + 5-section note + DNC pre-filter. Proven on dry-run (perfect locks; caught movers before any false write). Locked "make SISU complete" + "the deed is the router". Wrote the governing PRD.
+- **2026-06-26** — dotloop contract download wired (recovers departed agents); loop index (17,455 loops); reconciled-SSOT schema.
