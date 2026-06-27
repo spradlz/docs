@@ -1,0 +1,121 @@
+---
+title: "SRG Past-Client Reconciliation — Work In Progress"
+description: "The LIVING status of the SRG past-client resolver build. What's built, what's proven, the doctrine locked, the cost engine (pre-fetch + model cascade), the eval harness + ground-truth cases, and what's left before we run the book. Updated continuously as the work moves."
+---
+
+<Note>
+**This is a living WIP log.** It is the running status of the past-client resolver build — kept current as the
+work moves, so anyone can see exactly where we are. The settled architecture lives in
+[SRG Past-Client Reconciliation](/guides/past-client-data-pipeline); this page is the **build journal**.
+Owner: Caleb.
+</Note>
+
+## ⚡ Status at a glance (2026-06-27)
+
+| Piece | State |
+|---|---|
+| Resolver intelligence (facts + tools + principles, no if/then) | ✅ built |
+| Eval harness + 5 ground-truth cases (`resolver-eval.mjs`) | ✅ Sonnet 5/5 green |
+| Investigator search sandbox (10 live tools) | ✅ wired |
+| dotloop contract download + loop index (17,455 loops) | ✅ live |
+| Pre-fetch (cut tool calls 23 → 8/lead) | ✅ built |
+| Model cascade (Haiku → escalate weak to Sonnet) | 🟡 built, verifying |
+| Migrations 0250 (reconciled SSOT cols) + 0251 (loop index) | ✅ applied |
+| Child write-back (flat columns mirror the dossier) | ⏳ agent-attribution fix pending |
+| Grow ground-truth set to ~68 | ⏳ next |
+| **Run the book (1,834)** | ⏳ after ground-truth |
+
+## 🧠 The architecture pivot (the big one)
+
+We **killed the if/then approach.** The resolver was a growing pile of hand-written rules that contradicted each
+other — classic whack-a-mole. The new model, locked 2026-06-27:
+
+> **Give the LLM the facts + every tool + a few PRINCIPLES (guardrails) + let it investigate. Then a ground-truth
+> eval harness catches it when it's wrong, so we fix the *principle* once instead of bolting on rule #47.**
+
+The model is **not** lacking intelligence — when it got Nations' "current home" wrong, it had *faithfully followed
+a bad rule we gave it* (and even flagged its own uncertainty). The fix is always a principle or a missing fact,
+never another `if`.
+
+## 🔎 The investigator (how it works now)
+
+The resolver (`tools/houseloop-cards/s6-investigator.mjs`) is an **agentic investigator** with the whole filing
+cabinet. Per client it gets a starting dossier, then **searches every source itself and triangulates**:
+
+| Tool | What it searches |
+|---|---|
+| `dotloop_loop_search` / `dotloop_contract` | every dotloop loop by name/address; the signed contract licensee (recovers departed agents) |
+| `mls_search` / `mls_listing_history` | our MLS by anything; listing history at an address (finds **Cancelled** listings) |
+| `sisu_search` | SISU paid closings |
+| `fub_search` | Follow Up Boss people + note text |
+| `county_owner` / `gis_name_search` | live county deed; surname → owned parcels |
+| `repliers_lookup` / `ninja_agents` | confirm a sale + find the competitor agent |
+
+## 📏 Doctrine locked this session (the principles, not rules)
+
+1. **Current home = the last RESIDENTIAL home in the transaction history (still owned), OR an explicit "they live
+   at X" note. NEVER a county/GIS surname guess** — a surname-owned parcel is usually an investment or a canceled
+   listing. If the last residential deal sold and no note says where they went → **UNKNOWN** (honest).
+2. **A Cancelled / Expired / Withdrawn listing of ours = a LOST OPPORTUNITY** (we had it, it didn't close) — surfaced
+   from `mls_listing_history`, never a current home. *(Nations 724 S Cherry = Ana's cancelled listing.)*
+3. **Chain-of-custody agent = the agent on OUR CLIENT'S side of the deal** — buyer client → the buying agent; seller
+   client → the listing agent. **Never the other side's agent.** *(Hutchens BOUGHT 1676 → April Atkinson, NOT the
+   seller's agent Stephanie Duston.)*
+4. **dotloop's loop list (by surname) is the most complete record of a client's deals with us** — it catches deals
+   the MLS/SISU attribution dropped. Build the transaction history from the UNION of SISU + MLS + dotloop.
+5. **Card format:** `CONTACTS → TRANSACTIONS WITH US (oldest→newest) → LOST TRANSACTION (most recent, competitor) →
+   LOST OPPORTUNITY (canceled listings) → CURRENT → DOSSIER`.
+
+## 💰 The cost engine
+
+The cost driver is **tool turns** (each re-sends context), not the model. Two levers:
+
+- **Pre-fetch** — the full dotloop loop list + MLS listing history at every address are pulled deterministically
+  ($0 LLM) into the dossier as sections `[9]`/`[10]`, so the model reads them instead of re-deriving via 20+ calls.
+  Cut tool calls **23 → 8/lead.**
+- **Model cascade** (`CASCADE=1`) — run **Haiku + pre-fetch** first (~$0.08/lead); if the output is **weak** (no
+  current residence, a deal with no agent, low confidence, unparsed) **escalate that one client to Sonnet**.
+
+**Measured costs (the 5 ground-truth complex cases):**
+
+| Engine | $/lead | Book (1,834) | Accuracy |
+|---|---|---|---|
+| Sonnet (all) | ~$0.42 | ~$880 | 5/5 ✅ (consistent) |
+| Haiku + pre-fetch (all) | ~$0.08 | ~$145 | 3/5 (inconsistent — fails Hutchens-class) |
+| **Cascade (Haiku → Sonnet on weak)** | **~$0.12** | **~$220** | targeting 5/5 (Sonnet rescues the misses) |
+
+## ✅ The ground-truth cases (the eval set)
+
+`resolver-ground-truth.mjs` — Zach's verified answers; `resolver-eval.mjs` diffs the resolver's `resolver_block`
+against them. Current set (5):
+
+- **Nations** — Ana-only; current home UNKNOWN (last residence sold); 724 S Cherry = canceled-listing LOST
+  OPPORTUNITY; 301 E 68 = lost transaction (Audrie King); 2 Fourplexes held.
+- **Burton** — Team; lost listing (Jeremy David → KW, departed agent recovered from the contract).
+- **Chari** — Ana-only; current home 3216 Arboridge (deed-confirmed, Arboridge guard held); 3 KC rentals.
+- **Bazalgette** — Ana-only; relocated to Lake Havasu AZ (out-of-coverage, honest).
+- **Hutchens** — Team; all 3 deals April Atkinson (our side); 1676 = investment; Stephanie Duston was the *seller*.
+
+## 🛠️ Lessons / corrections logged this session
+
+- An env-var bug (`e()` reads the `.env` file, not `process.env`) meant early "Haiku"/"Opus" model tests **actually
+  ran on Sonnet** — invalidated and re-run for real. Fixed: `process.env.RESOLVER_MODEL` read first.
+- The JSON verdict parser was brittle (crashed a whole client on Opus's formatting) → hardened to extract the first
+  balanced object and never crash.
+- Real Haiku **is** ~3.4× cheaper than Sonnet (the earlier "no savings" claim was the env-bug Sonnet).
+
+## ⏳ What's left
+
+1. **Cascade** — finish verifying it lands 5/5 on the eval (Haiku does the cheap majority, Sonnet rescues Hutchens-class).
+2. **Child write-back** — make the flat `hl_srg_past_client_homes` columns mirror the dossier's `transactions[].agent`
+   (currently can fall back to the raw MLS list-agent).
+3. **Grow the ground-truth set to ~68** — Zach's known-correct clients, the guardrail before the book.
+4. **Run the book** (1,834) on the cascade, eval-watched.
+
+## Changelog
+
+- **2026-06-27** — Architecture pivot (facts + tools + principles + eval). Built the eval harness + 5 cases,
+  the investigator search sandbox, pre-fetch, the model cascade, hardened the JSON parser. Locked the current-home,
+  canceled-listing, chain-of-custody, and card-format doctrine. Cost solved: cascade ~$220 book.
+- **2026-06-26** — dotloop contract download wired (recovers departed agents); loop index (17,455 loops);
+  migrations 0250/0251; reconciled-SSOT schema.
