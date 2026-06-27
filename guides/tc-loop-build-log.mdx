@@ -32,12 +32,43 @@ and a direct **SkySlope/eXp** push. dotloop drops out of the critical path. Next
 ### Phase 2 — our own dotloop (the build gates, PRD §14)
 | Gate | What | State |
 |---|---|---|
-| **G1** | The **TC loop view** = the existing lead-detail page driven into a TC `view` mode (REUSE the real components — no new shells) | ✅ **shipped** (P0–P6) |
+| **G1** | The **TC loop view** = the existing lead-detail page driven into a TC `view` mode (REUSE the real components — no new shells) | ✅ **shipped** (P0–P6) + multi-loop sit-rep header |
 | **G2** | Forms + fill — our PDF templates + data-fill → filled PDF (R2) into a loop folder, from the Documents tab | ✅ **shipped** (fill→R2→`hl_tc_loop_document`) |
 | **G3** | E-sign — **Documenso self-host**: place fields → send → store sealed signed PDF + audit cert | ⬜ next |
 | **G4** | Runtime cascade — `computeLoopSchedule` fills dates from the 4 key dates; recompute on change | ⬜ (mig 0262 ready) |
 | **G5** | **SkySlope / eXp** integration — push signed docs for brokerage compliance | ⬜ |
 | **G6** | Myli-TC — autonomous fill → sign → file via the same endpoints | ⬜ |
+
+## ⭐ Multi-loop sit-rep header + Buyer/Seller toggle (✅ SHIPPED 2026-06-27)
+
+**A loop is ONE side** (`hl_transactions.transaction_type` `purchase`→Buyer / `sale`→Seller). A client buying
+AND selling has **two loops**. The TC Milestones-band navy header is now a **one-line sit-rep** so you can read
+both deals at a glance and flip between them:
+
+```
+MILESTONES    CLIENT: JESSICA MOORE    BUYER · NEW LEAD · JUL 31    SELLER · ACTIVE LISTING · JUL 12    [ Buyer | Seller ]
+```
+
+- **No pills — big bold white ALL-CAPS text** on the navy header. `MILESTONES` label left; `CLIENT: <name>` +
+  one line **per loop** (`<SIDE> · <stage> · <key date>`, **Buyer first**) centered; the `Buyer | Seller` toggle
+  pinned right (shown only when the lead has BOTH a buyer and a seller loop). One line, never wraps.
+- **Active side = full white + a thin underline accent;** the inactive side is muted (`--hl-on-navy-text-muted`)
+  but still clickable. The per-side `status` = the lead's side-matched pipeline stage (falls back to the loop's
+  Transaction Status); `key date` = the `closed` milestone date, else `under_contract`.
+- **The active loop is a URL param** `?loop=<loopId>` (alongside `?view=tc`). Clicking a side or flipping the
+  toggle → `router.push(/leads/<id>?view=tc&loop=<loopId>)`. The page reads `searchParams.loop` (validating it
+  belongs to the lead, else most-recent wins) and feeds that **same `tcLoopId` to BOTH `CenterLane` (hero cards +
+  tabs + milestone track) and `MilestoneBand`** — so the whole TC view re-points to the selected side. No new
+  client-state plumbing.
+- **Reuse, no new shell** (`hl/no-duplicate-shell-components` passes): the milestone TRACK is unchanged; the
+  sit-rep is plain tokenized text on the existing navy header; the toggle reuses the canonical
+  `hl-toggle hl-toggle--sm` switch (same component as LeadLane's Agent/TC toggle). **Single loop (the 99%)** =
+  just `CLIENT:` + that one side's line, **no toggle**.
+- **Data/API:** `listLoopsForLead(leadId)` (`lib/tc/loop-engine.ts`) → `GET /api/tc/loops?leadId=<id>` returns
+  `[{ id, side, stageName, ucDate, closeDate }]` newest-first; `MilestoneBand` fetches it for the header.
+- **Files:** `components/leads/detail/MilestoneBand.tsx`, `app/(crm)/leads/[id]/page.tsx` (the `?loop` seam),
+  `app/api/tc/loops/route.ts` (GET), `lib/tc/loop-engine.ts` (`listLoopsForLead`). Agent view (no `?view=tc`)
+  stays band-free.
 
 ## ⭐ G2 — Forms + fill INTO the loop (✅ SHIPPED 2026-06-27)
 
@@ -215,6 +246,16 @@ signed offset · `day_unit` · `business_day_def` (TRID precise/general) · week
 - **0263** — `hl_role.is_system` + `grants_tc` (built-in undeletable Real Estate Agent + Transaction Coordinator; TC view gate).
 
 ## Changelog
+
+### 2026-06-27 — ✅ Multi-loop sit-rep header + Buyer/Seller toggle
+- A loop is ONE side; a client buying AND selling has two loops. The TC Milestones-band navy header is now a
+  one-line sit-rep — `MILESTONES · CLIENT: <name> · <SIDE> · <stage> · <key date>` per loop (Buyer first), big
+  bold white ALL-CAPS (no pills), with a `Buyer | Seller` toggle (dual-side only). The active side is white +
+  underlined; the inactive side is muted + clickable. The active loop is a URL param `?loop=<id>` read by the
+  page seam and fed to **both** `CenterLane` (hero cards + tabs + track) and `MilestoneBand`, so flipping a side
+  re-points the whole TC view. Reuse-only: the `hl-toggle` switch + plain tokenized text on the existing navy
+  header (`hl/no-duplicate-shell-components` passes). New: `listLoopsForLead` + `GET /api/tc/loops?leadId`.
+  Single loop = one line, no toggle. Agent view stays band-free.
 
 ### 2026-06-27 — ✅ G2 SHIPPED: Forms + fill INTO the loop
 - `POST /api/tc/loops/[id]/documents` fills a contract from the loop's lead/deal (reusing `fillContract` /
