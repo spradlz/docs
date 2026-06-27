@@ -14,9 +14,9 @@ Canonical spec: `GT_HOUSELOOP_TRANSACTION_COORDINATION_PRD.md` §12–§14. UI s
 
 **Phase 1 — Configure template builders: DONE.** A-Frame engine reverse-engineered + rebuilt as editable,
 API-first Configure builders.
-**Phase 2 — Build our own dotloop (owned end-to-end): BUILDING. G1 (the TC loop view) = ✅ SHIPPED.** We own the
-whole stack: documents, forms, fill, **self-hosted Documenso e-signature**, the compliance archive, and a direct
-**SkySlope/eXp** push. dotloop drops out of the critical path. Next gate: **G2 (forms + fill)**.
+**Phase 2 — Build our own dotloop (owned end-to-end): BUILDING. G1 (TC loop view) + G2 (forms + fill) = ✅ SHIPPED.**
+We own the whole stack: documents, forms, fill, **self-hosted Documenso e-signature**, the compliance archive,
+and a direct **SkySlope/eXp** push. dotloop drops out of the critical path. Next gate: **G3 (Documenso e-sign)**.
 
 ### Phase 1 — engine + Configure (✅ done)
 | Layer | State |
@@ -24,7 +24,7 @@ whole stack: documents, forms, fill, **self-hosted Documenso e-signature**, the 
 | Reverse-engineering (A-Frame + dotloop) | ✅ complete |
 | Status + milestone + task model | ✅ **locked** (PRD §12 + §13), A-Frame parity (§13.6) |
 | Foundation data model (migrations 0253–0263) | ✅ applied |
-| Loop engine + API | ✅ createLoop (instantiates milestones + tasks) · completeMilestone · GET loop bundle (+ `kpis`) |
+| Loop engine + API | ✅ createLoop (instantiates milestones + tasks) · completeMilestone · GET loop bundle (+ `kpis`) · POST loop document (fill) |
 | **Configure → Stages / Milestones / Tasks** | ✅ built, editable, reuse CRM components |
 | Dynamic-date engine (`lib/tc/date-engine.ts`) | ✅ pure `computeDue`, 13/13 tests |
 | Platform re-brand switch (`{{platform.tc}}`) | ✅ one setting flips A-Frame → TC Loop |
@@ -32,12 +32,31 @@ whole stack: documents, forms, fill, **self-hosted Documenso e-signature**, the 
 ### Phase 2 — our own dotloop (the build gates, PRD §14)
 | Gate | What | State |
 |---|---|---|
-| **G1** | The **TC loop view** = the existing lead-detail page driven into a TC `view` mode (REUSE the real components — no new shells) | ✅ **shipped** (P0–P5 + open-in-TC) |
-| **G2** | Forms + fill — our PDF templates + data-fill (skeleton built) → filled PDF into a folder | ⬜ next |
-| **G3** | E-sign — **Documenso self-host**: place fields → send → store sealed signed PDF + audit cert | ⬜ |
+| **G1** | The **TC loop view** = the existing lead-detail page driven into a TC `view` mode (REUSE the real components — no new shells) | ✅ **shipped** (P0–P6) |
+| **G2** | Forms + fill — our PDF templates + data-fill → filled PDF (R2) into a loop folder, from the Documents tab | ✅ **shipped** (fill→R2→`hl_tc_loop_document`) |
+| **G3** | E-sign — **Documenso self-host**: place fields → send → store sealed signed PDF + audit cert | ⬜ next |
 | **G4** | Runtime cascade — `computeLoopSchedule` fills dates from the 4 key dates; recompute on change | ⬜ (mig 0262 ready) |
 | **G5** | **SkySlope / eXp** integration — push signed docs for brokerage compliance | ⬜ |
 | **G6** | Myli-TC — autonomous fill → sign → file via the same endpoints | ⬜ |
+
+## ⭐ G2 — Forms + fill INTO the loop (✅ SHIPPED 2026-06-27)
+
+**A form is filled from the loop's own data and the filled PDF lands in a loop folder as a document — all on our
+side, fill engine reused verbatim (no fork).**
+- **Endpoint:** `POST /api/tc/loops/[id]/documents` `{ formKey, folderId? }` — builds a `FillContext` from the
+  loop's lead/deal (same shape `ContractFormsPage` uses: buyer name, agent name, deal address from the loop row)
+  → `getTemplateBytes` → `fillContract` → uploads the filled PDF to **R2** (`tc-loops/<loopId>/<form>.pdf`) →
+  inserts `hl_tc_loop_document` (`file_url` + `contract_fill_id` — both already existed, **no migration**). If the
+  loop has no folder it auto-creates a "Forms" folder so the doc always renders. Clean 400/404/500 (no silent fail).
+- **UI:** an **"Add from Form"** button + `AddFromFormModal` in the TC **Documents** tab (reuses `HlFormModal`;
+  templates from the existing `/api/tc/contract/templates`); on submit it refetches the loop bundle so the new
+  doc appears under its folder. No new shell component (`hl/no-duplicate-shell-components` passes).
+- **Storage = R2** (same S3 client/creds as the photo engine; `uploadBufferToR2` added to `lib/media/r2.ts`).
+  Filled PDFs are **never** base64'd into Postgres.
+- **Verified real:** the filled PDF fetched back HTTP 200, `application/pdf`, `%PDF-1.7`, with genuine field
+  values (`f_buyerName`, `f_brokerName=eXp Realty LLC`, `f_agentName`, `f_date`). Agent view unchanged.
+- **Local dev note:** `R2_PHOTOS_*` live in repo-root `.env`; mirror them into `apps/houseloop-crm/.env.local`
+  (gitignored) or local "Add from Form" returns "storage not configured." Prod (Railway) already has them.
 
 ## ⭐ TC Loop UI — REUSE the lead-detail in a TC view mode (✅ SHIPPED 2026-06-27)
 
@@ -60,6 +79,7 @@ whole stack: documents, forms, fill, **self-hosted Documenso e-signature**, the 
 | **P3** | 6 TC KPI cards | `StatStrip` parameterized with `tcKpis` (same `StatCard` 6-grid) |
 | **P4** | View-aware dock tabs (Website→Documents, Deals→People) | `DockBar` items branch on `isTcView` |
 | **P5** | Tasks / Documents / People tab bodies | `ActivePanel` branch → `HlDataTable` + `SectionBand`; comms tabs reuse the lead streams unchanged |
+| **P6** | Open a loop → lands in TC mode | `/tc/transactions/[id]` redirects to `/leads/[id]?view=tc` |
 
 **6 KPI cards (this deal, never system totals):** Last Ctct · Stage · UC Days · To Close · Docs (X/Y) ·
 Awaiting — rendered by the **existing** `StatStrip` (same 6-grid as the lead view). Labels kept ≤10 chars to fit
@@ -103,8 +123,8 @@ the critical path; at most it's a **legacy importer** (read historical SRG loops
 |---|---|---|
 | Loop | container + status/stage | `hl_transactions` + `hl_tc_stage` ✅ |
 | Documents | folders + document lines (**our source of truth**) | `hl_tc_loop_folder` / `hl_tc_loop_document` ✅ |
-| Forms + fill | our PDF templates + data-fill (Myli supplies values) | `lib/tc/{contract-forms,fill-contract,template-store}.ts` + `tools/houseloop-contracts/` — pdf-lib **drawText overlay** (not AcroForm) · `field-maps/` · `vision-field-builder.mjs` auto-maps fields · `{{signature/date/initial}}` e-sign tags ✅ skeleton |
-| E-signature | place fields · send · seal · audit | **Documenso, SELF-HOSTED** — to build |
+| Forms + fill | our PDF templates + data-fill → filled PDF (R2) into a loop folder | `lib/tc/{contract-forms,fill-contract,template-store}.ts` + `POST /api/tc/loops/[id]/documents` + Documents-tab "Add from Form" ✅ |
+| E-signature | place fields · send · seal · audit | **Documenso, SELF-HOSTED** — to build (G3) |
 | Compliance archive | signed PDF + completion certificate, immutable, retained | our storage (R2) — to build |
 | Broker integration | push signed docs to **SkySlope (eXp)** | to build |
 | People / Tasks | participants + the A-Frame dated checklist | `hl_tc_loop_participant` ✅ · `hl_tc_loop_task` (mig 0262) ✅ |
@@ -183,7 +203,7 @@ signed offset · `day_unit` · `business_day_def` (TRID precise/general) · week
 ## Data model — migrations 0253–0263
 
 `apps/houseloop-crm/db/migrations/` (additive + reversible; `node db/migrate.mjs` against `HL_CRM_DATABASE_URL`):
-- **0253** — foundation: loop columns + child tables (`hl_tc_loop_folder/_document/_participant/_event`) + `hl_templates.scope`.
+- **0253** — foundation: loop columns + child tables (`hl_tc_loop_folder/_document/_participant/_event`) + `hl_templates.scope`. (`hl_tc_loop_document` already carries `file_url` + `contract_fill_id` — what G2 fill uses.)
 - **0254** — TC pipelines · repoint `tc_stage_id` · `lost_reason` · `hl_tc_milestone_template`.
 - **0255** — milestone `color` + `icon`.
 - **0256** — full milestone set + offset-engine columns (`anchor`, `is_key_date`).
@@ -196,15 +216,23 @@ signed offset · `day_unit` · `business_day_def` (TRID precise/general) · week
 
 ## Changelog
 
-### 2026-06-27 — ✅ G1 SHIPPED: TC view mode (P0–P5) + open-loop-in-TC
+### 2026-06-27 — ✅ G2 SHIPPED: Forms + fill INTO the loop
+- `POST /api/tc/loops/[id]/documents` fills a contract from the loop's lead/deal (reusing `fillContract` /
+  `getTemplateBytes` / `contractFormByKey` verbatim), uploads the filled PDF to **R2** (`uploadBufferToR2` added
+  to `lib/media/r2.ts`), and inserts `hl_tc_loop_document` (`file_url` + `contract_fill_id` already existed → **no
+  migration**); auto-creates a "Forms" folder when the loop has none. UI: an **"Add from Form"** button +
+  `AddFromFormModal` in the TC Documents tab (reuses `HlFormModal`; templates from `/api/tc/contract/templates`),
+  refetches the bundle on submit. Verified real (R2 200, `%PDF-1.7`, fields filled). Commits `639a91aa32` (backend)
+  + `d870a6dfac` (UI). Open: G3 (Documenso e-sign).
+
+### 2026-06-27 — ✅ G1 SHIPPED: TC view mode (P0–P6) + open-loop-in-TC
 - The TC loop view is live as a **`view='tc'` mode on the real lead-detail page** — zero new shell components
   (`hl/no-duplicate-shell-components` passes). **P0** system roles (mig 0263, `grants_tc` gate) · **P1** inline
   `Agent ⇄ TC` toggle in the navy lane header · **P2** loop-stage stepper (reuse `PipelineStepperRow` read-only)
   · **P3** 6 TC KPI cards (reuse `StatStrip` via `tcKpis`) · **P4** view-aware dock (Website→Documents,
-  Deals→People) · **P5** Tasks/Documents/People bodies (reuse `HlDataTable` + `SectionBand`). Loop bundle API
-  gained a `kpis` object (one source). **Fixes:** `/tc/transactions/[id]` now redirects to `?view=tc` (was
-  defaulting to Agent view); TC KPI labels shortened to fit the `StatCard`. Agent view verified byte-identical.
-  Pushed `f1e71c8496` (Railway). Open: G2 (forms + fill).
+  Deals→People) · **P5** Tasks/Documents/People bodies (reuse `HlDataTable` + `SectionBand`) · **P6**
+  `/tc/transactions/[id]` redirects to `?view=tc`. Loop bundle API gained a `kpis` object (one source). TC KPI
+  labels shortened to fit the `StatCard`. Agent view verified byte-identical. Pushed `f1e71c8496` (Railway).
 
 ### 2026-06-27 — RESET: rip out hand-rolled loop UI; enforce REUSE-NOT-RECREATE
 - The first loop-detail attempt **hand-rolled lookalike components** (`TcLoopLane`/`TcCenterLane`/`TcStageStepper`
