@@ -20,12 +20,13 @@ Fields, Email/Text templates, Forms.
 |---|---|
 | Reverse-engineering (A-Frame + dotloop) | ✅ complete |
 | Status + milestone model | ✅ **locked** (PRD §12 + §13) |
-| Foundation data model (migrations 0253–0259) | ✅ applied |
+| Foundation data model (migrations 0253–0261) | ✅ applied |
 | Loop engine + API | ✅ createLoop · completeMilestone (forward-only) · GET loop |
 | **Configure → Stages** builder | ✅ reuses `StagesPage` scoped to TC |
 | **Configure → Milestones** builder | ✅ full set (14 buyer / 16 seller) + offset engine, editable |
 | **Configure → Tasks** builder | ✅ 139 tasks + **dynamic-date rule** + blue phase bands + phase filter |
 | Dynamic-date engine (`lib/tc/date-engine.ts`) | ✅ pure `computeDue`, 13/13 tests (business/calendar/holiday roll) |
+| Platform re-brand switch (`{{platform.tc}}`) | ✅ one setting flips A-Frame → TC Loop |
 | **Configure → Merge Fields / Email / Text / Forms** | ⬜ |
 | TC surface tables — row kebab + bulk-delete | ✅ (CRM-wide convention + lint rule) |
 | **Runtime: per-loop instantiation + live cascade** | 🟡 next |
@@ -60,6 +61,23 @@ email). There was nothing to import, and we are **not** building an instructions
 **Future (deferred):** this A-Frame-mirrored set eventually converts to a **HouseLoop-native TC set** (rebranded
 names, possibly per-task instructions / Myli playbooks) — a later pass, only when we choose to "HouseLoop-ify"
 it. Until then every task stays A-Frame-faithful.
+
+### Re-platforming switch — `{{platform.tc}}` (mig 0260/0261)
+
+The day we drop A-Frame, the task labels shouldn't need a 60-row find/replace. So the platform self-reference is
+a **merge-field token**. The ~60 task labels that name the TC platform itself ("AFRAME: Change Status",
+"AFRAME/SLACK: …", "DOTLOOP/AFRAME: …", "…into AFrame") store **`{{platform.tc}}`** instead of the literal word.
+
+- It resolves at **display time** from one setting — `hl_settings` key `tc_platform` → `value.name` (default
+  **"AFRAME"**). Code: `lib/tc/platform.ts` (`resolveTcPlatform`, pure/client-safe) + `lib/tc/platform-settings.ts`
+  (`getTcPlatformName`, server read).
+- **Parity-safe:** it resolves to "AFRAME" today, so the screen is unchanged. **The flip is one value** —
+  set `tc_platform.name` to **"TC Loop"** and all ~60 labels read "TC Loop: …" at once. (Flipped manually for
+  now; a Configure field can expose it later.)
+- **Only the platform self-reference is tokenized.** Real external tools stay literal: SLACK · DOTLOOP ·
+  SKYSLOPE · FOLLOW UP BOSS · SISU · GMAIL · CANVA · MLS · CALENDAR. So `AFRAME/SLACK:` →
+  `{{platform.tc}}/SLACK:` (only the A-Frame half flips). The edit modal keeps the **raw token**; only read-only
+  display resolves it, so saving never bakes the resolved value back in.
 
 ## How A-Frame actually works — the 3-layer engine + dynamic dates (LOCKED 2026-06-27)
 
@@ -115,7 +133,7 @@ non-working day → next/prev business day) · versioned **holiday calendar** (U
 5. **E-signature = Documenso.**
 6. **Real CRM tables** — `HlDataTable` (`hl/table-requires-actions`) + canonical `HlFormModal` modals.
 
-## Data model — migrations 0253–0259
+## Data model — migrations 0253–0261
 
 `apps/houseloop-crm/db/migrations/` (additive + reversible; `node db/migrate.mjs` against `HL_CRM_DATABASE_URL`):
 - **0253** — foundation: loop columns + child tables + `hl_templates.scope`.
@@ -125,15 +143,26 @@ non-working day → next/prev business day) · versioned **holiday calendar** (U
 - **0257** — `hl_tc_task_template` (139 A-Frame tasks).
 - **0258** — task **date-rule** (`day_unit`, `business_day_def`, weekend/holiday roll, `skip_holidays`, chains: `anchor_type`/`anchor_task_id`/`anchor_on`, `is_conditional`, `task_type`) · `hl_tc_phase` **folders** (`is_gated`) · `hl_holiday_calendar` (US_FEDERAL).
 - **0259** — listing pre-market phase **label rename** (real A-Frame time phrases; 7-10→10, 3-4→5) + Stage-3 offsets −4d→−5d. Label-only; `phase_key` join key unchanged.
+- **0260 / 0261** — **platform token**: `hl_settings` `tc_platform` switch (default "AFRAME") + tokenize the A-Frame self-reference in task labels to `{{platform.tc}}` (0260 caps prefixes, 0261 mixed-case prose).
 
 ## The loop engine + date engine (built + proven)
 
 - `lib/tc/loop-engine.ts`: `createLoop` · `completeMilestone` (forward-only) · `getLoopStatus`/`listMilestones`.
 - `lib/tc/date-engine.ts`: pure `computeDue(anchor, rule, holidays)` — calendar/business/week/month + TRID
   business-day defs + weekend/holiday rollover. **13/13 unit tests** (`npx tsx lib/tc/date-engine.test.ts`).
+- `lib/tc/platform.ts` (pure resolver) + `lib/tc/platform-settings.ts` (server read) — the `{{platform.tc}}`
+  re-brand switch.
 - REST: `/api/tc/loops[/:id]` · `/api/tc/milestones[/:id]` · `/api/tc/tasks[/:id]`.
 
 ## Changelog
+
+### 2026-06-27 — Platform re-brand token (`{{platform.tc}}`)
+- The A-Frame platform self-reference in the ~60 task labels is now a merge-field token, so dropping A-Frame is a
+  one-setting flip instead of a 60-row rename. Mig **0260** (caps prefixes) + **0261** (mixed-case prose) +
+  `hl_settings` `tc_platform` switch (default "AFRAME"). Resolves at display time (`lib/tc/platform.ts` pure +
+  `lib/tc/platform-settings.ts` server). Parity-safe (renders "AFRAME" today); flip `value.name` → "TC Loop" to
+  re-platform everything. Only the platform word is tokenized — SLACK/DOTLOOP/SKYSLOPE/FUB/SISU stay literal.
+  Commit `a1023b3c60`.
 
 ### 2026-06-27 — Section bands + Workflows header + pre-market rename
 - **Shared `SectionBand`** (`components/table/SectionBand.tsx`) — extracted the canonical blue attached-table
