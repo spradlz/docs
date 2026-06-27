@@ -8,7 +8,7 @@ description: "The running work-in-progress log of building TC Loop — HouseLoop
 happens. It's the single place to see what's decided, what's built, what's staged, and what's next. Owner: Adam.
 </Info>
 
-## Status (last updated 2026-06-26 PM)
+## Status (last updated 2026-06-26 PM, late)
 
 **Phase: BUILDING — status/milestone model LOCKED, foundation + loop engine LIVE.** Migration 0254 applied;
 the status model now **reuses the existing CRM stage system** (`hl_pipelines`/`hl_stages` + `StagesPage`),
@@ -22,6 +22,7 @@ data. Next: wire appointment-set → Loop birth + the TC loop-detail page.
 | Foundation data model (migration 0254) | ✅ applied (TC pipelines + stages + milestone templates) |
 | Status builder | ✅ **reuses `StagesPage`** scoped to TC (no fork) |
 | Loop engine + API | ✅ createLoop · completeMilestone (forward-only) · GET loop — proven |
+| TC surface tables — row kebab + bulk-delete | ✅ Loops table + Email Queue (CRM-wide convention + lint rule) |
 | Appointment-set → Loop birth wiring | 🟡 next (live appointments integration) |
 | Loop + TC lead-detail page | ⬜ not started |
 | Myli-TC (AI layer) | ⬜ not started (last) |
@@ -86,6 +87,10 @@ or kills it.** Full spec: `GT_HOUSELOOP_TRANSACTION_COORDINATION_PRD.md §12`.
 4. **Status is side-aware** (TC Buyer vs TC Listing pipelines).
 5. **The lead/loop renders in TC view by role/surface**, not a toggle widget.
 6. **E-signature = Documenso** (dotloop e-sign isn't in its API).
+7. **Tables are real CRM tables** — every `<HlDataTable>` ships the standard far-right ⋮ kebab (Edit / Delete)
+   and a select-all → bulk-delete bar, reusing the table's real per-row delete. Enforced by the
+   `hl/table-requires-actions` ESLint rule. Read-only feeds/logs opt out with a documented reason (their verb
+   is Cancel/Unpublish, not delete).
 
 ## Data model — migrations 0253 + 0254
 
@@ -144,6 +149,17 @@ send the agreement via Documenso → client signs → **completeMilestone(agreem
 the contract-to-close milestones carry it to Closed. Same flow both sides, different docs.
 
 ## Changelog
+
+### 2026-06-26 (PM, late) — TC surface tables get the standard row actions (CRM-wide sweep)
+- Every CRM management table now ships the **standard far-right ⋮ kebab (Edit / Delete) + a select-all →
+  bulk-delete bar**, reusing each table's real per-row delete. On the TC surface this lit up the **Loops
+  table** (edit / delete a loop) and the **Email Queue** (new `DELETE /api/tc/email-queue/[id]`).
+- New **`hl/table-requires-actions` ESLint rule** makes it permanent: any `<HlDataTable>` missing the kebab
+  or the bulk bar fails lint. Genuine read-only feeds/logs opt out with a documented reason — the textbook
+  CRM split: **management rows get Edit/Delete; history/feeds don't** (their verb is Cancel/Unpublish). The
+  scheduled-actions queue keeps Cancel; the content run-log and SEO ledger stay read-only.
+- Shipped clean (commit `32ed429eec`); also replaced a hand-rolled search input with the shared `<SearchInput>`
+  (no raw inputs).
 
 ### 2026-06-26 (PM, late) — status/milestone model locked; pivoted to reuse + built the engine
 - **Killed the hand-rolled TC Stages builder** (`TcStagesBuilder.tsx` + its API + page) — it duplicated the
