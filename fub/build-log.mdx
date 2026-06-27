@@ -10,16 +10,14 @@ Owner: Lee. **Ground truth = the PRD:** `GT_HOUSELOOP_FUB_BEHAVIOR_EVENTS_PRD.md
 Card spec: [Request Cards](/fub/request-cards).
 </Info>
 
-## Status (last updated 2026-06-26 PM, late)
+## Status (last updated 2026-06-27)
 
-**Phase: data minted ✅ — now building the ONE sourced card (per the PRD).**
+**Phase: the ONE sourced card is BUILT + Playwright-verified on localhost. NOT yet deployed (iterating locally).**
 
 <Warning>
-**Direction changed 2026-06-26 (Zach, live).** The old "firewall" — keep FUB browsing OUT of `hl_lead_activity` —
-is **retired**. FUB behavioral events DO become first-class HouseLoop events now, **gated by a SOURCE**
-(`Zillow.com` / `HouseLoop.ai`) on every event. The earlier "PROVEN" below = the **data backfill** landed; the
-**cards** are still broken/inconsistent (no address, no photo, no source on most rows). The card build is the open
-work — see the PRD.
+**Localhost-only freeze (Zach).** The card system below is built and visually verified at `localhost:3020`, but
+**nothing is deployed** while we lock the visuals. Deploy happens on Zach's "lock it / push" — build green → push
+`houseloop-app` → re-register Inngest → verify live.
 </Warning>
 
 | Layer | State |
@@ -28,41 +26,55 @@ work — see the PRD.
 | Batched home-activity save (one INSERT) + `photo` column | ✅ shipped |
 | `classifyFubEvent` / `convertFubSignal` / `BEHAVIOR_BADGES` catalog | ✅ |
 | P5 backfill minted into the Inngest `fub-lead-import` step (behavior-only) | ✅ deployed — James 52 → 397 events, dup-free |
-| **Event catalog = one-to-one Zillow↔HouseLoop parity** (add `liked_home`, `shared_home`) | 🟡 spec'd (matrix); catalog rows next |
-| **ONE `ActivityHeroCard` for EVERY event** (house + type + source), All == Website == FUB panel | ⬜ the build |
-| **Real address + photo + /home link + source on view/save/repeat/area rows** | ⬜ broken now |
-| **Source bug:** blank `source_portal` → "via HouseLoop" should be "via Zillow" | ⬜ |
-| **KPI tiles** (Visits/Properties/Saved/Inquiries read 0) | ⬜ |
-| **Request classification:** step 2.6 `type`-based → `classifyFubEvent(message)` | ⬜ (mislabels rental as tour) |
-| Pre-seed trigger tokens · real workflows on behavior events | ⬜ later |
+| Event catalog = one-to-one Zillow↔HouseLoop parity (`liked_home`, `shared_home`) | ✅ in `activity-badges.ts` |
+| **ONE shared card** (`FeedRow`) — All == Website Activity, hero vs compact tiers | ✅ localhost |
+| Real address + photo + /home link + source on view/save/repeat/area rows | ✅ localhost |
+| Source fix — blank `source_portal` → "via Zillow.com" (no more "via HouseLoop") | ✅ localhost |
+| Hero card — calendar chip above address, static black addr, **bold facts**, photo→icon | ✅ localhost |
+| **Dual links** `View on HouseLoop │ View on Zillow` + out-of-area coverage modal (iPad-centered) | ✅ localhost |
+| **Tokenized** typography/sizing (`card-tokens.ts`) + actor lanes (`actor-lanes.ts`) + ESLint `hl/no-raw-card-token` | ✅ localhost |
+| Request classification — step 2.6 `classifyFubEvent(message)` | ✅ deployed |
+| **KPI tiles** (Visits/Properties/Saved/Inquiries read 0) | ⬜ open (P5) |
+| **Property inquiries not rendering** on James (2 tour reqs show, 2 inquiries missing) | 🟡 active — investigating |
+| FUB Activity panel renders the SAME card | ⬜ later |
+| Deploy to prod | ⬜ on Zach's go |
 
 ## What we're building (per the PRD)
 
 Every behavioral event — FUB/Zillow today, native HouseLoop tomorrow — is a **first-class `hl_lead_activity`
-event** rendered through **ONE catalog-driven `ActivityHeroCard`**, identical on **All · Website Activity ·
+event** rendered through **ONE catalog-driven card**, identical on **All · Website Activity ·
 Follow Up Boss Activity**, each carrying **house (address + photo + link) · what it is · source
 (`Zillow.com` | `HouseLoop.ai`)**. One-to-one Zillow↔HouseLoop parity (lone asymmetry: `liked_home` is
 HouseLoop-only; pre-qual = ZHL ↔ Lending Loop). This is the HouseLoop 2 event model; FUB is the test data.
 
-## Where it stands on James (lead 25246ca6 / fub 50308)
+## The card system (shipped on localhost)
 
-The **data is there** — 397 events minted (274 `property_view`, 41 `save_home`, repeat/area/saved-search/tags).
-What's wrong is the **render**: "Viewed Home" rows show no address/photo/source; only the Tour Request renders as
-the correct hero card. The build closes that gap (PRD §6 P1–P7).
-
-## The two-writer split (still holds — why there are no double tours)
-
-The import owns the **request spine** (keyed `fub_request` / `fubreq|<id>`); the **backfill owns behavior only**
-(views/saves/notes/searches/tags). `logActivity` dedupes on `(source_table, source_id)`, so re-runs add zero rows
-and the two never double-log.
+- **One renderer** — `FeedRow` (exported from `PixelFeedStream.tsx`, consumed by `CenterLane.tsx`) so the All feed
+  and the Website Activity tab draw the identical card. Two tiers: **hero** (registration + tour/contact/inquiry/seller
+  requests) and **compact** (viewed/saved/liked/shared/repeat/area).
+- **Hero** (`ActivityHeroCard.tsx`) — calendar chip ABOVE the address (FUB-style), static black address, bold facts
+  ($price · bd · ba · MLS#) matching the viewed-home card, big photo with a big icon fallback, source badge.
+- **Dual links** (`HomeLinks.tsx`) — `View on HouseLoop │ View on Zillow`. An out-of-area home grays "View on HouseLoop"
+  and opens a coverage modal centered on the lead-detail panel (the "iPad"), with a circular X and a single
+  "View on Zillow". One component, used by both tiers.
+- **Tokens** (`card-tokens.ts` `CARD` + `actor-lanes.ts` `ACTOR_LANE_COLOR`) — every font size/weight/color and photo
+  dimension comes from one source, enforced by the ESLint rule `hl/no-raw-card-token`. Zero vibe code.
 
 ## Changelog
+
+### 2026-06-27 — the one sourced card, tokenized + verified on localhost
+Unified the All feed and Website Activity onto one shared `FeedRow` card; wired real address/photo/`/home` link/source
+onto every behavior row; fixed the blank-source bug ("via Zillow.com"); added the calendar chip above the address,
+bold facts, and bigger photos (+10%, locked tokens); built the dual `View on HouseLoop │ View on Zillow` links plus the
+out-of-area coverage modal (centered on the iPad panel, circular X, single View-on-Zillow). Fully tokenized typography
++ sizing into `card-tokens.ts`/`actor-lanes.ts` and added the `hl/no-raw-card-token` ESLint rule. All Playwright-verified
+on `localhost:3020`; not deployed (locking visuals first). **Open:** KPI tiles still 0; James's 2 property inquiries
+aren't rendering (only the 2 tour requests show) — investigating the converter/classification next.
 
 ### 2026-06-26 (PM, latest) — direction locked: behavior → sourced cards (PRD written)
 Zach reversed the firewall: FUB behavior becomes first-class HouseLoop events, gated by a source per event.
 Locked the one-to-one Zillow↔HouseLoop parity catalog (added `liked_home`, `shared_home`) in the matrix; wrote
-`GT_HOUSELOOP_FUB_BEHAVIOR_EVENTS_PRD.md` + the scope lock. Card build (one sourced `ActivityHeroCard` for every
-event) is the open work. Corrected the prior "PROVEN" framing — that was the data, not the cards.
+`GT_HOUSELOOP_FUB_BEHAVIOR_EVENTS_PRD.md` + the scope lock. Corrected the prior "PROVEN" framing — that was the data, not the cards.
 
 ### 2026-06-26 (PM, late) — backfill data proven on James
 Dispatched `fub/lead.import { 50308, backfill: true }` through Inngest cloud. James **52 → 397** first-class events,
