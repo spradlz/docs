@@ -49,9 +49,10 @@ One-to-one Zillow↔HouseLoop parity. FUB is the test data; this is the HouseLoo
 - **COMPACT** — the row card. Thumbnail (80×80) · actor pill · label+icon · "via" badge · time · address ·
   facts · View links. Fired by everything else.
 
-**Zach 2026-06-28: every BEHAVIOR TRIGGER renders as a HERO card** (see the matrix). Home-bearing triggers fill
-the hero with the home + photo; flag-only triggers fill the hero body with the "what it means" note instead of
-an empty home block.
+**HERO is ONLY for property tours, inquiries, and registrations (Zach LOCKED 2026-06-28).** Everything else —
+all behavior triggers / signals / ML flags, saved searches, comms — is a regular COMPACT card. (The earlier
+"all behaviors are hero" call was reversed.) **Every HERO request card looks IDENTICAL to the canonical Tour
+Request card; the ONLY difference is a Tour Request shows the date as a calendar chip.**
 
 ## Behavior Trigger Matrix (the canonical list — every behavior → a card → a follow-up)
 
@@ -124,7 +125,58 @@ Street View by address** (new tokenized `photoForAddress()` util, reads the exis
 **junk filter** (drop an "address" that's a URL / doesn't start with a house number) at the mint layer + the
 backfill SQL. Net: **every home card shows a real picture**; URL-junk never becomes a card.
 
+## How a card is created — the trigger path (real, traced on Juan Martín Munguía 42729)
+
+A Zillow lead's card is born from a webhook, not a poll. The chain, grounded in real data:
+
+1. **Source** — a Zillow in-app message / inquiry lands in FUB (e.g. Juan → Ben Froeschl: "interested in touring
+   15111 E 44th St S on Jun 26 at 12pm", source **Zillow Preferred**, MLS# 2626844). FUB fires an `eventsCreated` webhook.
+2. **Pull-in decision** — `apps/dashboard/server/fub-webhooks.ts` `EVENT_IMPORT_TRIGGER` maps the event type
+   (`Property Inquiry → 'inquiry'`, `Virtually Toured Property → 'tour'`, `Seller Inquiry → 'seller'`,
+   `Registration → 'new_lead'`) → `dispatchFubImport(personId, trigger)` → CRM `/api/fub/import` → Inngest **`fub/lead.import`**.
+3. **The import mints two kinds of row:**
+   - **The canonical request card** — step 2.6, `kind` from `classifyFubEvent(message)`, `source_table='fub_request'`,
+     `source_id='fubreq|<fub.events.id>'`, ONE per inquiry, home resolved by MLS# → photo + `/home` link. **The card we keep.**
+   - **A registration door log** — step 3, `kind='registration'`, `source_table='fub_lead_import'`, source "VIA HouseLoop".
+     **This DUPLICATES the request card** (tracked issue I2).
+
+**Proven on Juan:** 2 `Property Inquiry` events (Zillow Preferred, MLS# 2626844) → 2 `tour_request` cards
+(`fubreq|1786386`, `fubreq|1786387`) + 2 `registration` cards. His home (MLS# 2626844) IS on HouseLoop → photo +
+blue link resolve — exactly why Juan's cards look right and Alberto's (off-market / relisted MLS#) don't.
+
+## The canonical request card — every request looks like the Tour Request (Zach LOCKED 2026-06-28)
+
+ONE shape for every request/registration HERO card:
+**actor pill · kind label · `VIA <source>` · [calendar chip — TOUR REQUEST ONLY] · home photo · address (with
+commas) · `$price · bd · ba · MLS#` · `View on HouseLoop │ View on Zillow` · the lead's quote.**
+The ONLY difference is the **date shown as a calendar chip on a Tour Request**.
+
+| Card | Source | Calendar chip? |
+|---|---|---|
+| **Tour Request** | Zillow Preferred | ✅ YES (requested date/time) |
+| **Property Inquiry** | Zillow | ❌ |
+| **Virtually Toured** | Zillow | ❌ |
+| Contact / Rental / Seller inquiry | Zillow | ❌ |
+
+## Open card issues — TRACKED (resolve these, then check off)
+
+| # | Issue | Where | Affects |
+|---|---|---|---|
+| **I1** | No photo + gray HouseLoop link on out-of-market / relisted homes — resolver matches by MLS# only; when the MLS# isn't in `Listing` it never falls back to an ADDRESS match. Add: Listing-by-address → `fub.zillow_home_activity` Zillow photo → Street View. | `route.ts` resolve + mint fallback | Alberto (off-market); "every card has a picture" law |
+| **I2** | Duplicate registration card — step-3 door logs "Registered · Requested a tour · VIA HouseLoop" duplicating the step-2.6 request card. Kill it for FUB inquiries (the inquiry IS the entry). | `fub-lead-import.ts` step 3 + `dispatchDoor` | every FUB request lead (Juan has 2) |
+| **I3** | Property Inquiry address has no commas + thin subline ("5226 E 28th Ter Kansas City MO 64128" / only "3 bd"). Comma the address; fill `$price · ba · MLS#`. | card address build + inquiry payload | sparse Zillow inquiries |
+| **I4** | Per-inquiry duplication — 2 inquiries same home/day mint 2 cards (Juan). Decide keep-per-inquiry vs dedupe. | step 2.6 | multi-inquiry leads |
+| **I5** | New Area of Interest layout — compact, location as a text-note sentence, no wrapping pill, kill blank space. | FeedRow / catalog `hero` off | `behavior_area_interest` |
+| **I6** | Viewed Repeatedly — photo + sentence label; compact (behaviors are NOT hero). | FeedRow / catalog `hero` off | `behavior_repeat_views` |
+
 ## Changelog
+
+### 2026-06-28 (PM) — card walkthrough: canonical Tour Request locked + trigger path documented
+Walked the real Zillow cards one-by-one with Zach. LOCKED: every request/registration HERO card = the canonical
+**Tour Request** shape; the only difference is the Tour Request's **calendar chip** (the date). HERO is ONLY
+tours/inquiries/registrations — behaviors revert to compact (reversing the earlier "all behaviors hero"). Traced
+the trigger on Juan Martín Munguía (42729): webhook → `EVENT_IMPORT_TRIGGER` → `fub/lead.import` → step 2.6
+request card (`fub_request`) + step 3 registration door (DUPLICATE). Opened the tracked card-issue list (I1–I6).
 
 ### 2026-06-28 — servicing LIVE + proven on real leads; card-rendering hardening begins
 The card system DEPLOYED to prod (behavior hero/compact cards live). Then validating on real leads exposed the
@@ -162,3 +214,4 @@ to intercept FUB's `/api/v1/events?hasProperty=true` (242 → 534 on James).
 
 ### 2026-06-26 (PM) — converter foundation + the matrix
 Built `classifyFubEvent`, `convert-fub-signal`, `BEHAVIOR_BADGES`; documented the Data & Signals Matrix.
+
