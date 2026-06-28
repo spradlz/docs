@@ -1,17 +1,21 @@
 ---
 title: "Property Data Model & Address Identity"
-description: "How HouseLoop keys homes by address — the ONE address-keyed table model, how an address becomes a stable identifier, how the resolver matches an incoming listing to one owned home, the HouseLoop Property ID, and how same-home forks are now prevented at intake and swept by the de-fork engine (shipped 2026-06-27)."
+description: "How HouseLoop keys homes by address — the ONE address-keyed table model, how an address becomes a stable identifier, the HouseLoop home id (HLID — sequence-backed HLID123456, in the /home/<slug>/<HLID> URL, HLP- replaced by aliasing), how the resolver matches an incoming listing to one owned home, the past-client re-pin to the HOME via the transaction, and how same-home forks are prevented at intake and swept by the de-fork engine."
 ---
 
 HouseLoop keys every home by its **address** — not by the MLS number, not by a per-source id. This page documents the property data model, how addresses are normalized into a stable identifier, **what our home id actually is** (and where it breaks), how the resolver matches an incoming listing to the one home we already own, and **the one engine we use to reconcile any address to that home**.
 
 <Note>
-**Current status — updated 2026-06-27 19:51 EDT (SHIPPED).** Same-home forks are now **prevented at intake and swept by an autonomous engine** — see [De-Forking](#de-forking). A drifted relist (ZIP, directional, or suffix drift) now references its existing home instead of forking; **1,588 backlog forks have been merged** (reversibly) and a weekly Inngest backstop is verified live. The `928 NE 87th Terrace, 64155` split (`928-ne-87th-terrace` vs the dropped-"NE" `928-87th-terrace`) is kept below as the canonical illustration of the problem the engine now solves. The home id is still derived as `HLP- + md5(identityKey)`; the one remaining step is the cosmetic rename to a fully-opaque frozen **HLID** — the resolver already stopped minting forks. Wherever this page still says the fix is "not yet built," that wording is historical.
+**THE HLID CONTRACT — LOCKED 2026-06-28 (Zach-approved spec, building now).** Every HouseLoop home has ONE canonical id named **`HLID`**, in the clean format **`HLID123456`** — sequential, opaque, minted once, frozen for life (our `zpid`). It is **sequence-backed** (a Postgres sequence `hl_property_hlid_seq`), **not** derived from the address. It replaces the old `HLP-…` string: the HLID **is** `hl_property`'s canonical id, and every old `HLP-…` is written into `hl_hlid_alias` so anything that ever referenced it still resolves — **a rename by aliasing, never a destructive break**.
+
+The HLID lives **in the URL**: `/home/<address-slug>/HLID123456` (Zillow/Redfin pattern). The address-only `/home/<slug>` **301-redirects** to the id-bearing URL, and the page heading shows the **Home ID**. One HLID → one slug → one permanent `/home` URL → many listing cycles hang under it.
+
+Rollout (per `.claude/plans/fuzzy-whistling-hedgehog.md`): **past-client homes first (~1,839)** — mint HLID, wire the URL, re-pin past clients to the HOME via the transaction, prove on `7325 Oakview` with Zach sign-off — **then the base sweep (~323K)**, coordinated with the de-fork engine. The fork-prevention + de-fork machinery below (shipped 2026-06-27) is the foundation the HLID rename sits on; wherever this page still calls the id `HLP- + md5(identityKey)`, that is the pre-rename state being replaced.
 </Note>
 
 <Note>
 **🔒 LOCKED 2026-06-27 (Zach) — "the rooftop is the identity," and the ID is named HLID.** SSOT: `GT_HOUSELOOP_HOME_IDENTITY_SSOT.md`. The four locked calls:
-1. **The home id is `HLID`** (one per physical house, opaque, minted once, frozen forever — our `zpid`). `HLP-` was only the internal `hl_property` column string and is being renamed to `HLID`. Address/ZIP/MLS#/status are mutable attributes; the HLID never moves.
+1. **The home id is `HLID`** (one per physical house, opaque, minted once, frozen forever — our `zpid`), in the format **`HLID123456`**, **sequence-backed** (not address-derived). `HLP-` was only the internal `hl_property` column string; it is **replaced by `HLID`**, with every old `HLP-…` written to `hl_hlid_alias` so it still resolves (rename by aliasing). Address/ZIP/MLS#/status are mutable attributes; the HLID never moves.
 2. **Identity is pinned to the rooftop by coordinates now** (lat/lng ~25 m + unit; parcel # later) — never re-derived from the address.
 3. **One HLID → one slug → one permanent `/home` URL.** Many listings (every MLS cycle) hang under the one HLID.
 4. **First pass (shipped 2026-06-27):** mint a frozen HLID for every **live** home — coming soon (751) + active (11,027) + under contract (4,992) = **~16,770** — plus the ~2,258 SRG past-client sold homes (the seed). The ~337k sold base is a later coordinate-merge pass.
@@ -67,9 +71,10 @@ Same physical home → same slug, regardless of which spelling a source sent. Ha
 
 ### The URL contract
 
-- Each home renders at **`/home/{canonicalSlug}`** — one canonical URL per home.
-- A non-canonical variant (`…-rd-…` when canonical is `…-road-…`) **308-redirects** to the canonical URL; the page sets `rel=canonical`.
-- The sitemap emits **one URL per home** (distinct `canonicalSlug`).
+- Each home renders at **`/home/{canonicalSlug}/{HLID}`** — the address slug for humans + Google, the HLID for permanence (the Zillow/Redfin `…/<zpid>` pattern). One canonical URL per home.
+- The **address-only** `/home/{canonicalSlug}` and any non-canonical variant (`…-rd-…` when canonical is `…-road-…`, an old slug in `hl_slug_alias`, an old `HLP-`/HLID in `hl_hlid_alias`) **301-redirects** to the canonical id-bearing URL; the page sets `rel=canonical`.
+- The sitemap emits **one URL per home** — `/home/{canonicalSlug}/{HLID}`.
+- The page **heading shows the Home ID** (`HLID123456`) under the address, so it's visible like a `zpid`.
 
 ## Address as a (would-be) USPS-conformed unique ID
 
@@ -143,7 +148,7 @@ So `HLP-2816F8920DC0` for *411 NW 71st Terrace* is literally `md5("411 nw 71st t
 - **Where it still breaks:** any source **without coordinates** — a home a lead browsed on Zillow (FUB activity carries the Zillow address + ZIP, no lat/lng), a hand-typed address. Its `identityKey`/HLP won't match the home we own, so it fails to resolve (or, uncaught, mints a fork).
 - **Blast radius (resolved 2026-06-27):** there were ~75 ZIP-drift forks (plus thousands more from dropped directionals / suffix variants). The de-fork engine merged **1,588 same-home forks** (reversibly) and intake prevention stops new ones — see [De-Forking](#de-forking).
 
-**The durable fix (shipped 2026-06-27 — see [De-Forking](#de-forking)).** The id must be **minted once per physical home and pinned** — assigned on first sighting, after which the address/ZIP/MLS# become *attributes* that can change without changing the id. When a drifted address arrives, the resolver looks up the existing home (coords / street / **parcel**) and **reuses its HLP** instead of re-hashing the new address. `hl_property` already carries the columns for the truly-stable key — **`parcel_number` and `upi`** (the county parcel id, which survives ZIP/address/MLS changes the way `zpid` does) — they are simply not yet populated or keyed on. Two complementary moves close it: (a) **turn on Smarty** so the ZIP is USPS-corrected before it enters the key (stops new forks at the source), and (b) **mint-once on parcel/UPI** so identity stops being `md5(address)`. **As of 2026-06-27** the intake resolver (`lib/listings/rooftop-identity.ts`) reuses the existing home's id for a drifted address, and the de-fork engine has merged the existing forks (1,588, reversibly). HLP is still *derived* as `md5(identityKey)`; the rename to a fully-opaque frozen HLID is the remaining cosmetic step.
+**The durable fix (shipped 2026-06-27 — see [De-Forking](#de-forking)).** The id must be **minted once per physical home and pinned** — assigned on first sighting, after which the address/ZIP/MLS# become *attributes* that can change without changing the id. When a drifted address arrives, the resolver looks up the existing home (coords / street / **parcel**) and **reuses its HLP** instead of re-hashing the new address. `hl_property` already carries the columns for the truly-stable key — **`parcel_number` and `upi`** (the county parcel id, which survives ZIP/address/MLS changes the way `zpid` does) — they are simply not yet populated or keyed on. Two complementary moves close it: (a) **turn on Smarty** so the ZIP is USPS-corrected before it enters the key (stops new forks at the source), and (b) **mint-once on parcel/UPI** so identity stops being `md5(address)`. **As of 2026-06-27** the intake resolver (`lib/listings/rooftop-identity.ts`) reuses the existing home's id for a drifted address, and the de-fork engine has merged the existing forks (1,588, reversibly). **As of 2026-06-28 (Zach-approved, building):** HLP is replaced by a **sequence-backed `HLID123456`** — minted once from `hl_property_hlid_seq`, never re-derived from the address — and every old `HLP-…` is written to `hl_hlid_alias`. The `ON CONFLICT(identity_key)` guard on `hl_property` guarantees one HLID per rooftop forever (a relist reuses it). The HLID then goes **in the URL** (`/home/<slug>/<HLID>`). See [The HLID contract](#) at the top of this page.
 
 ## The permanent URL — the SEO moat (why identity is a minted id, not the MLS# or the address)
 
@@ -172,7 +177,7 @@ The single most important property of a home's URL is that it **never changes fo
 | **0 — Freeze the id** ✅ done | Stop *recomputing* `hlPropertyId`. Add a guard in `linkListingToProperty`: never re-derive/overwrite an existing home's `HLP` or its `canonical_slug`. | No — purely defensive, zero user-visible change. |
 | **1 — Coordinate-pin (stop new forks)** ✅ done (intake resolver) | Change `linkListingToProperty` to find-or-create `hl_property` by **lat/lng ~25 m + unit FIRST**, then `identity_key`. Match → reuse the existing `HLP`; mint a fresh **opaque** id only for a genuinely new rooftop. | No — existing homes resolve to their own row → same `HLP`, same URL. Only brand-new homes mint. New forks stop dead. |
 | **2 — Merge the existing forks** ✅ done — 1,588 merged | One coord pass: group rows within ~25 m + same unit with different `HLP`s → keep one → repoint losers → `hl_slug_alias` 301s the old slug → keeper. Shadow-report first, then execute (Rule #0). | Only ~75 URLs redirect (301, authority preserved). Reversible. |
-| **3 — (optional, later) id-in-URL** | Move to `/home/<slug>/<HLP>` (full Zillow/Redfin pattern); old `/home/<slug>` 301s to it; sitemap + `rel=canonical` emit the new form. | Mass 301 — only do it deliberately, behind a flag, verified on a sample. **Not required** to fix the bug; phases 0–2 already make the URL permanent by freezing the slug. |
+| **3 — HLID rename + id-in-URL** 🔨 building (2026-06-28, Zach-approved) | Replace the derived `HLP- + md5` with a **sequence-backed `HLID123456`** (old `HLP-…` → `hl_hlid_alias`); move to `/home/<slug>/<HLID>` (full Zillow/Redfin pattern); old `/home/<slug>` + old ids 301 to it; sitemap + `rel=canonical` + the page heading emit the new form. | Additive + reversible — old URLs/ids 301 via the alias rails, never 404. Rolled out **past-client homes first** (prove on `7325 Oakview`), then the base. Phases 0–2 already froze the slug, so this is the belt-and-suspenders permanence, now adopted. |
 
 **The key insight that makes it safe:** phases 0–2 fix identity *and* the SEO problem **without changing a single existing URL** — because freezing each home's `canonical_slug` means the URL is already permanent, and coordinate-pinning means it can never fork again. The id-in-URL (phase 3) is the belt-and-suspenders Zillow pattern we can adopt later, not a prerequisite.
 
@@ -225,15 +230,17 @@ Geographic appreciation (`lib/valuation/appreciation.ts`) drifts an anchor value
 |---|---|
 | Deterministic normalizer (suffix/directional) | `lib/listings/canonical-address.ts` |
 | Address-as-ID service (identityKey, preferredCity, validateAddress) | `lib/listings/address-identity.ts` |
-| HouseLoop Property ID mint (`HLP- + md5(identityKey)`) + `hl_property` upsert | `lib/listings/cache.ts` |
+| HLID mint (sequence-backed `HLID123456`) + `hl_property` upsert | `lib/listings/cache.ts` (`houseloopPropertyId` → `hl_property_hlid_seq`) |
+| Id alias rails (`HLP-`/old id → canonical HLID; old slug → canonical slug) | `lib/listings/hlid-alias.ts`, `hl_hlid_alias` · `hl_slug_alias` |
+| Past-client → HOME re-pin (transaction-keyed `hl_property_id` = HLID) | `hl_srg_past_client_homes.hl_property_id` (resolved via `hl_srg_mls_deals` → `Listing`) |
 | Address resolver (identity → coords → mint) | `lib/listings/resolve-home.ts` |
 | Reconciliation engine — stage 2 (LLM sieve) | `scripts/twin-sieve.ts` |
 | Reconciliation engine — stage 3 (Redfin, last resort) | `tools/houseloop-reconcile/redfin-adjudicate.mjs` |
 | Listing ingest (calls the resolver before upsert) | `lib/listings/cache.ts` |
 | ZIP → USPS-preferred-city map | `lib/listings/zip-preferred-city.generated.json` |
 | Geographic appreciation model (value drift) | `lib/valuation/appreciation.ts` |
-| `/home` page + canonical redirect | `app/home/[slug]/page.tsx` |
-| Sitemap (one URL per home) | `app/sitemap.ts` |
+| `/home/<slug>/<HLID>` page + canonical redirect (catch-all) | `app/home/[...slug]/page.tsx` |
+| Sitemap (one `/home/<slug>/<HLID>` per home) | `app/sitemap.ts` |
 
 ## Carry-forward enrichment — the home as an accumulator (shipped 2026-06-27)
 
