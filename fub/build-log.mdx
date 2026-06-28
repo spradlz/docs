@@ -1,89 +1,164 @@
 ---
 title: "FUB Behavior Events — Build-Out (WIP Log)"
-description: "The running work-in-progress log of building FUB → first-class HouseLoop events. Status, build checklist, and a dated changelog."
+description: "The running work-in-progress log of building FUB → first-class HouseLoop events. Status, the behavior trigger matrix, the per-card design checklist, the image-pull-in fix, and a dated changelog."
 ---
 
 <Info>
 **Living document.** Build log for turning every Follow Up Boss signal into a first-class HouseLoop event.
-Owner: Lee. **Ground truth = the PRD:** `GT_HOUSELOOP_FUB_BEHAVIOR_EVENTS_PRD.md` (private GT). Scope lock:
-`.claude/state/session-scope-fub-behavior-events.lock`. Catalog: the [Data & Signals Matrix](/fub/data-matrix).
-Card spec: [Request Cards](/fub/request-cards).
+Owner: Lee. **Ground truth = the PRD:** `GT_HOUSELOOP_FUB_BEHAVIOR_EVENTS_PRD.md` (private GT). Catalog: the
+[Data & Signals Matrix](/fub/data-matrix). Card spec: [Request Cards](/fub/request-cards). Import pipeline:
+[Lead Import](/fub/lead-import). Myli's brain: [Myli Context](/fub/myli-context).
 </Info>
 
-## Status (last updated 2026-06-27)
+## Status (last updated 2026-06-28)
 
-**Phase: the ONE sourced card is BUILT + Playwright-verified on localhost. NOT yet deployed (iterating locally).**
-
-<Warning>
-**Localhost-only freeze (Zach).** The card system below is built and visually verified at `localhost:3020`, but
-**nothing is deployed** while we lock the visuals. Deploy happens on Zach's "lock it / push" — build green → push
-`houseloop-app` → re-register Inngest → verify live.
-</Warning>
+**Phase: event SERVICING is LIVE + proven on real leads. Now hardening CARD RENDERING — photos + per-card
+layout — one card at a time (the checklist below is the worklist).**
 
 | Layer | State |
 |---|---|
-| Scraper fix — complete home activity via API intercept (242 → 534) | ✅ deployed + LIVE |
-| Batched home-activity save (one INSERT) + `photo` column | ✅ shipped |
-| `classifyFubEvent` / `convertFubSignal` / `BEHAVIOR_BADGES` catalog | ✅ |
-| P5 backfill minted into the Inngest `fub-lead-import` step (behavior-only) | ✅ deployed — James 52 → 397 events, dup-free |
-| Event catalog = one-to-one Zillow↔HouseLoop parity (`liked_home`, `shared_home`) | ✅ in `activity-badges.ts` |
-| **ONE shared card** (`FeedRow`) — All == Website Activity, hero vs compact tiers | ✅ localhost |
-| Real address + photo + /home link + source on view/save/repeat/area rows | ✅ localhost |
-| Source fix — blank `source_portal` → "via Zillow.com" (no more "via HouseLoop") | ✅ localhost |
-| Hero card — calendar chip above address, static black addr, **bold facts**, photo→icon | ✅ localhost |
-| **Dual links** `View on HouseLoop │ View on Zillow` + out-of-area coverage modal (iPad-centered) | ✅ localhost |
-| **Tokenized** typography/sizing (`card-tokens.ts`) + actor lanes (`actor-lanes.ts`) + ESLint `hl/no-raw-card-token` | ✅ localhost |
-| Request classification — step 2.6 `classifyFubEvent(message)` | ✅ deployed |
-| **KPI tiles** (Visits/Properties/Saved/Inquiries read 0) | ⬜ open (P5) |
-| **Property inquiries not rendering** on James (2 tour reqs show, 2 inquiries missing) | 🟡 active — investigating |
-| FUB Activity panel renders the SAME card | ⬜ later |
-| Deploy to prod | ⬜ on Zach's go |
+| Scraper — complete home activity via API intercept | ✅ deployed + LIVE |
+| `classifyFubEvent` / `convert-fub-signal` / `BEHAVIOR_BADGES` catalog | ✅ deployed |
+| The ONE shared `FeedRow` card (hero + compact tiers) | ✅ deployed |
+| Behavior backfill into the Inngest `fub-lead-import` step | ✅ deployed |
+| **Catalog-driven import gate** (`SERVICED_FUB_EVENT_TYPES`) — the whack-a-mole is dead | ✅ deployed (`f680de5e31`) |
+| **Virtual tour = first-class `virtually_toured` event** (own kind, own home) | ✅ deployed + **PROVEN on Alberto** (3331 Benton) |
+| **Myli context builds on EVERY pull-in** (`context_built` + `fact_captured` + dossier) | ✅ deployed + **PROVEN** (Alberto: 9 facts) |
+| Dual links `View on HouseLoop │ View on Zillow` + out-of-area coverage modal | ✅ deployed |
+| Tokenized typography/sizing + `hl/no-raw-card-token` ESLint | ✅ deployed |
+| **Card photos on out-of-market homes** | 🔴 BROKEN — no fallback (Listing-only). The active fix. |
+| **Junk URL-as-address rows render as cards** (`realscout.com/agent/...`) | 🔴 BROKEN — needs a real-address filter |
+| **New Area of Interest layout** (source pill wraps, oversized, blank space) | 🔴 redesign in progress (Card #1) |
+| **Decision: ALL behavior triggers render as HERO cards** (Zach 2026-06-28) | 🟡 to apply across the catalog |
 
 ## What we're building (per the PRD)
 
 Every behavioral event — FUB/Zillow today, native HouseLoop tomorrow — is a **first-class `hl_lead_activity`
-event** rendered through **ONE catalog-driven card**, identical on **All · Website Activity ·
-Follow Up Boss Activity**, each carrying **house (address + photo + link) · what it is · source
-(`Zillow.com` | `HouseLoop.ai`)**. One-to-one Zillow↔HouseLoop parity (lone asymmetry: `liked_home` is
-HouseLoop-only; pre-qual = ZHL ↔ Lending Loop). This is the HouseLoop 2 event model; FUB is the test data.
+event** rendered through **ONE catalog-driven card**, identical on **All · Website Activity · Follow Up Boss
+Activity**, each carrying **house (address + photo + link) · what it is · source (`Zillow.com` | `HouseLoop.ai`)**.
+One-to-one Zillow↔HouseLoop parity. FUB is the test data; this is the HouseLoop event model.
 
-## The card system (shipped on localhost)
+## The card system — TWO render tiers (no new components, catalog-driven)
 
-- **One renderer** — `FeedRow` (exported from `PixelFeedStream.tsx`, consumed by `CenterLane.tsx`) so the All feed
-  and the Website Activity tab draw the identical card. Two tiers: **hero** (registration + tour/contact/inquiry/seller
-  requests) and **compact** (viewed/saved/liked/shared/repeat/area).
-- **Hero** (`ActivityHeroCard.tsx`) — calendar chip ABOVE the address (FUB-style), static black address, bold facts
-  ($price · bd · ba · MLS#) matching the viewed-home card, big photo with a big icon fallback, source badge.
-- **Dual links** (`HomeLinks.tsx`) — `View on HouseLoop │ View on Zillow`. An out-of-area home grays "View on HouseLoop"
-  and opens a coverage modal centered on the lead-detail panel (the "iPad"), with a circular X and a single
-  "View on Zillow". One component, used by both tiers.
-- **Tokens** (`card-tokens.ts` `CARD` + `actor-lanes.ts` `ACTOR_LANE_COLOR`) — every font size/weight/color and photo
-  dimension comes from one source, enforced by the ESLint rule `hl/no-raw-card-token`. Zero vibe code.
+`FeedRow` (exported from `PixelFeedStream.tsx`, reused by `CenterLane.tsx`) draws every card from the one
+`activity-badges.ts` catalog. Exactly two shapes:
+
+- **HERO** — `ActivityHeroCard.tsx`. Big card: accent border · actor pill · title · "via" source badge · time ·
+  photo/icon tile · address + facts ($price · bd · ba · MLS#) · `View on HouseLoop │ View on Zillow` ·
+  quote/message · calendar chip. Fired by `request:true`, `registration`, and `hero:true`.
+- **COMPACT** — the row card. Thumbnail (80×80) · actor pill · label+icon · "via" badge · time · address ·
+  facts · View links. Fired by everything else.
+
+**Zach 2026-06-28: every BEHAVIOR TRIGGER renders as a HERO card** (see the matrix). Home-bearing triggers fill
+the hero with the home + photo; flag-only triggers fill the hero body with the "what it means" note instead of
+an empty home block.
+
+## Behavior Trigger Matrix (the canonical list — every behavior → a card → a follow-up)
+
+> Every lead behavior is a **trigger token** → a hero card → a **behavior** (a Lead-Flow workflow). Workflows
+> are bound to "Coming Soon" stubs until each is built (the Landing law, see [Data & Signals Matrix](/fub/data-matrix)).
+
+### Group 1 — Home actions (acted on a specific home)
+| Trigger (`kind`) | What the lead did | Hero body | Fires |
+|---|---|---|---|
+| `property_view` | Viewed a home | home + photo + "Viewed" | view-nurture |
+| `save_home` | Saved a home | home + photo | saved-home follow-up |
+| `like_home` *(HL-only)* | Liked a home | home + photo | — |
+| `share_home` | Shared a home | home + photo | shared-home follow-up |
+| `unsave_home` / `hide_home` | Removed interest | home + photo | cool-down |
+
+### Group 2 — Zillow Insights signals (high-intent, carry a home/area)
+| Trigger | What the lead did | Hero body | Fires |
+|---|---|---|---|
+| `behavior_repeat_views` | Viewed ONE home 10× in 7 days | home + photo + "viewed 10× in 7d" | "5× as likely to transact — reach out ASAP" |
+| `behavior_area_interest` | Now looking in a new area/zip | representative home + "now looking in &lt;City&gt;" | new-market follow-up |
+| `behavior_specific_home_interest` | Flagged a specific home | home + photo | targeted follow-up |
+
+### Group 3 — Zillow ML flags (no specific home → hero body = the meaning note)
+| Trigger | What the lead did | Hero body | Fires |
+|---|---|---|---|
+| `behavior_high_intent_buyer` | Zillow high-intent buyer | "5× as likely to transact in 3 months" | reach out ASAP |
+| `behavior_high_intent_seller` | high-intent seller | "Likely to list in 3 months" | seller outreach |
+| `behavior_reengaged_buyer` | Searching again after ≥14d gap | "Re-engaged — reconnect" | reconnect |
+| `behavior_active` | In Zillow's 13-day "active now" window | "Active now" | strike-while-hot |
+| `behavior_window_closed` | Active window expired | "Window closed" | re-nurture |
+| `behavior_zhl_prequalified` / `pre_approval` | Pre-qualified / ZHL LO referral | "Pre-qualified via &lt;LO&gt;" | LO + agent intro |
+
+### Group 4 — Requests (explicit asks — also behaviors)
+| Trigger | What the lead did | Hero body | Fires |
+|---|---|---|---|
+| `tour_request` · `property_inquiry` · `contact_request` · `rental_inquiry` · `seller_inquiry` · `virtually_toured` | Reached out about a home | home + photo + the message | the registration/request workflow |
+
+### Group 5 — Search
+| `saved_search` | Created a saved search | criteria + matched homes | saved-search alert digest |
+| `search` | Ran a search | criteria | (noise — open Q: keep?) |
+
+## Card design — the per-card checklist (WE WORK DOWN THIS, one at a time, sign off each)
+
+Universal rules baked into every home-bearing card: **renders a real picture · `View on HouseLoop` +
+`View on Zillow` · tokenized (`var(--hl-*)`) · same shape everywhere · no wrapping pills.**
+
+| # | Card | Design decision | Status |
+|---|---|---|---|
+| 1 | **New Area of Interest** (`behavior_area_interest`) | Compact hero with a small representative-home thumbnail; location as a **text-note sentence** ("James is now looking in Lee's Summit, MO 64063 via Zillow Insights"), "via Zillow Insights" inline (NOT a wrapping pill); zip links; kill the blank space. **Layout A signed off.** | 🟡 designed, not built |
+| 2 | **Viewed Repeatedly** (`behavior_repeat_views`) | Hero with photo + the sentence label "&lt;Name&gt; viewed this home 10 times in the last 7 days", no wrapping, right size. | ⬜ design next |
+| 3 | **Virtually Toured** (`virtually_toured`) | Confirm the hero format + photo + a working Zillow link (home from the event's own property). | ⬜ |
+| 4 | **Request hero cards** (tour/inquiry/contact/rental/seller) | Photo on out-of-market homes; confirm the message quote + links. | ⬜ |
+| 5 | **Compact home cards** (view/save/like/share/unsave/hide) | Photo + junk-URL filtered + tokenized. | ⬜ |
+| 6 | **ML-flag triggers** (high-intent/reengaged/active/prequal) | Hero with the "what it means" note (no empty home block). | ⬜ |
+| 7 | **Saved search / search** | Confirm the criteria card; decide whether bare `search` rows stay. | ⬜ |
+
+## Image pull-in — why photos are blank + the fix (Issue B, diagnosed 2026-06-28)
+
+**Confirmed in data:** every off-market home card has an EMPTY `meta.photo`, while `fub.zillow_home_activity`
+HAS photos. Three gaps, and **no Street-View fallback exists anywhere** (`grep streetview` = 0):
+1. `resolveHouseloopUrls` (route.ts) injects a photo ONLY when the home matches a HouseLoop `Listing`. Off-market
+   → no Listing → no photo, **no fallback**.
+2. `behavior_repeat_views` / `behavior_area_interest` are minted with **no photo** (`convertNote`). The request
+   spine has a `fub.zillow_home_activity` photo fallback; the behavior cards don't.
+3. **Junk URL addresses** (`realscout.com/agent/...`) are minted unfiltered (`convertHomeActivity` + the note regex).
+
+**The fix — ONE photo-resolution chain for every home card:** Listing photo → the home's **Zillow photo** from
+`fub.zillow_home_activity` (match by zpid, else address — the pattern the request spine already uses) → **Google
+Street View by address** (new tokenized `photoForAddress()` util, reads the existing Google Maps key). Plus a
+**junk filter** (drop an "address" that's a URL / doesn't start with a house number) at the mint layer + the
+backfill SQL. Net: **every home card shows a real picture**; URL-junk never becomes a card.
 
 ## Changelog
 
+### 2026-06-28 — servicing LIVE + proven on real leads; card-rendering hardening begins
+The card system DEPLOYED to prod (behavior hero/compact cards live). Then validating on real leads exposed the
+next layer:
+- **Catalog-driven import gate** (`SERVICED_FUB_EVENT_TYPES` in `classify-fub-event.ts`) replaces the hardcoded
+  `type IN ('Property Inquiry','Tour','Seller Inquiry')` SQL — the whack-a-mole that silently dropped Virtually
+  Toured Property / Registration / Pre-Approval. Adding a type is now ONE place. Commit `f680de5e31`.
+- **Virtual tour = first-class `virtually_toured`** (not `tour_request`), home from the event's own property.
+  **Proven live on Alberto Lopez (47498):** `virtually_toured` → 3331 Benton Blvd, via a real Inngest run.
+- **Myli context on every pull-in** (`buildLeadContext` as import step 2.8). **Proven:** Alberto went 0 → 1
+  `context_built` + 9 `fact_captured`. James Ross spine unchanged (no regression).
+- **Card-rendering bugs found on real leads:** no photos on out-of-market homes (no fallback), junk
+  `realscout.com/agent/...` URL cards, and the New Area of Interest pill wrapping + oversized. Diagnosed (see
+  Image pull-in) and queued as the per-card checklist.
+- **Decision (Zach):** every behavior trigger renders as a HERO card; the Behavior Trigger Matrix above is the
+  canonical list we design + build down.
+
 ### 2026-06-27 — the one sourced card, tokenized + verified on localhost
-Unified the All feed and Website Activity onto one shared `FeedRow` card; wired real address/photo/`/home` link/source
-onto every behavior row; fixed the blank-source bug ("via Zillow.com"); added the calendar chip above the address,
-bold facts, and bigger photos (+10%, locked tokens); built the dual `View on HouseLoop │ View on Zillow` links plus the
-out-of-area coverage modal (centered on the iPad panel, circular X, single View-on-Zillow). Fully tokenized typography
-+ sizing into `card-tokens.ts`/`actor-lanes.ts` and added the `hl/no-raw-card-token` ESLint rule. All Playwright-verified
-on `localhost:3020`; not deployed (locking visuals first). **Open:** KPI tiles still 0; James's 2 property inquiries
-aren't rendering (only the 2 tour requests show) — investigating the converter/classification next.
+Unified All feed + Website Activity onto one shared `FeedRow`; real address/photo/`/home` link/source on every
+behavior row; fixed the blank-source bug; calendar chip above the address, bold facts, bigger photos; the dual
+`View on HouseLoop │ View on Zillow` links + the out-of-area coverage modal; fully tokenized into
+`card-tokens.ts`/`actor-lanes.ts` + the `hl/no-raw-card-token` ESLint rule.
 
 ### 2026-06-26 (PM, latest) — direction locked: behavior → sourced cards (PRD written)
 Zach reversed the firewall: FUB behavior becomes first-class HouseLoop events, gated by a source per event.
-Locked the one-to-one Zillow↔HouseLoop parity catalog (added `liked_home`, `shared_home`) in the matrix; wrote
-`GT_HOUSELOOP_FUB_BEHAVIOR_EVENTS_PRD.md` + the scope lock. Corrected the prior "PROVEN" framing — that was the data, not the cards.
+Locked the one-to-one Zillow↔HouseLoop parity catalog; wrote `GT_HOUSELOOP_FUB_BEHAVIOR_EVENTS_PRD.md` + the scope lock.
 
 ### 2026-06-26 (PM, late) — backfill data proven on James
-Dispatched `fub/lead.import { 50308, backfill: true }` through Inngest cloud. James **52 → 397** first-class events,
-idempotent, tour requests all from the inquiry spine (zero `fub.events` duplicates). Commit `f46f88bf69`.
+Dispatched `fub/lead.import { 50308, backfill: true }` through Inngest cloud. James **52 → 397** first-class
+events, idempotent, zero `fub.events` duplicates. Commit `f46f88bf69`.
 
 ### 2026-06-26 (PM, late) — the full backfill pipeline + scraper fix
-Batched the home-activity save (418 rows one pass); added the `photo` column; minted the P5 `backfill-behavior`
-step into `fub-lead-import`; split the writers (behavior-only backfill). Scraper rewritten to intercept FUB's
-`/api/v1/events?hasProperty=true` (242 → 534 on James).
+Batched the home-activity save; added the `photo` column; minted the `backfill-behavior` step; scraper rewritten
+to intercept FUB's `/api/v1/events?hasProperty=true` (242 → 534 on James).
 
 ### 2026-06-26 (PM) — converter foundation + the matrix
-Built `classifyFubEvent`, `convertFubSignal`, `BEHAVIOR_BADGES`; documented the Data & Signals Matrix.
+Built `classifyFubEvent`, `convert-fub-signal`, `BEHAVIOR_BADGES`; documented the Data & Signals Matrix.
