@@ -1,68 +1,166 @@
 ---
 title: "Saved Search Alerts"
-description: "How HouseLoop's saved search alert engine works — architecture, email delivery, Inngest crons, and the Listing query model."
+description: "How HouseLoop's saved search alert engine works — the compute-on-web / send-via-CRM-workflow architecture, the firstSeenAt feed-arrival model, Inngest triggers, and the Saved Searches surface."
 ---
 
-When a buyer saves a search on `houseloop.ai`, the HouseLoop alert engine sends them a
-first-look email immediately, then continues sending on their chosen schedule (instant
-hourly checks, daily at 8am CT, or weekly on Mondays). Everything runs through Inngest
-and Resend — no manual triggers, no polling crons you manage.
+When a buyer saves a search on `houseloop.ai`, the HouseLoop alert engine surfaces the
+matching homes the moment they hit our feed — instantly per new listing, or batched daily,
+weekly, or monthly. The website **computes** the matches; the **CRM workflow sends** the
+email. Everything runs through Inngest — no manual triggers, no polling crons you manage.
+
+<Note>
+**Doctrine (Zach 2026-06-17): "everything goes through a workflow."** The website no longer
+sends saved-search emails itself. It runs the match query (`skipSend`) and emits an event;
+the CRM's **Saved Search Listing Alerts** workflow (`sys_saved_search_digest`) and the
+**New Lead — Saved Search** door workflow are the only senders. This keeps every send visible
+on the workflow canvas + in the Run Log (see *Inngest or it doesn't exist*).
+</Note>
+
+## Dev Log
+
+<Update label="2026-06-28 — Benji" description="Instant alerts fire on feed-arrival; doc made current">
+**Saved-search instant alerts were never firing.** The trigger ran 58,363 times yet emitted
+zero digests since 2026-06-22. Two-part fix, plus this doc was rewritten to match the
+real (post-"everything through a workflow") architecture.
+
+- **`firstSeenAt`, not `listDate` (commit `ea0d22eedc`).** The digest match-floor filtered new
+  homes by `Listing.listDate` — the MLS market date, stored **date-only (midnight)** — so
+  `listDate >= "one hour ago"` was essentially always false and instant matched nothing. It now
+  filters by **`Listing.firstSeenAt`** (the timestamp a home first hit *our* feed). A home listed
+  days ago on the MLS but ingested into HouseLoop this hour now alerts instantly. **This is the
+  law: feed-arrival (`firstSeenAt`) drives alerts, never the MLS `listDate`.**
+- **Never-sent catch-up (commit `ea0d22eedc`).** A brand-new instant search used to look back only
+  one hour, so it stayed silent until a listing happened to land in that exact hour. A never-sent
+  search now does a **7-day catch-up on its first run**, then goes real-time. The watermark
+  (`lastAlertSentAt`) advances on every emit, so steady-state is gap-free and never re-sends.
+- **RECENT column = homes the last alert sent (commit `1074547593`).** The Saved Searches card's
+  RECENT column computed `daysOnMarket <= 1` (MLS days-on-market) and never reflected what was
+  emailed. It now reads **`lastMatchCount`** — the count the last alert actually sent.
+- **Doc corrections:** the website-sends-via-Resend flow → compute-on-web / send-via-CRM-workflow;
+  `saved-search-instant-check` is **event-driven on `houseloop/idx.event`**, not an hourly cron;
+  added the **monthly** function, the **digest gate**, the **registration-via-saved-search seed**,
+  and the **`/api/saved-searches/enriched`** surface.
+
+_Verified live: Titan (`titan@aititans.ai`) — `lastAlertSentAt` null → stamped, `lastMatchCount`
+0 → 13, email "13 new homes for your search, Titan" delivered._
+</Update>
 
 ## How it flows
 
 ```
-/listings → [Save Search]
-      │
-      ▼
-POST /api/saved-searches          ← creates the SavedSearch row
-      │
-      ├──▶ direct HTTP call to /api/saved-searches/alert   ← immediate first-look email
-      │
-      └──▶ Inngest crons fire on schedule for subsequent alerts
+                         ┌─────────────────────────────────────────────┐
+ Buyer saves a search    │  WEBSITE (houseloop.ai) — COMPUTES matches   │
+ OR registers via a      │                                              │
+ saved search            │  POST /api/saved-searches  (explicit save)   │
+        │                │      → sendSavedSearchAlert(skipSend)        │
+        ▼                │      → pushLeadToCRM(action:'saved_search')  │
+ SavedSearch row created │                                              │
+ (createdBy 'lead' or    │  seedStarterSavedSearch  (register-via-      │
+  'agent')               │      saved-search, CRM lead-intake)          │
+                         └───────────────────────┬─────────────────────┘
+                                                 │  emits Inngest events
+                                                 ▼
+                         ┌─────────────────────────────────────────────┐
+                         │  CRM (crm.houseloop.ai) — SENDS the email    │
+                         │                                              │
+                         │  New Lead — Saved Search door workflow       │
+                         │      (on-create: branded email + Myli + text)│
+                         │  sys_saved_search_digest workflow            │
+                         │      (digests: branded matches email)        │
+                         └─────────────────────────────────────────────┘
 ```
 
-## The alert endpoint
+The website's job is to **find the homes**. The CRM's job is to **send the message**. The two
+are bridged by Inngest events, never by the website calling Resend for a digest.
 
-`POST /api/saved-searches/alert` is an internal endpoint callable by the creation flow
-and by Inngest. Body: `{ savedSearchId, sinceDate?, cap? }`.
+## The match engine (the `firstSeenAt` law)
 
-**What it does:**
+`sendSavedSearchAlert(savedSearchId, opts)` in
+`apps/houseloop-web/app/api/saved-searches/alert/logic.ts` is the ONE engine every path uses.
 
-1. Loads the `SavedSearch` row + the owner's email via JOIN on `User`.
-2. Skips if the search is inactive, has no delivery email, or the user has no email.
-3. Builds a Postgres query against the `Listing` table using `searchCriteria` fields:
-   `city`, `state`, `zip`, `minPrice`, `maxPrice`, `beds`, `baths`. `sinceDate` narrows
-   to listings published after that timestamp (used for the hourly instant check).
-4. Resolves cover photos from the `Listing.photos` column (stored as
-   `[{ url: string, order: number }]` — first item after ascending sort by order is the
-   cover; the `{ primary, all, count }` shape is also handled).
-5. Sends via **Resend** FROM `HouseLoop <updates@houseloop.ai>` using the
-   `savedSearchAlertHtml` / `savedSearchAlertSubject` templates.
-6. Updates `SavedSearch.lastAlertSentAt`, `lastMatchCount`, and `totalMatchesSeen`.
+1. Loads the `SavedSearch` row + the owner's email (JOIN on `User`). Skips if inactive, no
+   delivery email, or no user email.
+2. Parses the search's own `searchUrl` through the **exact** engine the website uses
+   (`parseSearchParams` + `searchFromDb`), so the alert matches what the buyer sees on
+   `houseloop.ai` — including feature filters (`feature=pool`, etc.).
+3. **Digest floor (`effSince`):** keeps only homes whose **`firstSeenAt >= effSince`** — i.e. the
+   homes that arrived in *our feed* in this window. **Not `listDate`.** `firstSeenAt` is set once
+   on create and never updated; it is the source of truth for "newest." `listDate` is the MLS
+   market date (date-only) and must never gate alerts (see Dev Log 2026-06-28).
+4. Resolves cover photos from `Listing.photos` (`{ primary, all, count }`).
+5. **`skipSend` (the default for every automated path):** compute the matches and **return** them
+   — send nothing, stamp nothing. The CRM workflow owns the email. The legacy direct-Resend send
+   (`HouseLoop <updates@houseloop.ai>`) remains only for the manual `/api/saved-searches/alert`
+   HTTP wrapper.
+6. On a real send (non-`skipSend`): updates `lastAlertSentAt`, `lastMatchCount`, `totalMatchesSeen`.
 
 <Note>
-The alert always queries our **own Listing table** (centerbeam DB), not Repliers live.
-This means results reflect our cached MLS data — photos, prices, and status are as
-current as our last Repliers sync.
+The alert always queries our **own `Listing` table** (centerbeam DB), never Repliers live. Results
+reflect our cached MLS data, as current as the last Repliers webhook/sync.
 </Note>
 
-## Inngest cron functions
+## The send chain (compute → emit → workflow)
 
-All four functions live in
-`apps/houseloop-web/lib/inngest/functions/saved-search-alert.ts`.
+`emitDigestDue()` (in `saved-search-alert.ts`) runs the match query with `skipSend`, and if there
+is at least one new match, emits:
 
-| Function ID | Trigger | Audience |
+```
+houseloop/saved-search.digest-due
+  { email, match_count, search: { name, url, criteria, matches[] } }
+```
+
+The CRM consumes this in
+`apps/houseloop-crm/lib/inngest/functions/saved-search-digest-due.ts`, resolves the lead by email,
+and fires the **`sys_saved_search_digest`** ("Saved Search Listing Alerts") workflow — whose
+branded email step is the only thing that actually sends. After emitting, the watermark advances
+(`lastAlertSentAt = now()`, `lastMatchCount = matches`) so the next tick only picks up newer homes.
+
+## Inngest functions
+
+All live in `apps/houseloop-web/lib/inngest/functions/saved-search-alert.ts` and are registered in
+`apps/houseloop-web/app/api/inngest/route.ts`.
+
+| Function ID | Trigger | Audience / role |
 | --- | --- | --- |
-| `saved-search-on-create` | event `houseloop/saved-search.created` | fires on save — first-look email |
-| `saved-search-instant-check` | `0 * * * *` (hourly) | `alertFrequency = 'instant'` searches |
-| `saved-search-daily-alert` | `0 13 * * *` (8am CT daily) | `alertFrequency = 'daily'` |
-| `saved-search-weekly-alert` | `0 13 * * 1` (Mon 8am CT) | `alertFrequency = 'weekly'` |
+| `saved-search-on-create` | event `houseloop/saved-search.created` | **NO-OP.** The *New Lead — Saved Search* door workflow owns the on-create email. |
+| `saved-search-instant-check` | **event `houseloop/idx.event`** (a new/changed listing) | `alertFrequency = 'instant'` — fires the hour a matching home hits our feed |
+| `saved-search-daily-alert` | cron `0 13 * * *` (8am CT daily) | `alertFrequency = 'daily'` |
+| `saved-search-weekly-alert` | cron `0 13 * * 1` (Mon 8am CT) | `alertFrequency = 'weekly'` |
+| `saved-search-monthly-alert` | cron `0 13 1 * *` (1st, 8am CT) | `alertFrequency = 'monthly'` |
 
-<Note>
-The `saved-search-on-create` Inngest event is a fallback path. The creation route
-(`POST /api/saved-searches`) fires the alert via a direct HTTP call to
-`/api/saved-searches/alert` immediately — it does not wait for Inngest to pick up the event.
-</Note>
+<Warning>
+`saved-search-instant-check` is **event-driven, not a cron.** It runs on every
+`houseloop/idx.event` (emitted by the Repliers webhook at
+`apps/houseloop-web/app/api/repliers/webhook/route.ts` on `listing.created` / `listing.updated`).
+For each instant search it checks for homes that arrived since the last send. A **never-sent**
+search uses a 7-day catch-up floor for its first run; a sent search uses its `lastAlertSentAt`
+watermark, so arrivals between checks are never missed and never double-sent.
+</Warning>
+
+### The digest gate
+
+Every cron + the instant check first calls `digestGateActive()`, which reads the CRM's
+`/api/workflows/digest-gate`. If the **Saved Search Listing Alerts** workflow is paused in Lead
+Flow, every alert path here goes quiet. The gate **fails open** (treats unreachable as active).
+
+## How a saved search is created
+
+There are two creation paths, and both end with the CRM sending the email:
+
+**1. Explicit save (`createdBy = 'lead'`).** Buyer clicks **Save Search** on `/listings`.
+`POST /api/saved-searches` creates the row (defaults: `alertFrequency = 'instant'`,
+`deliveryEmail = true`), runs `sendSavedSearchAlert(skipSend, isConfirmation)` to compute the
+first-look matches, and calls `pushLeadToCRM({ action: 'saved_search', ... })`. The CRM's
+**New Lead — Saved Search** door workflow sends the branded confirmation + matches email, the Myli
+personal email, and the text.
+
+**2. Registration via a saved search (`createdBy = 'agent'`).** When a lead registers and we have
+real browsing signal, `seedStarterSavedSearch()` in
+`apps/houseloop-crm/app/api/integrations/website/lead-intake/route.ts` derives a starter search
+from the homes they actually viewed (`deriveSearchCriteriaFromPixel`) and raw-inserts an
+`instant`, `createdBy = 'agent'` row into the web `SavedSearch` table. It is a silent insert (no
+on-create email) — the `saved-search-instant-check` (with its never-sent 7-day catch-up) delivers
+the recent matches on the next `idx.event`, then real-time after.
 
 ## SavedSearch data model
 
@@ -72,43 +170,59 @@ model SavedSearch {
   userId           String
   name             String
   searchCriteria   Json      // { city, state, zip, minPrice, maxPrice, beds, baths, ... }
-  searchUrl        String    // e.g. "/listings?city=Olathe&minPrice=400000"
-  alertFrequency   String    @default("instant")  // instant | daily | weekly | never
-  deliveryEmail    String?
+  searchUrl        String    // e.g. "/listings?city=Olathe&minPrice=400000&minBeds=5"
+  alertFrequency   String    @default("instant")  // instant | daily | weekly | monthly | never
+  deliveryEmail    Boolean   @default(true)
   deliveryPush     Boolean   @default(false)
   isActive         Boolean   @default(true)
-  lastAlertSentAt  DateTime?
-  lastMatchCount   Int       @default(0)
+  createdBy        String    @default("lead")      // lead | agent (agent = seeded from browsing)
+  lastAlertSentAt  DateTime?                        // watermark — advances on every emit
+  lastMatchCount   Int       @default(0)            // homes the LAST alert sent (the RECENT column)
   totalMatchesSeen Int       @default(0)
+  lastOpenedAt     DateTime?                         // Resend engagement (the god-tier card)
+  lastClickedAt    DateTime?
+  lastEmailId      String?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 }
 ```
 
-## Buyer-facing flow on `/listings`
+## The Saved Searches surface
 
-1. Buyer clicks **Save Search** in the FilterBar.
-2. If signed out: `SignInModal` opens with `context: { type: "save-search" }` and
-   `nextUrl` containing `?postAuthSave=1`. After auth, they land back on `/listings` and
-   `SaveSearchButton` auto-pops the save modal.
-3. Save modal: name (auto-populated from URL params), frequency (Instant / Daily / Never),
-   Copy Link, Save.
-4. `POST /api/saved-searches` → first-look email fires immediately.
-5. User is redirected to `/saved-searches` to manage their searches.
+`/saved-searches` (and the `/updates` view) render from
+`apps/houseloop-web/app/api/saved-searches/enriched/route.ts`, which returns one card per active
+search:
+
+| Column | Source |
+| --- | --- |
+| **RESULTS** | live `totalCount` from the same query the card links to (parses `searchUrl`'s querystring so the count is byte-identical to the listing page) |
+| **RECENT** | **`lastMatchCount`** — the homes the *last alert sent* (Zach 2026-06-28: "the recent has to be the homes that were sent"). Was a `daysOnMarket<=1` query that never reflected the email. |
+| **STARTED** | `createdAt` |
+| **FREQ** | `alertFrequency` |
+| **LAST SENT** | `lastAlertSentAt` |
+
+In the CRM, the same data drives the **Saved Searches** card on the lead (the "god-tier" card with
+Resend opens/clicks/last-sent/frequency/match count). The card's count = real saved-search rows,
+never website *search* (pixel) events.
 
 ## Email template
 
-`apps/houseloop-web/lib/email/saved-search-alert.ts` (Benji). The template shows:
-- Search name + total match count in the header
-- Up to 8 listing cards: photo, address, price, beds/baths/sqft, "fresh" badge if listed
-  in the last 24 hours
-- A **View all N homes** CTA linking to the `searchUrl`
-- Unsubscribe link → `houseloop.ai/settings/saved-searches`
+The branded matches email is rendered + sent by the **CRM workflow** (`sys_saved_search_digest` /
+the New Lead — Saved Search door). The website template
+`apps/houseloop-web/lib/email/saved-search-alert.ts` (search name + total match count header, up to
+8 listing cards with a "fresh" badge for homes listed in the last 24h, a **View all N homes** CTA,
+and an unsubscribe link) backs the legacy manual `/api/saved-searches/alert` HTTP path only.
 
 ## Reference
 
-- `apps/houseloop-web/app/api/saved-searches/route.ts` — create / list
-- `apps/houseloop-web/app/api/saved-searches/alert/route.ts` — alert send (internal)
+- `apps/houseloop-web/app/api/saved-searches/route.ts` — create / list (explicit save)
+- `apps/houseloop-web/app/api/saved-searches/alert/logic.ts` — **the match engine** (`firstSeenAt` floor, `skipSend`)
+- `apps/houseloop-web/app/api/saved-searches/alert/route.ts` — thin manual HTTP wrapper
+- `apps/houseloop-web/app/api/saved-searches/enriched/route.ts` — the Saved Searches surface (RESULTS / RECENT / …)
 - `apps/houseloop-web/app/api/saved-searches/[id]/route.ts` — update / delete
-- `apps/houseloop-web/lib/inngest/functions/saved-search-alert.ts` — all four cron fns
-- `apps/houseloop-web/lib/email/saved-search-alert.ts` — email template
+- `apps/houseloop-web/lib/inngest/functions/saved-search-alert.ts` — the 5 Inngest functions + `emitDigestDue`
+- `apps/houseloop-web/app/api/repliers/webhook/route.ts` — emits `houseloop/idx.event` (drives instant)
+- `apps/houseloop-crm/lib/inngest/functions/saved-search-digest-due.ts` — CRM consumer → fires the send workflow
+- `apps/houseloop-crm/app/api/integrations/website/lead-intake/route.ts` — `seedStarterSavedSearch` (register-via-saved-search)
+- `apps/houseloop-web/lib/email/saved-search-alert.ts` — legacy website email template
+"
