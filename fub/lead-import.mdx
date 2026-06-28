@@ -129,21 +129,51 @@ auto-completes SSO, falling back to `FUB_WEB_GOOGLE_PASSWORD` then `FUB_WEB_PASS
 (`lastEmail.bodyHtmlVisibleClean`; a direct fetch is `401`). **UI-hidden emails are unrecoverable** — if a FUB
 user sets an email private, the body shows `[CONTENT HIDDEN]` in the UI itself (`content_status='hidden'`, permanent).
 
-### ⭐ The scrape-on-entry doctrine (one-time complete home scrape) 🔒
-On lead entry we do a **one-time complete scrape of every house the lead ever touched** — the scraper intercepts
-FUB's `/api/v1/events?hasProperty=true` and walks the entire timeline (242 → 534 homes on the test lead James Ross),
-capturing each home's Zillow photo into `fub.zillow_home_activity` (`s.followupboss.com/properties/…`). **This is
-how a lead gets their full home history with photos in real time.** It is deployed + LIVE.
+### ⭐ The scrape-on-entry doctrine — the real-time per-lead intercept (THE entry mechanism) 🔒
+**This is how every new lead's full history reaches us, in ~half a second.** The moment a new Zillow inquiry fires
+the FUB `eventsCreated` webhook, the handler **spins up a per-lead scrape on Camp David** that intercepts FUB's own
+authenticated SPA call `GET /api/v1/events?hasProperty=true` and walks the lead's **entire** timeline — grabbing
+**every home the lead ever touched: the Zillow URL, zpid, MLS, price, and the photo** — in one shot (242 → 534 homes
+on the test lead James Ross). It writes each home keyed by FUB's stable `fub_event_id` into `fub.zillow_home_activity`
+via `saveZillowHomeActivity` (`tools/fub-scraper/fub-scraper-lib.mjs`). Trigger paths: the webhook auto-enqueues it
+(`fub.rehydration_queue` → `fub-webhook-scraper`); on demand, **`mcp__fub-scraper__fub_scrape_lead` /
+`mcp__camp-david__fub_scrape_person`** re-run the full intercept for one person. **It is deployed + LIVE.** This
+scraper is the front door for ALL new lead data — when a lead's cards look wrong, re-running it is the first move.
+
+### 🗄️ TWO databases — and `zillow_home_activity` is OFF the relay (read this before any photo/home-card debugging) 🔒
+There are **two** FUB stores, and they are NOT kept in sync the same way for every table:
+- **Camp David `fub.*`** (`DATABASE_URL` on the box) — where the scraper WRITES. Ground truth for scraped data.
+- **Railway mirror `fub.*`** (`FUB_RAILWAY_DATABASE_URL`) — **what the HouseLoop CRM READS** (`fubQuery`,
+  `LeadContextPanel`, the import, the card minter). The CRM never reads Camp David directly.
+
+Most tables reach the mirror via the **relay** (`fub-relay`, upsert-by-id). **`fub.zillow_home_activity` is the
+exception — it is OFF the relay (Zach 2026-06-27).** The **scraper is its SINGLE WRITER to the mirror**: right after
+`saveZillowHomeActivity` writes Camp David, it does a **per-person FULL REPLACE to the mirror**
+(`syncPersonHomeActivityToMirror` — `DELETE person rows + INSERT the fresh set`). So a home's photo reaches the CRM
+**only when the scraper runs for that person.** If the scraper hasn't re-run since the photos were captured, **Camp
+David has the photos but the mirror does not** — and the CRM, reading the mirror, shows blank.
 
 ### ⚠️ The photo "race" (why some leads' cards are blank) 🚧 — fix tracked as I1 (§7)
-The complete-home scrape is wired, but the CRM import is dispatched via `setImmediate(() => dispatchFubImport(...))`
-— it **does not wait** for the scrape. The behavior-card minter (`backfillFubBehavior` → `logActivity`) is
-**INSERT-ONLY / idempotent on `(source_table, source_id)`** — a card copies the home photo **only if it's already
-in `fub.zillow_home_activity` at mint-time**, and never updates it later. So a lead whose import **beats** its scrape
-mints blank cards; the scrape later loads the photos but the insert-only minter never backfills them → **blank forever**.
-Proven: James Ross (pre-scraped) 432/442 cards have photos; Alberto Lopez (import beat the scrape) 0/113, even though
-his `fub.zillow_home_activity` holds 199/199 photos. **Fix = re-sync existing cards from `fub.zillow_home_activity`
-+ gate the mint on the scrape (NO Street View — the captured Zillow photo IS the picture).** See §7/I1.
+The blank-card bug is **two failures stacked**, both downstream of the mirror:
+1. **Mirror lag** (the bigger one) — the per-person mirror sync hasn't pushed the lead's photos to Railway, so the
+   mirror holds stale, **photo-less, event_id-less** rows. The CRM reads the mirror → blank. *Proven:* Alberto Lopez
+   — Camp David **199/199** rows with photos + `fub_event_id`; Railway mirror **829 rows, 0 photos, 0 event_ids**.
+2. **Card-mint race** — even with the mirror correct, the import is dispatched `setImmediate(() => dispatchFubImport)`
+   and **does not wait** for the scrape; the minter (`backfillFubBehavior` → `logActivity`) is **INSERT-ONLY /
+   idempotent on `(source_table, source_id)`**, so a card minted before its photo landed never updates. *Proven:*
+   James Ross (pre-scraped) **432/442** cards have photos.
+
+**The fix (both halves — see §7/I1):**
+- **Refresh the mirror:** re-run the scraper for the lead (`fub_scrape_lead` / `fub_scrape_person`) → the per-person
+  full-replace pushes the photos + `fub_event_id`s to the mirror.
+- **Heal the cards:** `resyncHomePhotos` stamps the captured photo onto already-minted cards via `stampActivityPhoto`
+  (the sanctioned append-only exception — fills only `photo` + `meta.house.photo`, idempotent), matching **all**
+  source_id variants (`evt` / `zpid` / address-slug) because legacy cards were minted zpid-keyed. Runs as import
+  step 2.7b (every pull-in) + the standalone **`fub/home-photos.resync`** Inngest fn (backfills already-blank leads).
+- **NO Street View — the captured Zillow photo IS the picture.**
+
+> **One-line debug rule:** blank home card → check the **Railway mirror** (`FUB_RAILWAY_DATABASE_URL`), not Camp
+> David. If the mirror has 0 photos for the person, re-run the scraper (`fub_scrape_lead`); then `fub/home-photos.resync`.
 
 ### Data model
 | Table | Holds |
@@ -405,7 +435,7 @@ layout — one card at a time.
 ### Open issues — TRACKED (resolve, then check off)
 | # | Issue | Fix | Where |
 |---|---|---|---|
-| **I1** | **Photo "race"** (§2) — insert-only minter runs before the scrape; photos exist in `fub.zillow_home_activity` but never backfill (Alberto 0/113 vs James 432/442). | **Re-sync** photos onto existing cards + **gate the mint on the scrape**. Photo = the captured Zillow photo; **NO Street View**. Also add Listing-by-address fallback for the HouseLoop link. | `fub-lead-import.ts` minter + re-sync + `route.ts` resolve |
+| **I1** | **Photo "race" + mirror lag** (§2). The CRM reads the **Railway mirror**; `zillow_home_activity` is OFF the relay, so a lead's photos reach the mirror ONLY when the **scraper** runs for that person. Alberto: Camp David 199/199 photos+event_ids, **mirror 829 rows / 0 photos / 0 event_ids** → CRM blank. Plus the insert-only minter can't backfill a card minted before its photo (James 432/442 vs Alberto 0/113). | **Two steps:** (1) **re-run the scraper** for the lead (`fub_scrape_lead` / `fub_scrape_person`) → the per-person full-replace pushes photos+event_ids to the mirror; (2) **`fub/home-photos.resync`** Inngest fn / import step 2.7b → `resyncHomePhotos` stamps the photo onto existing cards (`stampActivityPhoto`, all source_id variants evt/zpid/slug). **NO Street View.** | scraper → mirror; `backfill-fub-behavior.ts` resync; `fub-home-photo-resync.ts` |
 | **I2** | Duplicate registration card — step-3 door duplicates the step-2.6 request card. | Kill the door for FUB inquiries (the inquiry IS the entry). | `fub-lead-import.ts` step 3 |
 | **I3** | Property Inquiry address has no commas + thin subline. | Comma the address; fill `$price · ba · MLS#`. | card address build |
 | **I4** | Per-inquiry duplication (2 inquiries same home/day → 2 cards). | Decide keep-per-inquiry vs dedupe. | step 2.6 |
@@ -413,6 +443,13 @@ layout — one card at a time.
 | **I6** | Viewed Repeatedly — photo + sentence label; compact (behaviors are NOT hero). | Compact card, `hero` off. | FeedRow / catalog |
 
 ### Changelog (newest first)
+- **2026-06-28 (PM)** — **Corrected the photo-race root cause + documented the real mechanism (Zach).** The deeper
+  cause is **mirror lag**, not just the mint race: `zillow_home_activity` is OFF the relay, so a lead's photos reach
+  the Railway mirror (what the CRM reads) ONLY via the **scraper's per-person full-replace** — Alberto's mirror had
+  0 photos while Camp David had 199. Documented §2's **real-time per-lead webhook scraper** (the `/api/v1/events?hasProperty=true`
+  intercept, ~½s) and the **two-DB / off-the-relay / single-writer** architecture. Shipped the CRM-side heal:
+  `stampActivityPhoto` + `resyncHomePhotos` (all source_id variants) + import step 2.7b + the `fub/home-photos.resync`
+  Inngest fn. Heal sequence = re-run the scraper → mirror gets photos → `fub/home-photos.resync` stamps the cards.
 - **2026-06-28** — **Consolidated all FUB lead-import docs into this one master.** Documented the **photo "race"**
   root cause (insert-only minter beats the scrape → blank cards). Locked: every request/registration HERO card =
   the canonical Tour Request (calendar chip the only diff); HERO is tours/inquiries/registrations only (behaviors
