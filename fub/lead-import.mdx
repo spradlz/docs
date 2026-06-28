@@ -153,27 +153,35 @@ exception — it is OFF the relay (Zach 2026-06-27).** The **scraper is its SING
 **only when the scraper runs for that person.** If the scraper hasn't re-run since the photos were captured, **Camp
 David has the photos but the mirror does not** — and the CRM, reading the mirror, shows blank.
 
-### ⚠️ The photo "race" (why some leads' cards are blank) 🚧 — fix tracked as I1 (§7)
-The blank-card bug is **two failures stacked**, both downstream of the mirror:
-1. **Mirror lag** (the bigger one) — the per-person mirror sync hasn't pushed the lead's photos to Railway, so the
-   mirror holds stale, **photo-less, event_id-less** rows. The CRM reads the mirror → blank. *Proven:* Alberto Lopez
-   — Camp David **199/199** rows with photos + `fub_event_id`; Railway mirror **829 rows, 0 photos, 0 event_ids**.
-2. **Card-mint race** — even with the mirror correct, the import is dispatched `setImmediate(() => dispatchFubImport)`
-   and **does not wait** for the scrape; the minter (`backfillFubBehavior` → `logActivity`) is **INSERT-ONLY /
-   idempotent on `(source_table, source_id)`**, so a card minted before its photo landed never updates. *Proven:*
-   James Ross (pre-scraped) **432/442** cards have photos.
+### ✅ The blank-photo bug — ROOT CAUSE FOUND + FIXED (2026-06-28)
+Every blank photo + stale lead traced to **ONE bug**: `mirrorUrl()` in `fub-scraper-lib.mjs` resolved its `~/.env`
+fallback with **`require('node:fs')` — but that file is an ES module, so `require` is undefined and threw**, silently
+returning `null`. The per-person mirror sync then no-op'd on **every on-demand scrape** (which doesn't set
+`RAILWAY_DATABASE_URL`). pm2 scrapers "worked" only because their env sets the var. So a scrape wrote Camp David
+perfectly but **never updated the Railway mirror the CRM reads** → blank. *Proven:* Alberto Camp David **199/199**
+photos, mirror **829 rows / 0 photos** — until the fix flipped it to **207/207**.
 
-**The fix (both halves — see §7/I1):**
-- **Refresh the mirror:** re-run the scraper for the lead (`fub_scrape_lead` / `fub_scrape_person`) → the per-person
-  full-replace pushes the photos + `fub_event_id`s to the mirror.
-- **Heal the cards:** `resyncHomePhotos` stamps the captured photo onto already-minted cards via `stampActivityPhoto`
-  (the sanctioned append-only exception — fills only `photo` + `meta.house.photo`, idempotent), matching **all**
-  source_id variants (`evt` / `zpid` / address-slug) because legacy cards were minted zpid-keyed. Runs as import
-  step 2.7b (every pull-in) + the standalone **`fub/home-photos.resync`** Inngest fn (backfills already-blank leads).
-- **NO Street View — the captured Zillow photo IS the picture.**
+**Fixed (shipped):**
+- `mirrorUrl()` uses the ESM-imported `fs` (no `require`).
+- `syncPersonHomeActivityToMirror` now **sources the FULL set from Camp David** (not the flaky in-memory scrape
+  result, which the intercept returns non-deterministically — 0/4/199 on the same lead), **always runs**, **never
+  shrinks** the mirror below Camp David, and **fails LOUD** (`✅ mirror replaced: N` / `❌ mirror sync FAILED` — never
+  silent). The loud log is what surfaced the `require` bug on the first run.
+- **Card heal:** `resyncHomePhotos` + `stampActivityPhoto` (the sanctioned append-only exception) stamp photos onto
+  already-minted cards (all `evt`/`zpid`/slug source_id variants); for leads minted from the old broken mirror,
+  **re-import** (`fub/lead.import {backfill}`) mints clean `evt`-keyed cards, then a Rule#0-approved delete removes the
+  stale `fub_home:` non-evt duplicates. **Junk guard** in `convertHomeActivity`: an address that is a URL / agent-page
+  (`realscout.com/users/...`) / doesn't start with a street number **never mints a card**.
 
 > **One-line debug rule:** blank home card → check the **Railway mirror** (`FUB_RAILWAY_DATABASE_URL`), not Camp
-> David. If the mirror has 0 photos for the person, re-run the scraper (`fub_scrape_lead`); then `fub/home-photos.resync`.
+> David. 0 photos there → re-run `fub_scrape_lead` (now mirrors loud); cards stale → re-import the lead.
+
+### 🔑 Where property VIEWS actually come from — the internal feed, NOT the notes (Zach 2026-06-28)
+FUB has **no property-view webhook** (the public "Viewed Property" event died May 21). Your **"Property Viewed" note
+automation** fires `notesCreated` — but it **lags and misses** (proven: James had 6 views, Alberto 5, newer than their
+newest note; rentals/heavy browsers fall behind). The **complete, ordered, current** view list lives ONLY in FUB's
+**internal `GET /api/v1/events?hasProperty=true` feed**, which the scraper intercepts. So: **source views from the
+intercept, never the notes.** The note webhook is fine as a *trigger* ("go re-scrape"), but the data is the feed.
 
 ### Data model
 | Table | Holds |
@@ -443,6 +451,16 @@ layout — one card at a time.
 | **I6** | Viewed Repeatedly — photo + sentence label; compact (behaviors are NOT hero). | Compact card, `hero` off. | FeedRow / catalog |
 
 ### Changelog (newest first)
+- **2026-06-28 (late PM)** — **ROOT CAUSE FIXED + all home photos restored.** The blank-photo bug = `require()` in an
+  ESM (`mirrorUrl()`) silently nulling the mirror URL on every on-demand scrape. Fixed; mirror sync now sources from
+  Camp David, always runs, never shrinks, fails LOUD. Re-scraped + re-imported the 4 HouseLoop leads with home cards
+  (Alberto 207/207, James 673/673, Jo 178/178, Jessica 164/164 photos); Rule#0-approved delete of 190 stale/dup/junk
+  cards (0 junk remaining). Added `convertHomeActivity` junk-address guard. Fixed viewed-homes ordering: `activity_date`
+  is a DATE column (midnight) → order by `fub_event_id DESC` (chronological). LOCKED: property views are sourced from
+  FUB's internal `hasProperty=true` feed (the scraper intercept), NOT the lossy note automation. **NEXT: Gate C real-time
+  — the doorbell wiring exists (peopleUpdated/notesCreated/eventsCreated → `rehydration_queue` → `fub-webhook-scraper`),
+  unblocked by the mirror fix; the only blocker is the queue is ~49,000 deep with no HouseLoop prioritization. Build =
+  enqueue only HouseLoop leads (debounced) + a high-priority lane so an active lead scrapes in seconds.**
 - **2026-06-28 (PM)** — **Corrected the photo-race root cause + documented the real mechanism (Zach).** The deeper
   cause is **mirror lag**, not just the mint race: `zillow_home_activity` is OFF the relay, so a lead's photos reach
   the Railway mirror (what the CRM reads) ONLY via the **scraper's per-person full-replace** — Alberto's mirror had
