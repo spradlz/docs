@@ -11,6 +11,27 @@ Every search surface (the `/listings` page, the map, the home shelves, this API)
 shares **one query envelope**: the same URL params mean the same thing everywhere.
 No presets, no magic flags — every filter is explicit in the URL.
 
+## Dev Log
+
+<Update label="2026-06-28 — Benji" description="Status filter documented; default + additive-sold laws fixed">
+The `status` filter and its count behavior were undocumented and had drifted across surfaces.
+Counts disagreed (the same search read 348 in one place, 66 in another). Root cause + fixes, all live:
+
+- **ONE default-status definition (commit `f31d2823c8`).** The status picker writes a NULL `status=`
+  param when exactly **For Sale + Coming Soon** is selected (it treats that as the default). The search
+  engine's "no `status=` param" default MUST resolve to the **same** set. A 2026-06-27 change had made
+  no-status mean *all four statuses*, so picking For Sale + Coming Soon dropped the param → the engine
+  read all-four → **348 instead of 66**. Fixed: no-status default = For Sale + Coming Soon, both places.
+- **Sold is ADDITIVE when combined (commit `70a4567faf`).** "Results include every status you pick."
+  Checking Sold alongside live statuses now unions the **full** sold archive (same as Sold-only), not the
+  live table's recent sliver. All-four = 66 + 48 + 2,263 = **2,377**; Under Contract + Sold = **2,311**.
+  Gated to sold-mixed only — every other search path is untouched.
+- **One count source (commit `414cb19467`).** Every count surface (results header, Filters footer, the
+  price-histogram "homes in this range", saved-search card) reads `/api/listings/count` with the same
+  serialized status draft. The histogram count had been hardcoded to `active,pending` and went stale on
+  toggle; it now tracks the live draft and updates in real time.
+</Update>
+
 ## Base URL
 
 ```
@@ -26,6 +47,7 @@ http://localhost:3001/api     # local dev
 | `state` | State abbr | `state=KS` |
 | `zip` | ZIP (comma-list) | `zip=66085` |
 | `boardId` | MLS board (Heartland = `157`) | `boardId=157` |
+| `status` | **Listing status — CSV of group tokens.** Omitted = the default (For Sale + Coming Soon). See *Status filter & counts*. | `status=forSale,sold` |
 | `sort` | **Sort order — a SORT, not a filter.** Persists across filter changes. | `sort=newest` |
 | `minPrice` / `maxPrice` | Price band | `minPrice=400000` |
 | `minBeds` / `minBaths` | Bed / bath floor | `minBeds=3` |
@@ -46,6 +68,50 @@ removable filter. So "most viewed homes in Overland Park" = `?city=Overland Park
 drop the city and you get the most-viewed homes across the whole metro, same sort.
 </Note>
 
+## Status filter & counts
+
+The `status` param is a CSV of **group tokens**. There are exactly four:
+
+| Token | Means | DB status |
+|---|---|---|
+| `forSale` | Active / for sale | `active` |
+| `comingSoon` | Coming soon | `coming_soon` |
+| `underContract` | Pending / under contract | `pending` |
+| `sold` | Sold (closed) | `sold` |
+
+```bash
+curl "https://houseloop.ai/api/listings/count?city=Overland%20Park&state=KS&status=forSale,comingSoon"
+# → { "totalCount": 66 }
+```
+
+**The default (no `status=` param) = `forSale,comingSoon`.** This is locked because the UI status
+picker writes a *null* `status` param whenever exactly that pair is selected — so "no param" and
+"For Sale + Coming Soon" MUST resolve to the same set, or the count diverges (this was the 348-vs-66 bug).
+To browse pending or sold, pass them explicitly. A specific pending/sold home is always findable by
+**address** via `/api/locations/autocomplete` regardless of the grid's status filter.
+
+<Note>
+**Status is ADDITIVE — "results include every status you pick" (locked 2026-06-28).** Each token adds its
+full set; the total is the sum.
+
+- `status=forSale` → 58 · `status=comingSoon` → 8 · `status=forSale,comingSoon` → **66**
+- `status=sold` → **2,263** (the full sold archive — see below)
+- `status=forSale,comingSoon,underContract,sold` → 66 + 48 + 2,263 = **2,377**
+
+**Sold draws from the full archive, even when combined.** Sold-only and any sold-mixed query both pull
+the complete sold set from `ListingHistory` (~12-month window), not the live table's recent sliver. The
+engine (`searchFromDb`) unions the live (non-sold) results with the sold archive and presents **live homes
+first** (active → coming soon → under contract), then sold by sale-date desc. So combining Sold with live
+statuses never *shrinks* the sold count.
+</Note>
+
+<Note>
+**One count source.** Every count a user sees — the results header, the Filters panel footer, the
+price-range "homes in this range" preview, and the saved-search card — calls `/api/listings/count` with the
+**same** status draft. They always agree. If two surfaces ever show different numbers for the same filters,
+that's a regression: one of them is passing a different (or hardcoded) status.
+</Note>
+
 ## GET /api/listings/search
 
 Full search. URL params → envelope → results.
@@ -60,7 +126,8 @@ batched per listing. Default `limit` 24, max 100.
 
 ## GET /api/listings/count
 
-Just the total for a query — cheap, no rows.
+Just the total for a query — cheap, no rows. Honors the full envelope, including `status` (so the
+count is byte-identical to what `/listings` renders for the same URL).
 
 ```bash
 curl "https://houseloop.ai/api/listings/count?city=Leawood&state=KS"
