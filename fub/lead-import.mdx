@@ -1,69 +1,432 @@
 ---
-title: "FUB → HouseLoop: Lead Import"
-description: "How a Follow Up Boss lead becomes a HouseLoop lead — the import workflow, real-time sync, and how its tour/contact requests cross into the HouseLoop activity feed (the two-pipe rule)."
+title: "FUB → HouseLoop: Lead Import (Master)"
+description: "The ONE master doc for how a Follow Up Boss lead becomes a HouseLoop lead: data acquisition (webhooks + scraper), the import workflow, the signal→event matrix, the card system, and Myli's context. The single living source — all other FUB lead-import docs fold into this."
 ---
 
-<Accordion title="Changelog — last updated 2026-06-26" icon="clock-rotate-left">
-Newest first. Times Eastern.
-- **2026-06-26** — Incident + request-activity model (Benji). FIXED: Myli was texting FUB-imported leads **outside any workflow** — the canned lead-facing email/SMS in `request-alerts.ts` fired whenever no workflow owned the door (FUB sources are `workflow_id=null`). Removed the canned lead send entirely; **all lead comms now go through a Lead Flow workflow** (agent-facing alerts kept). SHIPPED + verified: FUB tour/contact requests now cross into the **HouseLoop activity feed** as their own per-inquiry events (verified on Abshiro — 4 Tour Request cards, each badged with its portal).
-- **2026-06-26** — Layer 1 real-time sync LOCKED (relay `pg_notify fub_lead_changed` → CRM `fubListener` → lead SSE, no polling) + the FUB Activity **count fix** (real counts, e.g. Website **3,923** not FUB's display 100). (Lee)
-- **2026-06-22** — FUB import workflow + enriched registration card, verified on James Ross 50308 (Benji).
-</Accordion>
+<Info>
+**This is THE master doc for FUB → HouseLoop lead import.** Everything about how a Follow Up Boss lead reaches
+HouseLoop lives here, top to bottom: **acquisition → import → event model → cards → Myli context**. The only
+separate FUB page is the [Follow-Up Widget](/fub/follow-up-widget) (the reverse direction — the AI clone *inside*
+FUB). Owner: **Lee**. Public mirror of the private GT SSOTs: `GT_HOUSELOOP_FUB_EVENTS_AND_REQUEST_CARD_SSOT.md`,
+`GT_HOUSELOOP_FUB_LEAD_IMPORT_PRD.md`, `GT_HOUSELOOP_FUB_BEHAVIOR_EVENTS_PRD.md`, `GT_HOUSELOOP_FUB_REQUEST_ACTIVITY_PRD.md`.
+Each section is tagged **🔒 LOCKED** (settled) or **🚧 WIP** (in-flight). Living document — amended as we go.
+</Info>
 
-## Overview
+---
 
-When a lead comes into HouseLoop from **Follow Up Boss**, this is the layer that turns it into a HouseLoop
-lead and surfaces its activity. *How FUB data physically lands in `fub.*`* is the
-[Data System](/fub/scraper) (webhooks + scraper); *what each signal becomes* is the
-[Data & Signals Matrix](/fub/data-matrix). This page is the **import pipeline** above them; Myli's brain on
-the lead is [Myli Context](/fub/myli-context).
+# 1. Overview & the one-source map 🔒
 
-FUB is **lead source #1** — the pattern (import → live sync → requests-to-feed) is source-agnostic.
+There is **one source** (FUB, fed by Zillow), pulled by **two pipes** (webhooks + scraper), into **one store**
+(`fub.*` on Railway), minted into **our own events** (`hl_lead_activity`), read by **many surfaces**.
 
-## The import workflow
+```
+   Zillow (Preferred · Rentals · RealScout)
+                  │  inquiries · tours · views · saves · ML intent tags
+                  ▼
+            FOLLOW UP BOSS              ← the hub. FUB owns the signal first.
+                  │
+        ┌─────────┴─────────┐
+   19 WEBHOOKS          SCRAPER (Chrome)
+   real-time signals    only what the API hides:
+   + clean property     · message/email/call bodies · saved searches · deep browse list
+        └─────────┬─────────┘
+                  ▼
+        fub.* on Railway              ← THE ONE STORE (relay: Camp David → Railway)
+                  │  classifyFubEvent / convert-fub-signal → logActivity()
+                  ▼
+        hl_lead_activity              ← OUR EVENT STORE (the truth; one run-log, no fork)
+                  │
+   ┌──────────────┼───────────────────────────┐
+   ▼              ▼                            ▼
+ Telegram     HouseLoop CRM               FUB's own UI
+ + SMS alert  (FUB Activity panel,        (followupboss.com)
+              lead import, request cards)
+```
 
-The **FUB import workflow is LIVE** — on an inbound FUB inquiry it pulls the lead into HouseLoop, logs an
-enriched **registration** card, and links it by `hl_leads.fub_person_id` (source = `Zillow.com`, platform =
-`follow_up_boss`). Verified on **James Ross 50308**.
+**The principle (LOCKED):** every FUB signal becomes **one of OUR OWN events** — minted via `logActivity()` into
+the one run-log `hl_lead_activity` (no new store, no fork; the `ALL_FEED_IS_EVERYTHING` law). `fub.*` is the raw
+landing zone; our event store is the truth. Once a signal is our event, it renders on our cards and can trigger
+our follow-up. **FUB is lead source #1** — the pattern (acquire → import → live-sync → events) is source-agnostic.
+
+**How to read this doc (the pipeline, in order):** §2 how data physically arrives · §3 how a lead is imported ·
+§4 what each signal becomes · §5 how it renders · §6 Myli's brain on the lead · §7 status + open issues.
+
+---
+
+# 2. Data acquisition — webhooks + scraper 🔒 *(the photo "race" fix = 🚧, see §7/I1)*
+
+Two acquisition paths, one destination. *"It's all webhooks"* and *"we're still scraping"* are **both true** —
+they cover different gaps.
+
+```
+                ┌─ 19 LIVE WEBHOOKS ─ signals + CLEAN property (real-time) ─┐
+FUB  ──────────►│                                                          ├─► Camp David fub.*  ─► [RELAY] ─► Railway fub.*  ─► HouseLoop FUB Activity panel
+                └─ SCRAPER (Chrome) ─ recovers ONLY what the API hides ─────┘                       (fub-relay.mjs)               (lead detail → "Follow Up Boss Activity")
+```
+
+- **Webhooks** = FUB pings us instantly with clean structured data for most things.
+- **Scraper** = logs into FUB as a human to grab the **two things the API hides**: masked message/email/call
+  **bodies**, and the **deep historical Zillow browse list** (incl. photos).
+- **Relay** (`tools/fub-sync/fub-relay.mjs`, pm2 `fub-relay`) mirrors Camp David `fub.*` → Railway `fub.*`.
+- **HouseLoop panel** = `apps/houseloop-crm/components/leads/detail/LeadContextPanel.tsx` — reads Railway `fub.*`
+  by `hl_leads.fub_person_id`.
+
+### What comes from where (the canonical table)
+| Data | Webhook / API delivers it? | Needs the scraper? |
+|---|---|---|
+| **Property inquiries** | ✅ `eventsCreated` — full clean property (street, MLS, price, beds/baths) | ❌ |
+| **Viewed homes** (single event) | ✅ `eventsCreated` "Viewed Property" — clean property | ⚠️ only the full *historical* 1,000+ browse list |
+| **Saved homes** | ⚠️ "Saved Property" exists but some events are app-only | ⚠️ for the full saved list |
+| **Lead notes** | ✅ `notesCreated` (body included) | ❌ |
+| **Lead / contact / stage / tags / deals** | ✅ `peopleCreated/Updated/StageUpdated`, `peopleTagsCreated`, `dealsCreated/Updated` | ❌ |
+| **Text — that one happened** | ✅ `textMessagesCreated` (to/from/time) | — |
+| **Text/email *body*** | ❌ masked ("hidden for privacy") | ✅ scraper recovers it |
+| **Call AI summary / transcript** | ❌ not in API | ✅ scraper |
+| **Deep historical browse list** | ❌ not in the API at all | ✅ scrape-only |
+
+### Webhooks (the real-time signal feed)
+**19 active subscriptions**, system `BossLoop` (`X-System` + `FUB_SYSTEM_KEY`), all pointed at
+`apps/dashboard/server/fub-webhooks.ts` (`POST /api/fub/webhook`).
 
 <Warning>
-**Lead comms go through workflows ONLY (2026-06-26).** The legacy canned lead-facing ack in
-`request-alerts.ts` is removed. A FUB lead's tour/contact acknowledgement is the job of the **Lead Flow
-workflow** bound to that door — never a hidden canned send. Agent-facing alerts remain.
+`GET /v1/webhooks` returns **0 unless you send `X-System: BossLoop`** — webhooks are system-scoped. They are
+live; a bare GET just can't see them.
 </Warning>
 
-## Layer 1 — Real-time sync (event-driven, NO polling)
+- **Lean payload** `{ eventId, event, resourceIds[], uri }` — the handler **fetches back** the full resource from
+  `uri` (Basic auth + `X-System`/`X-System-Key`). A `Viewed Property` / `Property Inquiry` fetch-back returns the
+  full `property` object (street/city/zip/MLS/price/beds/baths — **no lat/lng**, geocode ourselves).
+- **The handler** `handleEvent()` → `fub.events`; `parseZillowViewNote()` parses "Property Viewed" automation
+  notes → `fub.zillow_home_activity`; handles texts/emails/calls/notes/deals/tasks/appts; queues masked-body items
+  for the scraper; fires Twilio/Telegram alerts; has **catch-up pollers** (2–5 min) as a webhook-drop backstop.
+- **Signature** `FUB-Signature` = `HMAC-SHA256( base64(rawBody), X-System-Key )` (hex) — verify on the RAW body.
+- **Limits** events GET 20/10s; return 2xx within 10s; FUB retries up to ~8h.
 
+### Scraper (recovers what the API hides)
+FUB masks bodies in its public API. The scraper logs in via a real CDP Chrome and recovers the bodies a human
+sees (`content_status` `hidden` → `visible`). Repo SSOT `tools/fub-scraper/`; deploy `tools/fub-scraper/deploy.sh`
+— **never hand-edit files on the box.**
+
+| pm2 name | script | role |
+|---|---|---|
+| **fub-backfill-a / -b** | `fub-parallel-scraper.mjs` | Master scraper, pending-first from `fub.rehydration_log`. `-a`=Chrome A (CDP `:18800`), `-b`=Chrome B (CDP `:18802`) |
+| **fub-webhook-scraper** | `fub-webhook-scraper.mjs` | Real-time — polls `fub.rehydration_queue` (`FOR UPDATE SKIP LOCKED`) |
+| **fub-watchdog** | `fub-backfill-watchdog.mjs` | Self-healing — every 60s relaunches a dead/wedged Chrome (A **and** B), auto-logs-in via Google SSO, restarts a stalled worker |
+| **fub-relay** | `tools/fub-sync/fub-relay.mjs` | Camp David `fub.*` → Railway `fub.*` mirror |
+
+<Warning>
+`fub-webhook-sink` and `fub-sync` are **deliberately-stopped dead duplicates** — reading their "down" status as a
+live failure is a known trap. The live procs are `fub-backfill-a/b` + `fub-webhook-scraper` + `fub-relay` + `fub-watchdog`.
+</Warning>
+
+**Self-healing watchdog (the two Chromes):** A `:18800` (`/Users/lee/.chrome-fub-profile`) + B `:18802`
+(`/Users/lee/.chrome-fub-profile-2`). Every 60s, per Chrome: (1) liveness + un-wedge via a real `connectOverCDP`
+probe (HTTP 200 can hide a wedged websocket); (2) **auto-login** — the real FUB login is "Log in with Google"
+(`zach@spradlingrealtygroup.com`); the persistent profile holds a live Google session so navigating to the app
+auto-completes SSO, falling back to `FUB_WEB_GOOGLE_PASSWORD` then `FUB_WEB_PASSWORD`; a 2FA challenge alerts via
+`notify.sh`; (3) worker freshness — restart a worker whose log is stale >5 min. **Body recovery:** DOM extraction
+(`scrapeEmailCards`) + intercepting the SPA's own `GET /api/v1/timeline?...types=ThreadNew`
+(`lastEmail.bodyHtmlVisibleClean`; a direct fetch is `401`). **UI-hidden emails are unrecoverable** — if a FUB
+user sets an email private, the body shows `[CONTENT HIDDEN]` in the UI itself (`content_status='hidden'`, permanent).
+
+### ⭐ The scrape-on-entry doctrine (one-time complete home scrape) 🔒
+On lead entry we do a **one-time complete scrape of every house the lead ever touched** — the scraper intercepts
+FUB's `/api/v1/events?hasProperty=true` and walks the entire timeline (242 → 534 homes on the test lead James Ross),
+capturing each home's Zillow photo into `fub.zillow_home_activity` (`s.followupboss.com/properties/…`). **This is
+how a lead gets their full home history with photos in real time.** It is deployed + LIVE.
+
+### ⚠️ The photo "race" (why some leads' cards are blank) 🚧 — fix tracked as I1 (§7)
+The complete-home scrape is wired, but the CRM import is dispatched via `setImmediate(() => dispatchFubImport(...))`
+— it **does not wait** for the scrape. The behavior-card minter (`backfillFubBehavior` → `logActivity`) is
+**INSERT-ONLY / idempotent on `(source_table, source_id)`** — a card copies the home photo **only if it's already
+in `fub.zillow_home_activity` at mint-time**, and never updates it later. So a lead whose import **beats** its scrape
+mints blank cards; the scrape later loads the photos but the insert-only minter never backfills them → **blank forever**.
+Proven: James Ross (pre-scraped) 432/442 cards have photos; Alberto Lopez (import beat the scrape) 0/113, even though
+his `fub.zillow_home_activity` holds 199/199 photos. **Fix = re-sync existing cards from `fub.zillow_home_activity`
++ gate the mint on the scrape (NO Street View — the captured Zillow photo IS the picture).** See §7/I1.
+
+### Data model
+| Table | Holds |
+|---|---|
+| `fub.people` | Leads — `phones`, `tags`, `content_status`, materialized `*_count` |
+| `fub.text_messages` · `fub.emails` · `fub.calls` · `fub.notes` | Activity, each with `content_status` (`hidden`→`visible`) |
+| `fub.events` | Lead events — Property Inquiry / Viewed / Seller Inquiry, with the clean `property` jsonb |
+| `fub.zillow_home_activity` | Homes viewed/saved/shared (note-parsed + scraped) **with the photo** — the panel's homes tab + the card photo source |
+| `fub.saved_searches` | Saved searches (scraper) |
+| `fub.rehydration_log` / `fub.rehydration_queue` | Backfill queue / real-time webhook queue |
+
+**Health:** `mcp__camp-david__fub_backfill_status` (per-scraper health verdict + heartbeat) and
+`mcp__camp-david__fub_chrome_restart` are the fast path; full runbook below in the changelog history.
+
+---
+
+# 3. The import workflow 🔒
+
+A lead's card is born from a **webhook, not a poll**. The chain, grounded on real leads (Juan Martín Munguía
+42729, James Ross 50308):
+
+1. **Source** — a Zillow in-app message / inquiry lands in FUB (e.g. "interested in touring 15111 E 44th St S on
+   Jun 26 at 12pm", source **Zillow Preferred**, MLS# 2626844). FUB fires an `eventsCreated` webhook.
+2. **Pull-in decision** — `fub-webhooks.ts` `EVENT_IMPORT_TRIGGER` maps the event type
+   (`Property Inquiry → 'inquiry'`, `Virtually Toured Property → 'tour'`, `Seller Inquiry → 'seller'`,
+   `Registration → 'new_lead'`) → `dispatchFubImport(personId, trigger)` → CRM `/api/fub/import` → Inngest
+   **`fub/lead.import`** ([Inngest or it doesn't exist](/guides/inngest)).
+3. **The import mints (the key steps):**
+   - **2.6 — the canonical request card** — `kind` from `classifyFubEvent(message, source)`,
+     `source_table='fub_request'`, `source_id='fubreq|<fub.events.id>'`, ONE per inquiry, home resolved by MLS# →
+     photo + `/home` link. **The card we keep.**
+   - **2.7 — behavior backfill** — `backfillFubBehavior(fubPersonId, leadId)` mints the lead's entire FUB behavior
+     history (views/saves/searches/insights) as first-class events (idempotent).
+   - **2.8 — Myli context** — `buildLeadContext(leadId)` writes `context_built` + `fact_captured` + the dossier (§6).
+   - **3 — registration door log** — `kind='registration'`, `source_table='fub_lead_import'`, source "VIA HouseLoop".
+     **This currently DUPLICATES the request card** (tracked issue I2, §7).
+- **Link + source:** `hl_leads.fub_person_id`; lead source = `Zillow.com`, platform = `follow_up_boss`.
+
+<Warning>
+**Lead comms go through workflows ONLY (LOCKED 2026-06-26).** The legacy canned lead-facing ack in
+`request-alerts.ts` is removed — a FUB lead's tour/contact acknowledgement is the job of the **Lead Flow workflow**
+bound to that door, never a hidden canned send. Agent-facing alerts remain.
+</Warning>
+
+### Layer 1 — real-time sync (event-driven, NO polling) 🔒
 ```
 Camp David fub.*  →  relay  →  Railway fub.*  ──NOTIFY fub_lead_changed(fub_person_id)──►
    HouseLoop fubListener  →  lead-detail SSE (/api/leads/[id]/stream)  →  card updates instantly
 ```
+The relay fires a Postgres `NOTIFY` on each write; `fubListener` + the lead-detail SSE push it to any open card —
+**no polling** (HouseLoop law). The FUB Activity panel reads **real counts** from `fub.*` (e.g. Website **3,923**),
+never FUB's display number (capped at 100).
 
-The relay fires a Postgres **`NOTIFY`** on each write. HouseLoop's `fubListener` + the lead-detail SSE stream
-push the change to any open card — **no polling** (HouseLoop law). The FUB Activity panel reads the **real
-counts** from `fub.zillow_home_activity` / `fub.notes` / etc. (e.g. Website **3,923**), never FUB's display
-number (capped at 100).
-
-## Tour & Contact requests → the HouseLoop feed (the two-pipe rule)
-
-A FUB lead's activity flows through **two separate pipes** that do not feed each other:
-
-- **Pipe A — Myli's context** (the **Follow Up Boss Activity** panel): the lead's FULL FUB history — texts,
-  calls, notes, every inquiry, Zillow views — read live from `fub.*` by link. All FUB history lives here.
-  See [Myli Context](/fub/myli-context).
-- **Pipe B — the HouseLoop activity feed** (the **All** + **Website Activity** tabs, `hl_lead_activity`):
-  only **tour/contact REQUESTS** cross into here. FUB texts/calls/old activity never cross.
+### The two pipes 🔒 — *(scope evolved: behaviors are now first-class events too)*
+A FUB lead's activity flows through **two pipes that do not feed each other**:
+- **Pipe A — the raw FUB history** (the **Follow Up Boss Activity** panel, `LeadContextPanel.tsx`): the lead's FULL
+  FUB history — texts, calls, notes, every inquiry, Zillow views — read **live from `fub.*` by link**. This is
+  Myli's reading context (§6).
+- **Pipe B — our event store** (`hl_lead_activity`, the **All** + **Website Activity** tabs): the lead's activity
+  minted as **our own first-class events**. **Originally only tour/contact requests crossed; now behavior events
+  cross too** — backfilled + forward-minted, **scoped to leads already in HouseLoop** (the Landing, §4). Raw FUB
+  texts/calls never cross into Pipe B — they stay in Pipe A.
 
 The rules (LOCKED 2026-06-26):
-
 | Rule | Behavior |
-| --- | --- |
-| **One event per inquiry** | Each FUB tour/contact request becomes its **own** HouseLoop activity event (keyed per property) — a lead with 4 tour requests shows **4 request cards**, not one. |
-| **First touch vs request** | The lead's **first** touch = a `registration`. Every request **after** = a `tour_request` / `contact_request` event → **Website Activity → Requests** + **All**. |
-| **Request SOURCE = the portal** | Each request carries the portal it came FROM — `fub.events.source` (Zillow Preferred, Homes.com, realtor.com…) for FUB, **HouseLoop** for native — as a badge on the row. **Separate** from the LEAD source. |
-| **No backfill (watermark)** | Only inquiries from a lead's HouseLoop engagement window (event date **≥ when they joined**) create request events. Past FUB activity stays in Pipe A. |
+|---|---|
+| **One event per inquiry** | Each FUB tour/contact request = its own HouseLoop event (keyed per property) — 4 tour requests → 4 request cards. |
+| **First touch vs request** | First touch = a `registration`; every request after = `tour_request` / `contact_request` → Website Activity → Requests + All. |
+| **Request SOURCE = the portal** | Each request carries the portal it came FROM (`fub.events.source`: Zillow Preferred, Homes.com…) as a badge — **separate** from the LEAD source. |
+| **Watermark (no blind backfill)** | Only activity from the lead's HouseLoop engagement window (`synced_at` ≥ when WE ingested) is minted — see the Watermark Law (§6). |
 
-<Info>
-The card these requests render as is the canonical [Request Card](/fub/request-cards). Design SSOT (private):
-`GT_HOUSELOOP_FUB_LEAD_IMPORT_PRD.md` §4d + `GT_HOUSELOOP_FUB_REQUEST_ACTIVITY_PRD.md`.
-</Info>
+---
+
+# 4. The event model & Data & Signals Matrix 🔒
+
+### The coarse-type problem
+FUB stores **all** lead-initiated property contact under one `type = "Property Inquiry"`. The real intent lives
+**only in the message + `source`**. One classifier — `classifyFubEvent({type, message, source})`
+(`apps/houseloop-crm/lib/fub/classify-fub-event.ts`) — resolves it; every surface uses that one verdict. The ONE
+import gate is `SERVICED_FUB_EVENT_TYPES` in that file (replaces the old hardcoded `type IN (...)` SQL — adding a
+type is now ONE place).
+
+### The three request types (derived from the message, never the FUB type)
+| Request type | Message signal | Our event |
+|---|---|---|
+| **Contact request** | *reach out · call me · like to talk* | `contact_request` |
+| **Property inquiry** | *interested in &lt;addr&gt;* (no tour/callback) | `property_inquiry` |
+| **Property tour request** | *tour · showing · seeing &lt;addr&gt; on &lt;date&gt;* | `tour_request` |
+
+<Warning>
+**FUB's `General Inquiry` (~4,088) is a junk bucket** — 86% blank, rest mostly phone-call notices + Zillow system
+messages. Parsed: real questions → `contact_request`, phone notices → calls feed, noise → dropped (`null`).
+</Warning>
+
+### The event-conversion matrix — every signal → our event
+| FUB signal | Arrives via | → Our event |
+|---|---|---|
+| Property Inquiry (tour language) | `eventsCreated` | `tour_request` |
+| Property Inquiry ("interested in") | `eventsCreated` | `property_inquiry` |
+| Property Inquiry ("reach out / talk") | `eventsCreated` | `contact_request` |
+| Property Inquiry (`source = Zillow Rentals`) | `eventsCreated` | `rental_inquiry` |
+| Seller Inquiry | `eventsCreated` | `seller_inquiry` |
+| General Inquiry (real question) | `eventsCreated` | `contact_request` (filtered) |
+| **Virtually Toured Property** | `eventsCreated` | **`virtually_toured`** *(own first-class kind — Zach LOCKED 2026-06-28; NOT folded into tour_request)* |
+| ⭐ Property VIEWED (note) | `notesCreated` "Property Viewed: &lt;url&gt;" | `property_view` |
+| ⭐ Property SAVED (note) | `notesCreated` "Property Saved: &lt;url&gt;" | `save_home` |
+| ⭐ Property SHARED (scraper) | scraper → `fub.zillow_home_activity` | `share_home` |
+| Registration | `eventsCreated` | `registration` |
+| Pre-Approval | `eventsCreated` | `pre_approval` |
+| Saved Property Search | scraper → `fub.saved_searches` | `saved_search` |
+| note "viewed N× in 7 days" | `notesCreated` (raw) | `behavior_repeat_views` |
+| note "now looking in &lt;ZIP&gt;" | `notesCreated` (raw) | `behavior_area_interest` |
+| Zillow ML tags (High-Intent, Reengaged…) | `peopleUpdated` / `peopleTagsCreated` | `behavior_*` |
+
+<Warning>
+**Views & saves arrive ONLY as `notesCreated` notes now.** The `Viewed Property` / `Saved Property` **event
+types died May 21** (Premier Agent change — rows frozen at that date). So `property_view` / `save_home` are minted
+from the NOTE path, never the dead event type.
+</Warning>
+
+### One-to-one parity — Zillow ↔ HouseLoop (LOCKED 2026-06-26)
+Same event catalog on both platforms; only the **source badge** differs (`Zillow.com` vs `HouseLoop.ai`). A home
+viewed on Zillow and on houseloop.ai are the same `kind` (`property_view`). The one asymmetry: **liked home is
+HouseLoop-only** (Zillow has no "like"). Pre-qualified is the same kind, branded **ZHL** (Zillow) vs **Lending
+Loop** (HouseLoop). Add an event to the catalog (`activity-badges.ts` / `BEHAVIOR_BADGES`) → it gets a card on
+every surface automatically (no per-type hardcoding — the `ALL_FEED_IS_EVERYTHING` law).
+
+The Zillow side is minted from: views/saves → `notesCreated` → `fub.zillow_home_activity`; shared → scraper;
+repeat-views/area → the raw note; tour/inquiry/contact → `fub.events` → `classifyFubEvent`; saved search → scraper;
+high-intent/reengaged/specific-home/pre-qual → the Zillow tags. **`Zillow Smart List` = the 13-day "active now"
+window** (add → `behavior_active`, remove → `behavior_window_closed`) — not itself a behavior.
+
+### 🛬 The Landing — ship it without boiling the ocean (LOCKED)
+1. **Only a request creates a NEW lead.** A lead is pulled in **only** by a property inquiry / tour request.
+   **Behavior events NEVER create a lead** (that would flood HouseLoop with events for leads we have no workflows for).
+2. **Behavior events are first-class — but only for leads already in HouseLoop.** Once a request pulls a lead in:
+   **(a) backfill** its whole FUB behavior history into `hl_lead_activity`; **(b) forward**-mint every new behavior
+   in real-time; **(c) scope** — a behavior for a FUB lead NOT in HouseLoop is ignored. No flood, no orphans.
+3. **Pre-seed every trigger token → a "Coming Soon — Not Built Yet" stub** in the Workflows list. The trigger is
+   visible, the event flows first-class, **nothing fires** until a real workflow replaces the stub.
+
+Each conversion runs through ONE converter writing via `logActivity()` (events → `classifyFubEvent`; notes →
+view/save + the insight parsers; home activity → view/save/share deduped per home **with the photo**; saved
+searches → `saved_search`; tags → the `behavior_*` events + Smart-List window). Each fires at webhook-time +
+a per-lead backfill (gated to leads already in HouseLoop).
+
+---
+
+# 5. The card system 🔒 *(per-card design checklist = 🚧, §7)*
+
+`FeedRow` (exported from `components/leads/detail/PixelFeedStream.tsx`, reused by `CenterLane.tsx`) draws every
+card from the one `activity-badges.ts` catalog. **No new components** — exactly two shapes:
+
+- **HERO** — `ActivityHeroCard.tsx`. Accent border · actor pill · title · "via" source badge · time · photo/icon
+  tile · address + facts (`$price · bd · ba · MLS#`) · `View on HouseLoop │ View on Zillow` · quote/message ·
+  calendar chip. Fired by `request:true`, `registration`, `hero:true`.
+- **COMPACT** — the row card. Thumbnail (80×80) · actor pill · label+icon · "via" badge · time · address · facts ·
+  View links. Fired by everything else.
+
+**HERO is ONLY property tours, inquiries, and registrations (Zach LOCKED 2026-06-28).** All other behaviors/
+signals/searches/comms = COMPACT. (The earlier "all behaviors are hero" call was reversed.)
+
+### The canonical request card (Zach LOCKED 2026-06-28)
+**Every request/registration HERO card looks IDENTICAL** — modeled on Zillow's card. The ONLY difference is a
+**Tour Request shows the date as a calendar chip.** It is display-only (no accept/decline — acting on a request is
+a [workflow](/guides/workflows), not a button).
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ ① Tour Request   VIA Zillow Preferred          Jun 25    │  type (classified) + source pill + timestamp
+│ ② [PHOTO]   ③ 📅 Jun 26, 6:30 pm                          │  photo (far left) + calendar chip (TOUR ONLY)
+│             ④ 2324 SW 34th St, Topeka, KS 66611          │  FULL address (city+state+zip), blue link
+│             ⑤ MLS #165929 · $260,000 · 3bd/3ba           │  MLS + price + beds/baths
+│ ⑥ "I'm interested in 2324 SW 34th St… seeing Jun 26…"     │  full message line (Zillow-style)
+│ ⑧ View all tour requests                                  │  per-person link (tour cards only)
+└─────────────────────────────────────────────────────────┘
+```
+| Field | Source |
+|---|---|
+| ① type | `classifyFubEvent(message, source)` |
+| ② photo | our `Listing` (in-market) → the home's Zillow photo from `fub.zillow_home_activity` (out-of-market). **No Street View.** |
+| ③ calendar chip | parsed showing date/time from the message (tour cards only) |
+| ④ full address · ⑤ MLS·price·bd/ba | `fub.events.property` jsonb (street + city + state + zip, MLS, price, beds/baths, lat/lng, Zillow URL+zpid) |
+| ⑥ message | `event.message` |
+
+| Card | Source | Calendar chip? |
+|---|---|---|
+| **Tour Request** | Zillow Preferred | ✅ YES |
+| **Property / Virtually Toured / Contact / Rental / Seller** | Zillow | ❌ |
+
+**Why the data is all there:** every `eventsCreated` fetch-back stores the full clean `property` object — so a
+missing city/zip/MLS on a card is a **render bug, not a data gap**. The only field not in the row is the **photo**
+(Listing → captured Zillow photo).
+
+### Behavior Trigger Matrix (the canonical list — every behavior → a card → a follow-up)
+> Each behavior is a **trigger token** → a card → a **behavior workflow**, bound to a "Coming Soon" stub until built.
+
+**Group 1 — Home actions:** `property_view` · `save_home` · `like_home` *(HL-only)* · `share_home` ·
+`unsave_home`/`hide_home` — home + photo.
+**Group 2 — Zillow Insights (carry a home/area):** `behavior_repeat_views` (viewed 10× in 7d) ·
+`behavior_area_interest` (now looking in &lt;City&gt;) · `behavior_specific_home_interest`.
+**Group 3 — Zillow ML flags (no home → body = the meaning note):** `behavior_high_intent_buyer` ("5× as likely to
+transact in 3 months") · `behavior_high_intent_seller` · `behavior_reengaged_buyer` · `behavior_active` ·
+`behavior_window_closed` · `pre_approval` (ZHL / Lending Loop).
+**Group 4 — Requests (explicit asks):** `tour_request` · `property_inquiry` · `contact_request` · `rental_inquiry`
+· `seller_inquiry` · `virtually_toured`.
+**Group 5 — Search:** `saved_search` (criteria + matched homes) · `search` (noise — open Q: keep?).
+
+---
+
+# 6. Myli context 🔒
+
+One lead, three layers:
+```
+FUB lead (fub.* on Railway)
+   ├─ Layer 1  REAL-TIME SYNC ........ live counts + activity on the lead card (§3)
+   ├─ Layer 2  FACTS (deterministic) . the 12-domain fact store — structured, no LLM
+   └─ Layer 3  DOSSIER (on-demand LLM) . one Lead Context = [FUB section] + [HouseLoop section]
+```
+- **UI** — the lead-detail `[Lead Context] / [Follow Up Boss Activity]` toggle + the FUB Activity panel
+  (`LeadContextPanel.tsx`), reading the full FUB history live by `fub_person_id` (**Pipe A**, §3).
+- **Layer 2 — Facts** — on first pull, `buildLeadContext` structures every FUB fact into the **12-domain fact
+  store** (name, source, timeframe, price range, views/saves/searches, Zillow Insights). No LLM, fully structured.
+  Built on every pull-in as import step 2.8.
+- **Layer 3 — Dossier** — ONE Lead Context = a **Follow Up Boss** section (imported FUB history via `loadFubBrief`,
+  Sonnet, on-demand `POST /api/leads/[id]/context`) + a **HouseLoop** section (live). Not two dossiers. Sonnet once
+  on import · Haiku delta on update · never auto-per-fact.
+
+### ⭐ The Watermark Law — read-once, merge-forward (universal) 🔒
+Governs **every** LLM rollup (dossier, facts, Hot Buyers, any summary): **never re-process data already consumed.**
+The dossier stores its text + a `source_cursor` (high-water mark). Each regen: read only the delta
+(`WHERE synced_at > source_cursor`) → merge into the existing dossier (don't re-summarize) → advance
+`source_cursor = max(synced_at)`. First pull = full history (Sonnet, cursor = now); every pull after = the delta,
+merged with Haiku. **Tokens paid once per row, ever.**
+
+<Warning>
+**The gotcha:** watermark on **`synced_at` (when WE ingested the row), NOT the event's own date.** A 2-year-old
+home view the scraper *just* backfilled is **new to us** — `synced_at > cursor` catches it. Watermark on the event
+date and you'd silently skip every freshly-backfilled historical row.
+</Warning>
+
+---
+
+# 7. Status · open issues · changelog 🚧
+
+**Phase:** event servicing is LIVE + proven on real leads. Now hardening **card rendering** — photos + per-card
+layout — one card at a time.
+
+| Layer | State |
+|---|---|
+| Acquisition (19 webhooks + scraper + relay), complete-home scrape-on-entry | ✅ LIVE |
+| `classifyFubEvent` + `SERVICED_FUB_EVENT_TYPES` import gate (whack-a-mole dead) | ✅ deployed (`f680de5e31`) |
+| `virtually_toured` = first-class kind (own home) | ✅ PROVEN (Alberto → 3331 Benton) |
+| Behavior backfill + Myli context on every pull-in | ✅ PROVEN (Alberto: 9 facts; James no regression) |
+| ONE `FeedRow` card (HERO/COMPACT), dual View links, tokenized + ESLint | ✅ deployed |
+| **Card photos — the "race"** | 🔴 ROOT CAUSE FOUND — see I1 |
+| Per-card design checklist (area card, viewed-repeatedly, etc.) | 🚧 one at a time |
+
+### Open issues — TRACKED (resolve, then check off)
+| # | Issue | Fix | Where |
+|---|---|---|---|
+| **I1** | **Photo "race"** (§2) — insert-only minter runs before the scrape; photos exist in `fub.zillow_home_activity` but never backfill (Alberto 0/113 vs James 432/442). | **Re-sync** photos onto existing cards + **gate the mint on the scrape**. Photo = the captured Zillow photo; **NO Street View**. Also add Listing-by-address fallback for the HouseLoop link. | `fub-lead-import.ts` minter + re-sync + `route.ts` resolve |
+| **I2** | Duplicate registration card — step-3 door duplicates the step-2.6 request card. | Kill the door for FUB inquiries (the inquiry IS the entry). | `fub-lead-import.ts` step 3 |
+| **I3** | Property Inquiry address has no commas + thin subline. | Comma the address; fill `$price · ba · MLS#`. | card address build |
+| **I4** | Per-inquiry duplication (2 inquiries same home/day → 2 cards). | Decide keep-per-inquiry vs dedupe. | step 2.6 |
+| **I5** | New Area of Interest layout — compact, location as a text-note sentence, no wrapping pill. | Compact card, `hero` off. | FeedRow / catalog |
+| **I6** | Viewed Repeatedly — photo + sentence label; compact (behaviors are NOT hero). | Compact card, `hero` off. | FeedRow / catalog |
+
+### Changelog (newest first)
+- **2026-06-28** — **Consolidated all FUB lead-import docs into this one master.** Documented the **photo "race"**
+  root cause (insert-only minter beats the scrape → blank cards). Locked: every request/registration HERO card =
+  the canonical Tour Request (calendar chip the only diff); HERO is tours/inquiries/registrations only (behaviors
+  → compact). `virtually_toured` is its own first-class kind. Traced the trigger path on Juan; opened I1–I6.
+- **2026-06-28** — Servicing LIVE + proven on real leads. `SERVICED_FUB_EVENT_TYPES` catalog gate replaces the
+  hardcoded `type IN (...)` SQL (`f680de5e31`). `virtually_toured` proven on Alberto (3331 Benton). Myli context on
+  every pull-in (`buildLeadContext` step 2.8): Alberto 0→1 `context_built` + 9 facts; James unchanged.
+- **2026-06-27** — The one sourced card, tokenized + verified: unified All + Website Activity onto `FeedRow`; dual
+  `View on HouseLoop │ View on Zillow` + coverage modal; `card-tokens.ts` + the `hl/no-raw-card-token` ESLint rule.
+- **2026-06-26** — Direction locked: FUB behavior becomes first-class HouseLoop events, sourced per event
+  (`GT_HOUSELOOP_FUB_BEHAVIOR_EVENTS_PRD.md`). Backfill proven on James (52→397, idempotent, zero dupes,
+  `f46f88bf69`). Lead comms go through workflows ONLY (canned ack removed). Layer-1 real-time sync locked
+  (relay `pg_notify` → `fubListener` → SSE). Dossier reads FUB on-demand; Watermark Law locked.
+- **2026-06-22** — FUB import workflow + enriched registration card verified on James Ross 50308. Documented the
+  full acquisition system; rebuilt + backfilled the Camp David → Railway relay; Myli-context UI shipped.
+- **2026-06-02 / 06-01** — UI-hidden-emails truth established; `fub-webhook-sink` OOM loop stopped; email scraping
+  re-enabled with timeline-API `bodyHtmlVisibleClean` interception.
