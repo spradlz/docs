@@ -26,10 +26,24 @@ layout — one card at a time (the checklist below is the worklist).**
 | **Myli context builds on EVERY pull-in** (`context_built` + `fact_captured` + dossier) | ✅ deployed + **PROVEN** (Alberto: 9 facts) |
 | Dual links `View on HouseLoop │ View on Zillow` + out-of-area coverage modal | ✅ deployed |
 | Tokenized typography/sizing + `hl/no-raw-card-token` ESLint | ✅ deployed |
-| **Card photos on out-of-market homes** | 🔴 BROKEN — no fallback (Listing-only). The active fix. |
+| **Card photos — the "race" (NOT a missing fallback)** | 🔴 ROOT CAUSE FOUND 2026-06-28 — see below |
 | **Junk URL-as-address rows render as cards** (`realscout.com/agent/...`) | 🔴 BROKEN — needs a real-address filter |
 | **New Area of Interest layout** (source pill wraps, oversized, blank space) | 🔴 redesign in progress (Card #1) |
 | **Decision: ALL behavior triggers render as HERO cards** (Zach 2026-06-28) | 🟡 to apply across the catalog |
+
+## 2026-06-28 — ROOT CAUSE FOUND: the photo "race" (why Alberto is blank, James is full)
+
+**This supersedes the earlier "no fallback / Listing-only" diagnosis.** Grounded in live data + code:
+
+- **James Ross:** 442 `property_view` cards, **432 carry the Zillow photo.** Alberto Lopez: 113 cards, **0 carry a photo** — even though his `fub.zillow_home_activity` has **199 rows, all 199 with a photo** (FUB-hosted `s.followupboss.com/properties/…` URLs the scraper captured). The photos exist; they're stranded.
+- **The minter is INSERT-ONLY.** Cards are written by `backfillFubBehavior` → `convertHomeActivity` (carries `photo: h.photo`) → `logActivity`, which is **idempotent on `(source_table, source_id)`**. A card copies the photo **only if it already exists in `zillow_home_activity` at mint-time**, and **never updates it later.**
+- **The import does NOT wait for the scrape.** The webhook dispatches the CRM import via `setImmediate(() => dispatchFubImport(...))` (`apps/dashboard/server/fub-webhooks.ts`) — it races the CDP complete-home-activity scrape. The import reads whatever's in `zillow_home_activity` *at that instant* and mints.
+- **Net:** James was fully pre-scraped (test lead) → minted with photos. Alberto's live import **beat his scrape** → minted blank → scrape later loaded all 199 photos → insert-only minter never backfilled them → **blank forever.**
+- **Documented intent (the doctrine Zach named):** "one-time complete scrape of every house on entry" — `Scraper — complete home activity via API intercept` (FUB `/api/v1/events?hasProperty=true`, 242→534 on James). It IS deployed; it just isn't *gated before the mint*.
+
+**The fix (two parts):**
+1. **Re-sync (heals existing blank cards now):** patch `photo` onto already-minted cards from `zillow_home_activity` (match by `fub_event_id`, else address). The one thing insert-only can't do. Fixes Alberto's 113 immediately; makes the race harmless going forward.
+2. **Gate the mint on the scrape (prevents recurrence):** don't mint behavior cards until the complete-home-activity scrape has finished — the same "scrape-first, wait up to 120s" pattern the inbound-text alert already uses. Every new lead becomes the James path: scrape first, mint second.
 
 ## What we're building (per the PRD)
 
@@ -109,21 +123,26 @@ Universal rules baked into every home-bearing card: **renders a real picture · 
 | 6 | **ML-flag triggers** (high-intent/reengaged/active/prequal) | Hero with the "what it means" note (no empty home block). | ⬜ |
 | 7 | **Saved search / search** | Confirm the criteria card; decide whether bare `search` rows stay. | ⬜ |
 
-## Image pull-in — why photos are blank + the fix (Issue B, diagnosed 2026-06-28)
+## Image pull-in — why photos are blank + the fix (Issue B, CORRECTED 2026-06-28)
 
-**Confirmed in data:** every off-market home card has an EMPTY `meta.photo`, while `fub.zillow_home_activity`
-HAS photos. Three gaps, and **no Street-View fallback exists anywhere** (`grep streetview` = 0):
-1. `resolveHouseloopUrls` (route.ts) injects a photo ONLY when the home matches a HouseLoop `Listing`. Off-market
-   → no Listing → no photo, **no fallback**.
-2. `behavior_repeat_views` / `behavior_area_interest` are minted with **no photo** (`convertNote`). The request
-   spine has a `fub.zillow_home_activity` photo fallback; the behavior cards don't.
-3. **Junk URL addresses** (`realscout.com/agent/...`) are minted unfiltered (`convertHomeActivity` + the note regex).
+**The photo source is the Zillow photo the scraper already captured** into `fub.zillow_home_activity`
+(`s.followupboss.com/properties/…`). **NO Google Street View. NO Google Maps. The Zillow listing IS the
+picture** (Zach LOCKED 2026-06-28). The real problem is the **race** (see "ROOT CAUSE FOUND" above), not a
+missing fallback — the photos exist, they're just stranded because the insert-only minter ran before the scrape.
 
-**The fix — ONE photo-resolution chain for every home card:** Listing photo → the home's **Zillow photo** from
-`fub.zillow_home_activity` (match by zpid, else address — the pattern the request spine already uses) → **Google
-Street View by address** (new tokenized `photoForAddress()` util, reads the existing Google Maps key). Plus a
-**junk filter** (drop an "address" that's a URL / doesn't start with a house number) at the mint layer + the
-backfill SQL. Net: **every home card shows a real picture**; URL-junk never becomes a card.
+The mint chain for a home card's photo: HouseLoop `Listing` photo (in-market) → the home's **Zillow photo from
+`fub.zillow_home_activity`** (match by `fub_event_id`/zpid, else address) → if still none, the complete-home-
+activity **scrape hasn't run yet** → that's the gate to fix, not a third image source.
+
+**The fix:**
+1. **Re-sync** — patch `photo` onto existing minted cards from `fub.zillow_home_activity` (the insert-only minter
+   can't update; this can). Heals Alberto's 113 blank cards immediately.
+2. **Gate the mint on the scrape** — mint behavior cards only after the complete-home-activity scrape finishes
+   (the "scrape-first, wait up to 120s" pattern the inbound-text alert already uses).
+3. **Junk filter** — drop an "address" that's a URL / doesn't start with a house number (`realscout.com/agent/...`)
+   at the mint layer + the backfill SQL, so URL-junk never becomes a card.
+
+Net: **every home card shows its real Zillow picture**; no Street View; URL-junk never renders.
 
 ## How a card is created — the trigger path (real, traced on Juan Martín Munguía 42729)
 
@@ -162,7 +181,7 @@ The ONLY difference is the **date shown as a calendar chip on a Tour Request**.
 
 | # | Issue | Where | Affects |
 |---|---|---|---|
-| **I1** | No photo + gray HouseLoop link on out-of-market / relisted homes — resolver matches by MLS# only; when the MLS# isn't in `Listing` it never falls back to an ADDRESS match. Add: Listing-by-address → `fub.zillow_home_activity` Zillow photo → Street View. | `route.ts` resolve + mint fallback | Alberto (off-market); "every card has a picture" law |
+| **I1** | No photo on minted cards — the **photo race** (insert-only minter runs before the scrape). Photos exist in `fub.zillow_home_activity` but never backfill. Fix: **re-sync** photos onto existing cards + **gate the mint on the scrape**. Photo source = the captured Zillow photo; **NO Street View**. Also add Listing-by-address fallback for the `View on HouseLoop` link. | `route.ts` resolve + minter + re-sync | Alberto (113 blank); "every card has a picture" law |
 | **I2** | Duplicate registration card — step-3 door logs "Registered · Requested a tour · VIA HouseLoop" duplicating the step-2.6 request card. Kill it for FUB inquiries (the inquiry IS the entry). | `fub-lead-import.ts` step 3 + `dispatchDoor` | every FUB request lead (Juan has 2) |
 | **I3** | Property Inquiry address has no commas + thin subline ("5226 E 28th Ter Kansas City MO 64128" / only "3 bd"). Comma the address; fill `$price · ba · MLS#`. | card address build + inquiry payload | sparse Zillow inquiries |
 | **I4** | Per-inquiry duplication — 2 inquiries same home/day mint 2 cards (Juan). Decide keep-per-inquiry vs dedupe. | step 2.6 | multi-inquiry leads |
@@ -214,4 +233,3 @@ to intercept FUB's `/api/v1/events?hasProperty=true` (242 → 534 on James).
 
 ### 2026-06-26 (PM) — converter foundation + the matrix
 Built `classifyFubEvent`, `convert-fub-signal`, `BEHAVIOR_BADGES`; documented the Data & Signals Matrix.
-
