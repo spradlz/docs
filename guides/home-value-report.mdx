@@ -18,10 +18,11 @@ Audit found **125 sold homes (4.3%) — 80 of them past-client (4.5%)** that had
 precomputed `Listing.valueHistory` column, and homes that sold before the disposition pipeline have an empty
 column. **Fixed read-side in `get.ts`:** when the column is empty, build the line as
 **ZHVI back-projection (`hl_market_index`, 2012 → the sale month) + `appreciationRocket`(real sale → today)** —
-the real purchase sits ON the line as the anchor, the graph always reaches **2012**, and the **appreciation %
-is measured from the real PURCHASE**, not the ZHVI floor. No real sale at all → pure ZHVI 2012 → today.
-Verified: 816 E Saddlewood now runs **Jan 2012 $228,348 → Jul 2020 $346,000 (real purchase) → Jun 2026
-$458,179, +32.4% since purchase.** Mechanics: [Sold Data & Price History](/guides/sold-data-and-price-history).
+the real sale sits ON the line as an anchor, and the graph always reaches **2012**. The **appreciation % is
+measured across the WHOLE line — since the 2012 floor** (the % label reads the line's start year, not a flat
+"since sold"). No real sale at all → pure ZHVI 2012 → today. Verified: 816 E Saddlewood now runs **Jan 2012
+$228,348 → Jul 2020 $346,000 (real sale, on the line) → Jun 2026 $458,179, +100.6% since 2012.** Mechanics:
+[Sold Data & Price History](/guides/sold-data-and-price-history).
 </Note>
 
 The **HouseLoop Home Value Report** is the per-home value story for a past client. It exists in two places
@@ -46,7 +47,7 @@ re-derived):
 | Section | Source | Status |
 |---|---|---|
 | **HouseLoop Value** distribution — Low / Estimated / High + $/ft² | web `Listing.hlEstimate` / `hlEstimateLow` / `hlEstimateHigh` (Zestimate × 1.005 band, or soldPrice × 1.005 for a fresh sale) | ✅ data exists |
-| **HouseLoop Home Value History** — line over time, % since purchased. **Never blank** for a home with a value: ZHVI floor → 2012 + the **real sale anchored on the line** (appreciation measured from the purchase) → [Sold Data & Price History](/guides/sold-data-and-price-history) | web `Listing.valueHistory` if present; else built read-side in `get.ts` from the real sale + ZHVI; re-anchored to the oldest real price by `reanchorValueHistory` | ✅ data exists |
+| **HouseLoop Home Value History** — line over time, % over the whole line (since 2012). **Never blank** for a home with a value: ZHVI floor → 2012 + the **real sale anchored on the line** → [Sold Data & Price History](/guides/sold-data-and-price-history) | web `Listing.valueHistory` if present; else built read-side in `get.ts` from the real sale + ZHVI; re-anchored to the oldest real price by `reanchorValueHistory` | ✅ data exists |
 | Purchase price · Total Gain · Avg Monthly Gain · appreciation % | `hl_srg_past_client_homes` (purchase) + the value above (current) — computed | ✅ data exists |
 | **Comparable sales** — ~3 addresses + sale price, each linking to a houseloop.ai saved search | a comps feed | ⛔ **NOT wired into the CRM** |
 | **Neighborhood average** (last 12 months) | market/neighborhood stats (`hl_market_index` / market-report) | ⛔ **NOT wired into the CRM** |
@@ -60,12 +61,12 @@ These are the two graphs from the `/home` page (`apps/houseloop-web/components/l
 1. **HouseLoop Value** — a bell-curve bar distribution with **Low / Estimated Value / High** columns (value +
    $/ft², circle icons), titled "Estimated Sales Range." (301 E 68th: Low $501,244 · Est **$527,625** · High
    $554,006.)
-2. **HouseLoop Home Value History** — an interactive line/slider over time with the **% since purchased**
-   (301: $349,900 Jul 2022 → **$527,625** Jun 2026, "+50.8% since sold"). **The line always reaches back to
+2. **HouseLoop Home Value History** — an interactive line/slider over time. **The line always reaches back to
    2012** (the ZHVI floor), with **every real sale anchored on it** (the line passes through the actual
-   transacted price at its date), climbing to today's HouseLoop value. The **appreciation % is measured from
-   the client's real purchase**, not the 2012 floor. A home with no real sale at all uses a pure ZHVI
-   back-projection to 2012. It is never blank for a home that has a value. Mechanics:
+   transacted price at its date), climbing to today's HouseLoop value. The **appreciation % spans the whole
+   line — since the 2012 floor**, and the % **label reads the line's start year** (e.g. "+100.6% since 2012"),
+   not a flat "since sold". A home with no real sale at all uses a pure ZHVI back-projection to 2012. It is
+   never blank for a home that has a value. Mechanics:
    [Sold Data & Price History](/guides/sold-data-and-price-history).
 
 > **Architecture note (do not cross-app copy).** `HouseLoopValueHero` is a **website** component built in
