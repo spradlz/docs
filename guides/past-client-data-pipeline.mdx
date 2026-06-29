@@ -1,10 +1,11 @@
 ---
 title: "SRG Past-Client Reconciliation"
-description: "The end-to-end Spradling Group past-client reconciliation pipeline. TWO tables the app reads: the PARENT (hl_srg_past_clients = the person + dossier + bucket) and the CHILD (hl_srg_past_client_homes = the ONE reconciled house SSOT). Five raw sources feed it (MLS, SISU, recon notes, dotloop contracts, the FUB scraper mirror); the S6 resolver reads the facts, resolves who each house belongs to, and writes the dossier + bucket to the parent. dotloop CONTRACT licensee is the final-truth agent. Includes the visual whiteboard + full database/table matrix."
+description: "The end-to-end Spradling Group past-client reconciliation pipeline. TWO tables the app reads: the PARENT (hl_srg_past_clients = person + clean dossier_json + bucket) and the CHILD (hl_srg_past_client_homes = the ONE reconciled house SSOT, each carrying a real /home/<slug>/<HLID> URL). Five raw sources feed it (MLS, SISU, recon notes, dotloop contracts, the FUB scraper mirror). Rebuilt 2026-06-28 into a ONE-WAY TWO-ZONE pipeline (resolve-client.mjs): attach-closing-facts locks agent + disposition deterministically from ground truth, then the s6 LLM NARRATES a clean dossier — it never judges a fact or re-reads its own output. Includes the visual whiteboard + full database/table matrix."
 ---
 
-<Accordion title="Changelog — last updated 2026-06-26" icon="clock-rotate-left">
+<Accordion title="Changelog — last updated 2026-06-28" icon="clock-rotate-left">
 Newest first. Times Eastern.
+- **2026-06-28 (PM)** — **🏛️ RESOLVER REBUILT ONE-WAY / TWO-ZONE + URL RECONCILIATION + HLID.** The resolver no longer "owns the output" as a single LLM pass that re-reads itself. It is now `resolve-client.mjs` — 7 deterministic-first steps where every column is INPUT (ground truth, read-only) or OUTPUT (write-only): `attach-closing-facts.mjs` locks **agent + disposition** from ground truth, then `s6-investigator.mjs` runs as a **NARRATOR** writing a clean `dossier_json` (it never decides a fact or reads its prior dossier). The old `resolver_block` blob is **quarantined** (replaced by `dossier_json`); `extract-to-child.mjs` is dead. Separately, `reconcile-pc-urls.mjs` gave **2,074 / 2,077** past-client homes a real `/home/<canonicalSlug>/<HLID>` URL, and the HLID id system is live site-wide. Build log: [SRG Reconciliation WIP](/guides/srg-reconciliation-wip). (Caleb)
 - **2026-06-26 (PM4)** — **Renamed to "SRG Past-Client Reconciliation"; Audit Report split into its own page** under Seller Report; moved out of Website Integration into the **Seller Report** nav section. (Caleb)
 - **2026-06-26 (PM3)** — **Visual whiteboard added** (Mermaid: each database as a dashed box, its tables inside, the reconcile→resolve flow). Matches Zach's whiteboard. (Caleb)
 - **2026-06-26 (PM2)** — **Full database + table matrix locked** (5 sources, the FUB scraper mirror real+Camp-David+Railway structure, 4 databases with hosts, `client_reconciliation_notes` as the recon source). (Caleb)
@@ -32,7 +33,7 @@ flowchart TB
     RECON["client_reconciliation_notes · SOURCE: manual recon"]
     DLC["hl_srg_dotloop_contracts (NEW) · SOURCE: dotloop contract licensee"]
     CHILD["hl_srg_past_client_homes · CHILD MASTER · 1 row per house · reconciled SSOT"]
-    PARENT["hl_srg_past_clients · PARENT · person + dossier + bucket"]
+    PARENT["hl_srg_past_clients · PARENT · person + dossier_json + bucket"]
   end
 
   subgraph FUBCD["FUB mirror · Camp David · 192.168.1.211 / bossloop"]
@@ -113,7 +114,7 @@ is NEVER displayed — it triggers the waterfall. The Step-1 writer that populat
 
 | Layer | Table | Grain | Holds |
 |---|---|---|---|
-| **PARENT — person** | `hl_srg_past_clients` | 1 / past client (~1,834) | the PERSON: name · contact · `bucket` · **`resolver_block` (the dossier)** · `website_hlid`. The resolver WRITES the dossier here. |
+| **PARENT — person** | `hl_srg_past_clients` | 1 / past client (~1,834) | the PERSON: name · contact · `bucket` · **`dossier_json` (clean card: summary/contacts/tags/current_properties)** · `website_hlid`/`website_home_url`. Every child home carries a real `/home/<slug>/<HLID>` URL. |
 | **CHILD — house (THE SSOT)** | `hl_srg_past_client_homes` | **1 / house (~2,256)** | the ONE reconciled house record — **all facts in one flat row** (MLS + SISU + dotloop + contract + value/photos) with `*_source` provenance. The resolver READS its facts. |
 
 **Grain (Zach 2026-06-26):** **one row per house.** A past client with multiple homes has multiple child rows; the *same* house can have multiple rows across its life (sold more than once). **Each resolved home → exactly ONE `/home/<canonicalSlug>`** on the website `Listing`.
@@ -153,9 +154,9 @@ is NEVER displayed — it triggers the waterfall. The Step-1 writer that populat
 
 **Field precedence on the child (deterministic, provenance-tagged):** `agent`: dotloop contract > SISU > MLS list_agent > recon · `disposition`: live county deed > Repliers · `price/date`: full MLS CloseDate > SISU > MLS · `parties`: dotloop participants > FUB. Disagreement with no settling source → `verified=false / needs_review`.
 
-### THE ARCHITECTURE LAW (Zach LOCKED 2026-06-23) — the resolver owns the output, the transport is dumb
+### THE ARCHITECTURE LAW (Zach LOCKED 2026-06-28) — ONE-WAY, TWO-ZONE, the LLM narrates
 
-> **The S6 LLM resolver OWNS the entire output.** Household, contacts, transactions, disposition, DNC, bucket, tags, AND the human NOTE. **The transport (`dossier-to-fub.mjs`) is DUMB** — writes the finished block to FUB + the SSOT, never re-derives. If the output is wrong, fix the RESOLVER.
+> **Every column is INPUT (ground truth, read-only to the resolver) or OUTPUT (the resolver's product, write-only). No stage ever reads a column any stage writes — one direction, so re-running converges instead of corrupting itself.** Agent + disposition are locked DETERMINISTICALLY by `attach-closing-facts.mjs` from ground truth; the **s6 LLM is a NARRATOR** that writes prose over those locked facts and never decides an agent/disposition and never reads its own prior `dossier_json`. The transport (`dossier-to-fub.mjs`) stays dumb. If a fact is wrong, fix the deterministic attach; if the prose is wrong, fix the narrator prompt.
 
 ## 🏷️ THE BUCKET — a resolved output (Zach LOCKED 2026-06-26)
 
@@ -214,11 +215,11 @@ A **DNC** or **Internal (SG Holdings)** card replaces all of it with a short sup
 
 ## The Audit Report
 
-The human-readable proof surface for this pipeline lives on its own page: **[Audit Report](/guides/audit-report)** (`Seller Report → Audit Report`). It reads `resolver_block` live and shows every client's transaction history, the resolution matrix (with `*_source` provenance), and the Follow-Up Boss dossier note, each linked to the client's FUB profile.
+The human-readable proof surface for this pipeline lives on its own page: **[Audit Report](/guides/audit-report)** (`Seller Report → Audit Report`). It reads the two canonical tables (parent `dossier_json` + child rows) and shows every client's transaction history, the resolution matrix (with `*_source` provenance), and the Follow-Up Boss dossier note, each linked to the client's FUB profile.
 
-## The resolver's output block — `resolver_block` jsonb on `hl_srg_past_clients`
+## The resolver's output block — `dossier_json` jsonb on `hl_srg_past_clients` (clean card only)
 
-`contacts[]` · `transactions[]` (with `agent`) · `disposition` · `dispositions[]` · `dnc` · `bucket` + `bucket_basis` · `tags[]` · `note_markdown`. ⚠️ Write to `resolver_block`, never the `dossier` TEXT column (Myli's case-file).
+`dossier_json` holds ONLY the clean card: `summary` · `contacts[]` · `tags[]` · `current_properties[]` · `lost_buyers[]`. The per-deal facts (`determined_agent`+`_source`+`_role`, disposition, `sold_not_by_us`, price/date) live on the **CHILD** rows, not here. **`dossier_json` is never an accumulator** — raw MLS/Redfin/geocode/deed are INPUTS, never stored back into it. (The old `resolver_block` blob is quarantined in `hl_srg_resolver_quarantine`, drop gated.) ⚠️ Never write the `dossier` TEXT column (Myli's case-file).
 
 ### 🔖 FUB TAG TAXONOMY (Zach LOCKED 2026-06-23)
 
@@ -228,7 +229,10 @@ The human-readable proof surface for this pipeline lives on its own page: **[Aud
 
 | Concern | Where |
 |---|---|
-| **Resolver (THE authority)** | `tools/houseloop-cards/s6-investigator.mjs` |
+| **Resolve a client (THE one command)** | `tools/houseloop-cards/resolve-client.mjs` (7 steps, gated) |
+| Stage-1 fact engine (agent + disposition, deterministic) | `tools/houseloop-cards/attach-closing-facts.mjs` |
+| Narrator (clean dossier_json — kept intact) | `tools/houseloop-cards/s6-investigator.mjs` |
+| URL reconciliation (every home → /home/<slug>/<HLID>) | `tools/houseloop-cards/reconcile-pc-urls.mjs` |
 | dotloop CONTRACT agent | `tools/houseloop-cards/dotloop-contract-agent.mjs` · `lib/dotloop/client.ts → downloadDocument()` |
 | Live county deed | `tools/houseloop-cards/county-owner-verify.mjs` |
 | Repliers sold-check · Ninja agents | `repliers-sold-check.mjs` · `ninja-sold.mjs` |
