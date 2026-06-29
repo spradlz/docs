@@ -47,10 +47,11 @@ runs its steps inline as a single run — **one run, one Run Log row** ("Catalog
 ```
 Repliers webhook  →  cache upsert (SYNC, runs resolveHome, home queryable ~50ms)
                   →  houseloop/listing.catalog  →  catalog-listing (one run):
-                        • home    — load the resolved address
-                        • photos  — copy photos to Cloudflare R2 (permanent copy)
-                        • ai-tags — gpt-4o vision tags buyer features (pool, garage, …)
-                        • zillow  — ONE OpenWeb Ninja call (tax + schools + sold/price history + Zestimate)
+                        • home          — load the resolved address
+                        • photos        — copy photos to Cloudflare R2 (permanent copy)
+                        • ai-tags       — gpt-4o vision tags buyer features (pool, garage, …)
+                        • zillow        — ONE OpenWeb Ninja call (tax + schools + sold/price history + Zestimate)
+                        • price-history — write Listing.priceHistory (the home's own lifecycle ∪ Repliers history)
                   =  home live + fully enriched on the website
 ```
 
@@ -60,6 +61,7 @@ Repliers webhook  →  cache upsert (SYNC, runs resolveHome, home queryable ~50m
 | **photos** | Each Repliers photo is uploaded to Cloudflare R2 (our permanent copy — Repliers strips its CDN ~24h after a home leaves the feed). | `photosCached` |
 | **ai-tags** | gpt-4o vision tags buyer-facing features. | `visionTags` |
 | **zillow** | **One** OpenWeb Ninja call (street + ZIP). Returns tax history, GreatSchools, prior sold/price history (Repliers doesn't supply sold history), and the Zestimate. | `taxHistory`, `schoolsGreatSchools`, `valueHistory`, `zestimate`, `annualTaxAmount` |
+| **price-history** | Writes the **stored price-history column** (`Listing.priceHistory`) — the home's own lifecycle events (Listed / Pending / Sold / Coming soon) merged with the Repliers address history (prior cycles). This is what the page's Price History table reads. | `priceHistory` |
 
 The Ninja call is made **exactly once per home, at intake** — every step is idempotent, so re-runs never
 double-spend. **Timing:** queryable ~50ms; fully enriched within ~15–30s. Full detail:
@@ -76,9 +78,11 @@ sweep, no polling emitter — and an idempotency check makes any stray event a c
 Repliers status transition → "Sld"  →  houseloop/listing.sold  →  listing-sold (one run):
    1. idempotency-check — already archived? STOP (no-op, never re-spends R2 + LLM).
    2. load             — the live Repliers record (real close date = raw.CloseDate).
-   3. mark-sold        — flip the Listing row: status='sold' + soldDate + lastStatusChangeAt.
-   4. archive          — copy to the permanent /home page + push photos to R2.
-   5. ai-overview      — generate the Sold House AI overview (house-blurb-generate).
+   3. mark-sold        — flip the Listing row: status='sold' + soldDate + closePrice + lastStatusChangeAt.
+   4. price-history    — APPEND this sale to Listing.priceHistory from the ROW's own columns (no Repliers).
+   5. value-mint       — mint the HouseLoop value from the real sold price.
+   6. archive          — copy to the permanent /home page + push photos to R2.
+   7. ai-overview      — generate the Sold House AI overview (house-blurb-generate).
 ```
 
 Two backstop functions keep sold data complete (each a registered Inngest run, visible in the
@@ -90,8 +94,39 @@ Two backstop functions keep sold data complete (each a registered Inngest run, v
 | **`sold-photo-rescue`** | `cache-sold-photos` | Rescues thin sold-home galleries (re-caches photos to R2). |
 
 The sold home keeps the **same row and the same `/home/{canonicalSlug}` URL** — `status` simply flips to
-`sold`. The MLS sale price is captured but **display-restricted** in non-disclosure states (Heartland
-§12.3b). Value detail: [Sold Data & Price History](/guides/sold-data-and-price-history).
+`sold`. The MLS sale price is captured (`closePrice`) but **display-restricted** in non-disclosure states
+(Heartland §12.3b). Value detail: [Sold Data & Price History](/guides/sold-data-and-price-history).
+
+## Price history lives ON the row — never a live fetch
+
+The Price History table on `/home` renders from the **stored `Listing.priceHistory` column**, not a
+live Repliers call. The column is the home's running ledger of events (`{ date, event, price }`, newest
+first; Sold price is `null` per the non-disclosure rule). It's populated in three ways — all of which
+write the SAME column, so the page has one source of truth:
+
+| When | Who writes it | Source |
+| --- | --- | --- |
+| **Intake** (new listing) | `catalog-listing` → `price-history` step | the listing's own lifecycle ∪ Repliers address history |
+| **Disposition** (a sale) | `listing-sold` → `price-history` step | the **row's own columns** (the `soldDate`/`closePrice` `mark-sold` just set, plus `listPrice`/`pendingDate`/`listDate`) — **merged into** the existing column, **zero Repliers calls** |
+| **Backfill** (existing homes) | `price-history-backfill` (manual Inngest fan-out, scoped) | the listing lifecycle ∪ Repliers address history, idempotent (skips a populated column) |
+
+**The disposition path is deliberately Repliers-free.** At a sale, everything we need is already on the
+row — the webhook delivered the sale and `mark-sold` wrote it — so the `price-history` step builds the new
+sale's events from those columns and **appends** them to the existing history. Repliers only *announces*
+the sale (it's the trigger); it is never queried to *build* the history. The engine for all three paths is
+`writeListingPriceHistory()` (`lib/listings/price-history-store.ts`) with the canonical event builder in
+`lib/listings/price-history-events.ts`.
+
+**Why a stored column (not a render-time fetch):** rendering used to call Repliers live for every sold
+home that lacked a stored column. That's a runtime dependency on an external API on the hot path. Storing
+the history on the row removes it — the page reads one column, and the column is kept current by intake +
+disposition automatically. A render-time Repliers fetch remains only as a transitional fallback for homes
+not yet backfilled.
+
+**Backfill scope (one-time):** active + under-contract + past-client homes + recently-sold are being
+backfilled into the column via `price-history-backfill` (source: our Repliers IDX feed, no per-call
+billing). The full historical sold set is intentionally not mass-backfilled — going forward, every sale
+self-populates the column through disposition, so no historical sweep is needed.
 
 ## Why it's built this way (Inngest or it doesn't exist)
 
