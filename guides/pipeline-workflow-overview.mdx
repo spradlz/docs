@@ -19,6 +19,34 @@ top is the live proposal being built; the **Current State** below documents what
 > agnostic engine — and **HouseLoop becomes the first-class notification system, retiring Realloop event-by-event
 > as each row goes live** (kills the double-notification: FUB's own ping + the Realloop Twilio "355" text + dupes).
 
+## 🧭 THE MENTAL MODEL — Platform · Source · Event · Workflow (Zach LOCKED 2026-06-30)
+
+Four concepts. The trap is putting Platform/Source on the *workflow* — they belong on the **lead**.
+
+| Concept | What it is | Lives (data) | Shows (UI) |
+|---|---|---|---|
+| **Platform** | The *system* a lead entered through — **HouseLoop for everything**, except the one-off **Follow Up Boss** (legacy Zillow pull-ins) | `hl_leads.platform` | **Lead detail page** (+ FUB Settings is the one FUB control surface) |
+| **Lead Source** | Where the lead *originated*: HouseLoop.ai · Google PPC · Manual Entry · SOI · Zillow · referral | `hl_leads.source` | **Lead detail page** + the **Lead Sources** settings list |
+| **Event** | What the lead *did*: registered, tour request, liked a home, called… | the trigger | Registration Events / FUB Settings |
+| **Workflow** | The **agnostic** engine — triggers + steps; reacts to an *event* | `hl_workflows` | **Workflows** page (the builder) |
+
+**Platform + Lead Source are LEAD attributes, not workflow attributes.** A workflow can *read* them (a
+`{{source}}` merge field) but is **never categorized or filtered by them**. Seeing PLATFORM / LEAD SOURCE
+*columns on the Workflows table* is the old per-source-door model bleeding through — they get removed.
+
+**The surfaces reconcile cleanly (no overlap):**
+- **`/workflows`** — the **one agnostic library + builder**, grouped by **folder only** (Registration /
+  System / Follow-up / Other). No platform, no lead-source. *(Quarantined FUB "Coming Soon" placeholders hidden.)*
+- **`/settings/lead-platform` (Registration Events)** — attach a workflow to each **HouseLoop** event.
+- **`/settings/fub` (FUB Settings)** — attach a workflow to each **Follow Up Boss** event. The *only* place
+  "Follow Up Boss" appears as a concept.
+- **`/settings/lead-sources`** — the flat origin list + per-source defaults *(legacy FUB "doors" quarantined)*.
+- **Lead detail page** — where **Platform + Lead Source render** for an actual lead.
+
+> Two platforms (HouseLoop + FUB) attach workflows from one agnostic engine; platform + source are lead data
+> shown on the lead. **Retiring a superseded page = redirect the route + repoint inbound links** (the lead-flow,
+> command-center, /settings/integrations leftovers were dead twins fixed this way 2026-06-30).
+
 ## 🛤️ ARCHITECTURE RAILS — the preamble (must be ✅ before any matrix row passes)
 
 These are the shared rails every event rides. **No event row can be signed off until the rails it needs are
@@ -27,14 +55,21 @@ the first inquiry can flow natively into HouseLoop and notify you cleanly."
 
 | Rail | What it is | Why it matters | Status |
 |---|---|---|:--:|
-| **R1 — Native FUB ingestion** | FUB webhook data flows into HouseLoop directly; the Realloop dashboard keeps mirroring `fub.*` data **only** — it is no longer the notifier/in-between | Removes the realloop.co relay that double-fires | ☐ |
-| **R2 — HouseLoop notifier** | ONE native notification system (`hl_notification` → your channel), fired per-event, deduped | HouseLoop = first-class, canonical notification | ☐ |
-| **R3 — Notify-toggle repoint** | The FUB Settings **Notify** toggle drives **HouseLoop's** notify (not the dashboard's) | One switch, one place | ☐ |
-| **R4 — Realloop kill-switch (per-event)** | The dashboard's `notifyZach*` (Twilio **355** text + Telegram) gated OFF per-event as HouseLoop takes that event | Stops the duplicate 355 text, one event at a time | ☐ |
-| **R5 — Lead create/match engine** | Native create-or-match (person / caller number, company-line verified) | The lead exists before anything renders | ☐ |
-| **R6 — Card render** | Agnostic plain-text feed (scales infinitely) + the Zillow-inbound render MVP | The activity is visible in HouseLoop | ☐ |
-| **R7 — Workflow dispatch** | FUB Settings `workflow_id` attach + the agnostic dispatcher fires the right workflow | The lead gets handled | ☐ |
+| **R1 — Native FUB ingestion** | FUB webhook data flows into HouseLoop directly; the Realloop dashboard keeps mirroring `fub.*` data **only** — it is no longer the notifier/in-between | Removes the realloop.co relay that double-fires | ◐ partial (notify native; data still mirrors via dashboard) |
+| **R2 — HouseLoop notifier** | ONE native notification system (`hl_notification` → your channel), fired per-event, deduped | HouseLoop = first-class, canonical notification | ✅ |
+| **R3 — Notify-toggle repoint** | The FUB Settings **Notify VIA** control drives **HouseLoop's** notify (not the dashboard's) | One switch, one place | ✅ |
+| **R4 — Realloop kill-switch (per-event)** | The dashboard's `notifyZach*` (Twilio **355** text + Telegram) gated OFF per-event as HouseLoop takes that event | Stops the duplicate 355 text, one event at a time | ✅ |
+| **R5 — Lead create/match engine** | Native create-or-match (person / caller number, company-line verified) | The lead exists before anything renders | ✅ (existing) |
+| **R6 — Card render** | Agnostic plain-text feed (scales infinitely) + the Zillow-inbound render MVP | The activity is visible in HouseLoop | ◐ (feed ✅; Zillow render MVP ☐) |
+| **R7 — Workflow dispatch** | FUB Settings `workflow_id` attach + the agnostic dispatcher fires the right workflow | The lead gets handled | ✅ (existing) |
 | **R8 — Webhook test harness** | Fire/replay a real FUB webhook on demand + verify every gate | Proof, per INNGEST_OR_IT_DOESNT_EXIST | ☐ |
+
+**R2–R4 shipped 2026-06-30** (commits `e98e38e081`, `8d1f08a320`): migration `0270` adds
+`hl_fub_webhook_settings.notify_owner` (`realloop` default / `houseloop`). When a row is flipped to
+`houseloop`, `fub-lead-import` fires the native `createNotification` (bell + per-user SMS/email + Run Log)
+and the dashboard suppresses its hardcoded "355" SMS for that event. The cutover lever is the **NOTIFY VIA**
+control on FUB Settings, which links to **Notification Settings** (the *New lead created* alert governs the
+channels + sender). Default `realloop` preserves current behavior until a row is deliberately migrated.
 
 ## ✅ THE SIGN-OFF MATRIX — every event is a row, every column is a gate
 
