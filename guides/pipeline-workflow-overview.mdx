@@ -10,91 +10,115 @@ top is the live proposal being built; the **Current State** below documents what
 **Quarantine** section at the bottom records the legacy model we are retiring (kept, never deleted).
 </Note>
 
-## 🚧 WORK IN PROGRESS — HouseLoop MVP build checklist (Lee, Zach-approved 2026-06-30)
+## 🚧 WORK IN PROGRESS — HouseLoop MVP build (Lee, Zach-approved 2026-06-30)
 
-> The live scoreboard for HouseLoop's lead engine to MVP. **MASTER checklist by section** up top (every door /
-> event / number / to-do); the **build PHASES** (with their own checklists) below. Items flip ☐ → ✅ as shipped.
-> Plan of record: two platforms (HouseLoop + FUB), one agnostic engine. Each event needs a trigger + a workflow
-> (text + email) + a nurture.
+> The live scoreboard for HouseLoop's lead engine to MVP. **Read top-to-bottom:** first the **Architecture
+> Rails** (the plumbing that must be green before ANY event can pass), then the **Sign-Off Matrix** (every
+> event is a row; every column is a gate we sign off), then the **Build Phases** (the sequence). We work the
+> matrix **one row at a time**, top to bottom, by section. Plan of record: two platforms (HouseLoop + FUB), one
+> agnostic engine — and **HouseLoop becomes the first-class notification system, retiring Realloop event-by-event
+> as each row goes live** (kills the double-notification: FUB's own ping + the Realloop Twilio "355" text + dupes).
 
-## 🗂️ MASTER CHECKLIST (by section)
+## 🛤️ ARCHITECTURE RAILS — the preamble (must be ✅ before any matrix row passes)
 
-### 🟦 FUB — Follow Up Boss inbound (Zillow)
+These are the shared rails every event rides. **No event row can be signed off until the rails it needs are
+green.** This is the "build the architecture correctly first" layer — the answer to "what has to be true before
+the first inquiry can flow natively into HouseLoop and notify you cleanly."
 
-**Zillow-inbound card render (MVP)**
-- ☐ Remove photo → show Zillow logo
-- ☐ "View on HouseLoop" → "Find on HouseLoop" (look up the house on click)
-- ☐ Native-iMessage card style
+| Rail | What it is | Why it matters | Status |
+|---|---|---|:--:|
+| **R1 — Native FUB ingestion** | FUB webhook data flows into HouseLoop directly; the Realloop dashboard keeps mirroring `fub.*` data **only** — it is no longer the notifier/in-between | Removes the realloop.co relay that double-fires | ☐ |
+| **R2 — HouseLoop notifier** | ONE native notification system (`hl_notification` → your channel), fired per-event, deduped | HouseLoop = first-class, canonical notification | ☐ |
+| **R3 — Notify-toggle repoint** | The FUB Settings **Notify** toggle drives **HouseLoop's** notify (not the dashboard's) | One switch, one place | ☐ |
+| **R4 — Realloop kill-switch (per-event)** | The dashboard's `notifyZach*` (Twilio **355** text + Telegram) gated OFF per-event as HouseLoop takes that event | Stops the duplicate 355 text, one event at a time | ☐ |
+| **R5 — Lead create/match engine** | Native create-or-match (person / caller number, company-line verified) | The lead exists before anything renders | ☐ |
+| **R6 — Card render** | Agnostic plain-text feed (scales infinitely) + the Zillow-inbound render MVP | The activity is visible in HouseLoop | ☐ |
+| **R7 — Workflow dispatch** | FUB Settings `workflow_id` attach + the agnostic dispatcher fires the right workflow | The lead gets handled | ☐ |
+| **R8 — Webhook test harness** | Fire/replay a real FUB webhook on demand + verify every gate | Proof, per INNGEST_OR_IT_DOESNT_EXIST | ☐ |
 
-**Property inquiry**
-- ☐ General
-- ☐ Tour request
-- ☐ Contact request
-- ☐ Seller request
-- ☐ Virtual tour
+## ✅ THE SIGN-OFF MATRIX — every event is a row, every column is a gate
 
-**Inbound activity**
-- ☐ Zillow in-app message received
-- ☐ Phone call received
-- ☐ Text message received
+**The six gates (what we sign off on, per event):**
 
-**Website activity**
-- ☐ Property viewed
-- ☐ Property saved
-- ☐ Property shared
+| Gate | Question | Proof |
+|---|---|---|
+| **Lead** | Did a lead get created/matched in HouseLoop? | `hl_leads` row |
+| **Card** | Did the card / text get pulled in + render? | `hl_lead_activity` row, visible in the feed |
+| **Workflow** | Is a workflow (text + email) built + active to handle it? | `hl_workflows` active, canvas visible |
+| **HL Notify** | Did the notification fire **from HouseLoop**? | one clean ping to you |
+| **RL Off** | Did Realloop's notification get retired for this event? | no 355 text, no dupe |
+| **✅ Verified** | Fired E2E through the Run Log + Zach signs off? | Run Log run-id + your ✅ |
 
-**Zillow insights** *(→ route to Myli/AI, not auto-blast)*
-- ☐ High-intent buyer
-- ☐ High-intent seller
-- ☐ Viewed home 10× in 7 days
-- ☐ Looking in new area
+### 🟦 FUB — Property inquiry (Zillow inbound)
+| Event | Lead | Card | Workflow | HL Notify | RL Off | ✅ |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|
+| General property inquiry | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Tour request | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Contact request | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Seller request | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Virtual tour | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 
-### ☎️ PHONE
+### 🟦 FUB — Inbound activity
+| Event | Lead | Card | Workflow | HL Notify | RL Off | ✅ |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|
+| Zillow in-app message received | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Phone call received | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Text message received | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 
-**Inbound number classes**
-- ☐ Google My Business number
-- ☐ Sign-call number
-- ☐ Agent phone numbers
+### 🟦 FUB — Website activity
+| Event | Lead | Card | Workflow | HL Notify | RL Off | ✅ |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|
+| Property viewed | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Property saved | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Property shared | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 
-**Twilio port + voice**
-- ☐ Port Company number → Twilio
-- ☐ Port Sign-call number → Twilio
-- ☐ Forward Ana Google Voice → dedicated Twilio number
-- ☐ Twilio number for past-agent forwarding
-- ☐ 4 numbers total (Company · Signs · Ana old · Agent-fwd)
-- ☐ Voice agent answers all calls
+### 🟦 FUB — Zillow insights *(→ route to Myli/AI, not auto-blast)*
+For insights the **Workflow** gate = "routed to AI weighting" (a signal, not an outbound blast); **HL Notify** is optional/digest.
+| Event | Lead | Card | Workflow (AI) | HL Notify | RL Off | ✅ |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|
+| High-intent buyer | ☐ | ☐ | ☐ | — | ☐ | ☐ |
+| High-intent seller | ☐ | ☐ | ☐ | — | ☐ | ☐ |
+| Viewed home 10× in 7 days | ☐ | ☐ | ☐ | — | ☐ | ☐ |
+| Looking in new area | ☐ | ☐ | ☐ | — | ☐ | ☐ |
 
-### 🏠 HOUSELOOP
+### ☎️ PHONE — inbound number classes
+**Workflow** gate here = the per-number routing + Myli text-back (Phase 4). Twilio port + voice agent are infra rows in Build Phase 4.
+| Event | Lead | Card | Workflow | HL Notify | RL Off | ✅ |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|
+| Google My Business number | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Sign-call number | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Agent phone numbers | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 
-**Registration (new lead)**
-- ☐ General registration
-- ☐ Tour request
-- ☐ Contact request
-- ☐ Liked home
-- ☐ Saved home
-- ☐ Saved search
-- ☐ Seller report
-- ☐ Seller get started
-- ~~Shared home~~ — removed (don't force registration just to share; Zach 2026-06-30)
+### 🏠 HOUSELOOP — Registration (new lead)
+HouseLoop-platform events — **no Realloop to retire**, so **RL Off = n/a**.
+| Event | Lead | Card | Workflow | HL Notify | ✅ |
+|---|:--:|:--:|:--:|:--:|:--:|
+| General registration | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Tour request | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Contact request | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Liked home | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Saved home | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Saved search | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Seller report | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Seller get started | ☐ | ☐ | ☐ | ☐ | ☐ |
+| ~~Shared home~~ — removed (don't force registration just to share; Zach 2026-06-30) | | | | | |
 
-**Existing lead**
-- ☐ Liked home
-- ☐ Saved home
-- ☐ Shared home
-- ☐ Saved search
-- ☐ Property tour
-- ☐ Contact request
+### 🏠 HOUSELOOP — Existing lead
+| Event | Lead* | Card | Workflow | HL Notify | ✅ |
+|---|:--:|:--:|:--:|:--:|:--:|
+| Liked home | — | ☐ | ☐ | ☐ | ☐ |
+| Saved home | — | ☐ | ☐ | ☐ | ☐ |
+| Shared home | — | ☐ | ☐ | ☐ | ☐ |
+| Saved search | — | ☐ | ☐ | ☐ | ☐ |
+| Property tour | — | ☐ | ☐ | ☐ | ☐ |
+| Contact request | — | ☐ | ☐ | ☐ | ☐ |
 
-### 🔄 PAST-CLIENT RECONCILIATION
-- ☐ Reconcile all past clients into a single table
-- ☐ HouseLoop listing page
-- ☐ Seller report
-- ☐ Ana AI-assist follow-up campaign
+\* Existing-lead events match an EXISTING lead (no new lead created) — the **Lead** gate is n/a.
 
-### Cross-cutting TO-DOs *(apply to every event above)*
-- ☐ Triggers + events for all
-- ☐ Workflows (text + email) for all
-- ☐ Nurture workflows for all
+### 🔄 PAST-CLIENT RECONCILIATION *(different shape — its own gates)*
+| Item | Table | Listing page | Seller report | Ana campaign | ✅ |
+|---|:--:|:--:|:--:|:--:|:--:|
+| Reconcile all past clients → single table | ☐ | ☐ | ☐ | ☐ | ☐ |
 
 ---
 
@@ -105,6 +129,15 @@ top is the live proposal being built; the **Current State** below documents what
 - ✅ Registration Events (renamed Lead Platform): New Lead + Existing Lead, ON toggle + workflow Actions
 - ✅ Phone Numbers registry (`hl_phone_numbers`, 41 FUB numbers) — `/settings/phone-numbers`
 - ✅ Unified Event table · agnostic dispatcher (`trigger_type`) · FUB source pass-through · Clone-workflow API · plain-text feed
+
+### ⏳ PHASE R — Architecture Rails (the preamble — do this FIRST)
+The shared plumbing from the Rails table above. **No matrix row passes until the rails it needs are green.**
+- ☐ R1 Native FUB ingestion (Realloop mirrors `fub.*` data only, stops being the notifier)
+- ☐ R2 HouseLoop notifier (`hl_notification` → your channel, deduped) · ☐ R3 Notify-toggle repoint → HouseLoop
+- ☐ R4 Per-event Realloop kill-switch (gate the dashboard's 355/Telegram `notifyZach*`)
+- ☐ R5 Lead create/match · ☐ R6 Card render · ☐ R7 Workflow dispatch · ☐ R8 Webhook test harness
+- **The Realloop→HouseLoop notification migration is built into every FUB row's sign-off:** as a row goes live
+  (HL Notify ✅), its Realloop notify is retired (RL Off ✅). We never cut Realloop wholesale — it migrates down the matrix.
 
 ### ⏳ PHASE 1 — Events & triggers exist for every door
 - ✅ 1a. Registration/existing doors confirmed present (New-Lead-Shared-Home removed per Zach). Inbound (phone/text/in-app) fire via **FUB Settings** (no door); insights → AI (no door).
