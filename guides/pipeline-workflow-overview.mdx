@@ -15,31 +15,42 @@ top is the live proposal being built; the **Current State** below documents what
 > Status: **proposal locked, build not started.** PRD: `GT_HOUSELOOP_PIPELINE_WORKFLOW_REORG_PRD.md`.
 > This WIP closes out when the build below is shipped + Zach signs off; then it folds into Current State.
 
-**The problem.** The Lead Platform page secretly does two jobs: HouseLoop's own system events AND the Follow
-Up Boss integration (FUB modeled as a "platform" with a Zillow.com "source" carrying per-source registration
-**doors**). That forked the pipeline into being *source-aware* — every FUB event needed a door, on a FUB
-source, bound to a workflow, inside sections that are supposed to be source-agnostic.
+This is the **live build checklist** for HouseLoop's lead engine to MVP — every inbound + HouseLoop event, its
+trigger, its workflow (text + email + nurture), and the phone system. Work top-to-bottom; items flip to ✅ as
+they ship. Plan of record (Zach-approved 2026-06-30): two platforms (HouseLoop + FUB), one agnostic engine.
 
-**The fix — "two platforms, one agnostic engine."** Two platforms, each with its OWN toggleable system-events
-surface; one shared agnostic layer (sources + workflows) underneath. Every lead keeps both a `platform` and a
-`source`.
+### ✅ PHASE 0 — Foundation (shipped)
+- ✅ FUB Settings = its own page (`/settings/fub`): per-webhook toggles + Workflow attach (Open in Builder / Create / Clone)
+- ✅ Registration Events (renamed Lead Platform): New Lead + Existing Lead, ON toggle + workflow Actions
+- ✅ Phone Numbers registry (`hl_phone_numbers`, 41 FUB numbers) — `/settings/phone-numbers`
+- ✅ Unified Event table · agnostic dispatcher (`trigger_type`) · FUB source pass-through · Clone-workflow API · plain-text feed
 
-| Box | Scope | Owns | Toggle |
-|---|---|---|---|
-| **Registration Events** *(renamed Lead Platform)* | HouseLoop platform | built-in events: **New Lead** + **Existing Lead** | toggle each event + attach a workflow |
-| **FUB Settings** *(shipped)* | Follow Up Boss platform | webhook events (inquiry / text / in-app / call / notification) | Process · Creates Lead · Notify + attach a workflow |
-| **Lead Sources** | agnostic | flat origin list incl. **Manual Entry** | per-source "fire a registration workflow on entry?" |
-| **Workflows** | agnostic | the canvas library; copy reads `{{source}}` | — |
+### ☐ PHASE 1 — Complete the event/trigger taxonomy *(of 30 events: 11 wired, 2 partial, 17 missing)*
+- ☐ 1a. Add missing doors: `shared_home_registration`, `virtual_tour`, 3 inbound (phone/text/in-app), 4 insights
+- ☐ 1b. Zillow Insights → route to Myli/AI to prioritize (not auto-blast)
+- ☐ 1c. Inbound phone/text/in-app `creates_lead` → flip ON once the text-back workflow exists (1b/4b)
 
-**What changes (build plan):**
-1. `hl_fub_webhook_settings` gains a **`workflow_id`** column → a Workflow picker per webhook event; header "Webhook" → **"Webhook Event."**
-2. FUB dispatch (`fub-lead-import.ts`) stops resolving per-source doors and instead **fires the workflow the FUB Settings row points at**, stamping `platform='follow_up_boss'` + the FUB-provided `source`.
-3. **Lead Platform → Registration Events** (HouseLoop only): New Lead + Existing Lead toggle groups; FUB filtered out.
-4. **Manual Entry** moves out of system events → into **Lead Sources** with its own registration-workflow toggle.
-5. Workflows go fully source-agnostic (`{{source}}` merge: *"saw you registered on {{source}}"*).
-6. The legacy FUB sources/doors/placeholder workflows are **quarantined** (flagged + hidden, never deleted — Rule #0).
+### ☐ PHASE 2 — A workflow (text + email + nurture) for EVERY event
+- ☐ 2a. Add the missing **text step** to seller-report + seller-get-started
+- ☐ 2b. Existing-lead viewed/liked/saved/shared/saved-search DRAFT→ACTIVE w/ text+email (clone the Liked-Home playbook)
+- ☐ 2c. Workflows for the new events (shared-home, virtual tour, inbound, insights)
+- ☐ 2d. **Nurture** drips for all
 
-**Open for Zach:** confirm the page name **"Registration Events"**, and that Manual Entry becomes a Lead Source.
+### ☐ PHASE 3 — Zillow-inbound render MVP *(lead-detail cards, native-iMessage feel)*
+- ☐ 3a. **Zillow logo** in the icon tile (compact + hero)
+- ☐ 3b. **"Find on HouseLoop"** — look the house up on click, not preloaded
+- ☐ 3c. iMessage-bubble restyle
+
+### ☐ PHASE 4 — Phone system *(4 numbers: Company · Signs · Ana old · Agent-fwd)*
+- ☐ 4a. Per-number routing: inbound `to_number` → registry → fire its workflow
+- ☐ 4b. **Myli text-back** workflow (company-call MVP) + bind to company numbers
+- ☐ 4c. Decouple `hl_dialer_assignments` (multiple numbers per user)
+- ☐ 4d. FUB Team-Inbox sync (real forwarding, not seeded)
+- ☐ 4e. **[Zach + external]** Port the 4 numbers to Twilio + repoint Ana's Google Voice (5–10 biz days/number)
+- ☐ 4f. **[later]** Voice agent answers all calls (Twilio → LiveKit bridge)
+
+### ☐ PHASE 5 — Go-live 🔒 *(Zach's typed word)*
+- ☐ 5a. Quarantine the legacy FUB Zillow doors → real inquiries fire real workflows (E2E-verify each in the Run Log first)
 
 ---
 
