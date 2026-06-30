@@ -1,0 +1,106 @@
+---
+title: "Pipeline & Workflow — Master Overview"
+description: "The one map of how a lead enters HouseLoop and what happens next: two platforms (HouseLoop + Follow Up Boss), each with its own toggleable system-events surface, sitting on one source-agnostic engine of Lead Sources + Workflows. Includes the in-progress reorg, the current state, and the quarantined legacy FUB door model."
+---
+
+<Note>
+This is the **master reference + working doc** for everything under Settings → Pipeline & Workflow:
+Registration Events, Lead Sources, Workflows, and FUB Settings. The **Work In Progress** section at the
+top is the live proposal being built; the **Current State** below documents what ships today; the
+**Quarantine** section at the bottom records the legacy model we are retiring (kept, never deleted).
+</Note>
+
+## 🚧 WORK IN PROGRESS — Pipeline & Workflow Reorg (Lee, started 2026-06-30)
+
+> Status: **proposal locked, build not started.** PRD: `GT_HOUSELOOP_PIPELINE_WORKFLOW_REORG_PRD.md`.
+> This WIP closes out when the build below is shipped + Zach signs off; then it folds into Current State.
+
+**The problem.** The Lead Platform page secretly does two jobs: HouseLoop's own system events AND the Follow
+Up Boss integration (FUB modeled as a "platform" with a Zillow.com "source" carrying per-source registration
+**doors**). That forked the pipeline into being *source-aware* — every FUB event needed a door, on a FUB
+source, bound to a workflow, inside sections that are supposed to be source-agnostic.
+
+**The fix — "two platforms, one agnostic engine."** Two platforms, each with its OWN toggleable system-events
+surface; one shared agnostic layer (sources + workflows) underneath. Every lead keeps both a `platform` and a
+`source`.
+
+| Box | Scope | Owns | Toggle |
+|---|---|---|---|
+| **Registration Events** *(renamed Lead Platform)* | HouseLoop platform | built-in events: **New Lead** + **Existing Lead** | toggle each event + attach a workflow |
+| **FUB Settings** *(shipped)* | Follow Up Boss platform | webhook events (inquiry / text / in-app / call / notification) | Process · Creates Lead · Notify + attach a workflow |
+| **Lead Sources** | agnostic | flat origin list incl. **Manual Entry** | per-source "fire a registration workflow on entry?" |
+| **Workflows** | agnostic | the canvas library; copy reads `{{source}}` | — |
+
+**What changes (build plan):**
+1. `hl_fub_webhook_settings` gains a **`workflow_id`** column → a Workflow picker per webhook event; header "Webhook" → **"Webhook Event."**
+2. FUB dispatch (`fub-lead-import.ts`) stops resolving per-source doors and instead **fires the workflow the FUB Settings row points at**, stamping `platform='follow_up_boss'` + the FUB-provided `source`.
+3. **Lead Platform → Registration Events** (HouseLoop only): New Lead + Existing Lead toggle groups; FUB filtered out.
+4. **Manual Entry** moves out of system events → into **Lead Sources** with its own registration-workflow toggle.
+5. Workflows go fully source-agnostic (`{{source}}` merge: *"saw you registered on {{source}}"*).
+6. The legacy FUB sources/doors/placeholder workflows are **quarantined** (flagged + hidden, never deleted — Rule #0).
+
+**Open for Zach:** confirm the page name **"Registration Events"**, and that Manual Entry becomes a Lead Source.
+
+---
+
+## Current State — the four boxes today
+
+HouseLoop's pipeline is "everything is a workflow" (see `GT_HOUSELOOP_EVERYTHING_IS_A_WORKFLOW_PRD.md`). A lead
+enters through a **platform**, carries a **source**, fires an **event**, and that event runs exactly **one
+workflow**.
+
+### Registration Events *(today: "Lead Platform")*
+The HouseLoop platform's built-in system events, split **New Lead** vs **Existing Lead** (decided at intake by
+the `created` flag). New-lead events: registration, saved home, tour / contact / seller request, saved search,
+home value. Each event maps to one workflow (the Lead Flow lens). Canonical: `GT_HOUSELOOP_LEAD_PLATFORM_PRD.md`,
+`GT_HOUSELOOP_LEAD_FLOW_UI_PRD.md`, [Lead Flow](/guides/lead-flow), [Registration](/guides/registration).
+
+### Lead Sources
+Where a lead came from + per-source defaults (AI owner, human owner, start stage, tag). Backed by
+`hl_lead_sources`. See [Lead Sources](/guides/lead-sources). **Going agnostic:** a flat origin list (Zillow,
+HouseLoop.ai, realtor.com, Manual Entry); the `source` is a field on the lead and a `{{source}}` merge in copy.
+
+### Workflows
+The canvas engine — triggers, conditions, branches, the sender chain. Every step is visible on the canvas
+(WORKFLOW_CANVAS_IS_TRUTH) and every run lands in the Run Log (INNGEST_OR_IT_DOESNT_EXIST). System workflows
+are locked defaults; custom workflows are takeovers. See [Workflows](/guides/workflows),
+`GT_HOUSELOOP_WORKFLOW_TRIGGERS_SSOT.md`.
+
+### FUB Settings *(shipped 2026-06-29 — the Follow Up Boss platform mirror)*
+The control surface for the Follow Up Boss integration. Backed by `hl_fub_webhook_settings` (migration 0267).
+One row per FUB webhook event with three toggles + a global master switch:
+
+| Webhook Event | Process | Creates Lead | Notify |
+|---|---|---|---|
+| Property Inquiries | ✓ | ✓ | ✓ |
+| Text Messages | ✓ | (opt-in) | ✓ |
+| In-App Messages | ✓ | (opt-in) | — |
+| Phone Calls | ✓ | (opt-in) | ✓ |
+| Notifications | ✓ | — | — |
+
+- **Process** = ingest the webhook into the lead's history. **Creates Lead** = if no lead matches, this event
+  spins one up (phone calls match the caller number with company/shared-line verification; texts/in-app match
+  the person). **Notify** = ping Zach when it fires.
+- The dashboard webhook (`apps/dashboard/server/fub-webhooks.ts`) reads this table live (60s cache) and gates
+  notify + lead-creation per row. Canonical: `GT_HOUSELOOP_FUB_LEAD_IMPORT_PRD.md`, [FUB Lead Import](/fub/lead-import).
+- **Next:** a **Workflow** column so each webhook event can attach an agnostic workflow (see WIP above).
+
+---
+
+## 🗄️ Quarantine — the legacy per-source FUB door model (retired, NOT deleted)
+
+The original model made Follow Up Boss a "platform" with a Zillow.com "source" carrying per-source
+registration **doors** bound to placeholder workflows. We are retiring it in favor of FUB Settings + agnostic
+workflows. These rows are **kept for audit** (Rule #0 — no destructive deletes) and hidden from the agnostic
+pages:
+
+- `hl_lead_sources` rows with `platform='follow_up_boss'` — `fub_import` ("SRG-Follow Up Boss", 8 inactive
+  doors) and `zillow_com` ("Zillow.com", 2 active doors). Zillow.com survives as a plain agnostic **source tag**.
+- `hl_lead_source_events` FUB door rows (`tour_request_registration`, `contact_request_registration`, …).
+- The **Coming Soon** placeholder workflows (`sys_coming_soon`, `sys_coming_soon_contact`) — zero-node no-ops
+  the Zillow doors pointed at.
+- The dispatch's per-source door resolution (`fub-lead-import.ts` `TRIGGER_DOORS`) → replaced by the FUB
+  Settings `workflow_id` attach.
+
+Why quarantine and not delete: the rows carry historical attribution (which leads came through which door) and
+removing them is a destructive prod operation. They are flagged + hidden; the new path is FUB Settings.
