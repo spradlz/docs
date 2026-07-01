@@ -1,12 +1,90 @@
 ---
 title: "My Team"
-description: "My Team — HouseLoop CRM (Team Settings). Documentation stub."
+description: "Manage who has access to the HouseLoop CRM — human teammates and AI agents, their reusable roles, per-task AI models, and the global AI failover engine."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Team Settings** → **My Team** — [`/settings/team`](https://crm.houseloop.ai/settings/team)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/team/page.tsx` (route page + its components).
+## What it does
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+My Team is the CRM's team-administration surface. On one page it lists every active team member (humans and AI agents), the reusable **roles** assigned to them, the **AI model** chosen for each AI task, and the master **AI failover** switch. From here an admin adds and removes members, assigns roles, opens a member's full profile, emulates a member, and configures which Claude model runs each AI task.
+
+The page is composed of four stacked sections:
+
+1. **AI Failover Engine** — a single card with the global on/off toggle for the warm-handoff + SLA failover engine (ships **off**).
+2. **Members** — the team table, with an **Add Member** button and per-row actions.
+3. **Roles** — the reusable role library, with an **Add Role** button.
+4. **AI Models** — one row per AI task with a model picker, token usage, and estimated cost.
+
+A secondary **Audit Log** link in the page header points to `/settings/audit`.
+
+### Members
+
+Each member row shows an avatar, name/email, **Access** pill (Owner / Admin / Member), **Type** pill (Human / AI Agent), assigned **Roles**, a **Contacts** count (leads assigned to them), and live connection-status dots for **Email** (Gmail sync), **Calendar**, **Dialer** (off / pending / on), and **iMessage**. AI clones are hidden here — a clone is a backing identity bound to a human (`clone_of_user_id`) and is managed only from that human's profile, never as its own row.
+
+Per-row actions (⋮ menu):
+
+- **Configure** — opens the member's unified profile editor at `/settings/team/agents/[id]`.
+- **Emulate User** — sets an emulation session cookie so an admin can view the CRM as that member (admins only; cannot emulate yourself).
+- **Delete** — soft-deactivates the member (dependency-aware; see below).
+
+Members can be bulk-selected for deletion. **Add Member** opens a modal to create a Human or AI Agent; both sign in via Google (Workspace accounts in the DWD allowlist). AI agents also capture a phone number and time zone.
+
+**Dependency-aware delete.** Deleting a member is a soft-deactivate (`is_active = false`) that preserves history. Two guards run first:
+
+- **Last-human lock** — you cannot delete the only active human member.
+- **Reassign modal** — if the member is wired into routing (lead-source handoff / default owner / event-rule owner), owns active leads, or holds a phone number, the delete is blocked until you pick another active human to take over. On reassign, routing rules and leads move to that person, the phone number is released to the pool, then the member (and any AI clone) is deactivated. Re-adding the same email later revives the original row and its clone.
+
+### Roles
+
+Roles are **reusable AI role cards** — a persona, tool/capability permissions, workflows, and reference docs configured once and assigned to one or more members. Each role has a `kind` (`ai` or `human`), an optional Claude `model`, an `is_system` flag (built-in roles like Real Estate Agent / Transaction Coordinator cannot be deleted), a `grants_tc` flag (members with it get the Agent⇄TC view toggle), and an assigned-agent count. Rows open the role editor at `/settings/team/roles/[id]`; roles support per-row and bulk delete.
+
+### AI Models
+
+One row per AI **task** (e.g. conversation, extraction). Each row has a model dropdown, summed input/output tokens, run count, and estimated cost (tokens × the model's $/M rate). A rate key and an all-time running total sit below the table. Changing a model persists the task→model mapping.
+
+## What you configure
+
+| Setting | Where | Effect |
+|---|---|---|
+| Add member (Human / AI Agent) | **Add Member** modal | Creates an `hl_users` row; both types sign in via Google OAuth |
+| Member type | Add Member modal / profile | `human` or `ai_agent`; AI agents also get phone + time zone |
+| Access level | Add Member modal / profile | Admin (manage team, billing, all settings) or Member |
+| Role assignment | Member profile → roles | Rewrites the member↔role join (`hl_member_role`) |
+| Delete / reassign member | Row ⋮ → Delete | Soft-deactivate with last-human lock + routing/lead/phone reassignment |
+| Emulate member | Row ⋮ → Emulate User | Admin-only view-as session |
+| Add / edit / delete role | Roles section + `/settings/team/roles/[id]` | Reusable role card (persona, tools, workflows, docs, model) |
+| AI model per task | AI Models table | Sets which Claude model runs each AI task |
+| AI failover on/off + windows | AI Failover Engine card | Global toggle + ack-window (minutes) and clone-window (hours) |
+
+## Data source
+
+**APIs (all under `apps/houseloop-crm/app/api/`):**
+
+- `team/users` — `GET` (list active members + roles + connection status + team stats), `POST` (create/revive member)
+- `team/users/[id]` — `GET` (full profile), `PATCH` (identity + role assignment), `DELETE` (dependency-aware soft-delete; `?check=1` dry-run, `?reassign_to=<id>` to reassign)
+- `team/users/[id]/emulate` — `POST` (admin view-as session cookie)
+- `team/roles` — `GET` (role library + agent counts), `POST` (create role)
+- `team/roles/[id]` — role read/update/delete
+- `team/ai-models` — `GET` (per-task model + token usage + cost), `PATCH` (set task model)
+- `settings/agent-sla-policy` — `GET`/`PUT` (AI failover policy for the failover card)
+
+**Tables (CRM Postgres, `HL_CRM_DATABASE_URL`):**
+
+- `hl_users` — team members (human + AI agents + clones via `clone_of_user_id`); columns include `role`, `type`, `phone`, `timezone`, `is_active`
+- `hl_role` — reusable role cards (persona, tools, workflow_ids, docs, kind, model, is_system, grants_tc)
+- `hl_member_role` — member↔role assignment join
+- `hl_leads` — source of each member's Contacts count (`assigned_user_id`) and reassignment on delete
+- `hl_lead_sources`, `hl_lead_source_events` — routing rules scanned/reassigned on member delete (`handoff_user_id`, `default_assigned_user_id`)
+- `hl_dialer_assignments` — dialer/phone status and the number released to the pool on reassignment
+- `hl_oauth_connections` — Gmail (Google) connection → Email status
+- `hl_calendar_connections` — calendar sync → Calendar status
+- `hl_imessage_assignments` — BlueBubbles handle → iMessage status
+- `hl_settings` — per-task AI model map (`key = 'ai_models'`) and the failover policy
+- `hl_lead_activity` — the AI-cost source: token usage is summed from the AI slice (`actor_role = 'ai_agent'`) per the "AI cost lives on the catalog" law; the retired `hl_ai_actions` table is not used
+
+Model ids, labels, pricing, and the task→model catalog live in `apps/houseloop-crm/lib/ai/model-config.ts` (`AI_TASKS`, `MODELS`, `MODEL_PRICING`).
+
+## How it fits
+
+My Team is the identity + access + AI-configuration hub the rest of the CRM reads from. Membership and roles drive lead ownership, routing/handoff, and which members get the Agent⇄TC view. The per-user connection columns reflect the channel integrations wired up elsewhere (Gmail via `/api/email`, phone via `/api/phone/dialers`, iMessage via `/api/team/imessage`) — this page only owns identity and role assignment, not the channel connections themselves. The AI Models table and the AI Failover Engine card govern how the CRM's AI agents and clones run: which model each task uses, and whether an unresponsive agent's clone auto-steps in to keep a lead warm.

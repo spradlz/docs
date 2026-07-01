@@ -1,12 +1,49 @@
 ---
 title: "Google Ads"
-description: "Google Ads — HouseLoop CRM (Website Settings). Documentation stub."
+description: "Google Ads keyword-demand intelligence — Keyword Planner search volumes by KC-metro geo, fetched weekly and surfaced in the HouseLoop CRM."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Website Settings** → **Google Ads** — [`/settings/website/google-ads`](https://crm.houseloop.ai/settings/website/google-ads)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/website/google-ads/page.tsx` (route page + its components).
+## What it does
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+Google Ads is a **read-only demand-intelligence dashboard**. It uses the Google Ads **Keyword Planner API** to pull monthly search volumes (plus competition and top-of-page CPC bid ranges) for real-estate keywords across the Kansas City metro, so the team can see what buyers and sellers are actually searching for by neighborhood, city, and county.
+
+It does **not** run campaigns, create ads, or manage bidding. The Google Ads account holds **Basic Access** (approved June 5, 2026, 15,000 queries/day) and this integration only reads Keyword Planner data for internal reporting.
+
+The page shows:
+
+- **Status cards** — the connected Google Ads account, the manager (MCC) account used for API access, the developer token, and Keyword Planner API status (keyword/geo counts + last-fetch time).
+- **Keyword Demand table** — one row per keyword × geo: keyword, location, average monthly volume, a competition badge (HIGH / MEDIUM / LOW), CPC range (low–high top-of-page bid, converted from micros), and a trend arrow computed from the last 6 months of `monthly_data`.
+- **Geo filter** — narrow the table to a single geo.
+
+## What you configure
+
+This page has **no in-app settings to edit** — it is a display surface. The integration is configured through environment variables and a one-time OAuth grant:
+
+| Item | Where | Notes |
+|------|-------|-------|
+| OAuth refresh token | `GOOGLE_ADS_REFRESH_TOKEN` (.env + Railway CRM) | Minted once via the auth route below (`admin@houseloop.ai`, `adwords` scope) |
+| OAuth client | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Shared Google OAuth client |
+| Developer token | `GOOGLE_ADS_DEVELOPER_TOKEN` (falls back to `GOOGLE_ADS_API_API_KEY`) | Basic Access token |
+| Manager account | `GOOGLE_ADS_MCC_ID` (default `6469827966`) | Used as the `customer_id` for Keyword Planner calls |
+| Auth redirect | `GOOGLE_ADS_REDIRECT_URI` (default `http://localhost:3020/api/google-ads/auth`) | — |
+
+**Keyword and geo coverage** are code-defined, not user-editable, in `lib/google/keyword-planner.ts`:
+
+- **15 keyword templates** (e.g. `homes for sale in {geo}`, `{geo} real estate`, `sell my house in {geo}`, `{geo} home values`).
+- **28 KC-metro geos** (20 cities + 8 counties, e.g. Overland Park, Olathe, Lee's Summit, Johnson County, Jackson County).
+
+> Geo-targeting is done **nationally** (USA, `geoTargetConstants/2840`) on purpose: the keywords already embed the city name, so targeting the same city too would double-localize and return ~0 volume.
+
+## Data source
+
+- **Page → API:** the client fetches `GET /api/keyword-demand` (`app/api/keyword-demand/route.ts`) with optional `geo_type` / `geo_name` / `limit` (max 500) params. It returns `rows` (ordered by `avg_monthly` DESC) plus a `summary` (total keywords, distinct geos, last fetch).
+- **Table:** `hl_keyword_demand` — one row per `(keyword, geo_type, geo_name)`, with `geo_criterion`, `avg_monthly`, `competition`, `low_bid`/`high_bid` (micros), `monthly_data` (JSON of monthly search volumes), and `fetched_at`.
+- **Writer:** the Inngest function `keyword-demand-weekly` (`lib/inngest/functions/keyword-demand.ts`), registered in `app/api/inngest/route.ts`. It runs **every Monday at 6:00 AM Central** (`TZ=America/Chicago 0 6 * * 1`) and can also be re-run on demand via the `houseloop/keyword-demand.run` event from the Inngest dashboard. It loops the 28 geos, calls the Keyword Planner API (with RESOURCE_EXHAUSTED backoff retry), and upserts each idea (`ON CONFLICT … DO UPDATE`).
+- **Google Ads client:** `lib/google/keyword-planner.ts` wraps the `google-ads-api` (gRPC) `KeywordPlanIdeaService`.
+- **OAuth setup route:** `app/api/google-ads/auth/route.ts` — with no `code` it redirects to Google consent; on callback it exchanges the code and returns the `refresh_token` to store in env (a one-time setup helper, not part of normal page use).
+
+## How it fits
+
+The weekly fetch is a registered Inngest function, so every run is audited in the CRM **Run Log** (registered in `lib/run-log/inngest-registry.ts` as "Keyword Demand — Weekly Fetch"). The resulting `hl_keyword_demand` data feeds the Demand Intelligence reports and SEO keyword insights — telling HouseLoop which markets and search terms have the most buyer/seller demand, without spending on ads.

@@ -1,12 +1,38 @@
 ---
 title: "Profile Settings"
-description: "Profile Settings — HouseLoop CRM (User Settings). Documentation stub."
+description: "Profile Settings in the HouseLoop CRM — the /settings/profile route resolves the signed-in user and opens their row in the shared member editor, where identity (name, phone, time zone) is edited."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **User Settings** → **Profile Settings** — [`/settings/profile`](https://crm.houseloop.ai/settings/profile)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/profile/page.tsx` (route page + its components).
+## What it does
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+`/settings/profile` is **not a standalone form** — it is a thin redirect. On load it calls `GET /api/profile` to find the signed-in user's id, then `router.replace`s to that user's row in the shared member editor at **`/settings/team/agents/{id}`**. If the id can't be resolved it falls back to `/settings/team`. While resolving it shows an "Opening your profile…" placeholder.
+
+This is the same one-editor pattern the Account page uses: "My Profile" is not a separate screen anymore — you edit yourself in the exact editor teammates are edited in, just pre-opened to your own row. The old dedicated profile form has been retired.
+
+## What you configure
+
+The identity fields live in the member editor's **Profile** section (one scrollable page with a filter bar: `All · Permissions · Profile · Connections · Roles`, plus `AI Clone` for human members):
+
+| Field | Editable | Notes |
+|-------|----------|-------|
+| Name | Yes | `full_name`. Re-issues the session cookie so the sidebar name updates immediately. |
+| Email | No | Read-only sign-in identity, managed via Google. |
+| Phone | Yes | `phone`. |
+| Time zone | Yes | `timezone` (Eastern / Central / Mountain / Pacific). |
+
+Other member-editor sections (Permissions/Access, Roles, Connections, AI Clone) are documented with the Team / member editor, not here — this page only opens the editor.
+
+## Data source
+
+- **Route page:** `apps/houseloop-crm/app/(crm)/settings/profile/page.tsx` — client component, GET `/api/profile` → redirect.
+- **API:** `apps/houseloop-crm/app/api/profile/route.ts`
+  - `GET /api/profile` — returns the current user's row (`id, full_name, email, role, phone, timezone, avatar_url`, plus `data->>'notification_email'`) from `hl_users`, keyed by session.
+  - `PATCH /api/profile` — updates `full_name`, `phone`, `timezone`, and `data.notification_email` on `hl_users`, then re-issues the session cookie. (The redirect page itself only calls GET; edits made in the member editor go through `PATCH /api/team/users/{id}`.)
+- **Table:** `hl_users` — the columns above. Editable profile writes go here.
+- **Downstream editor:** `apps/houseloop-crm/app/(crm)/settings/team/agents/[id]/page.tsx`, which loads via `/api/team/users/{id}`, `/api/team/roles`, and `/api/me`, and stores per-role overrides on `hl_member_role`.
+
+## How it fits
+
+Profile Settings is the User Settings entry point into HouseLoop's unified member model: one editor renders every member (human or AI agent), and "your profile" is just your own row in it. Access/role permissions and channel connections sit alongside identity in that same editor, so signing-in identity (name/phone/time zone, Google-managed email) and team administration stay in one place.

@@ -1,12 +1,57 @@
 ---
 title: "Analytics"
-description: "Analytics — HouseLoop CRM (Website Settings). Documentation stub."
+description: "The website performance dashboard in HouseLoop CRM — Google Analytics 4 traffic, the first-party pixel, email, and Google Business Profile — read via the HouseLoop domain-wide-delegation service account impersonating admin@houseloop.ai."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Website Settings** → **Analytics** — [`/settings/website/analytics`](https://crm.houseloop.ai/settings/website/analytics)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/website/analytics/page.tsx` (route page + its components).
+**Code:** `apps/houseloop-crm/app/(crm)/settings/website/analytics/page.tsx`
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+## What it does
+
+One page that answers "how is houseloop.ai performing?" from four complementary sources, each on its own top tab. The active tab is stored in the URL (`?tab=ga4|pixel|email|gmb`) so a refresh keeps you on the tab you picked instead of snapping back to the default. Each tab has a 7 / 30 / 90-day range toggle. **Google Analytics** is the default view.
+
+The header carries a **Pixel Tracking** button linking to `/settings/website/pixel-tracking`.
+
+## The tabs
+
+| Tab | Component | What it shows |
+|-----|-----------|---------------|
+| **Google Analytics** (default) | `Ga4Analytics.tsx` | GA4 traffic for houseloop.ai |
+| First-Party Pixel | `PixelAnalytics.tsx` | Our own pixel — identified leads, property views, SEO crawlers (attribution GA4 can't tie back to CRM leads) |
+| Email | `EmailAnalytics.tsx` | Email performance |
+| **Google Business** | `GmbAnalytics.tsx` | Spradling Realty Group's Google Search + Maps performance |
+
+### Google Analytics (GA4)
+
+Reads `GET /api/analytics/ga4?days=<7|30|90>`. Shows:
+
+- **KPI tiles** — Users, Sessions, Page Views (click a tile to drive the chart below), plus read-only Engagement rate and Avg engagement (seconds).
+- A **realtime "active now"** badge (GA4 realtime active users).
+- A full-width **time-series chart** for the selected metric.
+- **Top pages** and **Traffic channels** tables.
+
+When GA4 has no data yet it shows a friendly "just went live, totals populate within a few hours" note rather than a blank.
+
+### Google Business Profile (GMB)
+
+Reads `GET /api/analytics/gmb?days=<7|30|90>`. When live it shows six KPI tiles — Total impressions, Search, Maps, Website clicks, Calls, Directions — plus a daily impressions chart.
+
+**This tab is currently gated on a pending Google API access grant.** Google's Business Profile APIs ship with a per-minute quota of 0 until a one-time access request is approved, so the API returns a quota/permission error (429 / quota / `PERMISSION_DENIED` / 403 / `accessNotConfigured` / `SERVICE_DISABLED`). The component detects that and renders a **"pending access"** state instead of an error, documenting the open case:
+
+- Re-applied **2026-06-15** as *The Spradling Group* from `zach@spradlingrealtygroup.com` (website `spradlingrealtygroup.com`) — active case **4-6206000040628**, In Review.
+- The prior request (case 0-2380000041528) was rejected because it was filed under the HouseLoop identity, which didn't match the verified profile.
+- When Google flips the quota above 0, the tab auto-fills — no redeploy needed.
+
+## Data source
+
+Everything is read server-side through Google Directory-Wide Delegation (DWD). The **HouseLoop service account** (`houseloop-master@houseloop-496200`, key `HOUSELOOP_GCP_SA_KEY_JSON` — the same SA/key used for Gmail and Calendar) **impersonates `admin@houseloop.ai`**. Both API routes are CRM-session gated (401 if unauthenticated) and return `{ ok: false, error }` on failure so the UI can show *why* it's blank instead of a silent empty state.
+
+- **GA4** (`lib/analytics/ga4.ts`) — the GA4 Data API (`analyticsdata.googleapis.com/v1beta`), scope `analytics.readonly`. Property **`539260560`** (`GA4_PROPERTY_ID`, hardcoded default with env override). Pulls a daily `runReport` (page views, sessions, users, engagement rate, engagement duration), a top-pages report, a channels report, and a realtime active-users report in parallel.
+- **GMB** (`lib/analytics/gmb.ts`) — the Business Profile Performance API (`businessprofileperformance.googleapis.com/v1`), scope `business.manage`. The location id is resolved at runtime (accounts → locations, preferring a title matching "Spradling"), cached, and overridable via `GMB_LOCATION_ID`. For this to work, `admin@houseloop.ai` must be a **Manager** on the Spradling Realty Group profile (the SA can only impersonate `@houseloop.ai` identities). If the location isn't resolvable yet, the route returns `configured: false` → the pending state.
+
+If `HOUSELOOP_GCP_SA_KEY_JSON` is missing, both routes return a `503` with a "not configured" message.
+
+## How it fits
+
+This is the **Website Settings** analytics surface — the real, wired dashboard for houseloop.ai, distinct from the top-level `/analytics` route (a ComingSoon placeholder). GA4 covers anonymous top-of-funnel traffic; the First-Party Pixel tab covers CRM-attributed behavior GA4 can't see; Email and Google Business round out the off-site and local-search picture. All four share the DWD-via-`admin@houseloop.ai` one-login pattern, so nothing here depends on a separate BossLoop credential.

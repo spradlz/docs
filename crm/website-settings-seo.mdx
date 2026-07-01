@@ -1,12 +1,68 @@
 ---
 title: "SEO"
-description: "SEO — HouseLoop CRM (Website Settings). Documentation stub."
+description: "The SEO dashboard in HouseLoop CRM Website Settings — organic search performance (Google Search Console), the programmatic-SEO article ledger, and the engine's run log for houseloop.ai."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Website Settings** → **SEO** — [`/settings/website/seo`](https://crm.houseloop.ai/settings/website/seo)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/website/seo/page.tsx` (route page + its components).
+**Code:** `apps/houseloop-crm/app/(crm)/settings/website/seo/` (tabbed layout + five route pages).
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+## What it does
+
+The SEO section is the read-only cockpit for everything that powers **houseloop.ai** in organic
+search: how the site is performing in Google, every programmatic-SEO article the engine has
+published, and the background runs that produced them.
+
+It is **one tabbed page**. The layout (`seo/layout.tsx`) owns the page chrome — the `PageShell`,
+the navy "SEO" header, and the tab strip (`components/seo/SeoTabs.tsx`) — and each tab is its own
+server-rendered route rendering only its inner content:
+
+| Tab | Route | What it shows |
+|---|---|---|
+| **Overview** | `/settings/website/seo` | KPI cards (Google clicks / impressions / rank + total articles), a per-tier **Page builder health** strip, a stacked "Articles published per week" bar chart, and "Articles by type" pill cards. |
+| **Articles** | `/settings/website/seo/articles` | Every published article, filterable by geo level (All / County / City / Zip / Neighborhood / Houses). Client-side instant-filter browser (`SeoArtifactBrowser`). |
+| **SEO Run Log** | `/settings/website/seo/run-log` | The artifact-level audit — every SEO thing created (article, narrative, FAQ, card) as a clickable row deep-linked to the Inngest run that made it. Same browser component as Articles. |
+| **Search Demand** | `/settings/website/seo/search-demand` | Google Search Console keyword data — the real terms people Google to find the site, with average rank position, clicks, impressions, CTR (7 / 30 / 90-day range). |
+| **FAQ** | `/settings/website/seo/faq` | Plain-English glossary of every metric and concept on the dashboard. Static content. |
+
+The dashboard is entirely observational — there are no settings to save here. It reports on the
+autonomous SEO engine that runs on the website side.
+
+## What you configure
+
+Nothing on this page is editable — it is a monitoring surface, not a settings form. The values it
+reports depend on two upstream configurations:
+
+| Dependency | Where it lives | Effect if missing |
+|---|---|---|
+| **Google Search Console access** | Domain-wide-delegation SA impersonating `admin@houseloop.ai` (`HOUSELOOP_GCP_SA_KEY_JSON` / DWD, scope `webmasters.readonly`, property `sc-domain:houseloop.ai`) | Search Demand shows "GSC not configured"; Overview omits the Google KPIs and renders DB-backed data only. |
+| **SEO engine (article + page builders)** | Inngest functions on the website app (geo weekly-report cron, house-blurb generation, page builders) | The article ledger and builder-health strip populate as the engine runs; a stale tier is flagged in red. |
+
+## Data source
+
+The CRM pages are thin readers. The heavy data lives in the **website** database and is fetched
+server-to-server; Google Search Console is read live.
+
+**CRM API routes** (`apps/houseloop-crm/app/api/seo/`):
+- `GET /api/seo/search-demand` — session-gated; reads GSC via `lib/seo/gsc.ts` (`getGscOverview`, `gscAvailable`), which mints a DWD token (`lib/google/dwd.ts`) and queries `searchconsole.googleapis.com`.
+- `GET /api/seo/artifacts` — same-origin proxy that passes query params through to the website's `/api/seo/artifacts` (avoids CORS for the client-side `SeoArtifactBrowser`).
+
+**Website API routes** (`apps/houseloop-web/app/api/seo/`):
+- `GET /api/seo/overview` — KPIs + weekly chart series + per-tier builder health. Also folds in live GSC KPIs (timeout-guarded so a GSC hang degrades to null rather than blocking the page). The Overview page (`seo/page.tsx`) fetches this directly via `NEXT_PUBLIC_HOUSELOOP_WEB_URL`.
+- `GET /api/seo/artifacts` — the artifact ledger feed (filter by `type`, `level`, `source`, `week`, `q`; paginated).
+
+**Website database tables** (via Prisma):
+- `hl_seo_artifact_log` — the artifact ledger. One row per created SEO artifact (`artifactType`: `geo_report` / `house` / `card` / `narrative` / `faq`; `level`: `county` / `zip` / `city` / `neighborhood` / `house`), with `title`, `pageUrl`, `sourceKind`, `inngestFnId` / `inngestRunId` (source run) and `master_fn_id` / `master_run_id` (parent chain) for the deep-links, `weekStart`, and `status`. Backs Overview counts, the Articles table, and the Run Log.
+- `hl_geo_page` — the built market-report pages, keyed by `geo_key` (`tier:...`) with `built_at`. Drives the **Page builder health** strip (built / fresh-within-8-days / newest per tier), which catches a dead page builder even while article counts look healthy.
+
+Google Search Console (queried live, not stored): totals, per-day series, top queries, and top pages.
+
+## How it fits
+
+This is a **Website Settings** surface — a sibling of Analytics, Pixel Tracking, Google Ads, and
+Registration Settings under the same `settings/website/` group. It closes the loop on the
+website's autonomous SEO engine: the engine runs on the `houseloop-web` app (Inngest crons write to
+`hl_seo_artifact_log` and build `hl_geo_page` rows), and this CRM section is where a non-engineer
+watches it — confirming articles keep publishing, no builder tier has gone stale, and the site is
+gaining organic visibility in Google. When something in the Monday pipeline breaks, the SEO Run Log
+is where it surfaces, with a direct link to the failing Inngest run.

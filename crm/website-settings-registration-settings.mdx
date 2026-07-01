@@ -1,12 +1,37 @@
 ---
 title: "Registration Settings"
-description: "Registration Settings — HouseLoop CRM (Website Settings). Documentation stub."
+description: "Control how visitors register on houseloop.ai and what they must provide — phone capture, PPC gating, phone requirements, and form display."
 ---
 
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
+Registration Settings controls how website visitors register on **houseloop.ai** and what information they are required to provide. Every option here is stored in the CRM and read by the public site.
 
 **In the app:** CRM sidebar → **Website Settings** → **Registration Settings** — [`/settings/website/registration-settings`](https://crm.houseloop.ai/settings/website/registration-settings)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/website/registration-settings/page.tsx` (route page + its components).
+## What it does
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+The page loads the current settings, lets you toggle/edit each control, and saves them with **Save Changes**. Settings are held as a single JSONB record in the CRM and consumed by the public houseloop.ai site to decide when visitors are forced to register, whether a phone number is captured, and how forms are displayed.
+
+## What you configure
+
+| Setting | Storage key | Values | Effect |
+|---|---|---|---|
+| Minimum detail views before registration *(Coming Soon — input disabled)* | `ppc_min_detail_views_for_registration` | number ≥ 0 | Intended to force registration after N property detail views for paid (PPC) traffic. Not yet wired — the field is disabled in the UI. |
+| Photo gating on search results | `ppc_photo_gating_enabled` | on / off | Hide the photo carousel on results pages so paid-traffic visitors must register to see photos. |
+| Require phone number at registration | `social_phone_requirement` | `required` / `optional` / `hidden` | On new-account creation via houseloop.ai (**both** Google sign-up and email+password), show a follow-up phone form. Required = block until entered; Optional = ask but allow skip; Hidden = never ask. |
+| Schedule Showing / Request More Info requires phone | `phone_required_on_showing_request` | on / off | Require a phone number on the showing-request form. When off, the field still appears but is optional. |
+| Accept international phone numbers | `international_phone_allowed` | on / off | Off = only US + Canada numbers are valid. On = allow any country code. |
+| Show red asterisks on required fields | `denote_required_fields` | on / off | Display red asterisks next to required fields across every public-site form. |
+
+**Defaults** (used when no row exists yet): phone required at registration, phone required on showing requests, US/Canada only, asterisks shown, PPC photo gating off, min detail views 0.
+
+## Data source
+
+- **Page:** `apps/houseloop-crm/app/(crm)/settings/website/registration-settings/page.tsx` (client component; all UI — cards, rows, switches, radio groups — lives in this one file).
+- **API:** `apps/houseloop-crm/app/api/integrations/website/registration-settings/route.ts`
+  - `GET /api/integrations/website/registration-settings` — returns current settings merged over defaults.
+  - `PUT /api/integrations/website/registration-settings` — whitelists/coerces known keys (unknown keys dropped) and upserts.
+- **Table:** `hl_registration_settings` (CRM database) — one JSONB row keyed `key = 'singleton'`, with `value` (the settings object) and `updated_at`. Written via `INSERT … ON CONFLICT (key) DO UPDATE`.
+
+## How it fits
+
+The CRM is the single place these controls are edited. The public site (`apps/houseloop`) reads the same settings over HTTP (cached ~60s per the route) and applies them at registration and on request forms. Because storage is a single singleton row, a save takes effect site-wide on the next read; there is no per-lead or per-source variant.

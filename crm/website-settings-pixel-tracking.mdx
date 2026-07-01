@@ -1,12 +1,46 @@
 ---
 title: "Pixel Tracking"
-description: "Pixel Tracking — HouseLoop CRM (Website Settings). Documentation stub."
+description: "Admin console for HouseLoop's first-party website pixel — install snippets, identity stitching, event tracking, and live pixel health."
 ---
 
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
+The Pixel Tracking page is the CRM-side console for HouseLoop's **first-party** website pixel. The pixel is built into `houseloop.ai` (it replaced the third-party SureSend pixel on 2026-05-20), so no visitor behavior leaves to a third party — events POST straight to our own ingest and land in the CRM database, which is the system of record.
 
 **In the app:** CRM sidebar → **Website Settings** → **Pixel Tracking** — [`/settings/website/pixel-tracking`](https://crm.houseloop.ai/settings/website/pixel-tracking)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/website/pixel-tracking/page.tsx` (route page + its components).
+## What it does
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+- Documents the first-party pixel that is already auto-installed on `houseloop.ai` (`HlPixelInit` mints an anonymous `visitor_id` and fires `page_view` on every route).
+- Shows copy-paste **snippets** for firing events manually: the base install/`hlTrack` call, the `hlIdentify` identity call, and the `property_view` call (plus `save_home`, `like_home`, `share_home`, `tour_request`, `saved_search`).
+- Explains **identity stitching** — how an anonymous visitor is linked to a CRM lead by email, backfilling all prior anonymous events to that lead.
+- Surfaces **live pixel health**: events today, events this week, unique visitors (7d), identified leads, and a "Last 50 events" recent-activity feed, all read live from the pixel event store.
+- Links out to the full **Website Analytics** dashboard (`/settings/website/analytics`) for the charted human-vs-crawler breakdown.
+
+## What you configure
+
+The page exposes four tracking toggles. **Note:** these switches are currently UI-only — the **Save Settings** button is disabled and labeled "Save endpoint coming in Phase 2," so the toggles do not yet persist. The pixel runs with its built-in defaults regardless.
+
+| Setting | What it controls | Default |
+|---------|------------------|---------|
+| Enable Pixel Tracking | Track page views and visitor activity | On |
+| Form Capture | Automatically capture form submissions | On |
+| Call to Action | Show CTA on property pages | On |
+| Debug Mode | Console logging to help verify events during testing | Off |
+
+Testing guidance on the page: enable Debug Mode, visit a property page, open the browser dev console, watch for the `POST /api/pixel/track` (200), then confirm the event appears in Recent Activity.
+
+## Data source
+
+- **CRM API routes** (`apps/houseloop-crm/app/api/pixel/`):
+  - `track/route.ts` — the ingest endpoint. Receives cross-origin POSTs from `houseloop.ai`, upserts the visitor, runs the email→lead identity stitch, dedupes redundant `property_view` fires, writes the event row, mirrors cataloged activity into the canonical lead run-log (`logActivity`), notifies the lead's owner, and emits per-door Inngest events (e.g. `houseloop/door.property_viewed`).
+  - `stats/route.ts` — powers the console's counts + Recent Activity (reads `hl_pixel_event` and `hl_pixel_visitor`).
+  - `events/route.ts` — a single lead's behavioral events (used by the lead-detail Homes/Requests feed).
+  - `analytics/route.ts` — the Website Analytics dashboard data (human metrics + SEO crawler breakdown).
+- **Database tables** (CRM DB, migration `db/migrations/0044_hl_pixel_events.sql`):
+  - `hl_pixel_event` — append-only behavioral event log (`visitor_id`, nullable `lead_id`, `event_type`, `mls_number`, `property_payload`, `event_payload`, `occurred_at`).
+  - `hl_pixel_visitor` — identity map (`visitor_id` → `lead_id`/`email`, `first_seen`, `identified_at`, `is_bot`/`bot_name`).
+- **Website pixel source** (`apps/houseloop-web/lib/pixel/hl-pixel.ts` + `components/pixel/` — `HlPixelInit`, `HlPropertyTrack`, `HlPixelIdentify`).
+- Bot/crawler classification: `apps/houseloop-crm/lib/pixel/bot-classify.ts` (filters Googlebot/AI crawlers out of human metrics).
+
+## How it fits
+
+The pixel is HouseLoop's owned replacement for a third-party behavioral tracker. Anonymous visits are captured immediately; the moment a visitor identifies (login/signup email), their history is stitched to a CRM lead and replayed into the canonical lead activity feed (`hl_lead_activity`) so their views, searches, and requests show up under the lead's **All** and **Website Activity** tabs. High-intent events (property saved/liked/shared, tour requests, seller-demand) also fire per-door Inngest workflows and owner notifications. This settings page is the operator's window into that pipeline — how to install/fire events, and whether the pixel is healthy.
