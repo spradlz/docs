@@ -1,12 +1,72 @@
 ---
 title: "Stages"
-description: "Stages — HouseLoop CRM (Pipeline & Workflow). Documentation stub."
+description: "Manage the stages of your Buyer and Seller lead pipelines — create, color, reorder, and track per-stage conversion and dwell-time metrics."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Pipeline & Workflow** → **Stages** — [`/settings/stages`](https://crm.houseloop.ai/settings/stages)
 
 **Code:** `apps/houseloop-crm/app/(crm)/settings/stages/page.tsx` (route page + its components).
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+## What it does
+
+Stage Management is where you define the columns of your lead pipeline. HouseLoop ships two lead pipelines — **Buyer** and **Seller** — and this page lets you add, edit, recolor, reorder, activate/deactivate, and delete the stages within whichever pipeline you have selected.
+
+Above the table, a metrics row and per-stage columns surface live analytics computed from lead movement: how many leads currently sit in each stage, the average time a lead spends there, and a conversion rate.
+
+<Info>This page shows **CRM lead pipelines only** (`scope = 'crm'`). TC Loop transaction-status pipelines (`scope = 'tc'`) are configured separately under **TC Loop → Configure → Stages**, which reuses the exact same builder pointed at a different API base.</Info>
+
+## What you configure
+
+**Pipeline switcher** — When more than one CRM pipeline exists, pills at the top (e.g. Buyer / Seller) switch which pipeline's stages you're editing. Selecting one drives the `?pipelineId=` query param.
+
+**Entity tabs** — A `People` / `Companies` / `Contracts` tab strip. Only **People** is active today; Companies and Contracts are shown as disabled ("Coming soon").
+
+**Header actions** — `Refresh Metrics` re-fetches the page data; `Add Stage` opens the create modal.
+
+**Per-stage fields** (create / edit modal):
+
+| Field | Control | Notes |
+|-------|---------|-------|
+| Stage Name | Text input | Required, max 60 chars. Must be unique within the pipeline (`uq_hl_stages_pipeline_name`); a duplicate returns `name_taken`. |
+| Color | Swatch picker (`StageColorSwatches`) | Validated against the allowed palette (`STAGE_COLOR_HEXES`). Defaults to `#6B7280`. |
+| Icon | Icon picker (`IconPicker`) | Any PascalCase Lucide icon name; validated shape-only, falls back to `Flag` if unresolvable. |
+| Active Stage | Checkbox / toggle | Inactive stages won't be offered for new assignments. Defaults to active. |
+
+**Table columns** (`StagesPage` via `HlDataTable`):
+
+| Column | Shows |
+|--------|-------|
+| STAGE | Drag handle, color bar, icon, and stage name |
+| LEADS | Count of leads currently in the stage |
+| CONV | Conversion rate (%) or `—` |
+| AVG TIME | Average days a lead spends in the stage (`Nd avg`) or `—` |
+| ACTIVE | Inline toggle to activate/deactivate |
+
+**Reorder** — Drag a row to reposition it; the new order is persisted as `position` values.
+
+**Delete** — Row action or bulk "Delete Selected". A stage with leads on it cannot be deleted outright — the delete modal requires you to pick a destination stage, and all leads are reassigned to it before the stage is removed. Bulk deletes skip any stage that still has leads.
+
+## Data source
+
+**Tables** (CRM Postgres, read/written directly via `q` from `@/lib/db`):
+
+- `hl_pipelines` — the pipelines (`scope`, `is_default`, `sort_order`). The page lists `scope = 'crm'` pipelines.
+- `hl_stages` — the stage records (`name`, `position`, `color`, `icon`, `is_active`, `is_terminal`, `pipeline_id`).
+- `hl_leads` — used to count leads per stage (`stage_id`, filtered `deleted_at IS NULL`) and to reassign leads on delete.
+- `hl_stage_transitions` — the movement history used to compute metrics: **AVG TIME** = average of the gap between a lead entering a stage and its next transition; **CONV** = `exited / entered` per stage as a percentage.
+
+**API routes:**
+
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/api/stages` | `GET` | List stages — bare call returns both Buyer + Seller pipelines grouped; `?pipelineId=` returns one. |
+| `/api/stages` | `POST` | Create a stage (appends at `MAX(position)+1`). |
+| `/api/stages` | `PATCH` | Bulk reorder — `{ order: [{ id, position }] }`. |
+| `/api/stages/[id]` | `PATCH` | Update name/color/icon/is_active. |
+| `/api/stages/[id]` | `DELETE` | Delete, with optional `reassign_to` to move leads first. |
+
+Server-side validation lives alongside these routes (`@/lib/stage-constants` for colors, `@/lib/stages/list-stages` for pipeline resolution). No Inngest functions are involved — all reads and writes are synchronous over the CRM database.
+
+## How it fits
+
+Stage Management is the configuration surface behind the CRM's lead pipelines: the stages defined here are the columns leads move through on the pipeline board and the values shown on each lead's stage pill. The same builder components (`StagesPage`, `StageModal`, `PipelineSwitcher`) are reused verbatim by TC Loop's transaction-status configuration by passing a different `apiBase` — one builder, two surfaces.
