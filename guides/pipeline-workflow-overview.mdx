@@ -1,15 +1,19 @@
 ---
 title: "Pipeline & Workflow — Master Overview"
-description: "The one map of how a lead enters HouseLoop and what happens next. There is ONE platform (HouseLoop) and everything is a LEAD SOURCE with events, on a single Lead Sources page. Workflows are source-specific — Workflow = f(source × event). Follow Up Boss is a special source with 5 event groups (Property Inquiry · Inbound Activity · Website Activity · Zillow Insights · Phone Call Activity) that pulls in its own sub-sources and phone lines; Myli dynamically reads which line a call/text came from (company · sign-box · past-agent · Ana's old cell). Includes the architecture rails, sign-off matrix, build phases, and quarantined legacy FUB door model."
+description: "WORK IN PROGRESS (2026-06-30). The one map of how a lead enters HouseLoop and what happens next. There is ONE platform (HouseLoop) and everything is a LEAD SOURCE with events, on a single Lead Sources page. Workflows are source-specific — Workflow = f(source × event). Follow Up Boss is a special source with 5 event groups (Property Inquiry · Inbound Activity · Website Activity · Zillow Insights · Phone Call Activity) that pulls in its own sub-sources and phone lines; Myli dynamically reads which line a call/text came from. Includes the architecture rails, sign-off matrix, build phases, the phone/porting plan, and the quarantined legacy FUB door model."
 ---
 
 <Note>
+**🚧 STATUS: WORK IN PROGRESS — last updated 2026-06-30 (Lee).** This is a live working doc; sections marked
+"NOT built" / ☐ are locked design, not shipped.
+
 This is the **master reference + working doc** for everything under Settings → Pipeline & Workflow:
 **Lead Sources**, **System Events**, and **Workflows**. The **Model** section defines how it fits together;
 the **Work In Progress** scoreboard (Rails → Sign-Off Matrix → Build Phases) tracks the MVP build; the
 **Current State** documents what ships today; the **Quarantine** section records the legacy model we are
 retiring (kept, never deleted). Model LOCKED by Zach 2026-06-30 PM — it diverged hard from the earlier
-"two platforms / agnostic engine" plan; that language is dead.
+"two platforms / agnostic engine" plan; that language is dead. **Phone + number porting** has its own deep
+doc: **[Phone Numbers, Call Routing & Number Porting](/guides/phone-numbers-and-call-routing).**
 </Note>
 
 ## 🚧 WORK IN PROGRESS — HouseLoop MVP build (Lee, Zach-approved 2026-06-30)
@@ -109,7 +113,8 @@ Referral) become **tags** under a source vs their own blocks; FUB's single Save 
 Follow Up Boss is our phone system today (pre-Twilio). Verified from the FUB API + Zach's config: **42,382 calls
 on record; ~66% auto-match a person.** FUB has **NO programmatic outbound-SMS API** (Zach tested — you cannot send
 a text from a FUB inbox number in code). We do **not** own these numbers in a Twilio account. This whole section is
-the **locked design for the FUB phone events** — nothing is built yet.
+the **locked design for the FUB phone events** — nothing is built yet. **Deep doc:**
+**[Phone Numbers, Call Routing & Number Porting](/guides/phone-numbers-and-call-routing).**
 
 ### The 3 FUB inboxes (all route to Zach)
 | Inbox | FUB id | Unread | Contents |
@@ -134,12 +139,19 @@ categorized: `number · e164 · label · category · forwards_to · assigned_use
 **913-954-7123 is Ana Spradling's actual old cell phone number.** She released it; we captured it on **Google
 Voice**; a huge number of **past clients still have it saved as her cell**. **Any inbound to it = a potential past
 client, full stop — a text/call from a contact reaching that line is a reactivation signal.** The problem: TODAY
-it is **forwarded to the sign box 913-354-8600**, and **forwarding collapses the true destination** — FUB may see
-it as the sign-box line and we **LOSE** the "this was Ana's cell → past client" signal. That's a shit show Zach
-does not want. **REQUIREMENT: we must know NATIVELY that the contact came to 913-954-7123 (Ana's line), never the
-forward target.** The fix is to **own 913-954-7123 directly (Twilio port) and stop forwarding**, so the `to` is
-natively 913-954-7123 → auto-tag past-client. Until then, the forward masks it — **do NOT trust the sign-box tag
-for Ana's number.**
+it is **forwarded to the FUB inbox 913-453-5505 (and emails to the ana@spradlingrealtygroup.com inbox)**, and
+**forwarding collapses the true destination** — FUB may see the forward target, not Ana's line, so we **LOSE** the
+"this was Ana's cell → past client" signal. That's a shit show Zach does not want. **REQUIREMENT (Rail R9): we
+must know NATIVELY that the contact came to 913-954-7123 (Ana's line), never the forward target.**
+
+**Interim intercept — buildable NOW via the Gmail API (the email bridge).** Google Voice has **no API**, but it
+already forwards **every text + voicemail (with transcription)** as an email to **`ana@spradlingrealtygroup.com`**
+(today a black hole nobody reads). That forwarded email identifies **which GV line it hit** + the sender's number +
+the transcript. So we point the **Gmail API** (we have Workspace admin) at that inbox, parse each Google-Voice
+email → *"inbound to Ana's line from \<past client\>"* → fire the reactivation. **The black-hole inbox becomes
+Myli's ears** — and it's *cleaner* than the FUB forward (the email preserves the native line). **Permanent fix:**
+**port 913-954-7123 out of Google Voice into our Twilio and stop forwarding** (see the porting section below +
+the deep doc). Until one of these is live, do NOT trust the sign-box tag for Ana's number.
 
 ### The workflow model — ONE workflow, Myli reads the number dynamically
 It is **one `(FUB · Phone Call)` workflow, not one per number.** On `callsCreated` (or inbound text), Myli:
@@ -153,6 +165,15 @@ It is **one `(FUB · Phone Call)` workflow, not one per number.** On `callsCreat
 **After the Twilio port**, the reply instead comes **AS the exact number they dialed** (Twilio can only send from a
 number provisioned to OUR account — hence the port; no spoofing/masking an unowned number). Same workflow — the
 port just swaps the sender from Myli's number to the ported line.
+
+### 📲 Porting phone numbers & communications — for everything
+The God-tier endgame is to **own every number in our own Twilio** — port each line out of **Google Voice** (Ana's
+913-954-7123) and **Follow Up Boss** (the company / sign / past-agent lines) — so inbound hits HouseLoop natively
+and Myli sends **AS the dialed line**, no forwarding shell game. The full **Port-Out Playbook** — GV→Twilio (the
+$3 unlock, LOA, the two-step SIM fallback), FUB→Twilio (port-out packet, the one-way cutover), the **Ana-first
+pilot**, A2P 10DLC, cost, who-does-what, and the post-port receiver architecture — lives in its own deep doc:
+
+**→ [Phone Numbers, Call Routing & Number Porting](/guides/phone-numbers-and-call-routing)** (Section 2).
 
 ## 🛤️ ARCHITECTURE RAILS — the preamble (must be ✅ before any matrix row passes)
 
@@ -305,13 +326,14 @@ The shared plumbing from the Rails table above. **No matrix row passes until the
 - ☐ 3b. **"Find on HouseLoop"** — look the house up on click, not preloaded
 - ☐ 3c. iMessage-bubble restyle
 
-### ☐ PHASE 4 — Phone system *(FUB Phone Call Activity — the locked design above)*
+### ☐ PHASE 4 — Phone system *(FUB Phone Call Activity — the locked design above; full playbook: [Phone Numbers, Call Routing & Number Porting](/guides/phone-numbers-and-call-routing))*
 - ☐ 4a. Capture `callsCreated` natively → match/create lead → `hl_lead_activity`
 - ☐ 4b. **The ONE `(FUB · Phone Call)` workflow**: Myli classifies human-vs-automated (skip BrokerBay `78340`), reads the dialed `to` line → source category → copy. Match `to` → `hl_phone_numbers`.
 - ☐ 4c. **Myli text-back from her BlueBubbles number 913-208-1633** (live today) — company=speed-to-lead, past-agent=agent-named reactivation, Ana-cell=past-client. FUB has no outbound-SMS API; we do not text from FUB numbers.
-- ☐ 4d. **R9 — preserve the native dialed line** (own Ana's 913-954-7123 directly, stop forwarding to the sign box, so the past-client signal survives).
-- ☐ 4e. **[Zach + external]** Port the numbers FUB → our Twilio (then the reply comes AS the dialed line, not Myli's number) — 5–10 biz days/number.
-- ☐ 4f. **[later]** Voice agent answers all calls (Twilio → LiveKit bridge). *(No AI voice needed for the text-back MVP.)*
+- ☐ 4d. **Ana email bridge** — Gmail API on `ana@spradlingrealtygroup.com` reads the Google-Voice voicemail/text forward emails → past-client reactivation (interim, before the port).
+- ☐ 4e. **R9 — preserve the native dialed line** (own Ana's 913-954-7123 directly, stop forwarding, so the past-client signal survives).
+- ☐ 4f. **[Zach + Ezra + Lee]** Port the numbers out of Google Voice / FUB → our Twilio (then the reply comes AS the dialed line). Pilot Ana's line first. A2P 10DLC before outbound at scale. Full steps in the porting doc.
+- ☐ 4g. **[later]** Voice agent answers all calls (Twilio → LiveKit bridge). *(No AI voice needed for the text-back MVP.)*
 
 ### ☐ PHASE 5 — Past-client reconciliation
 - ☐ 5a. Reconcile all past clients into the single canonical table
@@ -349,8 +371,9 @@ own page (not lead-creation). Attach a workflow to each; agnostic (fires for any
 
 ### Follow Up Boss — the special source *(config shipped 2026-06-29; folded into the FUB source's Configure)*
 FUB is a lead source that *creates* webhook events **and pulls in its own sub-sources** (Zillow, realtor.com…) **and
-is our phone system** (3 inboxes, 41 lines — see the Phone topology section above). Its five event groups: **Property
-Inquiry · Inbound Activity · Website Activity · Zillow Insights · Phone Call Activity.** Backed by
+is our phone system** (3 inboxes, 41 lines — see the Phone topology section above + the deep doc
+[Phone Numbers, Call Routing & Number Porting](/guides/phone-numbers-and-call-routing)). Its five event groups:
+**Property Inquiry · Inbound Activity · Website Activity · Zillow Insights · Phone Call Activity.** Backed by
 `hl_fub_webhook_settings` (migration 0267) — one row per FUB webhook **type** with three toggles + a global master switch:
 
 | Webhook Event | Process | Creates Lead | Notify |
