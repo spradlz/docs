@@ -1,6 +1,52 @@
 ---
 title: "AI Smart Home Search"
-description: "Conversational natural-language home search on houseloop.ai. A visitor describes their dream home in plain English; our chat (gpt-4o-mini) runs the conversation and a LAYERED search engine answers it — superlative questions get a direct answer, descriptive features match a pre-computed AI vision catalog of the listing photos, and everything else falls back to Repliers NLP. Every conversation is logged for the lead."
+description: "Natural-language home search on houseloop.ai. A visitor describes their dream home in plain English; Claude Haiku extracts structured filters constrained to our registry, a deterministic layer applies defaults, and results render from our own DB + AI vision catalog. This page is a live WIP log for the Home Search rebuild."
+---
+
+<Warning>
+**🚧 WORK IN PROGRESS — Home Search rebuild (Benji, 2026-06 → 2026-07).** This page is the running dev-docs log
+for the search overhaul. Two ground-truth PRDs drive it:
+- **The NL understanding engine** — `GT/GT - ACTIVE/GT_HOUSELOOP_AI_SEARCH_ARCHITECTURE.md`. Understanding now runs
+  on **Claude Haiku 4.5** (not gpt-4o-mini — that account hit quota); features are **grounded to the buyer's words**
+  so a property TYPE can never become a bogus feature pill; a **deterministic layer** owns the unambiguous filters.
+- **The human Details filter accuracy + MLS field capture** — `GT/GT - ACTIVE/GT_HOUSELOOP_SEARCH_FILTER_PRD.md`.
+
+Sections below the change log describe the older layered engine + vision catalog and are being reconciled — treat
+the change log as the source of truth for current behavior.
+</Warning>
+
+## Change log / WIP
+
+**AI understanding — the god-tier rebuild (SHIPPED + live):**
+- **P1 — feature grounding.** A resolved feature survives only if one of its registry needles is in the buyer's
+  actual words. "single family home" → **zero hallucinated pills** (no more "modern"/"open floor plan"). Constrained
+  selection from `FEATURE_REGISTRY`, not free generation. (`lib/search/smart-features.ts`)
+- **P2 — deterministic defaults** (`lib/search/search-defaults.mjs`, shared by both routes + the eval). "homes"/
+  "house" → Single Family Residence; "single story"/"ranch" → `story=1`, in CODE (the LLM was intermittently
+  dropping single-story). Bar + AI modal emit identical params.
+- **P4 — search-bar thinking indicator** (`SearchThinking.tsx` — animated HouseLoop emblem + cycling status) +
+  the classifier moved off the quota-dead OpenAI onto funded **Haiku** (~2.7s warm, was a ~20s hang).
+- **Pill dedupe** — one concept, one param, one pill (single-story / 3-car garage / no-hoa / corner-lot twins gone).
+  Guarded by `scripts/search-stress-matrix.mjs`.
+
+**Human Details filter overhaul — `GT_HOUSELOOP_SEARCH_FILTER_PRD.md` (IN PROGRESS):**
+- ✅ **F2** — detail pills now read **"Field: Value"** (Fireplace: Great Room).
+- ⬜ **F1** — facet counts computed from **our DB** (`searchFromDb`'s WHERE), not Repliers aggregates. Today all 20
+  detail fields show a dropdown count that doesn't match the result count (two different datasets). This unifies them.
+- ⬜ **F3** — capture + DB-back **Floor Plan (stories) · Architectural Style · Dining Area**. The raw values
+  (`raw.HMS_FloorPlanFeatures` etc.) already arrive in our Repliers payload; `toListing()` discards them. Add columns +
+  map + Inngest backfill → they filter. Floor Plan becomes its own filter section.
+- ⬜ **F4/F5** — Floor Plan flows into the AI matcher (bar + Myli); matcher/dedupe parity.
+
+**MLS field-capture opportunity (Repliers):** `GET /listings?fields=raw` returns every Heartland field;
+`?aggregates=<path>&listings=false` enumerates values. **`comparables[]` (20 per listing, free)** is the #1 input
+for the home-value engine — see the PRD §4.
+
+## Gates / sign-off
+Each phase ships + is live-verified: facet count == result count (F1); every field narrows (F3); every pill names
+its field (F2); the stress matrix stays 0-dup. Eval harnesses: `scripts/feature-eval.ts`, `scripts/search-eval.mjs`,
+`scripts/search-stress-matrix.mjs`, `scripts/facet-count-parity.mjs` (F1).
+
 ---
 
 **AI Smart Home Search** lets a visitor type what they want in plain language
@@ -13,10 +59,11 @@ the hero search bar, and the **"Search smarter with AI"** row in the search drop
 ## How it works (our chat UX, a layered search engine)
 
 1. The modal sends the running conversation to `POST /api/search/nlp`.
-2. **gpt-4o-mini** (server-side — the key never reaches the browser) runs the
+2. **Claude Haiku 4.5** (server-side — the key never reaches the browser) runs the
    *conversation*: a friendly reply + structured filter extraction + deciding when
-   there's enough to search (`ready`). All descriptive phrases ("white kitchen",
-   "floor-to-ceiling fireplace", "green exterior") are routed into `filters.keywords`.
+   there's enough to search (`ready`). Descriptive phrases are resolved to canonical
+   registry features (grounded to the buyer's words); a deterministic layer applies
+   home-type / single-story defaults.
 3. When `ready`, the search resolves through a **fixed layer order** — the first
    layer that can handle the query wins:
 
@@ -52,200 +99,50 @@ photos ONCE against a controlled matrix of **50+ buyer-searchable features** and
 the result in the `Listing.visionTags` JSON column. Descriptive search then becomes
 **instant SQL** — no per-query LLM, no Repliers round-trip.
 
-**What it catalogs:**
-
-| Group | Features |
-|---|---|
-| Kitchen | white kitchen, cabinet color, countertop material + color, island, backsplash, appliance finish, double oven |
-| Baths | freestanding tub, frameless/European glass shower, double vanity, tiled shower |
-| Floors | hardwood, tile, carpet, main-living floor |
-| Fireplace | present, two-story / floor-to-ceiling, material |
-| Ceilings / windows | tall/vaulted ceilings, beams, floor-to-ceiling windows, natural light (0–10) |
-| Walls / trim | wall color, white trim, accent wall, shiplap / board-and-batten |
-| Hardware | finish (black/gold/nickel/bronze), black door handles, statement lighting |
-| Layout | open floor plan, finished basement, main-floor primary, office, mudroom |
-| Exterior | color, material, **roof material + color** |
-| Pool | **private pool (vision-verified)**, pool_type |
-| Outdoor / lot | covered patio, deck, outdoor kitchen, fire pit, fenced yard, big backyard, mature trees, corner lot, landscaping (0–10), garage car count, curb appeal (0–10) |
-| Overall | modern, luxury (0–10), condition, primary style |
-| Catch-all | `notable_features[]` — anything else worth noting (wine cellar, sport court…) |
-
-**Matching** (`lib/listings/vision-search.ts`): query keywords map to tag conditions,
-plus dynamic color/material matching reads a "&lt;color&gt; &lt;surface&gt;" pair out of the
-keywords ("green exterior", "gray cabinets", "black roof", "granite counters"). Returns
-the exact listings matching EVERY requested feature, with pill labels.
-
-<Note>
-**Cost / scale:** ~$0.006 per listing (image cost is fixed by photo count + low detail;
-adding catalog fields only grows output tokens — essentially free). The live DB is
-~6,500 active + coming-soon listings ≈ **$40 one-time** full backfill, then pennies/day
-on new ingests. Backfill is city-scoped:
-`npx tsx --env-file=.env.local scripts/vision-backfill.ts "<City>"`. As of 2026-05-24,
-**Overland Park is the tagged test metro** (410 listings); full-DB backfill is pending.
-</Note>
-
-<Warning>
-**Direction is NOT vision.** "Front door faces east" isn't in the photos — it comes
-from lat/long + parcel geometry / the MLS `DirectionFaces` field, handled as a separate
-structured pass (not yet built).
-</Warning>
-
 <a id="superlative-answers" />
 ## Superlative answers
 
 When the query carries a sort, the engine **answers the question** (Zach's rule: "if I
-ask a question it should answer it — not 24 matching + 455 more nearby").
-
-- **Singular** ("the most expensive **home**") → leads with ONE home: a short
-  narration citing its real facts (price, sqft, subdivision, garage, days-on-market)
-  plus its vision standouts (pool, floor-to-ceiling windows, fireplace, mature trees),
-  a soft CTA, then offers up to 10 more.
-- **Plural** ("most expensive **homes**") → returns the sorted list.
-- Cards (lead + up to 10) come back under `listings`; `url = /listings?sort=<sortKey>`.
-  No "AI Match" badges — it's a sort, not a feature match.
-
-> *"The most expensive home in Overland Park right now is 16916 Bond Street, listed at
-> $3,875,000 and it's been on the market for just 7 days. This 8,914 sqft single-family
-> residence in Mills Ranch features a private in-ground pool, floor-to-ceiling windows,
-> and soaring ceilings... Check it out and let me know what you think! Here are 10 other
-> top homes too."*
+ask a question it should answer it — not 24 matching + 455 more nearby"): singular →
+leads with ONE home + a short factual narration; plural → the sorted list. `url = /listings?sort=<sortKey>`.
 
 ## Private vs HOA amenities (vision-verified)
 
 A home's OWN pool is separated from the neighborhood's. **Pool is vision-verified:**
-`visionTags.pool_type = "private"` only when the model SEES a pool in the home's own
-yard. Community/HOA pools (`condominium.amenities` contains "Pool") are tagged
-`"community"` and never match a private-pool query. This replaced trusting the
-structured `swimmingPool` flag, which mis-flagged condos with HOA pools as private.
-(OP backfill: private 12 · community 200 · none 198.)
-
-## Coming Soon
-
-The AI surfaces early-access listings (`status: A`, `lastStatus: "Cs"`) the same as
-active homes. See the **Coming Soon** guide for the data signal and the card pill.
-
----
+`visionTags.pool_type = "private"` only when the model SEES a pool in the home's own yard;
+community/HOA pools are tagged `"community"` and never match a private-pool query. The
+`private_pool` feature also triggers the single-family privacy rule (community-pool condos
+never leak into a "homes with a pool" search).
 
 ## Endpoints
 
 ### `POST /api/search/nlp`
-
-Runs one conversational turn. Returns a reply and, when `ready`, the search results.
-
-**Request**
-
-```json
-{
-  "messages": [{ "role": "user", "content": "whats the most expensive home in overland park" }],
-  "conversationId": "optional — reuse to continue a thread"
-}
-```
-
-| Field | Type | Notes |
-|---|---|---|
-| `messages` | `{role:"user"\|"assistant", content:string}[]` | Required. The running conversation (last ~16 turns). |
-| `conversationId` | `string` | Optional. Reuse to continue + persist one thread. |
-
-**Response (ready to search)**
-
-```json
-{
-  "ok": true,
-  "ready": true,
-  "reply": "The most expensive home in Overland Park right now is 16916 Bond Street...",
-  "count": 320,
-  "matchCount": 12,
-  "aiMatchHlids": ["hl_heartlandmls_2619637"],
-  "aiAll": false,
-  "url": "/listings?sort=priceDesc",
-  "filters": { "cities": ["Overland Park"], "sort": "priceDesc", "keywords": [] },
-  "listings": [
-    { "hlid": "hl_heartlandmls_2619637", "href": "/...", "photo": "https://cdn.repliers.io/...",
-      "price": 3875000, "beds": 5, "baths": 6, "sqft": 8914, "address": "16916 Bond Street, Overland Park",
-      "aiMatch": true, "keyword": "Pool" }
-  ],
-  "broadened": false,
-  "conversationId": "ff71a4f0-..."
-}
-```
-
-| Field | Type | Notes |
-|---|---|---|
-| `ready` | `boolean` | `false` = clarifying question only (no results yet). |
-| `reply` | `string` | The assistant turn (superlative narration, match summary, or question). |
-| `count` | `number` | Total matches behind the result set. |
-| `matchCount` | `number?` | AI-confirmed exact feature matches (vision/re-rank paths). |
-| `aiMatchHlids` | `string[]` | Confirmed hlids, AI-ranked — pinned + badged on `/listings`. |
-| `aiAll` | `boolean` | `true` when every returned result genuinely matches the feature. |
-| `url` | `string` | Deep link into the gallery (carries `aimatch=` / `sort=` / `only=`). |
-| `listings` | `card[]` | Preview cards (the result rows). **Cards live here, not under `cards`.** |
-| `conversationId` | `string` | Echo it back to continue the thread. |
-
-### `GET /api/search/nlp/history`
-
-Returns the visitor's recent AI-search threads (newest-first) for the History dropdown.
-Scoped by `userId` (if signed in) or the `hl_session` cookie. No body.
-
-```json
-{ "ok": true, "conversations": [
-  { "conversationId": "ff71a4f0-...", "title": "most expensive home in overland park",
-    "lastCount": 320, "lastUrl": "/listings?sort=priceDesc", "updatedAt": "2026-05-24T..." }
-] }
-```
+Runs one conversational turn (the AI modal + Myli). Returns a `reply` and, when `ready`, `count` / `matchCount` /
+`aiMatchHlids` / `url` / `listings[]` / `filters` / `conversationId`.
 
 ### `POST /api/search/classify`
+Routes the traditional search bar: deterministic filter extraction (Haiku) → `{ intent, params }`; the bar applies
+the same defaults + shows removable chips. `params` carries `city/style/story/minBeds/feature/detail.*` etc.
 
-Routes the traditional search bar: decides whether free-text is a deterministic
-6-facet search (city/zip/beds/baths/price/home-type) or needs the AI brain. Returns
-canonical facets when deterministic, or `{ ai: true }` to hand off to the modal.
-
-```json
-// request
-{ "q": "3 bed under 600k in olathe" }
-// response (deterministic)
-{ "ok": true, "ai": false, "params": "city=Olathe&minBeds=3&maxPrice=600000" }
-// response (needs AI)
-{ "ok": true, "ai": true }
-```
+### `GET /api/detail-search-facets`
+The human Details modal's checkbox values + counts. **F1 (in progress):** counts move from Repliers aggregates onto
+our DB so they match the result counts.
 
 ## Source (`apps/houseloop-web`)
 
 | Piece | File |
 |---|---|
-| Chat modal + entry points | `components/site/AiSearchModal.tsx`, `AiSearchButton.tsx`, `Header.tsx` (HeaderAiSearchLink), `SearchAutocomplete.tsx` |
-| Route (chat + layered engine + persistence) | `app/api/search/nlp/route.ts` |
-| Vision catalog — tagger | `lib/listings/vision-tags.ts` |
-| Vision catalog — matcher | `lib/listings/vision-search.ts` |
-| Vision catalog — backfill | `scripts/vision-backfill.ts` |
-| Repliers NLP lib (fallback) | `lib/listings/repliers-nlp.ts` |
+| Chat modal + entry points | `components/site/AiSearchModal.tsx`, `SearchAutocomplete.tsx` (+ `SearchThinking.tsx`) |
+| NL route (chat + layered engine) | `app/api/search/nlp/route.ts` |
 | Bar router | `app/api/search/classify/route.ts` |
-| History endpoint | `app/api/search/nlp/history/route.ts` |
-| Storage model | `prisma/schema.prisma` → `AiSearchConversation`, `Listing.visionTags` |
-
-## Conversation storage
-
-Every turn persists (best-effort) to `hl_ai_search_conversation` (`sessionId` = the
-`hl_session` cookie; `userId` set/backfilled on sign-in; `messages`, `lastFilters`,
-`lastUrl`, `lastCount`). Anonymous threads link to the account on the next signed-in turn.
+| Understanding + grounding | `lib/search/smart-features.ts` |
+| Deterministic defaults + dedupe | `lib/search/search-defaults.mjs` |
+| Detail matcher + library | `lib/search/feature-matcher.ts`, `lib/search/feature-library.ts` |
+| Detail manifest + DB columns | `lib/listings/detail-search-manifest.ts` |
+| Vision catalog | `lib/listings/vision-tags.ts`, `lib/listings/vision-search.ts` |
+| Repliers adapter | `lib/listings/providers/repliers.ts` |
 
 ## Cost & observability (CRM Run Log → AI Search lane)
 
-Every AI call is logged with its real cost. `/api/search/nlp` and `/api/search/classify`
-read OpenAI's `usage` and accrue tokens + USD across **both** model calls in a turn —
-the `gpt-4o-mini` conversation/classify turn **and** any `gpt-4o` re-rank — priced per
-model (4o-mini `$0.15`/`$0.60`, 4o `$2.50`/`$10.00` per 1M in/out). The web fires a
-cross-app Inngest event:
-
-```
-houseloop/ai-search.event
-  { kind, query, model, prompt_tokens, completion_tokens, total_tokens,
-    cost_usd, result_count, status, duration_ms }
-```
-
-The CRM consumer (`ai-call-log`) writes one `hl_run_log` row (`source='ai-search'`).
-It surfaces in the **CRM Run Log → AI Search** lane (`GET /api/run-log?view=ai`) as
-`model · $cost · tokens · results`, e.g. `gpt-4o-mini · $0.000189 · 888 tokens · 24 results`.
-The monthly market-report LLM (Claude Sonnet) shares this lane. See the **Run Log** /
-**API Reference** for the endpoint shapes.
-
-See also: **Coming Soon** guide (early-access listings the AI surfaces pre-market).
+Every AI call logs its real cost via a cross-app Inngest event (`houseloop/ai-search.event` → `hl_run_log`,
+`source='ai-search'`), surfaced in the **CRM Run Log → AI Search** lane as `model · $cost · tokens · results`.
