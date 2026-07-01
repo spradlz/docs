@@ -35,17 +35,260 @@ against the source before it ships.
 - [x] All 4 waves published to Mintlify
 - [ ] Website tab stubs (next — CRM tab was Zach's priority)
 
-## PRD
+## Source documents
 
-`.claude/state/adam-docs-ownership-handoff.md`
+The full working documents behind this work-stream — click to expand each:
 
-> ADAM — DEVELOPER DOCS OWNERSHIP (handoff from Lee, Zach-directed 2026-07-01) · YOUR MANDATE (Zach LOCKED 2026-07-01) · **You (Adam) now own ALL HouseLoop developer documentation, end-to-end.** One agent, one owner, correct · top to bottom. The Mintlify dev docs (`houseloop.mintlify.app`) are yours. Two jobs, below. **The CODE · writes each document — you write the prompt and have agents draft from the real page code, then you review · and check every one.** You don't hand-write 40 pages; you drive the machine and verify accuracy. · Lee still owns the lead-sources / event-trigger / notifications work (Zach is coming back to Lee on that). · Everything DOCS is yours. · THE DOCS SYSTEM (how it w…
+<AccordionGroup>
 
-## Scope lock
+<Accordion title="PRD — .claude/state/adam-docs-ownership-handoff.md">
 
-`.claude/state/adam.lock`
+#### ADAM — DEVELOPER DOCS OWNERSHIP (handoff from Lee, Zach-directed 2026-07-01)
 
-> ADAM LOCK — current state snapshot · AGENT: adam · LAST_UPDATED: 2026-06-28 (model: Opus 4.8) · BRANCH: houseloop-app · TREE: /Users/zachspradling/Code/BossLoop-Gold · APP: apps/houseloop-web (+crm earlier) · SUBPROJECT: houseloop-value-history (own e2e, Zach-directed) · SPEC: GT/GT - Pending/GT_HOUSELOOP_VALUE_HISTORY_SPEC.md · DOC: Mintlify guides/houseloop-home-value (published 4467ac6) · ✅ SHIPPED + VERIFIED — HOUSELOOP VALUE HISTORY (Zach 2026-06-28, own e2e). Zillow-Zestimate-history equiv…
+##### YOUR MANDATE (Zach LOCKED 2026-07-01)
+**You (Adam) now own ALL HouseLoop developer documentation, end-to-end.** One agent, one owner, correct
+top to bottom. The Mintlify dev docs (`houseloop.mintlify.app`) are yours. Two jobs, below. **The CODE
+writes each document — you write the prompt and have agents draft from the real page code, then you review
+and check every one.** You don't hand-write 40 pages; you drive the machine and verify accuracy.
+
+Lee still owns the lead-sources / event-trigger / notifications work (Zach is coming back to Lee on that).
+Everything DOCS is yours.
+
+---
+
+##### THE DOCS SYSTEM (how it works — read once, then use it)
+- **Source of truth = `docs-site/` in this monorepo** (colocated 2026-07-01). Edit a page there, commit →
+  it auto-publishes. **Never edit the old `spradlz/docs` repo directly** — the mirror will clobber it.
+- **Publish loop:** commit anything under `docs-site/` → `.git/hooks/post-commit` fires the mirror
+  (`tools/docs/mirror-docs.mjs`) → pushes to `spradlz/docs` → Mintlify auto-deploys (~1-2 min). A 15-min
+  cron also mirrors. **You do not manually publish** — commit and it ships.
+- **The reconcile GATE (`tools/docs/docs-reconcile.mjs`)** runs as a preflight on every mirror. It BLOCKS
+  the publish if any nav link points at a missing page (404) or any page fell out of the nav (orphan).
+  Run it yourself anytime: `node tools/docs/docs-reconcile.mjs` (exit 0 = clean).
+- **Generators (all in `tools/docs/`):**
+  - `crm-nav-sync.mjs` — rebuilds the docs **CRM tab to mirror the app sidebar 1:1, in order**, from a
+    transcribed copy of `apps/houseloop-crm/app/components/Sidebar/Sidebar.tsx` (MAIN_NAV + SETTINGS_GROUPS
+    + the render's TC Loop / All Settings / AI Cost / Run Log / Developer Docs / Account). Creates a STUB
+    for any sidebar item without a real doc. **Re-run it whenever the sidebar changes.** It will NOT
+    overwrite a page that already has real content.
+  - `wip-sync.mjs` — renders the Work In Progress pages from `.claude/state/wip/<agent>/*.md`. (You are
+    rebuilding this — see JOB 2.)
+  - `mintlify-docs.mjs` — read/write/list/publish helper (operates on `docs-site/`). MCP `docs_*` tools use it.
+  - `mirror-docs.mjs` — the publish/mirror engine (reconcile-gated).
+- **Deploy status (no API on our plan — use GitHub checks):**
+  `gh api repos/spradlz/docs/commits/main/check-runs --jq '.check_runs[0] | (.conclusion // .status)'`
+  → `success` = live. NOTE: every push RESTARTS the deploy — so batch your commits, don't push 10× rapid-fire.
+- **Current state:** CRM tab mirrors the sidebar exactly (30 sections); Website tab = 8 build sections;
+  reconcile clean; last good deploy `2820bc5`. `docs.json` is at `docs-site/docs.json`.
+
+---
+
+##### JOB 1 — FILL EVERY STUB WITH A REAL, CODE-WRITTEN DOC
+There are ~40 **stub** pages under `docs-site/crm/*.mdx` (each starts with `🚧 **Stub — documentation in
+progress.**`). Zach: "these stubs can't exist." Every one must become a real doc.
+
+**Method (the code writes it, you check it):**
+1. Each stub names its **route** and its **code path** (e.g. `apps/houseloop-crm/app/(crm)/settings/stages/page.tsx`).
+2. For each stub, spawn an agent (or a batch) with a prompt like: *"Read `<code path>` and its imported
+   components. Write a real developer doc for the `<Label>` page: what it does, what the user configures,
+   the fields/controls, the data source (tables/APIs), and how it fits the CRM. Replace the stub's body —
+   keep the frontmatter title. Be accurate to the code; do NOT invent."*
+3. **You review every draft against the code** before it ships. Accuracy is the bar (Zach: "get this
+   correct from end to end").
+4. Also enrich from the app's own copy where it exists — e.g. `apps/houseloop-crm/app/(crm)/settings/page.tsx`
+   already has a one-line `blurb` for each setting; `All Settings` (`docs-site/crm/all-settings-all-settings.mdx`)
+   is already a real index built from those — use it as the pattern.
+5. Do the CRM tab first (what Zach is looking at), then the Website tab. Reconcile + let it publish.
+
+**Scope:** every `🚧 Stub` page in `docs-site/`. Find them: `grep -rl "🚧 \*\*Stub" docs-site/`.
+
+---
+
+##### JOB 2 — REBUILD "WORK IN PROGRESS" AS NAMED PER-WORKSTREAM DOSSIERS (Zach spec, verbatim intent)
+Today it's ONE page under a **"Team"** group. Zach wants:
+1. **A top-level nav section literally named "Work In Progress"** (NOT "Team"). Rename it.
+2. **Each active work-stream is its OWN page** under that section, **named `<Agent> (<Work Title>)`** —
+   e.g. **"Benji (Saved Search Update)"**, **"Caleb (SRG Past Client Reconciliation)"**, **"Lee (Docs System)"**.
+3. **Clicking a work-stream shows the FULL dossier, end-to-end:**
+   - the live **checklist** (what's going down the codes),
+   - the **PRD document** (link or embedded),
+   - the **Scope Lock file** (link or embedded),
+   - **what they're building end to end**, and
+   - **the related Mintlify doc sections this work touches / updates in real time** (the pages it will change).
+4. It updates in real time (regenerated on every push, like today's WIP page).
+
+**Build it:**
+- Extend the WIP source format. Today each work-stream is `.claude/state/wip/<agent>/<topic>.md` (first `#`
+  heading = title, `_updated:_`, then a `- [ ]` checklist). Add front-matter-ish fields the generator reads:
+  `prd:` (path to the PRD, e.g. `GT/GT - ACTIVE/GT_HOUSELOOP_*_PRD.md`), `scope_lock:` (path to
+  `.claude/state/session-scope-*.lock`), and `touches:` (list of doc slugs this work updates).
+- Rewrite `tools/docs/wip-sync.mjs` to emit **one MDX page per work-stream** into `docs-site/wip/<agent>-<topic>.mdx`
+  (title `<Agent> (<Work Title>)`), each rendering: checklist + PRD link/excerpt + scope-lock link/excerpt +
+  "Related doc sections" (links to the `touches:` slugs). Then build the **"Work In Progress"** nav group in
+  `docs.json` listing every work-stream page. Remove the old single "Team" group.
+- Seed the four current work-streams so Zach sees the shape immediately:
+  - **Lee (Docs System)** — this handoff + the docs generators.
+  - **Benji (Saved Search Update)** — PRD + scope-lock for the saved-search trigger work (ask Benji for paths).
+  - **Caleb (SRG Past Client Reconciliation)** — `guides/srg-reconciliation-wip` is the doc it touches; PRD =
+    `GT_HOUSELOOP_PASTCLIENT_RECONCILE_PRD.md`; ask Caleb for his scope-lock.
+  - **Adam (CRM Docs Backfill)** — this very job.
+- Each agent keeps maintaining their own `.claude/state/wip/<agent>/*.md`; you own the RENDER + nav.
+
+---
+
+##### LAWS (don't break these)
+- **Reconcile-gated:** never ship a broken/orphaned nav — the gate enforces it; keep it green.
+- **`docs-site/` is truth; never edit `spradlz/docs`.** Commit → auto-mirror. Batch commits (each push
+  restarts the Mintlify deploy).
+- **Accurate to the code.** The code writes the doc; you verify. No invented behavior.
+- **CRM tab stays a 1:1 sidebar mirror** — if you add real docs, replace stub CONTENT, don't change the nav
+  structure (re-run `crm-nav-sync.mjs` if the app sidebar changes).
+- Full model: `CLAUDE.md` → "DEV DOCS — MINTLIFY" + memory `reference_houseloop_docs_colocation`.
+
+##### FIRST STEPS
+1. `node tools/docs/docs-reconcile.mjs` (confirm green) · skim `docs.json` + a couple stub pages.
+2. JOB 2 first if Zach wants to SEE the WIP restructure fast; else JOB 1. Ask Zach which he wants first.
+3. Ping Lee if you need the docs-system internals explained; ping Zach for sign-off on the WIP shape.
+
+</Accordion>
+
+<Accordion title="Scope lock — .claude/state/adam.lock">
+
+#### ADAM LOCK — current state snapshot
+AGENT: adam
+LAST_UPDATED: 2026-06-28 (model: Opus 4.8)
+BRANCH: houseloop-app · TREE: /Users/zachspradling/Code/BossLoop-Gold · APP: apps/houseloop-web (+crm earlier)
+SUBPROJECT: houseloop-value-history (own e2e, Zach-directed)
+SPEC: GT/GT - Pending/GT_HOUSELOOP_VALUE_HISTORY_SPEC.md · DOC: Mintlify guides/houseloop-home-value (published 4467ac6)
+
+✅ SHIPPED + VERIFIED — HOUSELOOP VALUE HISTORY (Zach 2026-06-28, own e2e). Zillow-Zestimate-history equivalent.
+FINAL: 1,826 homes seeded w/ full monthly series (of 1,836 target; ~10 legit no-value, 2 transient). Junk
+anchors 78→1 (anchor guard MIN_ANCHOR_RATIO=0.25, commit aa2fea67ef). Live-verified /home renders graph+table
+("since 2008"). Commits 5bbe0cb944 (table+fn+UI+get.ts) · aa2fea67ef (anchor fix) · f82f8ad105 (refresh enable).
+NEXT MONTHLY: cron 27th appends a point/home automatically. DEFERRED (Zach): recurring CRM→web mirror sync for
+NEW past clients as they close = a CRM-side Inngest fn (CRM has qWeb). Until built, new closes won't auto-join
+the worklist — re-run value-history/persist.run after seeding the mirror, OR build the sync fn.
+SHIPPED: (1) hl_value_history table (web DB, 1 row/HLID/month, PK(hlid,month), append-only). (2) Inngest fn
+value-history-persist (commit 5bbe0cb944) = back-seed full monthly series (oldest sale→2012 ZHVI→today, reuses
+getListing's flooredHistory — ONE algo) + monthly append; cron 27th + event value-history/persist.run. (3) get.ts
+reads the table as source once seeded (else computes). (4) HouseLoopValueHero Graph↔Table toggle (Zillow modal).
+(5) ENABLED pastClientZillowCache (the monthly Zestimate REFRESH, was imported-but-never-served = staleness cause;
+commit f82f8ad105). (6) Dev docs page published. SEEDED web mirror hl_past_client_homes = 1,836 homes (from CRM
+hl_srg_past_client_homes.website_hlid JOIN live Listing; 1,839 had a hlid, 3 no live listing). 5-home back-seed
+PROVEN (957 rows, 174-224 mo each, back past 2012). FULL 1,836 back-seed running (Inngest 01KW8A8T1W).
+NEXT: confirm full back-seed count → spot-check a /home table view live → REVIEWLOOP (anchor outliers e.g.
+12454 Meadow Lane started $18,334 = junk oldest-sale anchor; % correctness; N homes vs Zillow). DEFERRED (Zach):
+recurring CRM→web mirror sync for NEW past clients as they close (a CRM-side Inngest fn; "we'll figure it out").
+
+--- PRIOR SUBPROJECT (tc-loop-foundation) ---
+PRD: GT/GT - ACTIVE/GT_HOUSELOOP_TRANSACTION_COORDINATION_PRD.md (§12 = locked status/milestone model)
+TC TRANSACTION STATUS moved to its OWN table hl_tc_transaction_status (mig 0266, commit 58b49a7cbb) — out of
+hl_stages entirely; config reuses StagesPage via apiBase=/api/tc/transaction-statuses (commit b722fd1a76).
+WIP_DOC: Mintlify guides/tc-loop-build-log.mdx (published 0d5d92e)
+
+STATUS: TC MILESTONE MODEL LOCKED + FULL SET SHIPPED (commit a5862fecdd → Railway). Reverse-engineered
+A-Frame's 3-layer engine (STATUS / 4 KEY DATES / 139 TASKS + offset engine) and PERSISTED it (root-cause fix
+for the lost model): recon artifact .claude/reports/aframe-recon/TC_MILESTONE_TASK_MAP.md + PRD §13 + Mintlify
+build-log (5cfdedb). Mig 0256 seeded the FULL milestone set (14 buyer / 16 seller — EMD, inspections, title,
+appraisal, clear-to-close, walkthrough, FUNDED, possession…) + offset-engine cols anchor + is_key_date.
+Milestones builder now fully editable to the model: KEY-DATE toggle + Anchored-To dropdown + Offset + advances
++ color/icon; API carries anchor/is_key_date; table TIMING column. Playwright-verified live (16/16 seller,
+timing column, modal fields). Lint --max-warnings 0 + build green.
+
+PRIOR THIS SESSION: Table-actions sweep SHIPPED (commit 32ed429eec → pushed houseloop-app → Railway).
+Every CRM management table now has the standard ⋮ kebab (Edit/Delete) + select-all bulk-delete reusing its
+real per-row delete (AppointmentTypes, AppointmentOutcomes, Tasks active+completed, TC Loops, TC Email Queue,
+Content Templates). Read-only feeds/logs (blog, content runs, published, SEO, scheduled-actions) opt out with
+documented reasons. New ESLint rule hl/table-requires-actions enforces it (0 violations CRM-wide, build green).
+TasksPage hand-rolled search input → shared &lt;SearchInput&gt;. TC build-log doc updated + published (a1957cb).
+
+NEXT_ON_RESTART: read adam-handoff.md. TC CONFIGURE FOUNDATION BUILDERS: ✅ Stages · ✅ Milestones (full set)
+· ✅ TASK LAYER (mig 0257: hl_tc_task_template, 139 A-Frame tasks 58 buyer/81 sale; /api/tc/tasks; Configure→
+Tasks builder mirrors the shell; commit b585ea151d). 🔨 NEXT = either (a) RUNTIME per-loop instantiation at
+createLoop (instantiate active milestones+tasks into per-loop instances w/ computed due dates = anchor+offset,
+grouped by phase, for the TC loop-detail page) — needs a per-loop instance table/extension; OR (b) continue
+Configure builders: Merge Fields → Email/Text Templates → Forms. Ask Zach which. Plan = PRD §13.3/§13.5.
+RULE: never hand-roll — reuse the existing component (memory: feedback-never-hand-roll-reuse-components).
+RULE: never `npm run build` on the dev tree (poisons next dev CSS = "1995 html"); use lint + tsc + dev.
+
+✅ DYNAMIC DATES + FOLDERS DONE (Zach 2026-06-27, commit dafd8beb5b → Railway). 3 research agents synthesized →
+.claude/reports/tc-dynamic-dates-research-2026-06-27.md (Open To Close gold ref + TRID). Mig 0258: task
+date-rule (anchor/chain · day_unit cal|business|skip-weekend|week|month · business_day_def precise|general ·
+weekend/holiday roll · skip_holidays) + hl_holiday_calendar (US_FEDERAL) + hl_tc_phase folders (is_gated) +
+is_conditional + task_type. lib/tc/date-engine.ts computeDue (13/13 tests, run: npx tsx lib/tc/date-engine.test.ts).
+Configure→Tasks: HlFilterPills (new canonical filter-pill) + collapsible folders + full date-rule modal
+(chains, conditional, roll). All reuse the canon. Playwright-verified.
+
+✅ SECTION BANDS + WORKFLOWS HEADER (Zach 2026-06-27, commit e6ca6772bf). Shared components/table/SectionBand.tsx
+(extracted from WorkflowsTable's local SectionHeader). TC Tasks: replaced vibe-coded gray chevron phase folders
+with the blue SectionBand attached flush per phase ("Intake 8") + dropped "Showing N of M" (HlDataTable gained
+hideToolbar/flushTop). Workflows: floating "Create Workflow" → navy page header (WorkflowsHeaderActions, mirrors
+"Add Task"). Lint+tsc green, Playwright-verified both pages.
+
+✅ PRE-MARKET PHASE RENAME (Zach 2026-06-27, mig 0259, commit 74a4aa5d77). Listing pre-market phase LABELS were
+meaningless "Pre-Live: Stage 1…5" → renamed to A-Frame's real time phrases: Within 24h of ERTS Signed · 10 Days
+Before Going Live · 5 Days Before Going Live · Listing Goes Live · Weekend After Going Live. De-ambiguated per
+Zach (7-10→10, 3-4→5); Stage 3 task offsets snapped −4d→−5d so the computed date matches the label. Label-only
+on hl_tc_phase (phase_key join key unchanged); applied to live CRM DB. Parity total confirmed = 58 buyer + 81
+listing = 139 (exact A-Frame count).
+
+🏛️ A-FRAME PARITY DOCTRINE (Zach LOCKED 2026-06-27 — PRD §13.6, DO NOT re-litigate). Stages/milestones/tasks
+MIRROR A-Frame 1:1 right now (names/phases/anchors/offsets/assignees verbatim from the recon). ONLY the UI chrome
+(bands/pills/tables) is ours. Mirror it to understand + measure A-Frame parity; do NOT "improve" task content
+while in parity — a divergence is a bug. NO per-task instruction manuals (A-Frame's task description field is
+EMPTY, steps have none — verified; NOT building it). FUTURE (deferred, NOT now): convert this A-Frame set → a
+HouseLoop-native set (rebrand, maybe instructions) ONLY when Zach says "HouseLoop-ify it."
+
+🔨 NEXT = RUNTIME per-loop instantiation + LIVE CASCADE (with appointment-set → Loop birth): at createLoop
+instantiate active milestones+tasks into per-loop instances; computeDue resolves each from the loop's key dates;
+recompute on key-date change (eager, audit row, is_overridden sticky + drift "re-link" nudge); enforce folder
+GATING at runtime; render on the TC loop-detail page. Needs a per-loop instance table (hl_tc_loop_task +
+extend hl_tc_loop_event). Plan = PRD §13.5. Then ⬜ Merge Fields → ⬜ Email/Text Templates → ⬜ Forms.
+
+TC CONFIGURE FOUNDATION BUILDERS (Zach 2026-06-26 — this is the foundation, build in order):
+  ✅ Stages (TC Buyer + TC Listing) — reuse StagesPage, /tc/configure/stages
+  ✅ Milestones — per-side hl_tc_milestone_template editor, /tc/configure/milestones (commit 9df279bd85)
+  ✅ Milestones FULL SET + offset engine (mig 0256: 14 buyer/16 seller, anchor+is_key_date; A-Frame 3-layer
+     model reverse-engineered + persisted to PRD §13 + recon artifact .claude/reports/aframe-recon/
+     TC_MILESTONE_TASK_MAP.md so it never evaporates again; builder fully editable; commit a5862fecdd).
+  🔨 TASK LAYER (NEXT, Zach-directed) — the ~139 A-Frame tasks: hl_tc_task_template (side·phase·label·anchor·
+     offset·assignee_role·email?·sort) seeded from TC_MILESTONE_TASK_MAP.md + Configure→Tasks builder +
+     per-loop instantiation w/ computed due dates. Plan = PRD §13.3.
+  🔨 Merge Fields — extend code catalog (lib/merge-fields.ts + lib/templates/categories.ts +
+     lib/email/template-merge.ts) with loop/property/agent/date tokens; TC merge-fields Configure page.
+  ⬜ Email Templates (reuse hl_templates engine, scope='tc')
+  ⬜ Text Templates (reuse hl_templates, kind=text, scope='tc')
+  ⬜ Forms (contract documents — Single-Showing/Listing/Buyer Agency PDFs → merge tokens)
+
+TC ENGINE — DONE (✅, before this session): status/milestone model locked (PRD §12) · migration 0254 (TC Buyer
++ TC Listing pipelines, milestone templates, lost_reason, repointed tc_stage_id FK) · loop engine
+lib/tc/loop-engine.ts (createLoop/completeMilestone forward-only/getLoop) + REST proven on real data.
+TC ENGINE — NEXT RUNTIME (after all builders): appointment-set→Loop birth · TC loop-detail page · TC
+dashboard · Documenso wiring · Myli-TC (last).
+
+MODAL CANON (Zach 2026-06-26): Built canonical HlFormModal (blue header hl-modal-header--create + 500px box +
+footer) = THE Configure/pipeline/workflow modal shell. Swept the 3 drifted white-header modals onto it:
+AppointmentType, AppointmentOutcome, CustomField (commit b67670d591) + milestone modal (17030961c1). New
+lint rule hl/modal-uses-canonical-header REGISTERED 'off' (flags ~30 pre-existing modals across lanes — flip
+to 'error' AFTER the full modal sweep migrates/opts-out those). OPEN SWEEP: ~27 more modals (delete/confirm
+dialogs → opt-out; real drifters LeadSourceModal/NotificationTemplateModal/GetPhoneNumberModal/etc → HlFormModal).
+GOTCHA: dev 3020 CSS glitches after restart-dev --clean (whole page unstyled) — verify via build-green +
+prod, or a non-clean dev restart; the milestone HlFormModal rendered fully-styled this session = canon proven.
+
+ALSO PENDING: Inspector-Mode spot-check the live table-actions sweep on crm.houseloop.ai (built local-verified,
+Railway deploying). Lee never replied on the "blue outline" (it's the &lt;Info&gt; callout; mine already has it,
+published a1957cb) — no action needed unless he says he did something custom.
+
+PARKED (do not start without Zach go):
+- AIOS #210 (CRM email/tracking display E2E verify) — assigned to me, not started this session.
+- Deals tab (prior session, session-scope-deals-tab.lock) — UI live (da48464373), data pending Caleb's PCSOI fold.
+
+TEAMMATES: Lee=FUB behavior backfill (owns fub-lead-import.ts) · Benji=hl_leads FK-cascade #199/#200 (don't
+touch hl_leads schema) · Caleb=past-client resolver (data lane).
+
+</Accordion>
+
+</AccordionGroup>
 
 ## Related documentation
 
