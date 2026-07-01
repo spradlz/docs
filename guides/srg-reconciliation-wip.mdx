@@ -13,6 +13,37 @@ dotloop contracts (+PDF designated-agent), MLS full rooftop history, FUB Haiku f
 matcher writes the child SSOT. Running autonomously overnight.
 </Info>
 
+## 🆕 THE RESOLVER — `triangulate-resolver.mjs` (Stage 1 built + tested 2026-07-01)
+
+**The harvest is done (4 tables full); the resolver that combines them is now being built.** It replaces the
+token-burning s6 agentic loop. Full spec: internal PRD `GT_HOUSELOOP_TRIANGULATE_RESOLVER_PRD.md`.
+
+**Why s6 had to go:** 8-turn agentic loop on **Sonnet 4.6** that did its lookups (county/Ninja/Matrix-SSH/dotloop)
+**live inside the loop** and re-fed the growing transcript every turn (a 13.8M-input-tokens/day spike) → ~$100/day, and
+it **guessed** whenever a live fetch timed out. The harvest moved every live lookup OUT of the loop into a pre-built table.
+
+**The design — deterministic-first, one-shot Haiku:**
+- **Stage 1 — assembly ($0, no LLM):** per client, join brain(`hl_fub_person_facts` by fub_id) + SISU(`sisu_transactions`
+  by name) + dotloop agent(`hl_srg_dotloop_contracts` by address) + MLS disposition(`hl_mls_property_history`
+  rooftop — a later Sold = they moved) → tier **GREEN** (sources agree) / **YELLOW** (conflict or choice) / **RED** (gap).
+- **Stage 2 — Haiku, ONE shot, YELLOW only (gated):** reconcile source conflicts per the reconciliation laws +
+  synthesize the **RELATIONSHIP dossier** = the Myli 12-domain facts (spouse/kids/life-events/comms/motivation) **woven
+  WITH** the transaction history. RED → `needs_review` with the exact missing source named. Never invents.
+
+**Stage-1 test on the 12-card set (2026-07-01, first run):**
+- **GREEN pc6 Purtee** — fully resolved deterministically at $0, incl. the disposition (6424 Evanston later sold
+  2026-03-20 $253k by Homeric Group = they moved). Proves the $0 path.
+- **YELLOW pc11/21/38/57** — correctly flagged for the Haiku reconcile (agent name-variants like Walter Hawkins /
+  Walter V Hawkins Jr., an off-brain 2024 deal, duplicate address rows, SISU/brain tx-count mismatch).
+- **RED pc5/22/12/17/24** — flagged "no FUB brain", but this is a **linkage gap, not missing data** — the SISU closings
+  + dotloop agents are present; `past_client.fub_id` didn't hit a brain for older 2017-2020 clients. Next fix = brain
+  fallback by name/phone.
+
+**Cost:** est. **~$15-30 one-time** (Haiku, YELLOW-only) vs s6's ~$100/day. **Proof gate:** 12/12 on
+`gold-convergence.mjs` before any scale. Gated by Zach: Stage 2 build → scale to 1,834 → FUB publish (separate gate).
+
+---
+
 ## 🆕 PRD — HARVEST-THEN-TRIANGULATE (Zach LOCKED 2026-06-29 PM, the method that finally holds)
 
 <Warning>
@@ -179,6 +210,11 @@ Value: `zillow-enrich.mjs`. Render contract: `apps/houseloop-crm/lib/pastclient/
 
 ## Changelog
 
+- **2026-07-01** — **🆕 triangulate-resolver Stage 1 built + tested.** Replaces s6 (Sonnet 8-turn loop, live in-loop
+  lookups, ~$100/day, guessed on timeout). New: deterministic assembly of the 4 harvest tables + Myli brain → GREEN/
+  YELLOW/RED tiers; Haiku one-shot on YELLOW only; relationship dossier = Myli facts × transactions. First 12-card run:
+  GREEN pc6 fully resolved $0 (incl. sold-away disposition), YELLOW pc11/21/38/57 correctly flagged, RED pc5/22/12/17/24
+  = brain-linkage gap (data present, fub_id miss). Est ~$15-30 one-time. (Caleb)
 - **2026-06-29 11:38 PM EDT** — **🆕 HARVEST-THEN-TRIANGULATE method LOCKED + PRD written (above).** Root-caused the
   repeating failure: reactive resolution that guesses missing facts (Billy Fischer ghost card, Collins/Blair assumed-
   owned, Anders home found-but-not-rendered) + a brittle SISU name match leaving 1,633/2,168 homes with no agent.
