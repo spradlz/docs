@@ -1,107 +1,120 @@
 ---
 title: "Google Business Profile"
-description: "How the CRM's Google Business analytics work — the Business Profile Performance API via a domain-wide-delegation service account in project houseloop-496200 impersonating admin@houseloop.ai, the three identities that must line up (profile vs Cloud project vs reader), the June 2026 access-request history, and the Path A runbook to finally get API access granted."
+description: "How the CRM's Google Business analytics work — the Business Profile Performance API via a domain-wide-delegation service account in project houseloop-496200, the three identities that must line up, the June 2026 rejection, and the 2026-07-01 Path A re-application (case 8-0566000041156, filed under ana@spradlingrealtygroup.com) now awaiting Google."
 ---
 
 <Info>
-**Why this page exists:** the Google Business analytics tab has sat in a "pending access" state for weeks, and
-every time someone looks into it they re-derive the same tangle from scratch. This is the canonical writeup —
-the architecture, the three identities that must match, the real access-request history, and the exact fix.
-Sister doc (same project + identity + service-account pattern): [Google Search Console](/guides/google-search-console).
-Canonical SEO context: [Property Data & Address Identity](/guides/property-data-and-address-identity).
+**Why this page exists:** the Google Business analytics tab sat in a "pending access" state for weeks and got
+re-diagnosed from scratch every time. This is the canonical, complete record — the architecture, the three
+identities that must match, the full access-request history, the live application status, and how to check back.
+Sister doc (same project + identity + SA pattern): [Google Search Console](/guides/google-search-console).
 </Info>
+
+<Note>
+**⏳ CURRENT STATUS (2026-07-01): access request SUBMITTED — awaiting Google.**
+Path A executed. Allowlist request filed under **ana@spradlingrealtygroup.com** for project `houseloop-496200`.
+**Real case: `8-0566000041156`.** Google's review ≈ **7–10 business days** (ETA ~2026-07-11 to 07-15). When
+granted, the project quota flips above 0 and the CRM tab auto-fills — no deploy. Nothing to do but wait + check.
+</Note>
 
 ## What it is
 **CRM → Website → Analytics → Google Business.** A dashboard of how people find and act on the Spradling Realty
-Group listing on **Google Search + Maps**: total impressions (split search vs maps, desktop vs mobile), website
-clicks, calls, and direction requests. This is our **local-SEO** surface. It reads **live** from Google's
-Business Profile Performance API on every load — no stored data. Until API access is granted it renders a
-"pending access" card instead of the tiles.
+Group listing on **Google Search + Maps**: impressions (search vs maps, desktop vs mobile), website clicks,
+calls, and direction requests. This is our **local-SEO** surface. It reads **live** from Google's Business
+Profile Performance API on every load — no stored data. Until API access is granted it renders a "pending
+access" card instead of the tiles.
 
 ## The architecture — three identities that must line up
-This integration keeps confusing people because **three separate things** each carry an identity, and they are
-**not** the same identity today. All three must point at the same business for data to flow.
+This integration confuses people because **three separate things** each carry an identity.
 
-| Thing | What it is | Identity today |
+| Thing | What it is | Identity |
 |---|---|---|
-| **The Profile** | The Google Business listing itself ("The Spradling Group – EXP Realty") | Owned by **zach@spradlingrealtygroup.com** + **ana@spradlingrealtygroup.com**; `admin@houseloop.ai` was invited as an owner (2026-05-27) |
-| **The API quota grant** | GBP API access is granted **per Google Cloud project**, not per profile | Project **`houseloop-496200`** (the HouseLoop project). API **Enabled**, but **quota = 0** → not granted |
-| **The Reader** | The code that fetches the data | `lib/analytics/gmb.ts` — a **domain-wide-delegation (DWD)** service account (`houseloop-master@houseloop-496200.iam.gserviceaccount.com`) **impersonating `admin@houseloop.ai`**, scope `business.manage` |
+| **The Profile** | The Google Business listing ("The Spradling Group – EXP Realty", 7900 College Blvd, Overland Park KS, Verified) | Owners: **zach@** + **ana@spradlingrealtygroup.com**; **admin@houseloop.ai** is a manager (invited 2026-05-27, accepted) |
+| **The API quota grant** | GBP API access is granted **per Google Cloud project**, not per profile | Project **`houseloop-496200`** (HouseLoop). All 3 APIs Enabled; **quota = 0** until Google grants |
+| **The Reader** | The code that fetches the data | `lib/analytics/gmb.ts` — a **domain-wide-delegation (DWD)** SA (`houseloop-master@houseloop-496200.iam.gserviceaccount.com`) **impersonating `admin@houseloop.ai`**, scope `business.manage` |
 
-The reader walks three Google APIs (all on `houseloop-496200`): `mybusinessaccountmanagement` (list accounts) →
-`mybusinessbusinessinformation` (list locations, auto-pick the one whose title matches "Spradling") →
-`businessprofileperformance` (fetch the daily metrics). `GMB_LOCATION_ID` (`locations/{id}`) is an optional env
-fast-path; if unset it resolves the location at runtime.
+The reader walks three APIs (all on `houseloop-496200`): `mybusinessaccountmanagement` → `mybusinessbusinessinformation`
+(auto-picks the location titled "Spradling") → `businessprofileperformance`. `GMB_LOCATION_ID` (`locations/{id}`)
+is an optional env fast-path; unset by default (auto-resolves).
 
-## Why the reader MUST be admin@houseloop.ai (and not Spradling)
-Domain-wide delegation is a **Google Workspace mechanism scoped to the `houseloop.ai` workspace**. The service
-account can impersonate `admin@houseloop.ai`, but it **cannot** impersonate `zach@` or `ana@`
-(`spradlingrealtygroup.com` is a different workspace). So:
+## Why the reader MUST be admin@houseloop.ai
+Domain-wide delegation is a **`houseloop.ai`-workspace mechanism**. The SA can impersonate `admin@houseloop.ai`
+but **not** `zach@`/`ana@` (different workspace). So the reader identity is locked to `admin@houseloop.ai`, and
+**admin@houseloop.ai must be a manager/owner of the Spradling profile** (it is). That's why the fix is **Path A**
+(keep the HouseLoop plumbing, make the *request* match Spradling) — "pure Spradling" would mean rewriting the
+reader to OAuth for zero functional gain.
 
-- The reader identity is locked to **`admin@houseloop.ai`**.
-- For it to see the Spradling listing, **`admin@houseloop.ai` must be a manager/owner of the Spradling profile.**
-
-That constraint is why the fix is **Path A** (keep the HouseLoop plumbing, make the *request* match Spradling) —
-going "pure Spradling" would mean rewriting the reader to OAuth as zach@/ana@, for zero functional gain.
-
-## Access model + the June 2026 history
-Google's Business Profile APIs ship with **quota 0** after you enable them. You then submit a one-time
-**GBP API access request** describing your business + website; Google reviews whether the **applicant matches a
-business that legitimately manages the profile**, and grants quota to the **project**.
+## Access-request history
+Google's Business Profile APIs ship with **quota 0**. You submit a one-time **GBP API access request** describing
+your business + website; Google reviews whether the applicant legitimately manages the profile, then grants
+quota to the **project**.
 
 | Date | Event |
 |---|---|
-| 2026-05-27 | Ana invited `admin@houseloop.ai` as an owner of "The Spradling Group – EXP Realty". |
-| 2026-06-15 | **Access request `0-2380000041528` REJECTED** — *"did not pass our internal quality checks… ensure your Business Profile and official website are up to date."* Root cause: filed under **HouseLoop** identity, but the verified profile is **The Spradling Group** (mismatch). |
-| 2026-06-15 | `zach@spradlingrealtygroup.com` became a verified **Owner** of the profile. |
+| 2026-05-27 | Ana invited `admin@houseloop.ai` as an owner of the profile. |
+| 2026-06-15 | **Request `0-2380000041528` REJECTED** — "did not pass our internal quality checks." Root cause: filed under **HouseLoop** identity, but the verified profile is **The Spradling Group** (mismatch). |
+| 2026-06-15 | `zach@` became a verified Owner of the profile. |
+| **2026-07-01** | **Path A executed — new request SUBMITTED, case `8-0566000041156`** (see below). |
 
 <Warning>
-The **"Active case `4-6206000040628` — In Review"** shown on the CRM tab is **hardcoded UI text** (written
-2026-06-15 in `components/analytics/GmbAnalytics.tsx`), **not** a live status. As of 2026-07-01 there is **no
-email from Google** for that case in any inbox, and the project's quota is still **0** — so nothing is actually
-mid-review. The effort was also **split** across separate Spradling-owned Cloud projects (e.g. "Google My
-Business" `intense-hour-406822`, `srg-integrations`), which is why it never landed on `houseloop-496200`.
+The old **"Active case 4-6206000040628 — In Review"** hardcoded in `components/analytics/GmbAnalytics.tsx` was
+**fake UI text**, never a real Google case. The real, live case is **`8-0566000041156`**. Follow-up: update that
+component to the real case (or just let the tab go live and drop the pending block) once access is granted.
 </Warning>
 
-## Path A — the fix (runbook)
-Keep the existing HouseLoop project/reader; make the access request describe the business Google wants to see.
+## Path A — executed 2026-07-01
+1. **✅ admin@houseloop.ai manages the verified profile** — confirmed ("You manage this Business Profile"; it's
+   admin@'s 1 verified business). Lets the DWD reader resolve + read the location.
+2. **✅ All three APIs Enabled** on `houseloop-496200` (`businessprofileperformance`, `mybusinessaccountmanagement`,
+   `mybusinessbusinessinformation`). Only the quota grant is missing.
+3. **✅ Allowlist request submitted** via the official wizard ([Apply for GBP API access](https://developers.google.com/my-business/content/prereqs#request-access)),
+   **filed under `ana@spradlingrealtygroup.com`** (the original owner — and the only account with **no Google
+   "verify it's you" nag**), selecting the verified business **The Spradling Group – EXP Realty**. Submitted:
+   - Google Cloud project number **`753242193019`** (project `houseloop-496200`)
+   - Company website **https://spradlingrealtygroup.com**
+   - Use case: read-only performance reporting on our own verified profile → internal analytics dashboard.
+   - Result: **case `8-0566000041156`**, review ≈ 7–10 business days.
+4. **No code change** — the CRM already reads `houseloop-496200`; quota > 0 → tab auto-fills.
 
-1. **Make `admin@houseloop.ai` an Owner of the Spradling profile.** It was invited 2026-05-27 — confirm it's
-   still an active Owner/Manager on "The Spradling Group – EXP Realty" (Business Profile → Settings → People &
-   access). This is what lets the DWD reader see the location, and what ties the HouseLoop project's identity to
-   the verified profile.
-2. **Re-file the GBP API access request for project `houseloop-496200`** ([request form](https://developers.google.com/my-business/content/prereqs#request-access)),
-   describing the business as **The Spradling Group** with website **spradlingrealtygroup.com** — matching the
-   verified profile. That match is exactly what the prior request failed.
-3. **No code change.** The CRM already reads `houseloop-496200`. When Google grants access, the quota flips above
-   0 and the tab **auto-fills** on next load (`configured:false` → live tiles).
+**Do NOT** file on a Spradling-owned Cloud project (e.g. `intense-hour-406822`, `srg-integrations`) — the reader
+can only use `houseloop-496200`'s service account. That split effort is what stalled it originally.
 
-Do **not** file this on a Spradling-owned project — the reader can only use `houseloop-496200`'s service account.
-
-## How to check status
+## How to check back
 - **Quota (the source of truth):** [Cloud Console → Business Profile Performance API → Quotas](https://console.cloud.google.com/apis/api/businessprofileperformance.googleapis.com/quotas?project=houseloop-496200)
-  (sign in as `admin@houseloop.ai`). Watch **"Requests per minute"** — `0` = not granted; **> 0 = granted**.
-- **Decision email:** arrives from `googlebusinessprofile-support@google.com` (subject carries the case number)
-  to the applicant + `admin@houseloop.ai`.
+  (sign in `admin@houseloop.ai`). **"Requests per minute" > 0 = GRANTED.**
+- **Decision email:** from `googlebusinessprofile-support@google.com`, to the filer **ana@spradlingrealtygroup.com**
+  (and possibly admin@houseloop.ai as a profile manager).
+- **The tab itself:** once quota > 0, CRM → Analytics → Google Business populates the tiles automatically.
+- **Reminder:** a daily check-back is scheduled internally; the durable record is the GT tracker
+  `GT/GT - ACTIVE/GT_HOUSELOOP_GMB_API_ACCESS_WIP.md`.
+
+<Note>
+**On the "verify it's you" phone prompts (why forwarding was dropped):** Ana's 2-Step Verification is OFF (login
+needs no prompt). But Google fires a separate **step-up challenge on *sensitive changes*** (like editing Gmail
+forwarding) from an unrecognized browser — its only option is "tap Yes on Ana's phone," and **no admin setting
+disables it**. It's per-device-trust: approve once on a browser and it stops re-challenging. We therefore
+**dropped the email-forwarding plan** (it was only a convenience) and monitor Ana's inbox + the quota directly.
+</Note>
 
 ## Credentials
 | Purpose | Where | Note |
 |---|---|---|
-| Console / profile login (canonical HouseLoop account) | Master Login Credentials sheet, SaaS row 79 | `admin@houseloop.ai` / `spradling2026` — **use this to check quota + manage the project** |
-| Reader auth (DWD service account) | `HOUSELOOP_GCP_SA_KEY_JSON` | Sealed secret on Railway (houseloop-crm service). Mints a `business.manage` token impersonating `admin@houseloop.ai`. |
-| Cloud project | `houseloop-496200` · OAuth client `753242193019` | Same project as Google Search Console. |
-| Optional location override | `GMB_LOCATION_ID` (`locations/{id}`) | Unset by default; the reader auto-resolves the Spradling location. |
+| Console + profile login (HouseLoop) | Master sheet, SaaS row 79 | `admin@houseloop.ai` / `spradling2026` — check quota, manage project |
+| Filer / profile owner (Spradling) | `.env` `CRED_SPRADLING_REALTY_GROUP___ANA_*` | `ana@spradlingrealtygroup.com` — filed case `8-0566000041156`, receives the decision |
+| Reader auth (DWD service account) | `HOUSELOOP_GCP_SA_KEY_JSON` | Sealed secret on Railway (houseloop-crm). Mints a `business.manage` token as admin@houseloop.ai. |
+| Cloud project | `houseloop-496200` · number `753242193019` · OAuth client `753242193019` | Same project as Google Search Console. |
+| Optional location override | `GMB_LOCATION_ID` (`locations/{id}`) | Unset by default; auto-resolves the Spradling location. |
 
 ## Troubleshooting
 | Symptom | Meaning |
 |---|---|
-| Tab shows "Check back / pending access" | The live API returned a quota/permission error — access not granted. Check the quota page. |
-| Quota "Requests per minute" = `0` | Access **not granted** yet — run the Path A runbook. |
-| `403` / `PERMISSION_DENIED` / `accessNotConfigured` / `SERVICE_DISABLED` | API access not configured/granted on `houseloop-496200`. |
-| `configured:false` / "no location" (API works but no data) | `admin@houseloop.ai` isn't a manager on the profile, **or** no location titled "Spradling" resolves — fix Path A step 1 (or set `GMB_LOCATION_ID`). |
+| Tab shows "Check back / pending access" | Live API returned quota/permission error — access not granted yet. Check the quota page. |
+| Quota "Requests per minute" = `0` | Access **not granted** — case `8-0566000041156` still under review. |
+| `403` / `PERMISSION_DENIED` / `accessNotConfigured` / `SERVICE_DISABLED` | API access not granted on `houseloop-496200`. |
+| `configured:false` / "no location" (API works, no data) | admin@houseloop.ai lost manager access, **or** no "Spradling" location resolves — re-confirm profile access (or set `GMB_LOCATION_ID`). |
 
-## Status — 2026-07-01
-API **Enabled** on `houseloop-496200`, **quota = 0** (not granted). Prior request **rejected** (identity
-mismatch); effort was split across Spradling projects. **Path A** is the agreed fix — pending: confirm admin@ is
-a profile Owner + re-file the request as The Spradling Group. When quota flips > 0, the tab lights up with no
-deploy.
+## Code + owners
+- Reader: `apps/houseloop-crm/lib/analytics/gmb.ts` · route `app/api/analytics/gmb/route.ts` · UI
+  `components/analytics/GmbAnalytics.tsx` · DWD helper `lib/google/dwd.ts`.
+- Internal tracker (live status, timestamps): `GT/GT - ACTIVE/GT_HOUSELOOP_GMB_API_ACCESS_WIP.md`.
+- Owner: Adam.
