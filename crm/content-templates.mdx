@@ -1,12 +1,44 @@
 ---
 title: "Templates"
-description: "Templates — HouseLoop CRM (Content). Documentation stub."
+description: "The locked content templates behind HouseLoop's social-video / SEO Content engine — list them, rename them, and open each one into the Content Template Studio to edit its channels, cities, prompt, schedule, and publish behavior."
 ---
 
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
+**In the app:** CRM sidebar → **Content** → **Templates** — [`/settings/content/templates`](https://crm.houseloop.ai/settings/content/templates). Each row opens the Studio at `/settings/content/templates/[id]`.
 
-**In the app:** CRM sidebar → **Content** → **Templates** — [`/settings/content/templates`](https://crm.houseloop.ai/settings/content/templates)
+## What it does
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/content/templates/page.tsx` (route page + its components).
+The Templates page lists the named, locked content templates that drive HouseLoop's Content engine — the social-video + SEO-blog counterpart to the SEO article Run Log. Each template is a reusable content *job* (e.g. "Weekly Pool Homes", "Celebrity Spotlight"): a Remotion composition + a listing filter + a set of target cities + the channels it posts to.
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+The list itself is read-only except for delete: it shows a video **Preview** thumbnail (click to play the sample reel), the template **Name**, its **Filter** feature, a **Cities** count, and brand-colored **Channels** pills. The kebab (⋮) menu on each row offers **Open** (→ Studio), **Play preview**, and **Delete**; a template that has any run history in `hl_content_runs` cannot be deleted (the API returns 409 — set it inactive instead). Bulk-delete is available and silently skips templates that have runs.
+
+All real editing happens one level down in the **Content Template Studio** (`/settings/content/templates/[id]`).
+
+<Note>The Templates list and the Studio config UI are live. The end-to-end autonomous chain runner is **not** fully wired yet: the `content-weekly-drop` Inngest function is Phase 1 (it only enqueues `hl_content_runs` rows), its weekly cron is intentionally omitted until sign-off, and the preview endpoint renders proven sample ("flagship") content rather than a live run's output.</Note>
+
+## What you configure
+
+Editing is done in the Studio, saved via `PATCH /api/content/templates/[id]` (only changed fields are sent).
+
+| Setting | Where | Notes |
+|---|---|---|
+| **Name** | Overview | Rename only; capped at 120 chars. |
+| **Channels** | Overview | Toggle among `facebook`, `youtube_short`, `instagram`, `blog`. Rendered as brand-colored pills. |
+| **Cities** | Overview | Toggle the target cities the template runs for. |
+| **Prompt** | Prompt tab | Only shown when the template's chain includes a `find_story` step (e.g. Celebrity Spotlight). The LLM brief fed each run; capped at 8000 chars. |
+| **Model** | Prompt tab | Optional LLM override (defaults to `claude-sonnet-4-6` in the UI). |
+| **Schedule** | Schedule | Weekly cron via friendly picker (day/time) or custom cron string, plus timezone (default `America/Chicago`). |
+| **Auto-publish** | Schedule | Off = render + preview for manual approval; On = run straight through and publish. |
+| **Active** | — | A template goes Active only after one approved manual run. |
+
+The Studio also has read-only **Channels & Preview** (shows what each channel's caption/blog will say) and **Inngest Function** (the chain steps: `find_story → tie_to_kc → render → publish → blog → landing → log`) tabs.
+
+## Data source
+
+- **DB tables (CRM database):** `hl_content_templates` (one row per locked template — `key`, `name`, `composition`, `filter`, `target_cities`, `channels`, `prompt`, `schedule`, `timezone`, `chain`, `auto_publish`, `model`, `inngest_fn`, `last_run_at`, `active`) and `hl_content_runs` (one row per template × city × week; delete is blocked when runs exist).
+- **Migrations:** `db/migrations/0096_hl_content.sql` (both tables + seed), `0097_hl_content_sample_video.sql` (`sample_video_url`), `0124_content_template_studio.sql` (Studio columns: prompt/schedule/chain/auto_publish/model/inngest_fn + run step_log).
+- **APIs:** `GET /api/content/templates` (list), `GET · PATCH · DELETE /api/content/templates/[id]` (read / save / delete one), `GET /api/content/templates/[id]/preview` (per-channel caption preview, built from `lib/content/captions.ts` over sample data).
+- **Inngest:** `content-weekly-drop` (function id `content-weekly-drop`, triggered by the `houseloop/content.weekly-drop` event; Phase 1 enqueue only, cron omitted). Template rows record `inngest_fn = 'content-run'` as the intended chain runner.
+
+## How it fits
+
+Templates sit under the top-level **Content** nav section (peer of Website) and are the configuration layer for the Content engine. The list is where you rename and prune templates; the Studio is where you tune each one's channels, cities, prompt, schedule, and publish behavior. When the chain runs, it writes `hl_content_runs` rows (video + SEO blog + a `/collections` landing page) — the runs surface being to social video what the SEO Run Log is to articles.

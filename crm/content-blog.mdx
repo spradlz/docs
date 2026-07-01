@@ -1,12 +1,36 @@
 ---
 title: "Blog"
-description: "Blog — HouseLoop CRM (Content). Documentation stub."
+description: "Read-only CRM view of the SEO blog posts published to houseloop.ai/blog — each row links out to the live post."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Content** → **Blog** — [`/settings/content/blog`](https://crm.houseloop.ai/settings/content/blog)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/content/blog/page.tsx` (route page + its components).
+## What it does
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+A read-only table listing every SEO blog post published to `houseloop.ai/blog` (the city/filter round-ups and celebrity "Spotlight" articles the content flywheel produces). Each row shows the post's video thumbnail, title, city/state, the number of homes featured, and a Published/Draft status. Title and the **Open** action both link out to the live post on the website (`https://houseloop.ai/blog/<slug>`); there is no create/edit/delete of posts from this screen.
+
+The page fetches `/api/blog?status=all`, so both drafts and published posts appear here (the public site shows published only). If the feed can't be reached it renders "Couldn't reach the blog feed."; with no posts it shows an empty state.
+
+## What you configure
+
+Nothing is edited from this page — it is a live feed, not an editor. Posts are authored/published on the website side; the CRM table only reflects and links to them.
+
+| Column | Source field |
+|---|---|
+| Post (thumbnail) | `youtubeId` → YouTube `hqdefault.jpg`, else a book icon |
+| Title | `title` (links to live post) |
+| City | `city`, `state` |
+| Homes | `listingCount` (count of `listings`) |
+| Status | `status` (`published` / `draft`) |
+| Open | `url` → live post |
+
+## Data source
+
+- **CRM UI:** `apps/houseloop-crm/app/(crm)/settings/content/blog/page.tsx` → `apps/houseloop-crm/components/content/ContentBlogTable.tsx` (renders `HlDataTable`).
+- **CRM API:** `GET /api/blog` (`apps/houseloop-crm/app/api/blog/route.ts`) — a same-origin proxy that forwards the query string to the website's blog ledger (`${NEXT_PUBLIC_HOUSELOOP_WEB_URL || 'https://houseloop.ai'}/api/blog`) to avoid CORS.
+- **Website API:** `GET /api/blog` (`apps/houseloop-web/app/api/blog/route.ts`) — `?status=published|all` (default `published`); maps posts to `{ slug, title, city, state, filter, youtubeId, status, publishedAt, listingCount, channels, url }`.
+- **Underlying store:** file-based JSON, **not a database**. Posts live as committed files at `apps/houseloop-web/content/blog/<slug>.json`, read by `listBlogPosts()` in `apps/houseloop-web/lib/blog/posts.ts` (written by the content engine or by hand). There are no `hl_*` tables and no Inngest function backing this view.
+
+## How it fits
+
+This is the CRM's window into the website's SEO content: the content flywheel generates a blog post JSON on the website, and this table gives operators one place inside the CRM to see what's been published (or is still a draft) and jump straight to the live post. Because it proxies the website feed rather than owning any data, it stays in sync automatically and never needs its own write path — posts are managed on `houseloop.ai`, never from this screen.

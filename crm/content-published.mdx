@@ -1,12 +1,38 @@
 ---
 title: "Published"
-description: "Published — HouseLoop CRM (Content). Documentation stub."
+description: "The read-only feed of content runs that went live — one row per published video, with click-through links to YouTube, Instagram, Facebook, and the blog."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Content** → **Published** — [`/settings/content/published`](https://crm.houseloop.ai/settings/content/published)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/content/published/page.tsx` (route page + its components).
+## What it does
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+Published is a read-only run log of every social/video content run that has gone live. It renders `ContentPublishedTable`, which fetches the shared content feed (`GET /api/content/runs?limit=500`) and keeps only rows that are actually live — a run is shown when its `status` is `published` **or** any of its `channels` carries a live `url`.
+
+Each row shows:
+
+- **Preview** — a vertical thumbnail (`previewUrl`, falling back to the template preview) with a play overlay.
+- **Template** — the template name plus a `city · weekLabel` subline.
+- **Published to** — one brand-colored pill per platform that has a live URL (YouTube, Instagram, Facebook, Blog; unknown platforms fall back to a neutral pill). Each pill opens the live post in a new tab.
+- **Published** — a relative time from `updatedAt` (falling back to `createdAt`).
+
+The table has no row actions and no edit/delete — publish history is immutable. If the feed can't be reached it shows "Couldn't reach the content feed"; when empty it shows "Nothing published yet."
+
+> This page shares the same data source as the **Content Dashboard** (`ContentRunsTable`) but filters to the live subset. The publish side of the pipeline (attaching `channels[]` URLs and flipping runs to `status = 'published'`) is Phase 2 of the weekly-drop function — Phase 1 only enqueues runs at `status = 'queued'`, so this page stays empty until a run is actually published.
+
+## What you configure
+
+Nothing — Published is read-only. There are no settings, filters, or forms on this page. Which runs appear here is driven entirely by the state of `hl_content_runs` (status and per-channel URLs), which is written by the content pipeline, not from this screen.
+
+## Data source
+
+| Source | Detail |
+| --- | --- |
+| API | `GET /api/content/runs?limit=500` — returns `{ ok, rows }` |
+| Query | `hl_content_runs r LEFT JOIN hl_content_templates t ON t.id = r.template_id`, `ORDER BY r.created_at DESC` |
+| Tables | `hl_content_runs` (run rows: `status`, `channels` jsonb, `preview_url`, `video_url`, `city`, `county`, `week_label`, `inngest_run_id`) · `hl_content_templates` (`name`, target `channels`) |
+| Producer | Inngest function `content-weekly-drop` (event `houseloop/content.weekly-drop`) inserts run rows per active template × target city; each run links back to its Inngest run via `inngest_run_id`. |
+
+## How it fits
+
+Published is the "went live" view of the Content area. The **Content Dashboard** is the full run log (queued → rendering → rendered → published, with county/city facet filtering); **Published** is the filtered, link-out view of just what shipped. Both read the one `/api/content/runs` feed, so a run appears here automatically the moment the pipeline marks it published or attaches a live channel URL — there is no separate publish record to maintain.

@@ -1,12 +1,40 @@
 ---
 title: "Dashboard"
-description: "Dashboard — HouseLoop CRM (Content). Documentation stub."
+description: "The Content Dashboard — a read-only run log of every social video the HouseLoop content engine drops, faceted by county and city."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Content** → **Dashboard** — [`/settings/content`](https://crm.houseloop.ai/settings/content)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/content/page.tsx` (route page + its components).
+## What it does
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+The Content Dashboard is the run log for HouseLoop's social-video engine — the video-side counterpart to the SEO Run Log. It lists every content run (one per template × city × week) in a shared `HlDataTable` with columns **Preview · Template · City · Status · Channels · Time**, newest first.
+
+Above the table are two rows of facet pills — **county** (roll-up) then **city** — that filter the list and show live counts. All fetching, filtering, and counting happen client-side from a single `/api/content/runs` call (up to 500 rows).
+
+Each run's **Status** is one of `queued · rendering · rendered · published · failed`, rendered as a black-and-white symbol + label (no brand color on status, per `CRM_PIXEL_LOCK`). The **Channels** column shows brand-colored platform pills (Facebook, YouTube Short, Instagram) — solid + linked when the run is live on that platform, faint outline when it's only a target.
+
+Row actions (the "…" menu) open the rendered **video**, the **live post** on each published platform, and the **Inngest run** that produced the row. The table is intentionally read-only — the run history is immutable.
+
+> **Current state:** The pipeline's Phase 1 is live — the weekly drop enqueues `queued` rows for each template × city. Render (Remotion) and social publish (Phase 2) are noted in the code as the next gate, so runs currently populate the log at `queued` status; `video_url` and `channels[]` fill in once Phase 2 ships.
+
+## What you configure
+
+Nothing is edited on this page — it is a read-only cockpit. The only interaction is filtering:
+
+| Control | Effect |
+|---------|--------|
+| **County pills** | Filter runs to one county (or **All**); resets the city filter |
+| **City pills** | Filter runs to one city within the selected county (or **All cities**) |
+| **Row actions** | Open the video, open a live post per platform, or open the Inngest run |
+
+Templates (the named video configs — filter, target cities, target channels) are managed on the sibling **Content → Templates** page, not here.
+
+## Data source
+
+- **API:** `GET /api/content/runs?limit=500` — `apps/houseloop-crm/app/api/content/runs/route.ts`. Selects `hl_content_runs` `LEFT JOIN hl_content_templates` (for template name + target channels + fallback preview) ordered by `created_at DESC`, and shapes each row for the client.
+- **Tables:** `hl_content_runs` (one row per template × city × week; `status`, `listing_count`, `preview_url`, `video_url`, `channels` jsonb, `inngest_run_id`) and `hl_content_templates` (`name`, `filter`, `target_cities`, `channels`, `preview_url`). Schema: migration `0096_hl_content.sql`. Unique on `(template_id, city, week_label)` so re-fires are idempotent.
+- **Inngest:** `content-weekly-drop` (event `houseloop/content.weekly-drop`) — `apps/houseloop-crm/lib/inngest/functions/content-weekly-drop.ts`, registered in `app/api/inngest/route.ts` and in the Run Log registry (`lib/run-log/inngest-registry.ts`, category `content`). For each active template, it enqueues a `queued` row per target city for the current week. The weekly cron (`0 14 * * 4`) is intentionally omitted until a manual run is signed off (per `INNGEST_OR_IT_DOESNT_EXIST`); trigger it manually via the `houseloop/content.weekly-drop` event until then.
+
+## How it fits
+
+The Content Dashboard sits under the top-level **Content** nav section (peer of **Website**), alongside **Content → Templates**. Templates define *what* videos to make (filter + cities + channels); the weekly-drop Inngest job turns each active template into per-city runs; this dashboard is where those runs are audited from `queued` through `published`. Because every row is produced by an Inngest run (not hand-inserted), the dashboard doubles as the visible, auditable backbone for the content engine — the same pattern as the SEO Run Log.

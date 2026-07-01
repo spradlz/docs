@@ -1,12 +1,52 @@
 ---
 title: "Calendar"
-description: "Calendar — HouseLoop CRM (Calendar). Documentation stub."
+description: "The CRM Calendar — a unified month/week/day/agenda view of appointments, tasks, and imported Google Calendar events, with two-way Google sync."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Calendar** → **Calendar** — [`/calendar`](https://crm.houseloop.ai/calendar)
 
-**Code:** `apps/houseloop-crm/app/(crm)/calendar/page.tsx` (route page + its components).
+## What it does
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when written up — the generator won't overwrite an existing page._
+The Calendar merges three sources into one time-ordered view:
+
+- **Appointments** (`hl_appointments`) — CRM-native, render **blue**.
+- **Tasks** with a due date (`hl_tasks`, `due_at`, `status = 'open'`) — render **blue**.
+- **Imported Google Calendar events** (`hl_calendar_events`) not paired to a CRM row — render **green**.
+
+It offers **Month, Week, Day, and Agenda** views (Agenda shows the next 60 days), previous/next/Today navigation, and a **Personal / Team** scope toggle. Personal shows only the signed-in user's events; Team drops the user filter and shows everyone's. A **Filters** menu narrows to All Events / Appointments / Tasks.
+
+Clicking an empty day cell (month) or time slot (week/day) opens the **New Event** modal pre-filled with that date/time. Clicking an existing event opens the **Event Detail** modal to edit, reschedule, disposition (set an outcome), or cancel/delete it.
+
+**Google sync** runs automatically: a silent sync fires on load, on a 30-second interval while the tab is visible, and when the tab regains focus. A manual **Sync** button in the header runs a visible sync. De-duplication skips any Google row whose `google_event_id` already matches a CRM appointment (`calendar_event_id`) or open task, so a CRM event pushed to Google never appears twice.
+
+## What you configure
+
+Per-event, in the New Event / Event Detail modals:
+
+| Field | Notes |
+|-------|-------|
+| Title, description, location | Free text |
+| Type | Appointment types loaded from `/api/appointment-types` (falls back to a built-in list: First Buyer Appointment, Buyer Showing, Listing Appointment, Meeting, Phone Call, etc.); task types include Call, Email, Meeting, Follow Up, Viewing, Other |
+| Start / end (or duration) | Duration presets 15 min → 3 hrs; all-day supported |
+| Related lead | Searched via `/api/leads/search`; the lead's email auto-fills as a guest |
+| Guest emails + Send invite | When Send invite is on and the user has export enabled, Google emails all attendees (the assigned agent is added as an attendee too) |
+| Assigned user | From `/api/team/users` |
+| Appointment Created By | Defaults to the current user (`/api/me`); can be overridden to any actor including an AI agent — drives the "Set By" badge |
+| Outcome / status | On Event Detail: completed + outcome, cancelled, rescheduled |
+
+Per-user Google connection (managed under **Settings → Calendar Sync**, `/api/calendar/settings`): connect/disconnect account, `sync_enabled`, `import_enabled` + import calendar, `export_enabled` + export calendar.
+
+## Data source
+
+- **DB tables:** `hl_appointments`, `hl_tasks`, `hl_calendar_events`, `hl_calendar_connections`; joins to `hl_leads` and `hl_users` for names/emails.
+- **APIs:**
+  - `GET /api/calendar/events` — merges the three sources for a date window (`?start&end&view=personal|team&type=all|task|appointment`).
+  - `POST /api/calendar/events` — creates an appointment (requires a lead), fires `notifyLeadEvent('appointment_set')`, logs an `appointment_created` activity via `logActivity`, may hand off the lead (`maybeHandoffOnAppointment`) and forward-advance its stage (`advanceStageOnAppointment`), and pushes to Google when export is enabled.
+  - `PATCH`/`DELETE /api/calendar/events/[id]` — edit / reschedule / cancel; `PATCH /api/tasks/[id]` for task rows.
+  - `POST /api/calendar/sync` — incremental Google import into `hl_calendar_events` using `nextSyncToken` (full-sync fallback on token expiry / HTTP 410; a narrow −7d/+45d window, 8-page cap). Upserts Google edits back onto the owning CRM appointment/task in place.
+  - `GET/PATCH/DELETE /api/calendar/settings` — connection status + import/export config.
+- **Google integration:** `lib/calendar/google-calendar.ts` (`loadCalendarConnection`, `ensureFreshToken`, `listEvents`, `createEvent`, `listCalendars`).
+
+## How it fits
+
+The Calendar is the read/write surface over the same appointment and task records used across the CRM (lead detail, workflows, notifications). Creating an appointment here feeds the canonical lead run-log, notifications, care-team handoff, and stage advancement — the same paths the AI dispatcher uses when it books an appointment. Google Calendar is a mirror synced two ways: CRM events export to Google, and Google edits import back onto the originating CRM row.

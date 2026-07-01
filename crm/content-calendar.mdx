@@ -1,12 +1,41 @@
 ---
 title: "Calendar"
-description: "Calendar — HouseLoop CRM (Content). Documentation stub."
+description: "Month-grid view of every content run — when it goes out and how it landed (published / pending / failed)."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Content** → **Calendar** — [`/settings/content/calendar`](https://crm.houseloop.ai/settings/content/calendar)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/content/calendar/page.tsx` (route page + its components).
+## What it does
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+The Content Calendar is a read-only month grid of content runs — one dot per run, placed on the day it was created (or scheduled) and color-coded by status:
+
+- 🟢 **Green** — `published`
+- 🟡 **Amber** — pending / in-flight (`queued`, `rendering`, `rendered`)
+- 🔴 **Red** — `failed`
+- ⚪️ Grey dot — any other/unknown status
+
+Each entry shows the template name (falling back to the template key) and, on hover, `template · status`. Left/right chevrons in the header page through months; today's date is highlighted in blue. The current day's runs are grouped into that cell.
+
+Runs are bucketed onto a day by `scheduledFor ?? createdAt`. In practice the runs API does not currently return a `scheduledFor` field, so entries land on their **created-at** date until scheduling is wired through.
+
+## What it displays
+
+The page fetches up to 500 runs and filters them client-side to the month in view. It renders no controls beyond month navigation — creation, rendering, and publishing happen elsewhere (the Content engine / Inngest); the Calendar is purely a status view.
+
+| Element | Source |
+| --- | --- |
+| Run dot color | `status` (`published` · `queued`/`rendering`/`rendered` · `failed`) |
+| Run label | `templateName` → falls back to `templateKey` |
+| Day placement | `scheduledFor ?? createdAt` |
+
+## Data source
+
+- **API:** `GET /api/content/runs?limit=500` (`app/api/content/runs/route.ts`, `force-dynamic`). Joins `hl_content_runs` → `hl_content_templates` and returns shaped rows (`id`, `templateKey`, `templateName`, `status`, `createdAt`, `city`, etc.).
+- **Tables:**
+  - `hl_content_runs` — one row per template × city × week; carries `status`, `city`/`county`/`state`, `week_label`, `listing_count`, `preview_url`, `video_url`, `channels`, `inngest_run_id`, `created_at`. Migration `0096_hl_content.sql`.
+  - `hl_content_templates` — the named templates (`key`, `name`, `filter`, `target_cities`, `channels`). Joined for the display name.
+- **Producer:** the `content-weekly-drop` Inngest function (event `houseloop/content.weekly-drop`) enqueues the `hl_content_runs` rows the calendar reads. It is registered in the Run Log as `houseloop-crm-content-weekly-drop` (category `content`). Trigger is manual for now; the weekly cron is added only after sign-off.
+
+## How it fits
+
+The Calendar is one view onto the Content engine — the same `hl_content_runs` data that powers the Content Dashboard run-log table, rendered on a month grid instead of a table. Runs originate from content templates and are materialized by the `content-weekly-drop` pipeline; this page lets you see, at a glance, when content went out for a given month and whether each run published, is still pending, or failed.
