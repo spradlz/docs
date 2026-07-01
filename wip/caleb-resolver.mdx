@@ -3,7 +3,7 @@ title: "Caleb (SRG Past Client Reconciliation)"
 description: "Work-in-progress dossier — Caleb · Data intel · past-client resolver. SRG Past Client Reconciliation."
 ---
 
-<Info>Live dossier — auto-generated from `.claude/state/wip/caleb/resolver.md` on every push. **Progress: 1/5 done (20%).** _Updated 2026-07-01._</Info>
+<Info>Live dossier — auto-generated from `.claude/state/wip/caleb/resolver.md` on every push. **Progress: 4/6 done (67%).** _Updated 2026-07-01 PM._</Info>
 
 **Owner:** Caleb — Data intel · past-client resolver
 
@@ -11,20 +11,24 @@ description: "Work-in-progress dossier — Caleb · Data intel · past-client re
 
 **Goal:** every SRG past client → an accurate reconciliation card (person + home(s) by HLID + every transaction + the agent who worked it, even if departed + lost listings + dossier) for past-client reactivation. Accuracy is the only benchmark; the table is the truth.
 
-### The 7 boxes
-- [x] **2 — Brain** (Haiku dossier, `hl_fub_person_facts`) — DONE 2,178/2,178 past-client household members
-- [~] **3 — MLS rooftop** (`hl_mls_property_history`) — ~1,724/1,862 verified (93%), finishing; clean-source, self-verified by our MLS#, multi-family + dual-address handled
-- [~] **5 — Dotloop `.loop`** (`hl_srg_loop` + `hl_srg_agent_loops`) — deterministic dotloop-only facts (address/closing from /detail, listing+buyer agent from participant roles + activity log, Haiku doc-fallback). Fast mode (3 calls/loop) + `--matched-only` re-running our ~4,000 deal loops (~40 min); 91% agent yield; address + Ana-over-attribution bugs fixed
-- [ ] **1 — Dedup** (cross-client + HLID home-collapse) — built dry-run (52 clusters/54 merges); `--commit` needs typed Zach go (Rule #0)
-- [ ] **4 — HLID link on the MLS table** — add `hl_property_id` + backfill by canonical address → `Listing.hlid` (additive)
-- [ ] **6 — Reconcile engine** — join SISU + MLS rooftop + `hl_srg_loop` + brain → write `hl_srg_past_clients` + `hl_srg_past_client_homes` (agent waterfall: SISU → MLS → dotloop → FUB Team-Exit)
-- [ ] **7 — Prove first 20** vs the golds (Nations, Mettman, Belcher) → Zach sign-off → scale to 1,834; no auto-publish to FUB
+### The 7 boxes — current state
+- [x] **2 — Brain** (`hl_fub_person_facts`) — ✅ DONE. Haiku dossier over every past-client household FUB member's notes/texts/calls/tags/stages → structured facts (spouse, mentioned addresses, team-exit agent, closing refs, DNC, contacts). 2,178/2,178.
+- [x] **3 — MLS rooftop** (`hl_mls_property_history`) — ✅ DONE / 100%. Every past-client-home MLS# now seated: **1,955/1,955** (was 96.7%). 7,713 rows total; **6,017 selling agents (78%)** recovered; **all 151 Matrix CSV columns are real searchable columns** (was ~20). Closed the tail 3 ways: 151-col CSV backfill (`backfill-mls-csv.mjs`), 22 unit-condos straight from the disk CSVs (`recover-pch-from-csv.mjs`), and the last 41 malformed-address rooftops via **MLS#-direct Speed Bar search** — new `MLS_QUERY` mode in `mls-address-lookup.mjs`, exact record per MLS#, zero address ambiguity (landed even the no-house-number ones: Brook Haven St, 00000 Old KC Rd).
+- [~] **5 — Dotloop `.loop`** (`hl_srg_loop`) — 🟡 harvesting the REAL closings. TABLE TRUTH (not the code's "88%"): 13,449 loop rows, but **8,945 are empty NO_STATUS drafts**; the meaningful set = **2,128 real closings** (close_date OR SOLD/UC). Of those, 1,257 complete, **871 incomplete** (missing agent/address/price). New `--real-closings` mode targets exactly those; harvesting the 871 gap now, sharded 4-way with rate-limit backoff. Agent from participant ROLES + ACTIVITY LOG (departed-agent unlock) + Haiku doc fallback. NOTE: `harvest-loop-full.mjs` is a manual nohup script, not a daemon — must be relaunched to run.
+- [x] **1 — Dedup** — ✅ DONE. 54 merges (52 clusters), **1,834 → 1,780 cards**, 0 failed, 0 orphan homes. Per-cluster transaction: snapshot loser → coalesce keeper's nulls → re-parent 3 child tables → delete loser. Fully reversible via `hl_srg_dedupe_log`. Tool: `dedupe-past-clients.mjs --commit`.
+- [x] **4 — HLID link on the MLS table** — ✅ DONE. `hl_property_id` (HLID) added to `hl_mls_property_history`: **7,152 rows carry an HLID across 1,886 homes** (1,955 exact deal-MLS# + 7,138 rooftop-propagated; 7 multi-unit buildings held to exact-match-only). MLS table now references the same permanent HLID the past-client-home master carries. Tool: `link-hlid-on-mls.mjs`.
+- [ ] **6 — Reconcile engine** — join SISU + MLS rooftop + `hl_srg_loop` + brain → write `hl_srg_past_clients` + `hl_srg_past_client_homes`. Per-field canonical source law (agent waterfall: SISU → Repliers/MLS our-side → Ninja → dotloop → FUB Team-Exit; Ben Froeschl never; Zach→Ana; PENDING counts as a deal).
+- [ ] **7 — Prove first 20** vs the golds (Nations, Mettman, Belcher) → Zach sign-off → scale to ~1,834. No auto-publish to FUB.
+
+### Where I am right now
+Box 3 just hit 100% and is CLOSED. Box 5 (dotloop) is the last live harvest. Boxes 2+3 = two of the four source tables fully seated (brain + MLS). Next build step (no Zach gate) = **Box 4** (HLID link on the MLS table), then **Box 6** reconcile engine, then **Box 7** prove-20. BLOCKED on Zach: Box 1 dedup `--commit`.
 
 ### Key laws
 - Dotloop is its OWN source of truth — NO SISU triangulation; the resolver decides "ours" later.
 - Ana Spradling = account admin on every loop — never auto-assigned as agent (fixed 925 false attributions).
+- The table is the truth; only `:18804` on Camp David can export the Matrix CSV (the other 3 Chromes can't download — that's why parallel scrapes returned "0 verified").
 - Rule #0: no destructive SQL / no dedup `--commit` without typed Zach approval.
-- Tools: `tools/houseloop-cards/harvest-loop-full.mjs` (.loop) · `resolve-mls-rooftops.mjs` (MLS) · `harvest-fub-facts.mjs` (brain) · `dedupe-past-clients.mjs` (dedup).
+- Tools: `harvest-loop-full.mjs` (.loop) · `resolve-mls-rooftops.mjs` + `mls-address-lookup.mjs` (MLS, incl. MLS#-direct) · `recover-pch-from-csv.mjs` / `recover-pch-by-mls.mjs` (MLS recovery) · `backfill-mls-csv.mjs` (151-col) · `harvest-fub-facts.mjs` (brain) · `dedupe-past-clients.mjs` (dedup).
 
 ## Source documents
 
