@@ -1,12 +1,62 @@
 ---
 title: "Business Settings"
-description: "Business Settings — HouseLoop CRM (User Settings). Documentation stub."
+description: "Your company's identity source of truth — name, address, business timezone, default sender, and the team business-hours window that outbound automations respect."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **User Settings** → **Business Settings** — [`/settings/business-profile`](https://crm.houseloop.ai/settings/business-profile)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/business-profile/page.tsx` (route page + its components).
+## What it does
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+Business Settings is the single source of truth for your company's identity. You set it once here and the rest of the CRM reads from it so nothing drifts:
+
+- The **business timezone** you pick drives how every date and time renders across the CRM.
+- Your **company name and address** feed the CAN-SPAM compliance footer on bulk emails.
+- The **business-hours window** (configured inline on this page) lets automation delay steps hold their actions until the next moment inside your working hours.
+
+The page renders a static brand logo (from the brand-asset source of truth); logo upload and custom palette are noted in-app as "coming soon" and are not part of this version.
+
+## What you configure
+
+The page has two save-able sections. The top **Business Profile** form saves independently from the nested **Business Hours** section — each has its own Save button.
+
+### Business Profile
+
+| Field | Purpose |
+|-------|---------|
+| Business Name | Company name; used in the email compliance footer |
+| Business Timezone | IANA timezone the whole CRM renders dates/times in (default `America/Chicago` / Central) |
+| Street Address, City, State, ZIP, County | Physical company address; feeds the email footer |
+| Sender Name | Default outbound sender display name |
+| Sender Email | Default outbound sender email |
+
+Timezone choices offered: Central, Eastern, Mountain, Arizona (no DST), Pacific, Alaska, and Hawaii.
+
+### Business Hours (nested inline)
+
+| Field | Purpose |
+|-------|---------|
+| Enable business hours | Master toggle for the window |
+| Start Time / End Time | The daily open/close window (`HH:MM`) |
+| Timezone | IANA timezone the window is evaluated in |
+| Skip weekends | When on, actions falling on Sat/Sun roll to the next weekday's open |
+
+When enabled, automations with "Execute only during business hours" checked delay their actions to the next moment inside this window. Individual automations can override these defaults with their own schedule.
+
+## Data source
+
+Both sections persist as singleton rows in the `hl_settings` table (CRM database), stored as JSON:
+
+- **Business Profile** → `hl_settings` key `business_profile` — read via `getBusinessProfile()` (`lib/business-profile.ts`), written via `PUT /api/settings/business-profile` (an upsert that merges partial saves over the current value).
+- **Business Hours** → `hl_settings` key `business_hours` — read via `getBusinessHours()` (`lib/business-hours.ts`), written via `PUT /api/settings/business-hours`. `GET /api/settings/business-profile` returns the current profile.
+
+The page loads both values server-side and passes them to the client forms. If `hl_settings` is unreachable, reads fall back to defaults (timezone `America/Chicago`; business hours treated as not configured / passthrough).
+
+## How it fits
+
+Business Settings is a foundational settings page other CRM features depend on rather than a standalone tool:
+
+- **Date/time rendering** across the CRM pins to the `timezone` set here (via `getBusinessTimezone()`).
+- **Bulk email compliance footer** pulls `company_name` and the address fields.
+- **Automation delay steps** call `clampToBusinessHours()` (`lib/business-hours.ts`) to shift a scheduled action to the next in-window moment when business hours are enabled.
+
+Business Hours previously had its own standalone menu item; it now lives inline within Business Settings as a section, because it is a business-profile setting rather than a separate pipeline step.
