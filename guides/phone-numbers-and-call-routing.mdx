@@ -1,81 +1,219 @@
 ---
-title: "Phone Numbers & Call Routing"
-description: "The full SRG/HouseLoop phone topology — every line, who owns it, where it routes, and how the inbound number drives Myli's context. Internal: all comms move to HouseLoop; the owned business lines port to Twilio."
+title: "Phone Numbers, Call Routing & Number Porting"
+description: "The complete SRG/HouseLoop phone system — every line and inbox, how the dialed number drives Myli's dynamic read, the FUB phone events, and the God-tier endgame: port every number out of Google Voice / Follow Up Boss into our own Twilio so HouseLoop owns the number and the conversation. Two sections: (1) Events, Inboxes & Routing; (2) The Port-Out Playbook."
 ---
 
 <Note>
-**Internal command surface.** This page documents the real numbers and the FUB-exit plan. The
-canonical source is `GT_HOUSELOOP_MASTER.md` §8b + `.claude/checkpoints/srg-twilio-numbers-2026-06-22.md`;
-credentials live in the vault / Master Sheet (never printed here).
+**Internal command surface — the single deep doc for everything phone.** The
+[Pipeline & Workflow Overview](/guides/pipeline-workflow-overview) has a phone summary + the Sign-Off Matrix's
+**FollowUpBoss — Phone Call Activity** row; THIS page is the authority. Canonical GT: `GT_HOUSELOOP_MASTER.md`
+§8b + `.claude/checkpoints/srg-twilio-numbers-2026-06-22.md`. Credentials live in the vault / Master Sheet
+(never printed here). **Nothing in Section 2 is built yet — it is the locked plan.**
 </Note>
+
+## 💸 Why this exists — the money bleeding out of the inbox
+
+Verified live in the FUB inboxes 2026-06-30, warm messages that **nobody answered**:
+
+- **Kyle Nations** (Apr 28): *"this is Kyle Nations — you've helped us buy 2 apartments, 2 houses, and sell 2
+  houses. We're ready to sell and buy again."* A past client we did **~$5M** with; a ~$650K buy + $600K sell ≈
+  **$75K commission — sat unanswered.**
+- **Salim Rahman** — a **$1.2M** buyer we closed: *"I called to speak with Anna regarding my property, could you
+  send me her contact?"* Reaching for Ana (the 913-954-7123 line) — unworked.
+- **"Mobile Massage For You"** (Jun 2025, **13 months** unworked): *"I got your number through Zillow partners —
+  looking to sell my rental, vacant and almost ready to show."* A net-new Zillow **seller** lead handing us a listing.
+
+Past clients, past buyers reaching for Ana, and fresh Zillow seller/buyer leads — **all dying in the same
+1,245-unread Company inbox.** One recovered Kyle pays for this entire build. That's the mandate.
 
 ## The North Star
 
-**All comms run through HouseLoop.** FUB is no longer where we talk to people — every call, text,
-and email flows through HouseLoop / **Myli**. FUB's only remaining roles: (1) a **data source**
-(past-client inbound on the kept Past-Agent numbers, captured to our DB), and (2) a parking lot for a
-couple of unused legacy dialer numbers. Same de-risk-from-FUB logic as the walled-garden doctrine —
-FUB is Zillow-owned and progressively closing its data taps, so we own the numbers and own the conversation.
+**All comms run through HouseLoop.** FUB is no longer where we talk to people — every call, text, and email flows
+through HouseLoop / **Myli**. The endgame (Section 2): **we OWN every number in our own Twilio**, so inbound hits
+HouseLoop natively and outbound sends AS the line. FUB is Zillow-owned and progressively closing its data taps
+(the walled-garden doctrine) — owning the numbers is how we own the conversation.
 
-## The number a caller dials = their intent
+---
 
-The Twilio voice/SMS webhook reads the inbound **`To` number** → looks up that line's context → loads
-Myli's matching prompt. Three owned business lines, three frames:
+# ═══ SECTION 1 — EVENTS, INBOXES & MYLI'S ROUTING ═══
 
-| Line | Role | Myli reads it as | Opening frame |
+## FUB is our phone system today (pre-Twilio)
+
+Verified from the FUB API: **42,382 calls on record; ~66% auto-match a person.** Critical constraint:
+**FUB has NO programmatic outbound-SMS API** — you cannot send a text from a FUB inbox number in code (Zach
+tested; blocked). And we don't own these numbers in a Twilio account. So today's outbound is **Myli from her own
+BlueBubbles number 913-208-1633**; native send-as-the-line waits on the port (Section 2).
+
+## The 3 FUB inboxes (all route to Zach)
+
+| Inbox | FUB id | Unread | What's actually in it |
 |---|---|---|---|
-| **913-320-0906** | Company / Google My Business | new prospect found us on Google | qualify — buyer or seller? |
-| **913-354-8600** | LISTINGS / sign line (yard signs) | caller standing AT a listing | "which property are you looking at?" — high intent |
-| **913-954-7123** | Ana's old cell (Google Voice) — all her past clients call it | likely an **Ana past client** | warm; look them up in Ana's book |
+| **My Inbox** | Zach's user inbox (FUB line **913-490-2988**; cell 407-403-8088) | 169 | Zach's assigned contacts — **email-campaign replies** (e.g. Halimo replied "Yes" to "Top reasons to own your home"), voicemails, texts |
+| **Company** | teamInbox 1 | **1,245** | The company line's catch-all — mostly **UNMATCHED cold inbound** (missed calls, voicemails, "Hi Ana" texts, "Kyle with Zillow"). The unworked speed-to-lead mountain. |
+| **Past Agents** | teamInbox 3 | 333 | Departed-agent lines — **FUB natively TAGS each conversation with the agent** (Walter · Glen · Raul · Carrie…). A MIX of BrokerBay showing-feedback (short code `78340` — noise) + **real humans reaching the old agent** (reactivation gold). |
 
-## Ownership & the port plan
+## The number a caller dials = their intent (what Myli reads)
 
-| Number | Owns it today | Action |
-|---|---|---|
-| **913-320-0906** (Company/GMB) | FUB-provisioned (verify) | **Port → our Twilio → Myli** |
-| **913-354-8600** (LISTINGS/sign) | FUB-provisioned (verify) | **Port → our Twilio → Myli** |
-| **913-954-7123** (Ana's old cell) | **Google Voice** | **Port → Twilio** (GV port-out, unlock ~$3). Stop forwarding it to the sign line. (FUB inbox 913-453-5505 is tied to it — reconcile.) |
-| ~35 **Past-Agent** numbers (full list below) | FUB | **KEEP in FUB** — past clients still call old agent lines; captured via the inbound fix |
-| **Aaron** 913-298-8760 · **Ben** 913-379-3429 | FUB | **Drop** (Ben departing; team comms move off FUB) |
-| **Ana** 913-349-5536 · **Zach** 913-490-2988 | FUB | **Park, unused** |
+Every inbound carries the line they dialed (`To`). **That line IS the intent.** Mirrored in `hl_phone_numbers`
+(41 rows: `number · e164 · label · category · forwards_to · assigned_user_id · workflow_id · creates_event`).
 
-<Tip>
-A number provisioned *inside* FUB is owned by FUB — leaving FUB loses it. Porting it to our Twilio
-(LOA + recent bill, ~a few business days, no downtime) makes it ours and lets us point Voice + SMS at Myli.
-FUB's API does not expose number ownership — confirm in **FUB Admin → Phone Numbers**.
-</Tip>
+| Source category | Number(s) | Means | Myli's opening frame |
+|---|---|---|---|
+| **Company / Google My Business** | **913-320-0906** (FUB's texting line) | new prospect found us on Google | speed-to-lead — "saw you called SRG, buyer or seller?" |
+| **Sign box / Listings** | **913-354-8600** ("LISTINGS - KEEP") | caller standing at a yard sign | high intent — "which property are you looking at?" |
+| **⭐ Ana's old cell (Google Voice)** | **913-954-7123** | an **Ana past client** (her real old cell, in thousands of past-client phones) | warm — look them up in Ana's book, past-client reactivation |
+| **Past-agent line** | ~35 lines, each **tagged with the departed agent** | a client of a departed agent | reactivation — **name the agent** (native tag + `hl_srg_agent_roster`) |
 
-**Two Twilio accounts:** the HouseLoop/company Twilio + the **SRG Twilio** (`support@spradlingrealtygroup.com`,
-creds in vault / Master Sheet row 78). The SRG `913-347-xxxx` numbers (Commission Grids, etc.) currently
-route to **GoHighLevel** (`services.leadconnectorhq.com`) — we own them, just re-point to Myli.
+## The 5 FollowUpBoss event groups (the phone/webhook taxonomy)
 
-### 2-vs-3 lines (open decision)
+| Group | Events |
+|---|---|
+| **Property Inquiry** | General inquiry · Tour request · Contact request · Seller request · Virtual tour |
+| **Inbound Activity** | Zillow in-app message · Phone call received · Text message received · **Email received (reply)** ← `emailsCreated`, already flows (dashboard catches it, body hidden) |
+| **Website Activity** | Property viewed · saved · shared |
+| **Zillow Insights** | High-intent buyer/seller · viewed 10× in 7d · looking in new area (→ route to AI weighting, not auto-blast) |
+| **Phone Call Activity** | Every inbound call → the ONE workflow below (Myli reads the dialed line → source) |
 
-If the **yard signs in the field print 913-354-8600**, keep all 3 lines — you can't un-print physical signs.
-If the signs print the GMB number, collapse to **2** (Ana legacy + a GMB catch-all) and Myli recovers the
-sign-vs-general distinction by asking. **Ana's line stays separate either way.** Deciding question: what's
-printed on the signs today?
+## Myli's dynamic read — ONE workflow, not one per number
 
-## Full FUB number inventory
+It is **one `(FUB · Phone Call)` workflow.** On `callsCreated` (or inbound text), Myli:
 
-Every FUB line, as of 2026-06-22. All FUB-provisioned (FUB-owned).
+1. **Classifies human vs automated** — skips BrokerBay short-code `78340`, spam, robocalls. Only real humans get a text.
+2. **Reads the dialed `To` line → its source category** (company · sign-box · Ana-cell · past-agent) → picks the copy.
+3. **Sends the text-back.** Today: **from Myli's own BlueBubbles number 913-208-1633**, as herself — *"Hey, this
+   is Myli — just saw a call come into our company line, wanted to reach out personally. What are you looking
+   for?"* Past-agent → names the agent; Ana-cell → past-client voice. **After the port (Section 2), the reply comes
+   AS the dialed line.**
+
+## Inbound capture — every call & text lands on the lead
+
+<Check>
+**Live (shipped 2026-06-22).** Inbound calls, texts, and emails store to the lead record — **including callers
+who aren't a lead yet.**
+</Check>
+
+The root cause we fixed: FUB delivers unknown callers with **`personId = 0`**, and the handler did
+`if (!personId) return` — and `!0` is `true`, so **every missed call, voicemail, and first-touch text from an
+unknown number was silently dropped.** Now `handleCall` / `handleTextMessage` / `handleEmail`
+(`apps/dashboard/server/fub-webhooks.ts`) store `person_id = 0` as an *unmatched* record keyed by phone number.
+The full inbox — missed calls and voicemails included — is captured and converts to a lead when identified.
+
+## ⚠️ The Ana 913-954-7123 Google Voice gotcha (critical — do not lose this)
+
+**913-954-7123 is Ana Spradling's actual old cell.** She released it; we captured it on **Google Voice**; a huge
+number of **past clients still have it saved as her cell** → any inbound to it = a potential past client. The problem:
+
+- **Google Voice has NO API** to read texts/voicemails (Google never shipped one; unofficial scrapers are
+  unreliable + ToS-violating + against our no-fragile-scraping rule).
+- Today it **forwards to the FUB inbox 913-453-5505 (and emails to a black-hole SRG inbox nobody reads)**.
+  **Forwarding COLLAPSES the true destination** — FUB sees the forward target, not Ana's line, so we **LOSE** the
+  "this was Ana's cell → past client" signal.
+
+**Requirement (Rail R9): we must know NATIVELY that the contact came to 913-954-7123.** Two paths:
+
+- **Interim (buildable now) — the email bridge via the Gmail API.** Google Voice forwards **every text +
+  voicemail (with transcription) to email**, and that email identifies **which GV line it hit** + the sender's
+  number + the body. Point the Gmail API (we have Workspace admin) at that inbox → Myli parses each GV email →
+  *"inbound to Ana's line from \<past client\>"* → fires reactivation. The black-hole inbox becomes Myli's ears —
+  and it's *cleaner* than the FUB forward because the email preserves the native line.
+- **Permanent — port it out of Google Voice into Twilio** (Section 2). Then it's native: inbound webhook +
+  send-as-Ana. **Stop forwarding it.**
+
+---
+
+# ═══ SECTION 2 — THE PORT-OUT PLAYBOOK: OWN EVERY NUMBER IN TWILIO ═══
+
+**The God-tier endgame:** every business line lives in **our own Twilio**, not FUB or Google Voice. Then inbound
+SMS/voice hits a **Twilio webhook → HouseLoop native → the Myli workflow**, and outbound sends **AS the exact
+line** the person dialed. No middleman, no forwarding shell game, no lost source. We already own **two Twilio
+accounts** (HouseLoop + SRG, `support@spradlingrealtygroup.com`, vault / Master Sheet row 78).
+
+## Port a Google Voice number → Twilio (the 913-954-7123 recipe)
+
+1. **Unlock it from Google.** `voice.google.com/about/port` → pay Google's **$3 port-out unlock fee** → Google
+   returns the **port-out info: account number + PIN**.
+2. **Submit the port-in to Twilio.** Twilio Console → Phone Numbers → **Porting & Hosting → Port a number in.**
+   Provide: the number, a signed **LOA** (Letter of Authorization), the GV **account# + PIN**, a proof doc.
+   Twilio runs the carrier port — **~2–4 weeks.**
+3. **Land it.** Point the number's **Messaging + Voice webhooks at HouseLoop** → native inbound; send AS it.
+
+<Warning>
+**The Google Voice gotcha:** GV numbers *sometimes reject a direct port to Twilio* (Google is treated as VoIP;
+the LOA/account match fails). Battle-tested fallback = a **two-step port**: GV → a cheap **prepaid mobile SIM**
+(Tello / US Mobile, ~$10) first, let it settle a few days, **then** port that SIM → Twilio. Slower, near-100%.
+Try direct first; fall back to two-step if Twilio rejects.
+</Warning>
+
+## Port the ~35 FUB numbers → Twilio
+
+Same process, sourced from FUB: **request a port-out packet from Follow Up Boss support** (account# + PIN + LOA
+per number) → Twilio port-in.
+
+<Warning>
+**Porting REMOVES the number from FUB** — Twilio/HouseLoop becomes the receiver. Each port is a real **cutover**,
+not a copy. FUB's API does not expose number ownership; confirm each line in **FUB Admin → Phone Numbers** first.
+</Warning>
+
+## The rollout — pilot ONE, then batch
+
+1. **Pilot: 913-954-7123 (Ana's).** Port it first, prove the full **Twilio → HouseLoop native inbound + Myli
+   send-as-Ana** flow end-to-end. It's the highest-value line and its own worst gotcha (Google Voice) — nail it
+   and everything else is easier.
+2. **Then the owned business lines:** 913-320-0906 (Company/GMB) · 913-354-8600 (Sign/Listings).
+3. **Then batch the past-agent lines** as reactivation capacity comes online.
+4. **Re-point the SRG `913-347-xxxx` numbers** (Commission Grids, etc.) off GoHighLevel (`leadconnectorhq.com`) →
+   Myli. We already own them.
+
+## A2P 10DLC — required before outbound texting at scale
+
+US carriers require **A2P 10DLC brand + campaign registration** to send application SMS from a 10-digit number.
+Before Myli texts from ported lines at volume, register the brand + campaign in Twilio (we have the Twilio A2P
+tools: `twilio_a2p_brand_status`, `twilio_a2p_campaign_register`, …). Skipping this = carrier filtering / blocks.
+
+## Cost (rounding error vs one Kyle Nations)
+
+| Item | Cost |
+|---|---|
+| Google Voice port-out unlock | **$3 / number** |
+| Twilio port-in | ~$1 / number (one-time) |
+| Twilio number hosting | ~$1.15 / number / month |
+| A2P 10DLC brand + campaign | small one-time + monthly |
+| Prepaid SIM (only if two-step GV port) | ~$10 / number |
+
+## Who does what
+
+- **Human (Ezra / Zach):** sign the LOAs, pay the GV $3 unlock, click through the Twilio port-in console, the
+  FUB support port-out requests. Porting can't be done headless.
+- **Lee / automation:** the Twilio side — subaccount setup, the **port-in via Twilio's Porting API**, the
+  **receiver webhooks** (Twilio → HouseLoop), the **A2P 10DLC registration**, and wiring each ported line's
+  `workflow_id` in `hl_phone_numbers` → the Myli phone workflow.
+
+## The receiver architecture (post-port, per line)
+
+```
+Inbound call/text → the ported number (in OUR Twilio)
+        → Twilio Messaging/Voice webhook → HouseLoop (native ingest, hl_lead_activity)
+        → match/create lead → the ONE (FUB→now-Twilio · Phone Call) workflow
+        → Myli reads the To line → source category → classify human → text-back AS the dialed line
+```
+
+---
+
+## Full FUB number inventory (as of 2026-06-22)
 
 ### Company
-
 | Number | Label | Disposition |
 |---|---|---|
-| **913-320-0906** | Company number / Google My Business | **PORT → Twilio** |
+| **913-320-0906** | Company number / Google My Business — **the FUB texting line** | **PORT → Twilio** |
 
 ### Company team inboxes
-
 | Number | Label | Disposition |
 |---|---|---|
 | 913-270-0645 | Default Buyer's Agent # — OLD | drop (deprecated) |
 | **913-354-8600** | LISTINGS — KEEP (the sign line) | **PORT → Twilio** |
-| 913-453-5505 | "Ana old number 913-954-7123 for" | reconcile with the Ana GV port |
+| 913-453-5505 | "Ana old number 913-954-7123 for" (the forward target) | reconcile with the Ana GV port |
 
-### Past Agents (KEEP in FUB — past-client inbound)
-
+### Past Agents (each tagged; the reactivation lines)
 | Agent | Number | Agent | Number |
 |---|---|---|---|
 | Laura Wonder | 913-423-9499 | Mylyn Haguy | 913-298-8660 |
@@ -99,43 +237,25 @@ Every FUB line, as of 2026-06-22. All FUB-provisioned (FUB-owned).
 | Brian Williams | 913-270-3458 | | |
 
 ### Team Members
-
 | Member | Email | Number | Disposition |
 |---|---|---|---|
-| Aaron Foster | afoster@spradlingrealtygroup.com | 913-298-8760 | drop |
-| Ana Spradling | ana@spradlingrealtygroup.com | 913-349-5536 | park, unused |
-| Ben Froeschl | bfroeschl@spradlingrealtygroup.com | 913-379-3429 | drop (departing) |
-| Francela Chavarria | tc@spradlingrealtygroup.com | 913-270-6213 | **Keep** (holding pattern) — Transaction Coordinator; eventually moves to **tc@houseloop.ai** |
+| Zach Spradling | zach@spradlingrealtygroup.com | **913-490-2988** | **My Inbox** (Zach's personal FUB line) |
+| Ana Spradling | ana@spradlingrealtygroup.com | 913-349-5536 | park, unused (Ana's active line is the GV 913-954-7123) |
+| Francela Chavarria | tc@spradlingrealtygroup.com | 913-270-6213 | **Keep** — Transaction Coordinator; eventually → **tc@houseloop.ai** |
 | Mylee | mylee@spradlingrealtygroup.com | 850-660-3173 | TBD |
-| Zach Spradling | zach@spradlingrealtygroup.com | 913-490-2988 | park, unused |
+| Aaron Foster | afoster@spradlingrealtygroup.com | 913-298-8760 | drop |
+| Ben Froeschl | bfroeschl@spradlingrealtygroup.com | 913-379-3429 | drop (departed) |
 
-## Inbound capture — every call & text lands on the lead
+<Tip>
+A number provisioned *inside* FUB is owned by FUB — leaving FUB loses it unless you port it. Porting to our
+Twilio (LOA + recent bill) makes it ours and lets us point Voice + SMS at Myli.
+</Tip>
 
-<Check>
-**Live (shipped 2026-06-22).** Inbound calls, texts, and emails are stored to the lead record and
-threaded onto the conversation — **including callers who aren't a lead yet.**
-</Check>
-
-The root cause we fixed: FUB delivers unknown callers with **`personId = 0`**, and the webhook handler did
-`if (!personId) return` — and `!0` is `true`, so **every missed call, voicemail, and first-touch text from
-an unknown number was silently dropped.** Now `handleCall` / `handleTextMessage` / `handleEmail`
-(`apps/dashboard/server/fub-webhooks.ts`) store `person_id = 0` as an *unmatched* record keyed by phone
-number instead of dropping it. So the full inbox — missed calls and voicemails included — is captured and
-converts cleanly to a lead when the caller is identified.
-
-| Inbound type | Captured | Notes |
-|---|---|---|
-| **Call** (incl. missed / voicemail) | ✅ | Recording URL + outcome stored; transcript when available |
-| **Text** (SMS / iMessage) | ✅ | Threaded onto the lead; unknown-number texts captured too |
-| **Email** | ✅ | Threaded onto the lead |
-
-Per-member dialer numbers, A2P 10DLC, and per-user caller-ID rules:
-**[Team Members & Communications](/guides/team-communications)**.
-
-## Roadmap
+## Status — nothing in the phone build is live yet (locked design)
 
 <Info>
-**Live now:** inbound capture (calls, texts, voicemails, including unknown callers).
-**Next:** the Myli inbound voice+SMS handler (reads the `To` number → context → prompt) on the owned lines;
-complete the number ports into Twilio; re-point the SRG `913-347` numbers off GoHighLevel.
+**Live now:** inbound capture (calls, texts, voicemails, incl. unknown callers) via the FUB webhook.
+**Next (Phase 4, not built):** the ONE Myli phone workflow (dynamic dialed-line read + classify + text-back from
+BlueBubbles); the **email bridge** for Ana's GV line (Gmail API); then the **Twilio ports** starting with
+913-954-7123; A2P 10DLC; re-point the SRG `913-347` numbers off GoHighLevel.
 </Info>
