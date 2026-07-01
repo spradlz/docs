@@ -1,6 +1,6 @@
 ---
 title: "Saved Search Alerts"
-description: "How HouseLoop's saved search alert engine works — the compute-on-web / send-via-CRM-workflow architecture, the firstSeenAt feed-arrival model, Inngest triggers, and the Saved Searches surface."
+description: "How HouseLoop's saved search alert engine works — the compute-on-web / send-via-CRM-workflow architecture, the firstSeenAt feed-arrival model, the system/client/agent origin taxonomy, agent-on-behalf creation, Inngest triggers, and the Saved Searches surface."
 ---
 
 When a buyer saves a search on `houseloop.ai`, the HouseLoop alert engine surfaces the
@@ -17,6 +17,32 @@ on the workflow canvas + in the Run Log (see *Inngest or it doesn't exist*).
 </Note>
 
 ## Dev Log
+
+<Update label="2026-07-01 — Benji" description="3-origin taxonomy, agent-on-behalf creation, digest cards == count, firstSeenAt newest sort">
+**Four shipped changes to the saved-search system.**
+
+- **3-origin taxonomy (`createdBy`: `system | client | agent`).** Was `lead | agent`, where the
+  registration auto-seed was mislabeled `agent`. Now: **`system`** = auto-created at registration
+  (the pixel-derived starter); **`client`** = the client saved it themselves (was `lead`);
+  **`agent`** = an agent explicitly created it FOR the client. Existing rows remapped
+  (`lead`→`client`, `agent`→`system`). The CRM lead-detail Searches tab groups all three —
+  **Agent Searches / Client Searches / System Searches**; `/api/leads` counts them separately.
+- **"Create Saved Search as Agent" (agent-on-behalf).** A button on the CRM lead-detail Searches
+  section mints the client's magic link and drops the agent onto `houseloop.ai` **logged in AS the
+  client**, on `/listings?asAgent=1`. The agent picks filters exactly like the client would; the
+  site's `SaveSearchModal` renders **agent-focused copy** ("Create this lead's HouseLoop search /
+  Name their search / How often should we email the lead?") and saves `createdBy='agent'` FOR the
+  client via `POST /api/saved-searches`. Route: `apps/houseloop-crm/app/api/leads/[id]/agent-search-link`.
+- **Digest email cards == count.** The digest subject says "N new" (homes that hit our feed since the
+  last send), but the cards were re-queried from the FULL criteria (`renderMatchCards` → newest 3 of
+  ALL matches), so "1 new home" showed 3-4 cards. The email now renders the EXACT new-since-last homes
+  the website carries in `matches_json` (up to 4); the full-criteria `total` still drives the
+  "See all {total} homes that match your search" footer. **Count and cards are now the same set.**
+- **"Newest Listed" = website-arrival recency, NO status tier.** The `/listings` newest sort now orders
+  every listing by **`firstSeenAt`** (when it hit our feed) with no status grouping — a brand-new
+  coming-soon home surfaces at the top the instant it arrives, interleaved with active/pending/sold.
+  Reinforces the law below: feed-arrival drives "newest," never the MLS `listDate`.
+</Update>
 
 <Update label="2026-06-28 — Benji" description="Instant alerts fire on feed-arrival; doc made current">
 **Saved-search instant alerts were never firing.** The trigger ran 58,363 times yet emitted
@@ -55,8 +81,8 @@ _Verified live: Titan (`titan@aititans.ai`) — `lastAlertSentAt` null → stamp
         │                │      → sendSavedSearchAlert(skipSend)        │
         ▼                │      → pushLeadToCRM(action:'saved_search')  │
  SavedSearch row created │                                              │
- (createdBy 'lead' or    │  seedStarterSavedSearch  (register-via-      │
-  'agent')               │      saved-search, CRM lead-intake)          │
+ (createdBy 'client' /   │  seedStarterSavedSearch  (register-via-      │
+  'agent' / 'system')    │      saved-search, createdBy='system')       │
                          └───────────────────────┬─────────────────────┘
                                                  │  emits Inngest events
                                                  ▼
@@ -72,6 +98,21 @@ _Verified live: Titan (`titan@aititans.ai`) — `lastAlertSentAt` null → stamp
 
 The website's job is to **find the homes**. The CRM's job is to **send the message**. The two
 are bridged by Inngest events, never by the website calling Resend for a digest.
+
+## The origin taxonomy (`createdBy`: system | client | agent)
+
+Every saved search carries exactly one **origin** — who created it. It drives the CRM grouping,
+the copy, and the per-lead counts. (Zach 2026-07-01 — replaces the old `lead | agent`.)
+
+| Origin | Who made it | How |
+| --- | --- | --- |
+| **`system`** | HouseLoop, automatically | The registration auto-seed (`seedStarterSavedSearch`) derives a starter search from the homes the lead actually viewed and inserts it silently. *(Was mislabeled `agent`.)* |
+| **`client`** | The buyer themselves | They clicked **Save Search** on `/listings`. *(Was `lead`.)* |
+| **`agent`** | A HouseLoop agent, FOR the client | The **Create Saved Search as Agent** flow (below). |
+
+In the CRM lead-detail **Searches** tab, the three render as **Agent Searches / Client Searches /
+System Searches**. `GET /api/leads` returns `agent_search_count`, `client_search_count`,
+`system_search_count` (legacy `lead`/NULL rows count as client).
 
 ## The match engine (the `firstSeenAt` law)
 
@@ -96,7 +137,9 @@ are bridged by Inngest events, never by the website calling Resend for a digest.
 
 <Note>
 The alert always queries our **own `Listing` table** (centerbeam DB), never Repliers live. Results
-reflect our cached MLS data, as current as the last Repliers webhook/sync.
+reflect our cached MLS data, as current as the last Repliers webhook/sync. The `/listings` **"Newest
+Listed"** sort orders by `firstSeenAt` (feed-arrival) with no status tier, so the newest home — even
+a coming-soon one — always leads. Same clock everywhere.
 </Note>
 
 ## The send chain (compute → emit → workflow)
@@ -109,11 +152,21 @@ houseloop/saved-search.digest-due
   { email, match_count, search: { name, url, criteria, matches[] } }
 ```
 
-The CRM consumes this in
+`match_count` is the **new-since-last** count; `search.matches[]` is those **exact** homes (the
+`topMatches`, up to 4). The CRM consumes this in
 `apps/houseloop-crm/lib/inngest/functions/saved-search-digest-due.ts`, resolves the lead by email,
 and fires the **`sys_saved_search_digest`** ("Saved Search Listing Alerts") workflow — whose
 branded email step is the only thing that actually sends. After emitting, the watermark advances
 (`lastAlertSentAt = now()`, `lastMatchCount = matches`) so the next tick only picks up newer homes.
+
+<Note>
+**Count == cards (Zach 2026-07-01).** The digest subject says "N new homes." The branded email's
+`{{search.matches}}` cards render from the carried **`matches_json`** (the exact new-since-last homes),
+NOT a re-query of the full criteria — so the count and the cards are the same set. The full-criteria
+`total` still drives the "See all {total} homes that match your search" footer, and the omit-zero
+"explore the rest" block (`{{search.other_results}}`) links to *Listed in the last 24 hours*,
+*Coming soon*, etc. Card rendering: `apps/houseloop-crm/lib/workflows/execute-step.ts` (`fillSearchMatches`).
+</Note>
 
 ## Inngest functions
 
@@ -145,22 +198,32 @@ Flow, every alert path here goes quiet. The gate **fails open** (treats unreacha
 
 ## How a saved search is created
 
-There are two creation paths, and both end with the CRM sending the email:
+Three creation paths, each with its origin — and all end with the CRM sending the email:
 
-**1. Explicit save (`createdBy = 'lead'`).** Buyer clicks **Save Search** on `/listings`.
+**1. Client self-serve (`createdBy = 'client'`).** Buyer clicks **Save Search** on `/listings`.
 `POST /api/saved-searches` creates the row (defaults: `alertFrequency = 'instant'`,
-`deliveryEmail = true`), runs `sendSavedSearchAlert(skipSend, isConfirmation)` to compute the
-first-look matches, and calls `pushLeadToCRM({ action: 'saved_search', ... })`. The CRM's
-**New Lead — Saved Search** door workflow sends the branded confirmation + matches email, the Myli
-personal email, and the text.
+`deliveryEmail = true`, `createdBy = 'client'`), runs `sendSavedSearchAlert(skipSend, isConfirmation)`
+to compute the first-look matches, and calls `pushLeadToCRM({ action: 'saved_search', ... })`. The
+CRM's **New Lead — Saved Search** door workflow sends the branded confirmation + matches email, the
+Myli personal email, and the text.
 
-**2. Registration via a saved search (`createdBy = 'agent'`).** When a lead registers and we have
-real browsing signal, `seedStarterSavedSearch()` in
+**2. Registration auto-seed (`createdBy = 'system'`).** When a lead registers and we have real
+browsing signal, `seedStarterSavedSearch()` in
 `apps/houseloop-crm/app/api/integrations/website/lead-intake/route.ts` derives a starter search
 from the homes they actually viewed (`deriveSearchCriteriaFromPixel`) and raw-inserts an
-`instant`, `createdBy = 'agent'` row into the web `SavedSearch` table. It is a silent insert (no
+`instant`, `createdBy = 'system'` row into the web `SavedSearch` table. It is a silent insert (no
 on-create email) — the `saved-search-instant-check` (with its never-sent 7-day catch-up) delivers
 the recent matches on the next `idx.event`, then real-time after.
+
+**3. Agent-on-behalf (`createdBy = 'agent'`).** A HouseLoop agent clicks **Create Saved Search as
+Agent** on the CRM lead-detail Searches section.
+`GET /api/leads/[id]/agent-search-link` mints the client's magic link (`signMagicToken`, same
+`MAGIC_LINK_SECRET` the website verifies) and returns
+`/auth/magic?ml=<token>&next=/listings?sort=newest&asAgent=1`. Opening it logs the agent into
+`houseloop.ai` **as the client** and lands on `/listings` in agent-on-behalf mode. The agent picks
+filters like the client would; `SaveSearchButton` reads `?asAgent=1` → `SaveSearchModal` shows
+agent-focused copy → `POST /api/saved-searches { createdBy: 'agent' }` saves the search FOR the
+client (and fires the same confirmation + alert workflow).
 
 ## SavedSearch data model
 
@@ -175,7 +238,7 @@ model SavedSearch {
   deliveryEmail    Boolean   @default(true)
   deliveryPush     Boolean   @default(false)
   isActive         Boolean   @default(true)
-  createdBy        String    @default("lead")      // lead | agent (agent = seeded from browsing)
+  createdBy        String    @default("client")    // system | client | agent (Zach 2026-07-01)
   lastAlertSentAt  DateTime?                        // watermark — advances on every emit
   lastMatchCount   Int       @default(0)            // homes the LAST alert sent (the RECENT column)
   totalMatchesSeen Int       @default(0)
@@ -186,6 +249,9 @@ model SavedSearch {
   updatedAt        DateTime  @updatedAt
 }
 ```
+
+`createdBy` values: **`system`** (auto-seeded at registration), **`client`** (self-serve),
+**`agent`** (agent-on-behalf). Legacy `lead`/NULL rows read as `client`.
 
 ## The Saved Searches surface
 
@@ -202,27 +268,33 @@ search:
 | **LAST SENT** | `lastAlertSentAt` |
 
 In the CRM, the same data drives the **Saved Searches** card on the lead (the "god-tier" card with
-Resend opens/clicks/last-sent/frequency/match count). The card's count = real saved-search rows,
-never website *search* (pixel) events.
+Resend opens/clicks/last-sent/frequency/match count), grouped by origin (Agent / Client / System),
+with the **Create Saved Search as Agent** button at the top. The card's count = real saved-search
+rows, never website *search* (pixel) events.
 
 ## Email template
 
 The branded matches email is rendered + sent by the **CRM workflow** (`sys_saved_search_digest` /
-the New Lead — Saved Search door). The website template
-`apps/houseloop-web/lib/email/saved-search-alert.ts` (search name + total match count header, up to
-8 listing cards with a "fresh" badge for homes listed in the last 24h, a **View all N homes** CTA,
-and an unsubscribe link) backs the legacy manual `/api/saved-searches/alert` HTTP path only.
+the New Lead — Saved Search door). `{{search.matches}}` = the new-since-last homes (from the carried
+`matches_json`, so count == cards); `{{search.match_count}}` = that same count; `{{search.other_results}}`
+= the omit-zero "explore the rest" links (last 24h / coming soon / under contract / sold). The website
+template `apps/houseloop-web/lib/email/saved-search-alert.ts` backs the legacy manual
+`/api/saved-searches/alert` HTTP path only.
 
 ## Reference
 
-- `apps/houseloop-web/app/api/saved-searches/route.ts` — create / list (explicit save)
+- `apps/houseloop-web/app/api/saved-searches/route.ts` — create / list (explicit save; accepts `createdBy`)
 - `apps/houseloop-web/app/api/saved-searches/alert/logic.ts` — **the match engine** (`firstSeenAt` floor, `skipSend`)
 - `apps/houseloop-web/app/api/saved-searches/alert/route.ts` — thin manual HTTP wrapper
 - `apps/houseloop-web/app/api/saved-searches/enriched/route.ts` — the Saved Searches surface (RESULTS / RECENT / …)
 - `apps/houseloop-web/app/api/saved-searches/[id]/route.ts` — update / delete
+- `apps/houseloop-web/components/listings/SaveSearchModal.tsx` — the save modal (client + `agentMode` copy)
+- `apps/houseloop-web/lib/auth/magic-token.ts` — magic-token sign/verify (shared `MAGIC_LINK_SECRET`)
 - `apps/houseloop-web/lib/inngest/functions/saved-search-alert.ts` — the 5 Inngest functions + `emitDigestDue`
 - `apps/houseloop-web/app/api/repliers/webhook/route.ts` — emits `houseloop/idx.event` (drives instant)
+- `apps/houseloop-crm/app/api/leads/[id]/agent-search-link/route.ts` — mints the agent-on-behalf magic link
+- `apps/houseloop-crm/components/leads/detail/CenterLane.tsx` — the lead-detail Searches tab (3-origin groups + Create button)
 - `apps/houseloop-crm/lib/inngest/functions/saved-search-digest-due.ts` — CRM consumer → fires the send workflow
-- `apps/houseloop-crm/app/api/integrations/website/lead-intake/route.ts` — `seedStarterSavedSearch` (register-via-saved-search)
+- `apps/houseloop-crm/lib/workflows/execute-step.ts` — `fillSearchMatches` (renders the digest cards from `matches_json`)
+- `apps/houseloop-crm/app/api/integrations/website/lead-intake/route.ts` — `seedStarterSavedSearch` (register-via-saved-search, `system`)
 - `apps/houseloop-web/lib/email/saved-search-alert.ts` — legacy website email template
-"
