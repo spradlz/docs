@@ -1,12 +1,44 @@
 ---
 title: "Account"
-description: "Account — HouseLoop CRM (Account). Documentation stub."
+description: "Your own member record in the HouseLoop CRM — name, sign-in email, phone, and time zone. 'Account' (My Profile) opens your row in the same unified member editor teammates use."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Account** → **Account** — [`/settings/profile`](https://crm.houseloop.ai/settings/profile)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/profile/page.tsx` (route page + its components).
+<Info>There is no standalone profile form. `/settings/profile` immediately resolves the signed-in user and redirects to that user's row in the shared member editor at `/settings/team/agents/[id]` — the same page used to edit any teammate. "My Profile" and "edit a member" are one editor, self or others.</Info>
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when written up — the generator won't overwrite an existing page._
+## What it does
+
+Opens **your** member record so you can view and edit your identity fields. On load, `/settings/profile` fetches `/api/profile`, gets your user id, and replaces the route with `/settings/team/agents/<your-id>` (falling back to `/settings/team` if it can't resolve you). The member editor is one scrollable page with a filter bar — `All · Permissions · Profile · Connections · Roles` — plus an `AI Clone` tab for human members. Edits auto-save (debounced ~600ms after the last change) and a **Save** button forces an immediate save.
+
+## What you configure
+
+On the **Profile** section (identity only):
+
+| Field | Editable | Notes |
+|-------|----------|-------|
+| **Name** | Yes | Your display name. Saving re-issues the session cookie so the sidebar name updates immediately. |
+| **Email** | No | Sign-in identity, read-only. Managed via Google. |
+| **Phone** | Yes | Stored on your user record. |
+| **Time zone** | Yes | Eastern / Central / Mountain / Pacific. |
+
+The surrounding editor also exposes (subject to permissions):
+
+- **Permissions** — Access level (Owner / Admin / Member) and member Type (Human / AI Agent). Only admins can change another member's access, and you cannot change your **own** access.
+- **Connections** — Email, Calendar, Phone, and iMessage channel connections.
+- **Roles** — job roles for humans; AI-kind roles with per-role persona/tool/doc overrides for AI agents.
+- **AI Clone** — human members only: assign and configure the AI clone that sends as you (your phone, email, calendar).
+
+## Data source
+
+- **`/api/profile`** (`GET` / `PATCH`) — reads/writes the current user's row in **`hl_users`**: `id`, `full_name`, `email`, `role`, `phone`, `timezone`, `avatar_url`, and `data->>'notification_email'`. `PATCH` also re-signs the session cookie.
+- **`/api/team/users/[id]`** — the member editor's primary load/save. Joins **`hl_users`** with role assignments (**`hl_member_role`**) and connection state: **`hl_oauth_connections`**, **`hl_dialer_assignments`**, **`hl_imessage_assignments`**, **`hl_calendar_connections`**.
+- **`/api/team/roles`** — the role catalog (human and AI-kind roles).
+- **`/api/me`** — the viewer's identity + access level, used to gate the Access dropdown.
+- **`/api/team/users/[id]/roles/[roleId]`** (`PATCH`) — persists per-role overrides (persona/tools/docs/workflow_ids) on **`hl_member_role`**.
+
+No Inngest functions are involved; all writes are synchronous CRM API calls.
+
+## How it fits
+
+"Account" is the self-service entry point into HouseLoop's single member model: every teammate — human or AI agent — is one row edited through one page. Because your profile is just your own member record, the same editor governs access levels, comms connections, and AI-clone configuration, keeping identity, permissions, and channels in one place rather than a separate account screen.
