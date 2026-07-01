@@ -218,8 +218,25 @@ by dotloop CS 2026-06-22.** Developer guide (source of truth):
 (v2.5)" + "[Step 2] Quick Start Guide". Document templates pulled into
 `tools/houseloop-contracts/dotloop-forms/`.
 
+## The `.loop` fact table (`hl_srg_loop`) — deterministic dotloop facts (2026-07-01)
+
+dotloop is **its own source of truth.** `hl_srg_loop` holds the DETERMINISTIC facts of every loop — one row per loop — so the past-client resolver has a clean ground-truth source. **No SISU triangulation, no LLM guessing who is "ours"** — we record who the listing agent + buyer agent were, by address, plus the closing facts; the resolver decides "ours" later. Rolled up by `hl_srg_agent_loops` (one agent → their loops, mirror of one home → many transactions).
+
+**Facts per loop:** Property (`/detail`: full_address, street#, street, city, state, zip, county, legal) · Closing (`/detail`: sale_price, earnest money, contract_date, **closing_date**, offer_date) · `listing_agent` · `buyer_agent` (each {name,email,brokerage}) · `transaction_coordinator` · `spradling_agents[]` (every @spradlingrealtygroup.com actor = resolver candidates) · buyers[] · sellers[] · participants[] · activity_actors[] · documents[] · referral_direction.
+
+**Sourcing — deterministic-first:** (1) participant **ROLE** (`LISTING_AGENT` / `BUYING_AGENT` / `BUYER` / `SELLER`) → (2) the **ACTIVITY LOG** → (3) documents (Haiku) only as a last-resort fallback.
+
+### THE ACTIVITY-LOG UNLOCK (better than the contract PDF for the departed agent)
+
+`GET /profile/:pid/loop/:lid/activity?batch_size=200` is an audit trail of every action with the actor's name + email + brokerage: *"Walter Hawkins added document … whawkins@spradlingrealtygroup.com"*. **dotloop scrubs a departed teammate from `/participant` but NOT from the activity log** — so a `@spradlingrealtygroup.com` actor in the log IS the agent, recovered deterministically without reading a single PDF. Proof — **11436 Conser**: `/participant` lists only Wendy Manning (`LISTING_AGENT`, the other side); the buyer agent **Walter Hawkins** appears ONLY in the activity log. The contract-PDF route is now the *fallback*, not the primary, for the departed agent.
+
+⚠️ **Ana Spradling is the account admin on every loop** — excluded from the single-candidate agent auto-fill unless she's the only Spradling actor (else she'd falsely become the agent on everyone's deals).
+
+⚠️ **Rate limits:** dotloop throttles concurrent reads. `dl()` backs off (exponential, jittered, ≤3 retries) on 429/5xx, and harvesters run ~3 parallel workers. A fetch-failure guard means a rate-limited loop is retried, never persisted as a blank "done" row. Tool: `tools/houseloop-cards/harvest-loop-full.mjs`.
+
 ## Change log
 
+- **2026-07-01** — **The `.loop` fact table + the activity-log unlock.** Built `hl_srg_loop` (one row/loop: address, price, closing_date from `/detail`; listing+buyer agent from participant roles + the ACTIVITY LOG; Haiku doc-fallback) + `hl_srg_agent_loops` (agent → their loops). Key discovery: the **activity log** (`/loop/:id/activity`) exposes an agent scrubbed from `/participant` (Walter Hawkins, buyer agent on 11436 Conser) — deterministic, no PDF needed. dotloop treated as its own source of truth (no SISU triangulation). Added rate-limit backoff to `dl()`. (Caleb)
 - **2026-06-30** — **Bulk document harvest hardened (token self-heal + archived folders).** The first
   contract harvest pulled only 82/12,096 PDFs because (a) the OAuth token lapsed/rotated mid-run →
   silent 401s, and (b) the folder call omitted `include_archived=true` so closed-loop docs (in archived
