@@ -1,303 +1,62 @@
 ---
-title: "SRG Past-Client Reconciliation — Build-Out (WIP Log)"
-description: "The running work-in-progress log of building the SRG past-client resolver. THE METHOD (locked 2026-06-29): HARVEST every source exhaustively into its own provenance-stamped table FIRST, then a deterministic-first matcher triangulates complete data into the child SSOT. The agent comes from the dotloop CONTRACT → SISU → MLS → FUB waterfall. Cost = cheap Haiku only."
+title: "SRG Reconciliation Engine — WIP"
+description: "The working doc for getting SRG past-client data right, in the right tables, verified. Planning + build log."
 ---
-
-<Info>
-**Living document — THIS Mintlify page is the working WIP. We work off of THIS.**
-**Last updated:** 2026-06-29 11:38 PM EDT (Caleb).
-**Working out of:** `GT/GT - ACTIVE/GT_HOUSELOOP_PASTCLIENT_SSOT_PRD.md` (internal) + plan `fuzzy-whistling-hedgehog.md`.
-Settled architecture: [SRG Past-Client Reconciliation](/guides/past-client-data-pipeline). dotloop: [dotloop Integration](/guides/dotloop-integration).
-**Current step:** **HARVEST-THEN-TRIANGULATE rebuild (PRD below).** Filling four source tables exhaustively —
-dotloop contracts (+PDF designated-agent), MLS full rooftop history, FUB Haiku facts — then a deterministic-first
-matcher writes the child SSOT. Running autonomously overnight.
-</Info>
-
-
-## ✅ STAGE 2 BUILT + PROVEN — RELATIONSHIP DOSSIER + LOST-LISTING DETECTION (2026-06-30 overnight)
-
-Stage 2 (`triangulate-stage2.mjs`, Haiku ONE-shot) is live and proven on a 22-card batch (11 regression + 11 fresh),
-run on VIRGIN data (prior resolver output quarantined first via `quarantine-batch.mjs`, reversible).
-
-**⭐ The whole point — LOST-LISTING detection:** a home we helped a client BUY that later SOLD WITHOUT US (a non-roster
-agent got the listing) = a lost reactivation opportunity. First-class field; the dossier leads with it. "Spradling
-Group"/"Spradling Realty" as the MLS list agent = US (the team name) → NOT a lost listing. Batch result: **2 real lost
-listings (Mettman 10013 Webster → Kim Brown; Cooney 6424 Evanston → Homeric Group), 0 false.**
-
-**Result: GREEN 18 · YELLOW 4 · RED 0 · $0.149 for 22 (→ ~$12 for all 1,834).** The relationship dossiers weave Myli
-facts × transactions × current home × lost-listing into a reactivation-ready narrative. The 4 YELLOW are HONEST,
-precisely-named gaps (0 errors): 3 current-home-unknown (sale-only clients → need a county-deed skip-trace harvest) +
-1 resolved-referral. Hand-check caught + fixed a Haiku prose error (said a client "owns" a sold home) by handing Haiku
-the deterministically-computed current home instead of letting it infer.
-
-**~10 general hardening improvements** (all principled, not per-card): same-rooftop/same-side dedup · referral =
-known-disposition-not-a-gap · SISU-spine address/side authority · brain↔dotloop corroboration · Spradling-Group=us ·
-owned-buys current-home model · addressless-buy flagged · MLS address-recovery (price+date) · earliest-sale disposition ·
-current-home handed to the LLM. Staging: `hl_srg_resolver_stage2`. FUB write-back + full scale GATED on Zach sign-off.
-
----
-
-## 🏁 HARVEST COMPLETE + RESOLVER STAGE 1 CERTIFIED (2026-07-01) — the loop is closed
-
-All FOUR harvest tables are full and the deterministic resolver + agent roster are built, hardened, and proven. **Nothing
-is running anymore.** Total money cost of the whole harvest = **~$68** (Haiku, FUB brains only); MLS/dotloop/SISU-enrich/
-resolver were **$0**.
-
-### The 4 harvest tables (all done)
-| Table | Result |
-|---|---|
-| `hl_mls_property_history` | 1,975 rooftops · 5,919 records |
-| `hl_fub_deals` | 4,554 · 4,539 SISU-linked |
-| `hl_fub_person_facts` (Myli brains) | 4,202 · Myli 12-domain facts + dossier + SISU-enriched transactions · ~$68 |
-| `hl_srg_dotloop_contracts` | **1,782 loops with the agent-of-record (from 89 → a 20× recovery)** · 72,996 PDFs · 0 err |
-
-### The SRG agent roster — `hl_srg_agent_roster` (136 agents), `build-srg-roster.mjs`
-The master list of everyone EVER on the team, triangulated from SISU agents ∪ team-exit agents ∪ FUB tags. **Tells the
-resolver which dotloop licensee was OURS** (dotloop shows both sides; a licensee NOT on the roster — Molly Rector, Cami
-Jones, Kimaree Manifold — was the other side, never attributed as ours). Canonicalizes name variants (Walter Hawkins =
-Walter V Hawkins Jr.; Noelle Owen → Noelle Stephens; Kathy Shen = Kathy Shin = Kaixi Shen). Records married-couple pairs
-`couple_of` (Chris Bishop ⚭ Kathy Shen, Lane ⚭ Noelle Stephens, Jenny Delich ⚭ Thornton Williamson, Amanda ⚭ Roger
-Barbieri) for DNC / not-a-reactivation-target.
-
-### The resolver — `triangulate-resolver.mjs` — DETERMINISTIC-FIRST, $0
-Replaces the token-burning s6 (Sonnet 8-turn loop that fetched live in-loop and re-fed the transcript → ~$100/day + it
-GUESSED on timeout). This JOINS the 5 harvest tables and TIERS each client. **Hardcoded against every edge case caught
-tonight, all deterministic, all $0:**
-1. **Roster-gated agent** — take the licensee who was on our team (which side were we on).
-2. **Date-gated dotloop** — a rooftop has many loops over the years; only the one whose date matches the deal (Schmoe's
-   2025 buy → April Atkinson, NOT the house's 2023 loop under a different agent).
-3. **Alias-indexed names** — renamed agents resolve to one identity (Noelle Owen → Stephens).
-4. **Sold-away only when NON-roster** — if WE sold it later, it's not a loss.
-
-**12-card regression proof: GREEN 9 · YELLOW 1 · RED 1 — all $0.** GREEN = all sources agree, resolved free. YELLOW =
-a genuine conflict/choice (real team agents disagree → reconcile). RED = a genuine gap (a referral with no captured agent
-→ "needs investigation," never a wrong guess).
-
-### What's gated on Zach — STAGE 2 (the Haiku one-shot)
-Reconciles the YELLOW tail per the reconciliation laws + synthesizes the full **RELATIONSHIP dossier** (Myli facts ×
-transactions), RED → `needs_review`. **One shot, no agentic loop, Haiku only, est. ~$15-25 one-time.** Proven design;
-does not build/run without Zach's go. Validation protocol: Haiku the 12 → all green → 10 more deterministic → Haiku →
-hand spot-check all 22 → then FUB write-back cards 1-22. Resolver runs on VIRGIN data (prior output quarantined first).
-
----
-
-## 🆕 THE RESOLVER — `triangulate-resolver.mjs` (Stage 1 built + tested 2026-07-01)
-
-**The harvest is done (4 tables full); the resolver that combines them is now being built.** It replaces the
-token-burning s6 agentic loop. Full spec: internal PRD `GT_HOUSELOOP_TRIANGULATE_RESOLVER_PRD.md`.
-
-**Why s6 had to go:** 8-turn agentic loop on **Sonnet 4.6** that did its lookups (county/Ninja/Matrix-SSH/dotloop)
-**live inside the loop** and re-fed the growing transcript every turn (a 13.8M-input-tokens/day spike) → ~$100/day, and
-it **guessed** whenever a live fetch timed out. The harvest moved every live lookup OUT of the loop into a pre-built table.
-
-**The design — deterministic-first, one-shot Haiku:**
-- **Stage 1 — assembly ($0, no LLM):** per client, join brain(`hl_fub_person_facts` by fub_id) + SISU(`sisu_transactions`
-  by name) + dotloop agent(`hl_srg_dotloop_contracts` by address) + MLS disposition(`hl_mls_property_history`
-  rooftop — a later Sold = they moved) → tier **GREEN** (sources agree) / **YELLOW** (conflict or choice) / **RED** (gap).
-- **Stage 2 — Haiku, ONE shot, YELLOW only (gated):** reconcile source conflicts per the reconciliation laws +
-  synthesize the **RELATIONSHIP dossier** = the Myli 12-domain facts (spouse/kids/life-events/comms/motivation) **woven
-  WITH** the transaction history. RED → `needs_review` with the exact missing source named. Never invents.
-
-**Stage-1 test on the 12-card set (2026-07-01, first run):**
-- **GREEN pc6 Purtee** — fully resolved deterministically at $0, incl. the disposition (6424 Evanston later sold
-  2026-03-20 $253k by Homeric Group = they moved). Proves the $0 path.
-- **YELLOW pc11/21/38/57** — correctly flagged for the Haiku reconcile (agent name-variants like Walter Hawkins /
-  Walter V Hawkins Jr., an off-brain 2024 deal, duplicate address rows, SISU/brain tx-count mismatch).
-- **RED pc5/22/12/17/24** — flagged "no FUB brain", but this is a **linkage gap, not missing data** — the SISU closings
-  + dotloop agents are present; `past_client.fub_id` didn't hit a brain for older 2017-2020 clients. Next fix = brain
-  fallback by name/phone.
-
-**Cost:** est. **~$15-30 one-time** (Haiku, YELLOW-only) vs s6's ~$100/day. **Proof gate:** 12/12 on
-`gold-convergence.mjs` before any scale. Gated by Zach: Stage 2 build → scale to 1,834 → FUB publish (separate gate).
-
----
-
-## 🆕 PRD — HARVEST-THEN-TRIANGULATE (Zach LOCKED 2026-06-29 PM, the method that finally holds)
 
 <Warning>
-**Why every prior attempt failed:** they resolved **reactively** — went looking for a fact *during* matching, so the
-facts never all existed at once and the matcher **guessed** (Billy Fischer stamped "ghost card / no SISU" when SISU
-held the closing under Walter Hawkins; Collins's 16451 Blair assumed "owns" when one MLS query showed it sold 2022;
-Anders's current home found via GIS but never written to the rendered field). A day of grinding burned $100+ of LLM.
+**Active WIP (2026-07-01).** Rule for today: prove on the **FIRST 20** before anything touches 1,800. "Good" = the
+correct data EXTRACTED and SITTING IN THE RIGHT TABLE — not "the script ran." Canonical source: `GT/GT - Pending/GT_SRG_RECONCILIATION_ENGINE_WIP.md`.
 </Warning>
 
-**THE METHOD: harvest exhaustively into provenance-stamped tables FIRST → then triangulate complete data.** When every
-fact already lives in a table before resolution starts, the matcher cannot guess — there is nothing missing to guess
-about. **Cost = cheap Haiku only** (reading FUB text/calls/tags/stages to extract structured facts + find SISU deals in
-FUB). Everything else is deterministic: DB joins, the dotloop API, the MLS scrape, county/Ninja APIs.
+## What we've done
+Harvested 5 source tables over 2 days (SISU, FUB deal report, MLS rooftop history, dotloop, FUB Haiku brains). The **s6**
+agentic resolver (~$200 Sonnet) ran on all ~1,834 on the **29th** → populated the cards with deals, the **household FUB-ID
+resolution** (`fub_identity`, 94% coverage, dedup + spouse merge), and live GIS/deed discoveries (current homes, lost
+buyers). **13 gold cards were hand-corrected by Zach on the 28th = ground truth.**
 
-### The four sources → four canonical staging tables (every row stamped to its source key)
-| # | Source | Access | Table | State (2026-06-29) |
-|---|---|---|---|---|
-| spine | **SISU** | DB | `sisu_transactions` | ✅ have it (the paid-truth: price · date · client · agent) |
-| 1 | **Dotloop** (agent spine) | **Public API v2 OAuth2** (live, `document:*`) | `hl_srg_dotloop_loops` + `hl_srg_dotloop_contracts` | loops **17,455 ✅** · contracts only **202** → finish |
-| 2 | **MLS** | Heartland Matrix scrape (Camp David) | **`hl_mls_property_history`** (NEW) | build + harvest full rooftop history |
-| 3 | **FUB** | scraper mirror DB + **Haiku** extraction | **`hl_fub_person_facts`** (NEW) | build + harvest |
+## The fuck-up
+1. Built a **from-scratch resolver** that ignored s6's discoveries and wrote to a **scrap table** the audit never reads → thin/wrong cards + constant "my list vs your page" divergence.
+2. **Name-match bug:** exact first-name match dropped SISU deals filed under a partial name ("Kyle" vs "Kyle & Karly") → Nations lost 2 of 5 deals + its lost listing.
+3. **Brain harvest ran on the WRONG pool** (`hl_fub_sisu_link`) → dossiered 3,542 non-clients, **skipped 1,044 past clients** incl. Nations.
+4. **Dotloop licensee 85% empty** (10,361/12,143 NULL agent) — reported "done" off a process exit, never measured coverage.
 
-### Why dotloop is the AGENT SPINE — the departed-agent unlock
-When a team agent leaves, dotloop **deletes them from `/participant`** — the loop then shows only the agent-of-record
-(Ana) + clients, NOT the agent who worked the deal. That agent survives ONLY in the signed contract PDF's **"Licensee
-Assisting Seller/Buyer"** field. We hold the `document:*` scope → `dotloop.downloadDocument()` → `pdftotext` → the real
-human agent, **deterministically, no LLM**. This is the fix for the **535-of-2,168** missing-agent gap and the
-Walter-Hawkins / Mikey-Fletcher / Team-Exit class. dotloop is "the final say on who actually transacted what with us."
+## Lessons (locked)
+- **The table is the truth. ONE source.** Resolver writes the SAME canonical tables the audit reads.
+- **"Done" = correct data IN the table, verified by query.** Measure coverage, never trust "exit 0."
+- **Reconcile, don't rebuild.** Combine s6's discoveries with the harvest tables; correct dispositions, keep GIS finds.
+- **Match fuzzy (surname + first-token); merge households.** Prove on 20 vs the golds before scale.
 
-### Harvest specs
-- **Dotloop → `hl_srg_dotloop_contracts`** (1 row / closing loop, all via API): `/loop/:id/detail` → address · MLS# ·
-  price · close date; `/participant` → client name+email+role+side; **download contract PDF → licensee/designated
-  agent**. Provenance = loop id + document id. Resumable (skip pulled loops). Reuse the dotloop suite.
-- **MLS → `hl_mls_property_history`** (1 row / MLS record / rooftop): dedup every address across SISU + child homes +
-  dotloop detail → unique rooftops; `mls-address-lookup.mjs` → **every** record (Sold/Active/Expired/Pending) with
-  mls# · status · sale price · close date · list agent · office · beds/baths/sqft/year. Provenance = mls#. **Catches
-  the post-our-sale resale** (the lost-listing signal we kept missing). Cache per rooftop; the only slow scrape → runs
-  all night, resumable.
-- **FUB → `hl_fub_person_facts`** (1 row / FUB person): a schema-constrained **Haiku** extraction over notes/texts/
-  calls/tags/stages → fields ONLY (no prose): `spouse_names[]` · `mentioned_addresses[]` · `team_exit_agent` ·
-  `closing_refs[]` · `dnc` · `is_agent` · emails/phones — each carrying its **source snippet**. Also links SISU deals →
-  FUB person(s) by name+phone+email. Extraction, not narration.
+## FUB-ID + household coverage (live)
+| Metric | Count |
+| --- | --- |
+| Total past clients | 1,834 |
+| **Have a resolved FUB household** (`fub_identity`) | **1,732 (94.5%)** |
+| No FUB link at all | 100 |
+| Duplicate FUB profiles detected + flagged | 366 |
+| Spouse / 2nd member resolved | 185 |
+| Distinct household FUB IDs mapped | 2,178 |
 
-### Phase 2 — Triangulate (deterministic-first; Haiku only for the ambiguous tail)
-Join the four tables per past client → write `hl_srg_past_client_homes` (child SSOT) + `hl_srg_past_clients.dossier_json`:
-- **Agent** = dotloop contract licensee → SISU → MLS our-side → FUB Team-Exit (Ben Froeschl never; Zach→Ana).
-- **Disposition** = MLS rooftop history (later Sold by a non-SRG agent after our buy = LOST listing, dated/priced/agent;
-  EXIT rule — a home WE sold is never lost) + county deed for current ownership.
-- **Current home** = deed owner_match, else (sold-everything) AIMS/county surname search → seat via Ninja (HLID+value),
-  **materialized into `dossier_json.current_properties`** (the field the card renders).
-- 80% resolve in pure code; only true ambiguity (collisions, multiple candidate homes, conflicting sources) escalates
-  to a cheap Haiku that can only MATCH facts already on the table. **No-add/no-delete/match-only.**
+## The data map — where every piece lives (2026-07-01)
 
-### Cost + guardrails
-Cost = cheap Haiku only (FUB extraction + ambiguous triangulation); zero Opus/Sonnet in the path. No auto-sign-off, no
-FUB publish (Zach gate). Provenance on every row; a fact with no trace = `needs_review`, never asserted. The harvest
-tables are canonical staging — reusable for the AI clone + website, not scratch.
+### CRM DB (`HL_CRM_DATABASE_URL`, autorack)
+| Table | Rows | Contains | Written by |
+| --- | --- | --- | --- |
+| `hl_srg_past_clients` | 1,834 | card parent: name, bucket, `fub_identity` (1,732), dossier (473 carded, 13 gold) | s6 + Zach hand-fix |
+| `hl_srg_past_client_homes` | 2,168 | deal/home child: address, role, `determined_agent` (535), disposition, resale | s6 / attach-closing-facts |
+| `sisu_transactions` | 11,636 | closings (1,945 closed): amount, date, agent, address | SISU import |
+| `hl_fub_deals` | 4,554 | FUB deal report (4 pipelines) | FUB deal-report harvest |
+| `hl_mls_property_history` | 5,919 / 1,547 rooftops | rooftop sales: date, price, `list_agent` only (buyer-agent MISSING) | harvest-mls-history (Matrix) |
+| `hl_srg_dotloop_loops` | 17,455 | loop index | dotloop-loop-index |
+| `hl_srg_dotloop_contracts` | 12,143 | contract → licensee — **10,361 NULL agent**, all have PDFs | dotloop-contract-fetch |
+| `hl_fub_person_facts` | 4,214 | Haiku brain (facts+dossier) — WRONG POOL, only 686 are past clients | harvest-fub-facts (Haiku) |
+| `hl_srg_agent_roster` | 136 | every SRG agent | build-srg-roster |
 
-### Proof (Phase 2 gate)
-12-card regression set must be 12/12 green before any sign-off: gold pc5 Mettman · pc6 Purtee · pc11 Capps · pc21 Jundt ·
-pc22 Lasley, plus the cards verified live tonight — pc12 Collins (16451 Blair LOST) · pc17 Anders (16800 Westgate OWNS) ·
-pc24 Lozano · pc38 Schmoe · pc57 Belgrave · pc125 Billy Fischer (Walter Hawkins).
+### FUB mirror (`FUB_RAILWAY_DATABASE_URL`, `fub.*`)
+`fub.people` 49,229 · `fub.text_messages` 444,864 · `fub.notes` 140,223 · `fub.calls` 39,867 · `fub.events` 146,292 — Camp David FUB DOM scraper.
 
----
-
-## 🧹 RESOLVER QUARANTINE — the contaminated blob is OUT of the canonical tables (Zach LOCKED 2026-06-27 PM)
-
-<Warning>
-**The prior resolver output is CONTAMINATED and was MOVED OUT of the parent into a quarantine table.** The old
-resolver wrote `hl_srg_past_clients.resolver_block` (jsonb) + `resolution_status`. That data carries **placeholder
-agents** ("SRG", "Past Agent Referrals" — the exact thing the agent law forbids), and its internal `resolved_at` is
-**unreliable**: it claims 2026-06-27 for 1,453 rows while the row's `updated_at` proves it was actually last written
-**Jun 11–20** — i.e. it predates the agent-source law and is stale, not "today's clean work."
-</Warning>
-
-**Where it lives now:** **`hl_srg_resolver_quarantine`** (CRM DB, autorack). Columns: `past_client_id` (PK) ·
-`resolver_block` · `resolution_status` · `quarantined_at` · `reason`. **1,508 rows (1,493 blocks) moved in,
-verified count-exact, nothing deleted, fully reversible.** Created Phase 1, 2026-06-27 PM.
-
-**The rule (LOCKED):**
-1. **Canonical tables stay clean as fuck.** `hl_srg_past_clients` (parent) + `hl_srg_past_client_homes` (child)
-   hold ONLY source-verified, provenance-stamped truth — never a derived/guessed blob.
-2. **`hl_srg_resolver_quarantine` is NOT a source of truth.** Never render from it, never project it into the
-   canonical tables.
-3. **Use it ONLY for post-resolve research** — when the clean source resolver genuinely **can't match** a deal, you
-   MAY consult the quarantine blob as a *research hint*. It's a lead, never an answer; re-verify against the canonical
-   source before anything touches a canonical row.
-
-**Still open (gated):** Phase 2 — `DROP COLUMN resolver_block, resolution_status` off `hl_srg_past_clients`.
-Requires (a) repoint `audit/route.ts` off the blob (it still reads contacts/summary from it), then (b) **Rule #0
-typed Zach approval naming the table.** Note: `.claude/checkpoints/resolver-quarantine-2026-06-27.md`.
-
-**The no-add/no-delete/match-only law (Zach LOCKED 2026-06-27):** we do NOT add houses, we do NOT delete houses — we
-MATCH houses. Every children operation is MATCH → UPDATE an existing row. Anything found in dotloop/MLS/Zillow must
-match a house already on the canonical children list; external sources resolve/enrich, never grow the set.
-
-## 🏛️ THE 2-LAYER ARCHITECTURE (Zach LOCKED 2026-06-27 PM) — source tables → resolver → 2 read tables
-
-**Not "2 tables instead of 6" — "SOURCE tables FEED 2 CANONICAL read tables."** Both stay.
-
-- **SOURCE (system of record, raw, never bulk-copied):** `sisu_transactions` · `hl_mls_property_history` (NEW) ·
-  `hl_srg_dotloop_contracts` · `Listing` (Repliers) · `hl_fub_person_facts` (NEW, from `fub.*`). The resolver READS these.
-- **READ MODEL (the 2 canonical tables):** PARENT (person + dossier) · CHILD (house facts + dossier). The card +
-  AI clone read **ONLY** these. Resolve ONCE, materialize on the child, read forever — never re-JOIN at read time.
-
-<Warning>
-**THE NO-BIAS RULE.** Most child rows carry a STALE `determined_agent` from prior runs **while the source columns are
-EMPTY** (`sisu_agent`/`dl_loop_id`/`mls_number` = NULL) — a guessed agent on top of no evidence (the "50 times"
-pattern). **The resolver runs BLIND: never shown the prior agent/disposition/dossier; it tees up ONLY raw source
-evidence and resolves independently.** Showing the model the prior answer is not a test.
-</Warning>
-
-## 🛑 THE LAW (locked 2026-06-27 — read this first, it overrides everything below)
-
-**`hl_srg_past_client_homes` (the CHILD) is THE single source of truth. EVERY resolved fact is WRITTEN there as a
-column. The Audit Report, the FUB note, and the `/home` page all RENDER from the child. Nothing is "resolved" until
-it is written into the child table.** The parent `hl_srg_past_clients` holds the person + `bucket` + `dossier_json`
-(a **derived render of the child**) — never the place truth lives.
-
-## The data model (two tables, one SSOT)
-
-| Layer | Table | Grain | Holds |
-|---|---|---|---|
-| PARENT — person | `hl_srg_past_clients` | 1 / person (~1,834) | name · contact · `bucket` · `website_hlid` · `dossier_json` (**derived render**) |
-| **CHILD — house = THE SSOT** | `hl_srg_past_client_homes` | **1 / house (~2,168)** | the ONE reconciled row — all facts flat + `*_source` provenance. **`determined_agent`(+`_role`+`_source`), disposition, `sold_not_by_us` MUST be populated here.** |
-
-## The agent waterfall (LOCKED — "no agent = not resolved"; never SRG/placeholder/MLS-listing)
-
-1. **Dotloop CONTRACT** → the signed **Licensee Assisting Seller/Buyer** = final truth (recovers departed agents the
-   participant list drops). `dotloop-contract-agent.mjs → contractAgent(loopId, profileId)`; `lib/dotloop/client.ts →
-   downloadDocument()`. **Precedence: dotloop CONTRACT > SISU > MLS list_agent > recon.**
-2. **SISU `agent`** (client first+last + amount). Zach → Ana. Not `closings.agent` (MLS-polluted).
-3. **FUB** `Team Exit - <name>` + notes/texts/calls. 4. **Still nothing → not resolved → investigation.**
-   Keep the departed agent — the relationship is the asset. **Ben Froeschl is never the agent.**
-
-## Disposition + lost listings
-
-- **Disposition:** MLS rooftop history (`hl_mls_property_history`) PRIMARY for the resale signal > live county deed
-  (owner_match = owns / owner_differs = moved) > Repliers (sold date/price) > Ninja (agents). Mover-finder (cross-county
-  by owner name, deed-verified) finds the new home; else "moved — unknown, ask them."
-- **Lost-listing rule (Bazalgette):** ONLY a home we BOUGHT for them that THEY later sold through a NON-SRG agent.
-  **If WE sold the address, it is NEVER lost.** Match by house# + street token, not raw string.
-
-## The card (a render of the child)
-
-```
-HouseLoop · Spradling Group Past Client — <Bucket>
-Resolved <MM/DD/YYYY>
-CONTACTS            • <name> — <phone> · <email>
-TRANSACTIONS WITH US• <BOUGHT/SOLD> <date> <address>  $<price>  — <determined_agent>
-LOST TRANSACTIONS   • LOST·SOLD <date> <address>  $<price>  — <list_agent> (<broker>) · sold without us
-CURRENT PROPERTIES  • OWNS <deed-confirmed addr> (value $<v>)  — the value-report target
-DOSSIER             <2-4 sentence brief, facts only — no data-quality musing>
-```
-
-## Key files
-
-Harvest (NEW): `harvest-mls-history.mjs` · `harvest-fub-facts.mjs` · migration (2 tables + FK).
-Dotloop: `dotloop-loop-index.mjs` · `dotloop-participants-harvest.mjs` · `dotloop-contract-fetch.mjs`/`-batch.mjs` ·
-`lib/dotloop/client.ts → downloadDocument()`. MLS: `mls-address-lookup.mjs` (Camp David).
-FUB: `fub-history.mjs` · `link-contacts-fub.mjs`. County deed: `county-owner-verify.mjs` · `aims-name-resolver-v2.mjs`.
-Value: `zillow-enrich.mjs`. Render contract: `apps/houseloop-crm/lib/pastclient/card-note.mjs` ·
-`components/seller-report/AuditReport.tsx`. Oracle: `gold-convergence.mjs`. Matcher (NEXT): `triangulate-card.mjs`.
-
-## Changelog
-
-- **2026-07-01 (late)** — **🏁 HARVEST COMPLETE. Resolver Stage 1 certified.** All 4 tables full (dotloop 89→1,782 loops
-  w/ agent, 20×). Built `hl_srg_agent_roster` (136) + `triangulate-resolver.mjs` (deterministic, $0), hardened vs every
-  edge case (roster-gated agent / date-gated dotloop / alias-merged names / non-roster sold-away). 12-card GREEN 9/YELLOW
-  1/RED 1. Whole harvest cost ~$68. Stage 2 (Haiku reconcile + relationship dossier) gated on Zach. Loop closed. (Caleb)
-- **2026-07-01** — **🆕 triangulate-resolver Stage 1 built + tested.** Replaces s6 (Sonnet 8-turn loop, live in-loop
-  lookups, ~$100/day, guessed on timeout). New: deterministic assembly of the 4 harvest tables + Myli brain → GREEN/
-  YELLOW/RED tiers; Haiku one-shot on YELLOW only; relationship dossier = Myli facts × transactions. First 12-card run:
-  GREEN pc6 fully resolved $0 (incl. sold-away disposition), YELLOW pc11/21/38/57 correctly flagged, RED pc5/22/12/17/24
-  = brain-linkage gap (data present, fub_id miss). Est ~$15-30 one-time. (Caleb)
-- **2026-06-29 11:38 PM EDT** — **🆕 HARVEST-THEN-TRIANGULATE method LOCKED + PRD written (above).** Root-caused the
-  repeating failure: reactive resolution that guesses missing facts (Billy Fischer ghost card, Collins/Blair assumed-
-  owned, Anders home found-but-not-rendered) + a brittle SISU name match leaving 1,633/2,168 homes with no agent.
-  New method: exhaustively harvest 4 sources into provenance-stamped tables (dotloop contracts +PDF agent, MLS full
-  rooftop history `hl_mls_property_history`, FUB Haiku facts `hl_fub_person_facts`), then a deterministic-first matcher.
-  dotloop confirmed as the **agent spine** (contract-PDF licensee recovers departed agents). Cost = cheap Haiku only.
-  Fixed tonight against live sources + render (gold 5/5 held): pc12 Collins, pc17 Anders, pc24 Lozano, pc38 Schmoe,
-  pc57 Belgrave, pc125 Billy Fischer; built `seat-na-address-buys.mjs` (NA-address SISU→deed-home linker). Grinder
-  retired. Starting the overnight harvest. (Caleb)
-- **2026-06-27 12:12 PM EDT** — Step 1 build: `extract-to-child.mjs` populated the CHILD SSOT; Audit Report API
-  rewritten to SELECT from `hl_srg_past_clients` + `hl_srg_past_client_homes` only. (Caleb)
-- **2026-06-27 10:57 AM EDT** — **🛑 SSOT LAW LOCKED.** CHILD is the single source of truth; agent = SISU → dotloop
-  CONTRACT → FUB; lost-listing rule fixed (if we sold it, never lost). (Caleb)
-- **2026-06-26** — dotloop contract download wired (recovers departed agents); loop index; reconciled-SSOT schema.
+## Today's plan — 3 pillars → reconcile → prove on 20 → scale
+1. **Brain** — fix the pool to the household FUB IDs on the cards; run on the 1,044 missing; verify rows land in `hl_fub_person_facts`.
+2. **MLS rooftop** — full history per rooftop: date · sale price · **listing agent · buyer agent** (add buyer side); disposition every client address.
+3. **Dotloop** — re-parse the 10,361 contract PDFs → licensee.
+4. **Reconcile** — combine s6 + tables (surname+token SISU match, household brain, rooftop disposition, keep GIS) → write canonical.
+5. **Prove on the first 20** vs the golds; Zach signs off the process; then scale.
