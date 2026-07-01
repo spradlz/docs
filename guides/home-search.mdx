@@ -1,0 +1,314 @@
+---
+title: "HouseLoop Home Search"
+description: "How a buyer finds a home on houseloop.ai — the three surfaces (the main search bar, the AI home search, and the Details filters), all driven by one shared query envelope and one search engine over our own listing cache + AI vision catalog."
+---
+
+There are **three ways to search** on `houseloop.ai`, and they all run on the **same engine over the
+same query envelope** — the same URL param means the same thing everywhere, and every filter is
+explicit in the URL (no presets, no magic flags):
+
+1. **The main search bar** — type a place, price, beds, home type. A deterministic classifier turns it
+   into removable chips and lands you on the results gallery.
+2. **The AI home search** — describe your dream home in plain English ("single-family with a private
+   pool and a white kitchen in Overland Park"). Claude extracts filters constrained to our registry,
+   matches our AI vision catalog, and answers superlative questions.
+3. **The Details filters** — the human filter modal (status, price, beds/baths, style, and 20 detail
+   facets) whose checkbox counts equal the real result counts.
+
+All three read our own **`Listing` cache** (the Heartland MLS feed, centerbeam DB), never Repliers live.
+
+<Info>
+**Ground truth:** `GT/GT - ACTIVE/GT_HOUSELOOP_AI_SEARCH_ARCHITECTURE.md` (NL understanding),
+`GT_HOUSELOOP_SEARCH_FILTER_PRD.md` (Details filter + MLS field capture),
+`GT_HOUSELOOP_SEARCH_FILTERBAR_SPEC.md` (the bar), `GT_HOUSELOOP_SEARCH_AI_ROUTING.md` (bar ↔ AI routing).
+This page mirrors what is **shipped + live**.
+</Info>
+
+## 🚧 Work in progress — Home Search rebuild (Benji, June–July 2026)
+
+The search overhaul, phase by phase. ✅ = shipped + live, ⬜ = in progress. Each line names the commit
+and the file so the record is verifiable.
+
+### The AI understanding rebuild — "select from our menu, never generate" (✅ SHIPPED)
+
+The extraction model used to have a free-text slot where it could invent filters, so "single family
+home" intermittently produced hallucinated pills ("modern", "open floor plan"). The god-tier rebuild
+makes a bad value **structurally impossible**, not patched.
+
+- ✅ **Registry-derived vocabulary** (`7ea94df093`). The AI's filter vocabulary is generated from
+  `FEATURE_REGISTRY` — it SELECTS from our real filter menu, never free-generates. (`lib/listings/search/feature-registry.ts`)
+- ✅ **P1 — feature grounding** (`58636f6626`). A resolved feature survives only if one of its registry
+  "needles" appears in the buyer's actual words. "single family home" → **zero feature pills** (no more
+  "modern"). The property TYPE can never become a bogus amenity. (`lib/search/smart-features.ts`)
+- ✅ **Understanding moved to Claude Haiku 4.5** (`418d750bc2`). The OpenAI account hit `insufficient_quota`
+  (429), which had been silently killing feature resolution; the classifier + resolver run on funded
+  **Haiku** now (~2.7s warm, was a ~20s hang). Key: `ANTHROPIC_API_KEY_HOUSELOOP`.
+- ✅ **P2 — deterministic default layer** (`a2ac040292`, `lib/search/search-defaults.mjs`, shared by both
+  routes AND the eval). "homes"/"house" → `Single Family Residence`; "single story"/"ranch" → `story=1`,
+  in CODE — the LLM was intermittently dropping single-story. The bar and the AI modal emit **identical**
+  params for the same query.
+- ✅ **G2 — deterministic detail-value matcher** (`c03dc54552`). The long tail (exact detail-facet values)
+  matches by a DB-sourced vocabulary, narrowing results instead of hallucinating. (`lib/search/feature-matcher.ts`, `feature-library.ts`)
+- ✅ **Pool/condo privacy fix** (`8581901f02`). `private_pool` triggers the **single-family privacy rule**
+  so a "homes with a pool" search never leaks community-pool condos. (`lib/listings/search/feature-registry.ts`)
+- ✅ **Pill dedupe** (`f8e55b176a`, `a59deb0e8f`). One concept → one param → one pill. The single-story
+  (`story=1`) / 3-car-garage / no-HOA / corner-lot / waterfront twins are gone. Guarded by
+  `scripts/search-stress-matrix.mjs` (0-dup on 22 adversarial queries).
+- ✅ **P4 — search-bar thinking indicator** (`418d750bc2`). An animated HouseLoop emblem + cycling status
+  ("searching AI vision, researching listing descriptions") so the bar never sits in dead air.
+  (`components/site/SearchThinking.tsx`)
+
+### The human Details filter overhaul — `GT_HOUSELOOP_SEARCH_FILTER_PRD.md`
+
+- ✅ **F1 — facet counts from OUR DB** (`dd5c47001f`). Every Details checkbox count is computed from the
+  SAME scope `searchFromDb` uses (status + location + price + beds + core-heartland clamp + property-type
+  whitelist + photo floor), so **count(value) == the result count when you check it** — by construction.
+  Was Repliers aggregates (a different dataset → every count wrong). Gate: `scripts/facet-count-parity.ts`
+  = 48/48 (12 fields × 4 scopes). (`lib/listings/detail-facets-db.ts`, `app/api/detail-search-facets/route.ts`)
+- ✅ **F2 — pill labels read "Field: Value"** (`f6bba2e92a`). A detail pill now says `Fireplace: Great Room`,
+  not a bare value. (`components/search/ActiveFilters.tsx`)
+- ⬜ **F3 — capture + DB-back Floor Plan (stories) · Architectural Style · Dining Area.** The raw values
+  (`raw.HMS_FloorPlanFeatures` etc.) already arrive in our Repliers payload; `toListing()` discards them.
+  Add columns + map + Inngest backfill → they filter. Floor Plan becomes its own filter section.
+- ⬜ **F4/F5 — Floor Plan flows into the AI matcher** (bar + Myli); matcher/dedupe parity (single-story
+  = `story=1` vs multi-story = floor-plan; 0 dups).
+
+### "Newest Listed" = website-arrival recency (✅ SHIPPED)
+
+- ✅ **`firstSeenAt`, no status tier** (`aa93a6453e`). The `/listings` "Newest Listed" sort orders every
+  listing by **`firstSeenAt`** (when it hit OUR feed), with NO status grouping — a brand-new coming-soon
+  home surfaces at the top the instant it arrives, interleaved with active/pending/sold. The homepage
+  "All Homes In KC Metro" shelf (`sort=newest`) inherits it. (`lib/listings/cache.ts` `searchByFreshnessRaw`)
+
+### MLS field-capture opportunity (Repliers)
+
+`GET /listings?fields=raw` returns every Heartland field; `?aggregates=<path>&listings=false` enumerates
+values. **`comparables[]` (20 per listing, free)** is the #1 input for the home-value engine — see
+`GT_HOUSELOOP_SEARCH_FILTER_PRD.md` §4.
+
+### Eval harnesses (gate every change)
+
+`scripts/feature-eval.ts` (35 cases, hallucination-rate 0), `scripts/search-eval.mjs` (per-field + exact-set,
+the production Haiku model), `scripts/search-stress-matrix.mjs` (0 dup pills), `scripts/facet-count-parity.ts`
+(F1 count == result parity).
+
+---
+
+## 1. The main search bar
+
+The bar is the fast path: a buyer types a place / price / beds / home type and lands on the gallery. It
+handles the **six deterministic facets** (location, home type, status, beds, baths, price); anything
+richer (amenities, "white kitchen", "pool", floor plan) routes to the AI home search.
+
+**Flow:** type → `POST /api/search/classify` (Haiku) → `{ intent, params }` → the bar applies the shared
+deterministic defaults, renders **removable chips**, and navigates to `/listings?<params>`.
+
+```bash
+curl -X POST "https://houseloop.ai/api/search/classify" \
+  -H "content-type: application/json" \
+  -d '{"q":"Overland Park single family homes with a private pool"}'
+# → { "intent": "normal",
+#     "params": { "city": "Overland Park", "style": "Single Family Residence", "feature": "private_pool" } }
+```
+
+- **The bar NEVER asks a question.** It applies smart defaults and shows removable chips (the AI modal is
+  where clarifying happens). "homes" → `style=Single Family Residence`; "single story" → `story=1`.
+- **`params` carries** `city / style / story / minBeds / minBaths / minPrice / maxPrice / feature / detail.*`.
+- Location typeahead comes from `GET /api/locations/autocomplete` (addresses, cities, counties,
+  neighborhoods, school districts, schools). Selecting an address goes straight to the listing.
+
+<Note>
+**One brain, two surfaces.** The bar (`classify`) and the AI modal (`nlp`) share `search-defaults.mjs`, so
+they emit **identical** params for the same query — the bar just never converses.
+</Note>
+
+## 2. The AI home search
+
+The AI modal lets a visitor describe a home in plain English and **answers** instead of dumping a list.
+Entry points: the **"AI Search"** nav item, the gradient **"AI Search"** button beside the hero bar, and
+the **"Search smarter with AI"** row in the dropdown — all open one chat modal that calls `POST /api/search/nlp`.
+
+**Claude Haiku 4.5** (server-side — the key never reaches the browser) runs the conversation: a friendly
+reply + structured filter extraction (constrained to our registry, grounded to the buyer's words) + a
+`ready` decision. When `ready`, the search resolves through a **fixed layer order** — first layer that can
+handle the query wins:
+
+<Steps>
+  <Step title="Superlative answer">
+    If the query carries a sort ("most expensive / cheapest / biggest / most beds"), we **answer the
+    question** — singular → ONE home + a short factual narration; plural → the sorted list.
+    `url = /listings?sort=<sortKey>`. (Zach's rule: "if I ask a question, answer it — not 24 matching + 455 nearby.")
+  </Step>
+  <Step title="Vision-tag match (PRIMARY for tagged metros)">
+    Descriptive features match our **pre-computed AI vision catalog** of each listing's photos — instant
+    SQL, photo-verified, exact. Skipped where a metro isn't vision-tagged yet.
+  </Step>
+  <Step title="Repliers NLP (untagged fallback)">
+    `POST https://api.repliers.io/nlp` extracts structured filters + runs Repliers' own image search — a
+    **thin fallback** only where we haven't vision-tagged.
+  </Step>
+  <Step title="Description re-rank (last backstop)">
+    Reads listing descriptions to reject false positives ("white quartz countertops" ≠ white kitchen,
+    "pool table" / "community pool" ≠ private pool).
+  </Step>
+</Steps>
+
+The reply returns the match count, a `listings` preview array, and a **View N homes** URL that deep-links
+into the gallery (matches pinned + badged "AI Match" via `aimatch=`).
+
+### Vision Catalog (the primary matcher)
+
+At ingest, **gpt-4o-mini** (vision, low detail, up to 16 photos) reads each listing's photos ONCE against a
+controlled matrix of **50+ buyer-searchable features** and caches the result in `Listing.visionTags` (JSON).
+Descriptive search is then **instant SQL** — no per-query LLM, no Repliers round-trip.
+
+### Private vs HOA amenities (vision-verified)
+
+A home's OWN pool is separated from the neighborhood's. `visionTags.pool_type = "private"` only when the
+model SEES a pool in the home's own yard; community/HOA pools are tagged `"community"` and never match a
+private-pool query. The `private_pool` feature **also** triggers the single-family privacy rule, so
+community-pool condos never leak into a "homes with a pool" search.
+
+## 3. The Details filters (+ results & map)
+
+The Details modal is the human filter surface: status, price, beds/baths, style, lot size, and **20 detail
+facets** (fireplace, flooring, kitchen features, exterior, etc.). Every checkbox shows a **count that equals
+the real result count** (F1) and every applied pill names its field (F2).
+
+### The query envelope (shared by every surface)
+
+| Param | Meaning | Example |
+|---|---|---|
+| `city` | City name (comma-list for multi) | `city=Overland Park` |
+| `state` | State abbr | `state=KS` |
+| `zip` | ZIP (comma-list) | `zip=66085` |
+| `status` | Listing status — CSV of group tokens. Omitted = default (For Sale + Coming Soon). | `status=forSale,sold` |
+| `sort` | Sort order — a SORT, not a filter; persists across filter changes. | `sort=newest` |
+| `minPrice` / `maxPrice` | Price band | `minPrice=400000` |
+| `minBeds` / `minBaths` | Bed / bath floor | `minBeds=3` |
+| `style` | Heartland style discriminator | `style=Single Family Residence` |
+| `story` | Floor-plan stories | `story=1` |
+| `feature` | Amenity/vision feature (CSV) | `feature=private_pool` |
+| `detail.<field>` | A Details-facet value | `detail.fireplace=Great Room` |
+| `minAcres` / `maxAcres` | Lot size band | `minAcres=2` |
+| `bbox` | Viewport `W,S,E,N` (map) | `bbox=-94.8,38.8,-94.5,39.1` |
+| `limit` / `page` | Page size (caps at 100) / 1-based page | `limit=24` |
+
+**Sort values:** `newest` (**website-arrival, `firstSeenAt` desc — no status tier**), `viewsDesc`,
+`priceAsc`, `priceDesc`, `bedsDesc`, `bathsDesc`, `sqftDesc`, `lotsizeDesc`, `priceDropDesc`, `recentlySold`.
+Default is `newest`. Sort **persists** as you add/remove location filters.
+
+### Status filter & counts
+
+The `status` param is a CSV of exactly four group tokens:
+
+| Token | Means | DB status |
+|---|---|---|
+| `forSale` | Active / for sale | `active` |
+| `comingSoon` | Coming soon | `coming_soon` |
+| `underContract` | Pending / under contract | `pending` |
+| `sold` | Sold (closed) | `sold` |
+
+**Default (no `status=` param) = `forSale,comingSoon`.** Locked because the UI status picker writes a *null*
+`status` param whenever exactly that pair is selected — so "no param" and "For Sale + Coming Soon" MUST
+resolve to the same set (this was the 348-vs-66 bug).
+
+<Note>
+**Status is ADDITIVE — "results include every status you pick."** Each token adds its full set; the total
+is the sum. `forSale` → 58 · `comingSoon` → 8 · together → **66**. `sold` draws from the **full** sold
+archive (`ListingHistory`, ~12-month window) even when combined, and the engine presents live homes first,
+then sold by sale-date desc. **One count source:** every count a user sees (results header, Filters footer,
+price-histogram, saved-search card) calls `/api/listings/count` with the same status draft — they always agree.
+</Note>
+
+### Facet counts come from OUR DB (F1)
+
+`GET /api/detail-search-facets` returns each detail field's checkbox values + counts, computed from the SAME
+WHERE `searchFromDb` uses (`computeDetailFacets` in `lib/listings/detail-facets-db.ts`) — so the count for a
+value equals the number of homes you get when you check it, by construction. (Was Repliers aggregates, a
+different dataset → every count wrong.)
+
+### Results gallery + map
+
+`GET /api/listings/search` returns `Listing` objects (price, address, beds/baths/sqft, photos, status,
+`mlsListedAt`) + engagement stats, batched per listing. `GET /api/listings/count` is the cheap total.
+
+`GET /api/listings/map` takes the **same envelope** plus map params so the map mirrors the list exactly:
+
+- **Marker mode** (default, `mode:"pins"`, **no clustering, ever**): `pins` is capped at 50 per viewport
+  (`MAX_MAP_PINS`, stride-sampled; AI-match pins always kept), so the UI shows "{pins.length} of {total}"
+  (e.g. "46 of 312"). Zoom in → bbox shrinks → every home shows.
+- **Fit mode** (`bounds=1`): returns the bounding box of the whole filtered set to auto-frame the map.
+- **Search-as-you-move:** in map/split view the client pushes the live viewport `bbox` into the URL on
+  every pan/zoom, so the list + count re-scope to what's on screen. Markers flip to price pills by pixel
+  spacing (never stacked); AI matches always render as ✨ pills.
+
+`GET /api/geo/place-boundary` draws the Census TIGER outline around a searched city.
+
+## Endpoints (public website read APIs)
+
+Served from `https://houseloop.ai/api` (prod) / `http://localhost:3001/api` (dev). Read-only `GET` unless noted.
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/search/classify` | The bar router — deterministic extraction (Haiku) → `{ intent, params }` |
+| `POST /api/search/nlp` | One AI conversational turn → `reply` + (when `ready`) `count / aiMatchHlids / url / listings[] / filters` |
+| `GET /api/listings/search` | Full search (envelope → results), `limit` default 24, max 100 |
+| `GET /api/listings/count` | Just the total for a query (byte-identical to what `/listings` renders) |
+| `GET /api/listings/map` | Map markers / fit bbox for the current viewport (same envelope) |
+| `GET /api/detail-search-facets` | Details-modal checkbox values + counts (from our DB — F1) |
+| `GET /api/locations/autocomplete` | Search-bar typeahead (`q` ≥ 3 chars) |
+| `GET /api/geo/place-boundary` | Census TIGER named-place outline for a city |
+| `GET /api/home` | The composed home page (ordered shelves + inspiration), cached 5 min |
+| `GET /api/listings/{hlid}` | A single listing (full `photos.all` gallery + price `history`) |
+
+**Home shelves:** each shelf = the **12 newest-listed homes** in its filter, new listings push in at the
+front. Shelves are DB-config (`hl_home_shelf`, seeded from `prisma/seed/home-shelves.ts`) — not hardcoded.
+
+## IDX attribution (MLS GRID / Heartland)
+
+HouseLoop displays Heartland MLS listings via the MLS GRID IDX feed, so the
+[MLS GRID IDX Rules](https://www.mlsgrid.com) govern where broker attribution + the source disclaimer must
+appear. The key lever is the **200-character minimal-info exemption**.
+
+> **§13/§23/§24/§25 (verbatim):** *"Displays of minimal information (e.g. a one-line or 'thumbnail,' text
+> messages, 'tweets', etc. of two hundred (200) characters or less) are exempt from this requirement but
+> only when linked directly to a display that includes all required disclosures."*
+
+| Surface | Component | Attribution |
+|---|---|---|
+| Gallery / list card | `components/listing/ListingCard.tsx` | **None** — minimal-info ≤200 chars linking to detail (§13/§23). |
+| Map pin preview | `components/listings/ListingsMap.tsx` | **None** — same exemption (§24/§26). |
+| Listing **detail** page | `components/listing/ListingDetail.tsx` | **Required** — brokerage (§23) + `Source: Heartland MLS as distributed by MLS GRID · MLS #{n}` (§24) + Heartland logo. |
+| Site **footer** (every page) | `components/site/Footer.tsx` | **Required** — §24 source + logo, §25 full disclaimer, §32 DMCA. The site-wide carrier that keeps cards/pins exempt. |
+
+Use `components/listing/HeartlandMlsLogo.tsx` for the logo — never a raw `<img>`, and **never on a
+minimal-info surface** (cards, map pins, thumbnails). Other hard rules: no seller name/phone/email (§30),
+no listing-agreement type (§21), refresh ≤12h (§11), ≤500/2,500 listings per search (§27), per-address
+**sold price never displayed** (Heartland §12.3(b)). Source of truth: `products/houseloop/Drop/IDX Rules.pdf`
++ `GT/GT - ACTIVE/GT_HOUSELOOP_SEO.md` §15.3.
+
+## Source (`apps/houseloop-web`)
+
+| Piece | File |
+|---|---|
+| Search bar + entry points | `components/site/SearchAutocomplete.tsx` (+ `SearchThinking.tsx`) |
+| AI chat modal | `components/site/AiSearchModal.tsx` |
+| Bar router | `app/api/search/classify/route.ts` |
+| AI NL route (chat + layered engine) | `app/api/search/nlp/route.ts` |
+| Understanding + grounding | `lib/search/smart-features.ts` |
+| Deterministic defaults + dedupe (shared) | `lib/search/search-defaults.mjs` |
+| Feature registry (the enum vocabulary) | `lib/listings/search/feature-registry.ts` |
+| Detail matcher + library | `lib/search/feature-matcher.ts`, `lib/search/feature-library.ts` |
+| Detail facets from DB (F1) | `lib/listings/detail-facets-db.ts`, `app/api/detail-search-facets/route.ts` |
+| Detail manifest + DB columns | `lib/listings/detail-search-manifest.ts` |
+| Active-filter pills (F2) | `components/search/ActiveFilters.tsx` |
+| The search engine (envelope → results, newest sort) | `lib/listings/cache.ts` (`searchFromDb`, `searchByFreshnessRaw`) |
+| Vision catalog | `lib/listings/vision-tags.ts`, `lib/listings/vision-search.ts` |
+| Repliers adapter | `lib/listings/providers/repliers.ts` |
+| Evals | `scripts/feature-eval.ts`, `scripts/search-eval.mjs`, `scripts/search-stress-matrix.mjs`, `scripts/facet-count-parity.ts` |
+
+## Cost & observability (CRM Run Log → AI Search lane)
+
+Every AI call logs its real cost via a cross-app Inngest event (`houseloop/ai-search.event` → `hl_run_log`,
+`source='ai-search'`), surfaced in the **CRM Run Log → AI Search** lane as `model · $cost · tokens · results`.
