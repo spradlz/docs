@@ -1,12 +1,46 @@
 ---
 title: "Custom Fields"
-description: "Custom Fields — HouseLoop CRM (Pipeline & Workflow). Documentation stub."
+description: "Extend the CRM data model with governed custom fields. Each field registers exactly one merge token — unique by identifier, with values stored on the lead record."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Pipeline & Workflow** → **Custom Fields** — [`/settings/custom-fields`](https://crm.houseloop.ai/settings/custom-fields)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/custom-fields/page.tsx` (route page + its components).
+## What it does
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+Custom Fields is a governed editor for extending the CRM's data model. Every field you register here becomes **exactly one merge token** — there is no free-typed token soup. The identifier is globally unique and validated against the built-in tokens, so a custom field can never shadow a built-in like `{{contact.name}}`.
+
+The manager shows a table of your fields (name + identifier, the derived **merge field**, type, and what it applies to) with **Create Custom Field**, plus per-row **Edit** and **Delete**. It deep-links to the canonical token list at [Merge Fields](/crm/pipeline-workflow-merge-fields) via a "View canonical merge fields" link.
+
+Each field's merge token derives 1:1 from its identifier — a Contact field with identifier `preferred_area` reads `{{contact.preferred_area}}`. Values for a contact fill in from the lead record (including data synced from FUB); if a record has no value, the field's default is used.
+
+## What you configure
+
+Create/edit happens in the "Create New Custom Field" modal:
+
+| Setting | Notes |
+|---|---|
+| **Field Type** | One of: **Text**, **Number**, **Date**, **Dropdown**, **Multi-Select**, **URL**. |
+| **Display Label** | Human-readable name (e.g. "Property Address"). Required. |
+| **Choices** | Required for Dropdown / Multi-Select — the list of options. |
+| **Internal Identifier** | (Advanced) The `key` used in the API and merge token. Auto-generated from the label until you edit it; must be a lowercase slug (`^[a-z][a-z0-9_]*$`) and cannot reuse a reserved built-in identifier. Validated live. |
+| **Default value** | (Advanced, optional) Used when a record has no value for the field. |
+| **Applies To** | **Contact** only in v1. Listing and Agent appear as "coming soon" and are disabled. |
+| **Required field** | Marks the field as required. |
+| **Description** | (Optional) Extra info about the field. |
+
+Identifier uniqueness is enforced on both create and edit: a duplicate `key` is rejected (409), and reserved built-in identifiers (e.g. `first_name`, `email`, `phone`) are blocked.
+
+## Data source
+
+- **Table:** `hl_custom_fields` (base schema `0001`) — columns `key`, `label`, `field_type`, `applies_to`, `is_required`, `default_value`, `choices` (jsonb), `description`, `is_recurring`, `sort_order`. The feature conforms to this existing table rather than forking a parallel one. `key` is globally **UNIQUE**.
+- **Contact values:** stored in `hl_leads.data[key]` (the FUB-style JSONB overflow), falling back to `default_value`.
+- **APIs:**
+  - `GET /api/custom-fields[?applies_to=lead]` — list the registry.
+  - `POST /api/custom-fields` — create a field.
+  - `PATCH /api/custom-fields/[id]` — edit label/type/identifier/choices/flags/default/description.
+  - `DELETE /api/custom-fields/[id]` — remove a field **definition**. It does **not** touch values already stored in `hl_leads.data`.
+- **Code:** page `apps/houseloop-crm/app/(crm)/settings/custom-fields/page.tsx`; components `components/settings/custom-fields/CustomFieldsManager.tsx` + `CustomFieldModal.tsx`; shared logic `lib/custom-fields.ts` (types, slugify, identifier validation, reserved list, `customFieldPlaceholder`, `toMergeField`).
+
+## How it fits
+
+Custom Fields is the intake side of the merge-field system. A field registered here is adapted into a `MergeField` (`toMergeField`) using the **same registry path as built-in tokens**, so it lists in the merge-field catalog/pickers and resolves at send/run time. That means a custom field is immediately usable in templates, workflows, and any surface that renders merge tokens — see [Merge Fields](/crm/pipeline-workflow-merge-fields) for the full token list.

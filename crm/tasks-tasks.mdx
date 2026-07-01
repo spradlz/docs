@@ -1,12 +1,53 @@
 ---
 title: "Tasks"
-description: "Tasks — HouseLoop CRM (Tasks). Documentation stub."
+description: "The CRM Tasks page — a personal and team to-do list of tasks tied to leads, with status/type/priority filtering, bulk actions, and optional Google Calendar export."
 ---
 
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
+The Tasks page is the CRM's to-do list. It lists tasks — calls, emails, follow-ups, and other action items — that are optionally tied to a lead and assigned to a team member. You can switch between your own tasks and the whole team's, filter and sort them, create/edit tasks in a modal, and complete, dismiss, or delete them one at a time or in bulk.
 
-**In the app:** CRM sidebar → **Tasks** → **Tasks** — [`/tasks`](https://crm.houseloop.ai/tasks)
+**In the app:** CRM sidebar → **Tasks** — [`/tasks`](https://crm.houseloop.ai/tasks)
 
-**Code:** `apps/houseloop-crm/app/(crm)/tasks/page.tsx` (route page + its components).
+## What it does
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when written up — the generator won't overwrite an existing page._
+- **Two views.** A `My Tasks` / `All Team Tasks` toggle. `My Tasks` (`view=personal`) shows only tasks assigned to the signed-in user; `All Team Tasks` (`view=team`) shows every task.
+- **Status tabs with live counts.** `Active`, `Overdue`, `Today`, `Done`, `All`. Counts are computed from the full loaded task list, not the current filter.
+  - **Active** renders two stacked tables: an *upcoming* table (status `open` / `in_progress`) plus a *Completed Tasks* section (status `done` / `cancelled`, shown struck-through and dimmed).
+  - **Overdue** = active tasks whose due date is in the past. **Today** = tasks due on the current calendar day. **Done** = `done` / `cancelled`. **All** = everything.
+- **Search** across task name, linked person name, and assignee name.
+- **Type filter** (All Types, Follow Up, Call, Email, Text, Meeting, Viewing, Other) and **Sort** (Due Date, Created, Priority) from the table toolbar.
+- **Create / edit** via a modal (`New Task` button, or the row `Edit` action). Tasks can be standalone or linked to a person; if a due date/time is set and the assignee has Google Calendar export enabled, a paired 30-minute calendar event is created and kept in lock-step on edit/delete.
+- **Row actions:** Edit, Mark Complete, Delete. **Bulk actions** (via row selection): Mark Complete, Dismiss (→ `cancelled`), Delete. Bulk and single deletes prompt for confirmation.
+- Table rows show task name + description, type (icon), linked person, priority pill, status pill, due date (overdue dates flagged in red with a ⚠ marker), and assignee.
+
+The status/due tab logic, filtering, and sorting all run client-side in the browser over the task list loaded for the selected view.
+
+## What you configure
+
+Each task carries these fields (set in the create/edit modal):
+
+| Field | Values / notes |
+|-------|----------------|
+| **Link To** | Standalone, or linked to a **Person** (lead) via search |
+| **Task Name** | Required, free text |
+| **Type** | Follow-up, Call, Text, Email, Send Listing, Other (editor set); the table also labels `meeting` / `viewing` |
+| **Status** | Pending (`open`), In Progress (`in_progress`), Completed (`done`), Cancelled (`cancelled`) |
+| **Priority** | Low, Medium, High, Urgent |
+| **Assign To** | A team member (defaults to the current user / "Me") |
+| **Due Date** + **Time** | Optional date + time-of-day; combined into a single timestamp |
+| **Description** | Optional free text |
+
+## Data source
+
+- **Table:** `hl_tasks` (CRM Postgres). Joined to `hl_leads` (for the linked person name) and `hl_users` (for the assignee name). Key columns: `name`, `description`, `type`, `priority`, `status`, `due_at`, `completed_at`, `created_at`, `lead_id`, `assigned_user_id`, `created_by`, plus `calendar_event_id` / `calendar_provider` for Google Calendar sync.
+- **APIs:**
+  - `GET /api/tasks?view=personal|team` — list tasks (also supports a `lead_id` filter used by the lead-detail Scheduled panel).
+  - `POST /api/tasks` — create a task (also fires a `task_created` lead notification + run-log entry, and pushes to Google Calendar when export is enabled).
+  - `PATCH /api/tasks/[id]` — update a task (logs `task_completed` to the run-log on completion; mirrors changes to the paired Google Calendar event).
+  - `DELETE /api/tasks/[id]` — delete a task (also deletes the paired Google Calendar event).
+  - `POST /api/tasks/bulk` — bulk `complete` / `dismiss` / `delete`.
+  - `GET /api/options` — supplies the team-member list for the Assign To dropdown.
+- The `TaskRow` type returned by the list API is defined in `app/api/tasks/route.ts`.
+
+## How it fits
+
+Tasks is the standalone worklist mirror of a lead's action items. Creating a task on a linked lead writes a `task_created` event to the canonical lead activity run-log (`logActivity`) and raises a team-wide in-app notification (`notifyLeadEvent`), and completing it logs `task_completed` — so a task's lifecycle shows up on the lead's timeline. The same task editor field set is reused by the Workflow Builder's "Create Task" step, and tasks with a due date optionally sync out to the assignee's Google Calendar.

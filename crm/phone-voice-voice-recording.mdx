@@ -1,12 +1,45 @@
 ---
 title: "Voice & Recording"
-description: "Voice & Recording — HouseLoop CRM (Phone & Voice). Documentation stub."
+description: "Call-recording preferences and conversational-intelligence AI settings for your team's calls in the HouseLoop CRM."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Phone & Voice** → **Voice & Recording** — [`/settings/voice-recording`](https://crm.houseloop.ai/settings/voice-recording)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/voice-recording/page.tsx` (route page + its components).
+## What it does
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+This page is the **settings surface** for call recording and AI call analysis. It has three toggles plus a legal-compliance notice and descriptive feature lists:
+
+- **My Call Recording Preference** — a per-user opt-out. Any user can turn their own recording on or off. It only takes effect when the team setting below is enabled (opt-out model — the default is on).
+- **Enable Call Recording** — the team-wide default (admins/owners only). When on, calls are recorded by default; a user's personal preference can still opt them out.
+- **Conversational Intelligence AI** — the team-wide toggle (admins/owners only) for AI analysis of recordings: Deepgram transcript → Claude summary/sentiment/suggested follow-up tasks.
+
+A call is recorded when the team has recording enabled **and** the user has not opted out (`shouldRecordForUser` in `lib/voice-recording.ts`).
+
+<Note>The page **persists these settings** and enforces admin-only writes today. The actual recording **capture**, the AI transcription/summary **pipeline**, and the dialer are later phases — the code comments mark them as not yet built. The "Call recording features" and "AI conversational intelligence" bullet lists on the page describe the intended capabilities of those later phases, not shipped behavior.</Note>
+
+## What you configure
+
+| Setting | Scope | Who can change | Persisted to |
+|---|---|---|---|
+| My Call Recording Preference | Per-user (`recordCalls`, default `true`) | Any signed-in user | `hl_users.data.recordCalls` |
+| Enable Call Recording | Team (`recordingEnabled`, default `false`) | Admin / owner only | `hl_settings` key `call_recording` |
+| Conversational Intelligence AI | Team (`aiAnalysisEnabled`, default `false`) | Admin / owner only | `hl_settings` key `call_recording` |
+
+Admin gate: role must be `admin` or `owner` (read from `hl_users.role`). Non-admins see the team toggles disabled with an explanatory note.
+
+## Data source
+
+- **Page:** `apps/houseloop-crm/app/(crm)/settings/voice-recording/page.tsx` (server component — loads team config, the current user's preference, and the user's role).
+- **UI component:** `apps/houseloop-crm/components/settings/voice-recording/VoiceRecordingPage.tsx` (client — the toggles + save calls).
+- **Config helpers:** `apps/houseloop-crm/lib/voice-recording.ts` — `getCallRecordingConfig` / `saveCallRecordingConfig`, `getUserRecordPref` / `setUserRecordPref`, `shouldRecordForUser`.
+- **API route:** `apps/houseloop-crm/app/api/settings/voice-recording/route.ts`
+  - `GET` → `{ ok, team, myPref, isAdmin }`
+  - `PUT` → save team config (admin only; 403 otherwise)
+  - `PATCH` → set the current user's personal `recordCalls` preference
+- **Tables:**
+  - `hl_settings` — team config stored as JSON under key `call_recording` (`{ recordingEnabled, aiAnalysisEnabled }`).
+  - `hl_users` — per-user preference in `data.recordCalls`; `role` drives the admin gate.
+
+## How it fits
+
+Voice & Recording lives under **Phone & Voice** in team settings. It defines the policy — whether calls get recorded and whether recordings get AI analysis — that the call/dialer pipeline is intended to read (via `shouldRecordForUser`) once capture and the AI pipeline ship in later phases. The design mirrors SureSend's model: a team default plus per-user opt-out, with recordings and AI-generated summaries/tasks landing on the lead timeline when the capture and pipeline phases are built.

@@ -1,12 +1,46 @@
 ---
 title: "System Events"
-description: "System Events — HouseLoop CRM (Pipeline & Workflow). Documentation stub."
+description: "Toggle the site-activity events an EXISTING lead can fire — tour, contact, saved home, liked home, saved search — and attach the workflow each one runs, per platform."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Pipeline & Workflow** → **System Events** — [`/settings/system-events`](https://crm.houseloop.ai/settings/system-events)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/system-events/page.tsx` (route page + its components).
+System Events was split out of Registration Events (Zach, 2026-06-30). Registration Events covers **lead creation**; System Events covers what happens **after** a lead exists.
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+## What it does
+
+System Events lists the actions an **already-existing lead** takes on the site — request a tour, request contact, save a home, like a home, save a search — and lets you decide, per event, whether it is **on** and which **workflow** it fires. These are platform-level "surface" events: they fire regardless of which source the lead originally came from, which is why they're grouped by **platform** (HouseLoop, Follow Up Boss) rather than by source, and deduped so each event appears once per platform.
+
+Lead-creation events (anything whose key ends in `_registration`) are intentionally excluded here — they live on Registration Events.
+
+The page reuses the same platform tabs, blue section header, event table, and workflow row-actions as Registration Events (shared building blocks in `components/settings/lead-platform/event-board-shared.tsx`).
+
+## What you configure
+
+Each row is one system event. Two independent controls:
+
+| Control | Column | What it does |
+|---|---|---|
+| **ON toggle** | `ON` | Flips the event active/inactive (`is_active`). Independent of whether a workflow is attached. |
+| **Workflow** | `WORKFLOW` | Shows the bound workflow as a pill, or "General (catch-all)" when none is attached. Clicking a row (or **Open in Builder**) opens the workflow. |
+| **Row menu (⋮)** | `ACTIONS` | If a workflow is bound: **Open in Builder** and **Clone & assign** (duplicates the workflow and binds the copy). If none is bound: **Create Workflow** (creates a workflow seeded with the event's trigger type, then binds it). |
+
+Newly created or cloned workflows open in the Workflow Builder with a `from=/settings/lead-platform` back-link, so **Back** returns here.
+
+## Data source
+
+Everything is read/written live from the CRM Postgres — no separate config store.
+
+- **Page query** (`app/(crm)/settings/system-events/page.tsx`): joins `hl_lead_source_events` → `hl_lead_sources` → `hl_workflows`. It selects events where the event and source are active, the source has a `platform`, the source `source_type` is **not** `platform`/`system`, and the `event_key` does **not** end in `_registration`. Rows are deduped by `event_key` per platform and ordered `houseloop`, then `follow_up_boss`.
+- **Toggle / attach** — `PATCH /api/lead-flow` (`app/api/lead-flow/route.ts`) updates `is_active` or `workflow_id` on `hl_lead_source_events` (each field independently; it never nulls the other).
+- **Create workflow** — `POST /api/workflows`, seeded with `trigger_type` from `EVENT_TRIGGER[event_key]` (`lib/workflows/event-trigger-map.ts`), then bound via the same `PATCH /api/lead-flow`.
+- **Clone workflow** — `POST /api/workflows/[id]/duplicate`, then the copy is bound to the event.
+
+## How it fits
+
+System Events is one of the two event boards under **Pipeline & Workflow**:
+
+- **Registration Events** — events that **create** a lead (`*_registration`), grouped by channel/source.
+- **System Events** — events an **existing** lead fires on the site, grouped by platform (this page).
+
+Both write to the same `hl_lead_source_events` rows and bind the same `hl_workflows`; the workflows themselves are authored in the **Workflow Builder** (`/workflows`).

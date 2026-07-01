@@ -1,12 +1,48 @@
 ---
 title: "Audit Log"
-description: "Audit Log — HouseLoop CRM (Team Settings). Documentation stub."
+description: "Admin-only viewer of the HouseLoop CRM audit trail — every recorded mutation, who made it, and what changed."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Team Settings** → **Audit Log** — [`/settings/audit`](https://crm.houseloop.ai/settings/audit)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/audit/page.tsx` (route page + its components).
+## What it does
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+The Audit Log is an admin-only, read-only viewer over the CRM's single global "who did what, when" table (`hl_audit_log`). Each row is one successful mutation: the timestamp, the actor (a CRM user, or an AI agent/clone), the action, the target record, and a human-readable summary of what changed.
+
+The page renders the rows in a `DataTable` grid with five columns:
+
+| Column | Shows |
+|--------|-------|
+| **When** | Timestamp, formatted in America/Chicago time |
+| **Who** | Actor's full name (falls back to email) |
+| **Action** | The action key rendered as a friendly label pill (e.g. `leads.stage_change` → "Stage changed") |
+| **Target** | Target table plus the first 8 chars of the target id (e.g. `hl_leads/1a2b3c4d`) |
+| **Summary** | A one-line description of the change — the entry's `summary` field when present, otherwise before → after pairs, otherwise the changed field names |
+
+Results are paginated 50 rows at a time (Prev / Next), newest first, with a header count of total rows and current page. A **Refresh** button re-runs the current query.
+
+## What you configure
+
+There is nothing to set up or persist here — it is a viewer, not a settings form. The only controls are three filters, all applied server-side and combinable:
+
+| Filter | Effect |
+|--------|--------|
+| **User** | Restrict to one actor. The dropdown is populated from the actors that actually appear in the log (includes AI agents/clones). |
+| **Action** | Restrict by action key. Options include prefix buckets (`leads.`, `notes.`, `team.` — matched as an `ILIKE` prefix) and specific keys like `leads.update`, `leads.stage_change`, `team.user.access_level_change`. |
+| **Target table** | Restrict by the affected table: `hl_leads`, `hl_users`, `hl_notes`, `hl_role`, `hl_member_role`. |
+
+Changing any filter resets to the first page.
+
+## Data source
+
+- **Read API:** `GET /api/audit` (`app/api/audit/route.ts`). Admin-gated via `requireAdmin()`. Accepts `actor`, `action` (ILIKE prefix), `target_t`, `target_id`, `since` (ISO), `limit` (1–200, default 50), and `offset`. Returns `rows`, `total`, and the distinct `actors` list for the User dropdown. Rows are `hl_audit_log` joined to `hl_users` for the actor's name and email, ordered by `id DESC`.
+- **Table:** `hl_audit_log` (migration `db/migrations/0061_hl_audit_log.sql`). Columns: `id`, `actor_id` (FK → `hl_users`), `action`, `target_t`, `target_id`, `diff` (JSONB), `at`, `request_id`. Indexed on `(actor_id, at)`, `(target_t, target_id, at)`, and `(action, at)`.
+- **Writers:** rows are written best-effort (never throw back to the caller) by:
+  - `writeAudit()` in `lib/audit/write.ts` — called from `POST /api/leads/[id]/pipeline` (stage changes) and `POST /api/leads/[id]/deal` (deal create / under-contract / closed).
+  - `auditWrite()` in `lib/auth.ts` — called from team-admin routes such as `PATCH /api/team/users/[id]/roles/[roleId]` (role assignment changes).
+
+The `diff` payload is free-form: newer writes include a `summary` string that the viewer renders directly; older rows fall back to `[before, after]` field pairs or a list of changed keys.
+
+## How it fits
+
+This is Phase 3 of the Multi-User work: Phase 1 created the `hl_audit_log` table, and the write call sites (`writeAudit` / `auditWrite`) log each successful mutation, while this page is the admin surface that reads them back. It gives team admins an accountability trail across lead edits, deal transitions, notes, and team/role administration. Because writes are best-effort and only exist at the call sites listed above, the log covers those wired mutations — it is not a full row-level trigger on every table.

@@ -1,12 +1,47 @@
 ---
 title: "Merge Fields"
-description: "Merge Fields — HouseLoop CRM (Pipeline & Workflow). Documentation stub."
+description: "The read-only reference catalog of every merge field the HouseLoop CRM can drop into emails, texts, templates, and AI agent personas — grouped by category, with a copyable {{placeholder}} and a live example for each."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Pipeline & Workflow** → **Merge Fields** — [`/settings/merge-fields`](https://crm.houseloop.ai/settings/merge-fields)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/merge-fields/page.tsx` (route page + its components).
+## What it does
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+Merge Fields is a **read-only reference page**. It lists every `{{placeholder}}` token you can put into a message so the CRM fills in the real value — for that lead, listing, and sending agent — at the moment the message is sent (or when an AI agent runs). Unfilled tokens render as empty text, never the raw `{{tag}}`.
+
+Each field is shown in a table row with three columns:
+
+| Column | Meaning |
+|--------|---------|
+| **Field** | Friendly name (e.g. "First name") |
+| **Merge field** | The literal `{{placeholder}}` you paste in — click the copy icon to grab it |
+| **Example** | A realistic sample value the token would resolve to |
+
+The page is grouped into one table per category. The same set of fields shown here is exactly what the merge-field pickers offer in the editors and what the resolver fills at send/run time — there is no second list to maintain.
+
+## What you configure
+
+Nothing on this page — it is reference only (no create/edit/delete). You *use* these tokens elsewhere: in email campaigns and templates, text templates, and AI agent personas. New fields appear here automatically from three sources:
+
+| Source | How a field gets here |
+|--------|-----------------------|
+| **Built-in fields** | Added as one entry in the merge-field registry (`lib/merge-fields.ts`); appears in this catalog and every picker at once |
+| **Custom fields** | Created in **Settings → Custom Fields** (`hl_custom_fields`); surfaces as `{{contact.<identifier>}}` (or the listing/agent prefix) |
+| **AI Context Blocks** | Created in **Settings → AI Context Blocks** (`hl_templates` with `kind='context_block'`); surfaces as `{{ai.<key>}}` — the AI composes this section per lead at send time |
+
+The categories shown (in order): **Contact, Listing, Agent, Market, Search, Request, Valuation, Time & Day, Company, AI Context Blocks**. A category with no fields is hidden.
+
+A few tokens are not plain scalars: `{{search.matches}}` and `{{valuation.comps_table}}` render HTML blocks (listing cards / comps), `{{company.footer}}` renders the full canonical email footer, and the `{{time.*}}` fields resolve from the live clock in the business timezone rather than from any record.
+
+## Data source
+
+- **Page / component:** `apps/houseloop-crm/app/(crm)/settings/merge-fields/page.tsx` → `components/settings/merge-fields/MergeFieldsCatalog.tsx`
+- **Built-in registry + resolver:** `apps/houseloop-crm/lib/merge-fields.ts` (`MERGE_FIELDS`, `MERGE_GROUP_META`, `resolveMergeFields()`, `sampleValue()`). Examples come from the registry's `SAMPLE_CONTEXT`.
+- **Custom fields:** `GET /api/custom-fields` (`app/api/custom-fields/route.ts`) → table `hl_custom_fields`, adapted to a merge field by `lib/custom-fields.ts` `toMergeField()`.
+- **AI Context Blocks:** `GET /api/context-blocks` (`app/api/context-blocks/route.ts`) → table `hl_templates` where `kind='context_block'`, adapted by `contextBlockToMergeField()` in `lib/merge-fields.ts`.
+
+The catalog loads the built-ins statically, then fetches custom fields and context blocks in the browser and merges all three into one list per category.
+
+## How it fits
+
+`lib/merge-fields.ts` is the single substitution path for the whole CRM: `resolveMergeFields()` is called at email/text send time and inside the AI agent runtime, using the same registry entries this page displays. Because the pickers, the resolver, and this reference all read from that one registry (plus the two live APIs for custom fields and AI context blocks), the catalog can never drift from what actually gets inserted or filled. AI Context Block tokens (`{{ai.*}}`) are the exception to plain substitution — they are composed per lead by the workflow email step (`lib/ai/context-blocks.ts`) before the merge runs.

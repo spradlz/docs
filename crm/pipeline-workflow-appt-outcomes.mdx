@@ -1,12 +1,52 @@
 ---
 title: "Appt Outcomes"
-description: "Appt Outcomes — HouseLoop CRM (Pipeline & Workflow). Documentation stub."
+description: "Configure the outcomes you record on a completed appointment (Showed Up, No Show, Rescheduled, etc.) and the stage-automation rules that move a lead's pipeline stage when an outcome is marked."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Pipeline & Workflow** → **Appt Outcomes** — [`/settings/appointment-outcomes`](https://crm.houseloop.ai/settings/appointment-outcomes)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/appointment-outcomes/page.tsx` (route page + its components).
+## What it does
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+An **appointment outcome** captures *how an appointment went* after it wraps — Showed Up, No Show, Rescheduled, Cancelled, Positive/Negative Feedback, Follow Up Needed, and any custom outcome you add. This page is the admin surface where you manage that list.
+
+Each outcome can also carry **Stage Automation Rules**: when someone marks that outcome on an appointment, the lead's pipeline stage advances automatically. The engine is **forward-only** (a lead is never pulled backward) and **first-match-wins** (rules are evaluated in order; the first matching rule fires and the rest are skipped).
+
+Outcomes are marked elsewhere in the CRM (the "Save Outcome" action on an appointment, or the AI clone dispositioning a texted cancellation) — both paths run through the same engine (`lib/appointments/apply-outcome.ts`), so a UI mark and an AI mark behave identically: they set the outcome + appointment status, stamp who/when, save outcome notes, and run the rule engine.
+
+## What you configure
+
+The page shows outcomes in a draggable table (drag the row to reorder — order controls the picker order). Per row you can Edit, Set as default, Activate/Deactivate, and Delete. Selecting rows enables bulk delete.
+
+| Setting | What it controls |
+|---|---|
+| **Outcome Name** | The label shown in the outcome picker. A URL-safe `key` is auto-generated from the name (deduped on collision) and is immutable. |
+| **Color** | The swatch color for the outcome's icon chip. |
+| **Icon** | The icon shown in the picker and table (Lucide icon name). |
+| **Valid For (appointment types)** | Which appointment types this outcome appears on. Leave empty to show on every type. |
+| **Stage Automation Rules** | Zero or more rules. Each rule: *When appointment type is X and current stage is Y → move to stage Z.* "Any type" / "Any stage" leave the match unconstrained. Target stage is required; incomplete rules are skipped on save. First match wins. |
+| **Default** | Pre-selects this outcome when marking an appointment complete. Setting a new default clears the previous one (a partial unique index enforces at most one default). |
+| **Active** | Whether the outcome shows in the picker. Inactive outcomes are hidden but retained so historical appointments still resolve their key. |
+
+The table also surfaces read-only columns: **Valid For**, **Rules** count, **In Use** (how many appointments cite this outcome), and the **Active** toggle.
+
+**Delete behavior:** an outcome that is in use by any appointment cannot be hard-deleted — the API returns a `409 in_use` and the UI deactivates it instead. Free (unused) outcomes are deleted; deleting an outcome cascade-deletes its rules.
+
+## Data source
+
+- **`hl_appointment_outcomes`** — the outcome list. Columns: `key`, `label`, `color`, `icon`, `is_active`, `is_default`, `sort_order`, `valid_for_types` (jsonb array of appointment-type keys), plus a legacy `stage_advance_to_stage_id`. Seven defaults are seeded (migration `0031`); `showed_up` is the shipped default (migration `0041`).
+- **`hl_appointment_outcome_rules`** — the stage-automation rules (migration `0041`). Columns: `outcome_id` (FK, cascade delete), `match_appt_type_key` (NULL = any type), `match_current_stage_id` (NULL = any stage), `target_stage_id`, `sort_order`.
+- **`hl_appointment_types`**, **`hl_stages`** / **`hl_pipelines`** — read to populate the "Valid For" and rule dropdowns.
+- **`hl_appointments`** — the `outcome` column links back to an outcome `key`; `outcome_notes` / `outcome_at` / `outcome_by` store the disposition audit trail. Powers the "In Use" count.
+
+**APIs:**
+
+| Route | Methods | Purpose |
+|---|---|---|
+| `/api/appointment-outcomes` | `GET` (`?scope=admin` for the full admin list), `POST` (create), `PATCH` (bulk reorder) | Outcome CRUD + ordering |
+| `/api/appointment-outcomes/[id]` | `PATCH` (update / set default / toggle active), `DELETE` (with in-use guard) | Single outcome |
+| `/api/appointment-outcomes/[id]/rules` | `GET`, `POST`, `PATCH` (bulk reorder) | Rules for an outcome |
+| `/api/appointment-outcomes/[id]/rules/[ruleId]` | `PATCH`, `DELETE` | Single rule |
+
+## How it fits
+
+Outcomes are the third leg of appointment configuration, alongside **Appointment Types** (what kind of meeting) and **Availability**. When an appointment is dispositioned anywhere in the CRM, `applyAppointmentOutcome()` writes the outcome to `hl_appointments`, then runs the outcome's rules against the lead's `hl_lead_pipeline_memberships`: the first matching, forward-only rule advances the lead and records the move in `hl_stage_transitions` (reason: `appointment outcome: <key> (<rule>)`). If an outcome has no rules, the lead's stage is left unchanged. This is what turns "the showing happened" into automatic pipeline movement without manual stage edits.

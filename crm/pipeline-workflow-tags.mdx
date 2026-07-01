@@ -1,12 +1,54 @@
 ---
 title: "Tags"
-description: "Tags — HouseLoop CRM (Pipeline & Workflow). Documentation stub."
+description: "Manage the team-wide tag library — create, rename, lock, and delete the tags applied to leads across the HouseLoop CRM."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Pipeline & Workflow** → **Tags** — [`/settings/tags`](https://crm.houseloop.ai/settings/tags)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/tags/page.tsx` (route page + its components).
+## What it does
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+Tags is the settings screen for the CRM's global tag library. Tags are **team-wide, not per-pipeline** — one tag can be applied to leads anywhere in the CRM, and this page is where the tags themselves are defined and maintained.
+
+The page shows:
+
+- **Three stat cards** at the top — Total Tags, Locked Tags, and Unlocked Tags.
+- **A searchable table** of every tag (`HlDataTable`), each row showing the tag pill, its lock **STATUS**, and the **PEOPLE** count (how many leads currently carry that tag). Rows are sorted alphabetically by name.
+- **A search box** that filters the table by name as you type.
+
+From the table you can:
+
+- **Add Tag** (header button) — opens a modal to create a tag with a name and an optional locked toggle. Names are unique (case-insensitive); a duplicate is rejected.
+- **Edit** (row action) — rename a tag or change its locked state.
+- **Toggle lock** — click the STATUS pill to lock/unlock a tag in place.
+- **Delete** — remove a single tag (row action) or several at once via multi-select **Delete Selected**. Deleting a tag also removes it from every lead that carried it. The single-delete confirmation warns how many people will lose the tag.
+
+**Locking** is an intent flag on the tag: a locked tag is meant to be added/removed only by admins and owners, while unlocked tags can be managed by all users. This page persists that flag; enforcement of who may apply a locked tag happens where tags are applied, not on this settings screen.
+
+## What you configure
+
+| Field | Description |
+|---|---|
+| **Tag Name** | The tag text (max 60 chars in the modal). Must be unique case-insensitively. On save, the same value is written to both the `name` and `label` columns. |
+| **Locked Tag** | Toggle. When on, the tag is marked admin/owner-only for applying and removing. |
+
+There is no color picker in the UI — the `color` column exists in the schema and is accepted by the API, but the settings page does not set it.
+
+## Data source
+
+Server rendering and all mutations go through the CRM's Postgres database (`@/lib/db`), across two tables:
+
+- **`hl_tags`** — one row per tag. Columns used: `id`, `name`, `label`, `color`, `is_locked`, `created_at`. A unique index on `lower(name)` enforces case-insensitive uniqueness (migration `0014_hl_tags_management.sql`; base table in `0001_hl_schema.sql`).
+- **`hl_lead_tags`** — join table linking tags to leads (`lead_id`, `tag_id`, `applied_at`, `applied_by`). The **PEOPLE** count is `COUNT(lead_id)` from this table via a `LEFT JOIN`.
+
+The page component (`page.tsx`) queries the tag list directly on the server for the initial render. Client interactions call the tag API routes:
+
+| Route | Method | Action |
+|---|---|---|
+| `/api/tags` | `GET` | List all tags with people counts |
+| `/api/tags` | `POST` | Create a tag (rejects blank or duplicate names) |
+| `/api/tags/[id]` | `PATCH` | Update `name`/`label`, `is_locked`, and/or `color` |
+| `/api/tags/[id]` | `DELETE` | Delete the tag and remove it from all leads (`hl_lead_tags` rows deleted first) |
+
+## How it fits
+
+Tags defined here feed the rest of the CRM: they are applied to leads (manually or by workflows/Myli/system, per the `applied_by` column on `hl_lead_tags`) and are used to segment and drive automation. This screen is the single place the tag vocabulary is created and curated, so it sits under **Pipeline & Workflow** alongside the other lead-organization settings.
