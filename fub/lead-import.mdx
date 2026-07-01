@@ -28,7 +28,7 @@ There is **one source** (FUB, fed by Zillow), pulled by **two pipes** (webhooks 
         ┌─────────┴─────────┐
    19 WEBHOOKS          SCRAPER (Chrome)
    real-time signals    only what the API hides:
-   + clean property     · message/email/call bodies · saved searches · deep browse list
+   inquiry property     · views/saves (events?hasProperty feed) · msg/email/call bodies · saved searches · browse list
         └─────────┬─────────┘
                   ▼
         fub.* on Railway              ← THE ONE STORE (relay: Camp David → Railway)
@@ -59,7 +59,7 @@ Two acquisition paths, one destination. *"It's all webhooks"* and *"we're still 
 they cover different gaps.
 
 ```
-                ┌─ 19 LIVE WEBHOOKS ─ signals + CLEAN property (real-time) ─┐
+                ┌─ 19 LIVE WEBHOOKS ─ signals + inquiry property (real-time)┐
 FUB  ──────────►│                                                          ├─► Camp David fub.*  ─► [RELAY] ─► Railway fub.*  ─► HouseLoop FUB Activity panel
                 └─ SCRAPER (Chrome) ─ recovers ONLY what the API hides ─────┘                       (fub-relay.mjs)               (lead detail → "Follow Up Boss Activity")
 ```
@@ -75,8 +75,8 @@ FUB  ──────────►│                                       
 | Data | Webhook / API delivers it? | Needs the scraper? |
 |---|---|---|
 | **Property inquiries** | ✅ `eventsCreated` — full clean property (street, MLS, price, beds/baths) | ❌ |
-| **Viewed homes** (single event) | ✅ `eventsCreated` "Viewed Property" — clean property | ⚠️ only the full *historical* 1,000+ browse list |
-| **Saved homes** | ⚠️ "Saved Property" exists but some events are app-only | ⚠️ for the full saved list |
+| **Viewed homes** | ❌ **FUB no longer emits a view webhook** (Zach LOCKED 2026-07-01) | ✅ **scraper reads the ENTIRE view history + backfills it at lead-import** |
+| **Saved homes** | ❌ **no save webhook** (Zach LOCKED 2026-07-01) | ✅ **scraper reads the full saved list + backfills at lead-import** |
 | **Lead notes** | ✅ `notesCreated` (body included) | ❌ |
 | **Lead / contact / stage / tags / deals** | ✅ `peopleCreated/Updated/StageUpdated`, `peopleTagsCreated`, `dealsCreated/Updated` | ❌ |
 | **Text — that one happened** | ✅ `textMessagesCreated` (to/from/time) | — |
@@ -94,11 +94,15 @@ live; a bare GET just can't see them.
 </Warning>
 
 - **Lean payload** `{ eventId, event, resourceIds[], uri }` — the handler **fetches back** the full resource from
-  `uri` (Basic auth + `X-System`/`X-System-Key`). A `Viewed Property` / `Property Inquiry` fetch-back returns the
-  full `property` object (street/city/zip/MLS/price/beds/baths — **no lat/lng**, geocode ourselves).
-- **The handler** `handleEvent()` → `fub.events`; `parseZillowViewNote()` parses "Property Viewed" automation
-  notes → `fub.zillow_home_activity`; handles texts/emails/calls/notes/deals/tasks/appts; queues masked-body items
-  for the scraper; fires Twilio/Telegram alerts; has **catch-up pollers** (2–5 min) as a webhook-drop backstop.
+  `uri` (Basic auth + `X-System`/`X-System-Key`). A **`Property Inquiry`** fetch-back returns the
+  full `property` object (street/city/zip/MLS/price/beds/baths — **no lat/lng**, geocode ourselves). ⚠️ There is
+  **no `Viewed Property` webhook** — that public event type **died May 21** (see the 🔑 note in §2). Views/saves do
+  NOT come from a webhook fetch-back; they come from the scraper intercept below.
+- **The handler** `handleEvent()` → `fub.events`; `parseZillowViewNote()` parses "Property Viewed" automation notes
+  → `fub.zillow_home_activity` **as a re-scrape TRIGGER only** — the note lags & misses, so it just says "go
+  re-scrape"; the authoritative, complete view list is the **`GET /api/v1/events?hasProperty=true` intercept**.
+  The handler also handles texts/emails/calls/notes/deals/tasks/appts; queues masked-body items for the scraper;
+  fires Twilio/Telegram alerts; has **catch-up pollers** (2–5 min) as a webhook-drop backstop.
 - **Signature** `FUB-Signature` = `HMAC-SHA256( base64(rawBody), X-System-Key )` (hex) — verify on the RAW body.
 - **Limits** events GET 20/10s; return 2xx within 10s; FUB retries up to ~8h.
 

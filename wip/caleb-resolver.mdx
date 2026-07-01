@@ -1,6 +1,6 @@
 ---
-title: "Caleb (SRG Past-Client Reconciliation Engine)"
-description: "Work-in-progress dossier — Caleb · Data intel · past-client resolver. SRG Past-Client Reconciliation Engine."
+title: "Caleb (SRG Past Client Reconciliation)"
+description: "Work-in-progress dossier — Caleb · Data intel · past-client resolver. SRG Past Client Reconciliation."
 ---
 
 <Info>Live dossier — auto-generated from `.claude/state/wip/caleb/resolver.md` on every push. **Progress: 4/6 done (67%).** _Updated 2026-07-01 PM._</Info>
@@ -9,183 +9,29 @@ description: "Work-in-progress dossier — Caleb · Data intel · past-client re
 
 ## Checklist
 
-### NORTH STAR
-Every SRG past client → ONE accurate reconciliation card: person + household + every transaction we did (with the
-agent who worked it, even if they left) + their current home (deed-confirmed) + lost opportunities + dossier — for
-past-client reactivation. **Accuracy is the only benchmark. The table is the truth.** The card renders at
-`/settings/seller-report/audit` (the SRG Past-Client Resolution Audit) and is the exact note published to Follow Up Boss.
+**The ONE master doc is now the Mintlify guide → `docs-site/guides/srg-reconciliation-engine.mdx`
+("calebwip — Spradling Realty Group Past Client Reconciliation").** It absorbed the old
+`past-client-data-pipeline` + `srg-reconciliation-wip` guides + this WIP. Everything — the architecture, the
+canonical-source-per-field law, the locked GT laws, the full live table map, the card format, the 3-tab Audit UI,
+the Nations reference case, the fuck-up log — lives there, with every count current as of 2026-07-01. Read that.
 
-### ⭐ THE ARCHITECTURE (Zach LOCKED 2026-07-01 — I HAD THIS BACKWARDS, now corrected)
-**The resolver is the brain. Every prior output — including the old child table — is just a SOURCE it reads.**
-1. **Quarantine all prior work** as read-only SOURCES (never the truth, never the render target):
-   - `hl_srg_resolver_quarantine` (1,473 rows, **1,458 rich `resolver_block`s** — the prior full Sonnet/s6 resolution:
-     complete `transactions[]`, `lost_listings[]`, `dispositions`, `contacts`, `summary`, `dnc`, `tags`, `confidence`).
-     **THIS IS THE RICHEST INPUT and my thin SISU-spine resolver was ignoring it — the core miss.**
-   - `hl_srg_pch_quarantine` (2,168 rows — snapshot of the structured child: determined_agent, disposition, URLs).
-2. **The resolver reads ALL sources together** (union): quarantined resolver_block + quarantined child + SISU + MLS
-   (100%) + dotloop (.loop + contracts) + brain (FUB facts) + parent deed fields (`resolved_current_home`).
-3. **It triangulates → its OWN conclusion** — unions transactions so NOTHING prior work found is ever lost, applies
-   the canonical-source-per-field law, adds the new recoveries (departed agents from dotloop, 100% MLS), corrects errors.
-4. **It writes the NEW child** `hl_srg_past_client_homes` = the truth = what renders. Quarantines stay as provenance/undo.
-5. **PROVE on Nations first (dry-run, full card) → Zach sign-off → THEN write → scale to 1,780.** No auto-publish to FUB.
+### The 7 boxes (live status)
+- [x] **2 — Brain** (`hl_fub_person_facts`) — 2,178/2,178 household members.
+- [x] **3 — MLS rooftop** (`hl_mls_property_history`) — 100% (1,955/1,955), 6,017 selling agents, 151 cols.
+- [x] **4 — HLID on the MLS table** — 7,152 rows / 1,886 homes.
+- [x] **1 — Dedup** — 54 merges (1,834→1,780), reversible (`hl_srg_dedupe_log`).
+- [~] **5 — Dotloop `.loop`** — 86.9% agent / 88.7% address on the 2,128 real closings.
+- [ ] **6 — Reconcile engine** — ACTIVE. Rework `triangulate-resolver.mjs` to ingest ALL sources (esp. the 1,458 `resolver_block`s) → union → canonical-source-per-field → write the new child.
+- [ ] **7 — Prove first 20** → Nations → Zach sign-off → scale. No auto-publish to FUB.
 
-### 🔒 CANONICAL-SOURCE-PER-FIELD LAW (Zach LOCKED 2026-07-01 — conflict resolution)
-Union everything; when sources disagree on a field, the CANONICAL source wins (resolver_block fills gaps only):
-| Field | Canonical source (waterfall) |
-|---|---|
-| **A transaction exists** | UNION of ALL sources (SISU ∪ resolver_block ∪ old child ∪ MLS ∪ dotloop ∪ brain), deduped by rooftop+side |
-| **Agent per deal** | SISU → MLS/Repliers our-side → Ninja → dotloop licensee → FUB Team-Exit. (resolver_block/old-child agent = last-resort gap-fill.) Ben Froeschl NEVER; Zach→Ana. |
-| **Transaction price/date** | SISU (MLS agrees) |
-| **Property address** | MLS `hl_srg_mls_deals` by mls_number → Google-Places-normalized SISU |
-| **Current home** | County DEED (`resolved_current_home`). Bought through a competitor → **LOST PURCHASE, renders RED** under CURRENT PROPERTIES. |
-| **Lost listing** | MLS later-Sold-by-non-SRG after our buy ∪ resolver_block.lost_listings |
-| **HouseLoop URL** | carry from old child / `hl_srg_past_client_homes.houseloop_url` (by HLID) |
-| **Dossier** | brain (Myli facts) + property facts + resolver_block.summary |
-
-### 🗺️ WHERE EVERYTHING LIVES (CRM database — HL_CRM_DATABASE_URL)
-**Prior resolution (the enriched work):**
-- `hl_srg_resolver_quarantine` — 1,473 · **1,458 resolver_block** (rich prior Sonnet resolution) ← primary rich input
-- `hl_srg_resolver_stage2` / `_s2` — 22 each (triangulate Haiku test batch)
-**Structured/derived:**
-- `hl_srg_past_clients` — 1,780 parents (dossier_json, resolved_current_home, bucket, houseloop_resolved_at)
-- `hl_srg_past_client_homes` — 2,168 child SSOT (the audit render target) · `hl_srg_pch_quarantine` — 2,168 snapshot
-- `hl_srg_pch_staging` — 50 (my 20-card reconciled staging tab) · `hl_srg_dedupe_log` — 54 (reversible merges)
-**Raw harvested sources:**
-- `sisu_transactions` 11,636 · `hl_mls_property_history` 7,713 (100%, HLID-linked, 151 cols) · `hl_srg_mls_deals` 1,971
-- `hl_srg_loop` 13,449 (dotloop .loop) · `hl_srg_dotloop_contracts` 13,257 · `hl_srg_dotloop_loops` 17,455
-- `hl_fub_person_facts` 5,694 (brain) · `hl_fub_deals` 4,554 · `hl_srg_agent_roster` 136
-
-### THE AUDIT UI — 3 TABS (built 2026-07-01, `components/seller-report/AuditReport.tsx` + `app/api/settings/seller-report/audit/route.ts`)
-- **Pending Review — Old** (default) — the pre-existing resolution, UNCHANGED (full list, resolved-at-top, Nations #1). Kept for compare.
-- **Reconciled — 2026-07-01** — the resolver's fresh run (reads `hl_srg_pch_staging`).
-- **Final Resolved** (green) — signed-off cards only (`houseloop_resolved_at` not null). 13 golds so far.
-`?tab=reconciled|old|final` selects the child source. Sign-off promotes staging→child (button = NOT built yet).
-
-### THE 7 BOXES — status
-- [x] **2 — Brain** (`hl_fub_person_facts`) — ✅ 2,178/2,178 household members, Haiku dossiers.
-- [x] **3 — MLS rooftop** (`hl_mls_property_history`) — ✅ 100% (1,955/1,955 past-client homes; 6,017 selling agents; all 151 cols; MLS#-direct recovery for malformed addrs).
-- [x] **4 — HLID on MLS table** — ✅ `hl_property_id` on 7,152 rows / 1,886 homes (exact + rooftop-propagated; 7 multi-unit held to exact-match).
-- [x] **1 — Dedup** — ✅ 54 merges (1,834→1,780), reversible via `hl_srg_dedupe_log`.
-- [~] **5 — Dotloop `.loop`** (`hl_srg_loop`) — 🟢 87% agent/address on the 2,128 real closings (871-gap harvest done). Remaining ~278 genuinely dotloop-empty (waterfall covers them).
-- [ ] **6 — Reconcile engine** — 🔴 **THE ACTIVE BUILD.** Rework `triangulate-resolver.mjs` to ingest ALL sources (esp. resolver_block) per the architecture above → write new child. Currently SISU-spine-only = REGRESSES the old child (drops 801 Poplar, 68th Terrace, links). Must fix.
-- [ ] **7 — Prove first 20** → Nations first, then the golds → Zach sign-off → scale. No auto-publish to FUB.
-
-### 📍 THE NATIONS REFERENCE CASE (pc1 — what CORRECT looks like; Zach walked it 2026-07-01)
-TRANSACTIONS WITH US (all 6, each with a /home link):
-- BOUGHT + SOLD 23309 W 45th Terrace, Shawnee (Ana) · BOUGHT 816 E Saddlewood, Gardner (Ana)
-- BOUGHT 801 W Poplar Street, Olathe (Ana) · BOUGHT + SOLD 301 E 68th Terrace, Kansas City MO (Ana)
-CURRENT PROPERTIES: **🔴 OWNS 7325 Oakview St, Shawnee KS 66216 — bought through a competitor (LOST PURCHASE, red)** — deed-confirmed (`resolved_current_home`). ✅ card builder fixed (`lib/pastclient/card-note.mjs`: deed home wins as current; competitor→red).
-My thin resolver produced only 3 txns, no links → the regression that proved the SISU-spine approach is wrong.
-
-### KEY LAWS
-- Dotloop is its own source of truth (no SISU triangulation at harvest); the resolver decides "ours" via the roster.
-- Ana = account admin on every loop — never auto-assigned as agent. Ben Froeschl NEVER the agent. Zach→Ana alias.
-- Rule #0: the resolver overwriting the child = a big mutation → PROVE on Nations + Zach sign-off before writing.
-- Only `:18804` on Camp David exports the Matrix CSV (others can't download).
-
-### TOOLS
-`triangulate-resolver.mjs` (Stage-1 assemble — being reworked) · `triangulate-stage2.mjs` (Haiku reconcile+dossier) ·
-`persist-reconcile.mjs` (→ staging) · `link-hlid-on-mls.mjs` · `dedupe-past-clients.mjs` · `recover-pch-by-mls.mjs` ·
-`backfill-mls-csv.mjs` · `harvest-loop-full.mjs` (--real-closings) · card builder `apps/houseloop-crm/lib/pastclient/card-note.mjs`.
-
-### NEXT CONCRETE ACTION
-Rework `triangulate-resolver.mjs` assemble(): add the resolver_block + quarantined-child source legs → union all
-transactions (dedup by rooftop+side) → canonical-source-per-field agent waterfall → carry URLs + deed current home.
-Prove on Nations (dry-run full card = all 6 txns + 7325 Oakview red) → Zach sign-off → write new child → scale.
+### Next concrete action
+Box 6: the resolver ingests `hl_srg_resolver_quarantine.resolver_block` + `hl_srg_pch_quarantine` + SISU + MLS +
+dotloop + brain → union transactions (dedup by rooftop+side) → agent waterfall → carry URLs + deed current home.
+Prove on Nations (all 6 txns + 7325 Oakview red) → sign-off → write new child → scale.
 
 ---
 
-## PRD · `GT/GT - ACTIVE/GT_HOUSELOOP_PASTCLIENT_RECONCILE_PRD.md`
-
-#### GT_HOUSELOOP_PASTCLIENT_RECONCILE_PRD — Two-Table Consolidation + Correct Sold-Page Data
-
-**Status:** 🟡 WIP — IN BUILD (Caleb, started 2026-06-17) · **Owner:** Caleb (data, end-to-end) · **CRM-side dossier:** coordinate w/ Adam/seller-report lane.
-**Indexed in:** `GT_HOUSELOOP_MASTER.md` §11 (Valuation / Home Value) + §6 index.
-**Supersedes the DATA sections of:** `GT_HOUSELOOP_PAST_CLIENT_REPORT_ENGINE_PRD.md` (that PRD's §0.0 audit table points here). **Forward-live sibling:** `GT_HOUSELOOP_LIVE_LISTING_ENRICHMENT_PRD.md`.
-**Source of record:** `.claude/reports/houseloop-architecture-reconcile-sitrep-2026-06-17.md` (the 10-agent audit this PRD executes).
-
----
-
-##### 1. THE PROBLEM (what Zach found auditing live sold pages, 2026-06-17)
-1. **Wrong HouseLoop Value** on a subset of sold pages — e.g. 9405 Alden showed $341,500; Zillow Zestimate is $443,300.
-2. **Thin/fake price history** — the value chart is a 2-anchor synthetic ruler line; the price-history table shows 1–2 events when Zillow has the full multi-decade history.
-3. **Three tables, a spoiled middle one** — `hl_srg_mls_deals` → `hl_sold_profiles` → `Listing`. The middle table got polluted with banned realtor.com data and drifted into a fake "source of truth."
-
-##### 2. ROOT CAUSES (root-caused to the line)
-- **F1 — value falls back to the SALE PRICE.** `tools/houseloop-cards/backfill-past-clients.mjs:200` does `estimated_value = estimated_value || deal_sale_price`. When the `hl_sold_profiles` join misses, the **sale price** is stamped into the field the code treats as the Zillow Zestimate. **240 homes** show `zestimate==closePrice`, **138** `zestimate==listPrice`. The 9405 Alden join missed because its only profile row was a banned realtor `gap-backfill` row (correctly filtered at line 147).
-- **F2 — real price history is fetched then discarded.** `zillow-enrich.mjs` pulls Ninja's full `priceHistory[]` (back to 2011) but keeps only the latest Sold event. No `priceHistory` column exists. The render component `PriceHistory.tsx` already supports a multi-row table + Sold="—" — it's starved.
-- **F3 — value chart is 2-anchor synthetic.** `valueHistory()` linear-interpolates between sale price and today's value with ±1% jitter; can't show real step-ups. The chart renderer is generic; making the data real keeps the visual.
-
-##### 3. END-STATE (Zach LOCKED 2026-06-17) — TWO truth tables, middle table RETIRED
-```
-CRM DB (autorack) — PEOPLE/DEALS              WEBSITE DB (centerbeam) — HOUSES (the truth)
-hl_srg_mls_deals  = canonical spine    ──▶    Listing = the ONE complete house record that
-  (the closings + who/role per deal)          renders /home/<slug>. Value (Zillow), full price
-                                              history, schools, tax, photos ALL live here.
-        hl_sold_profiles = RETIRED (no cache). Enrichment writes DIRECTLY into Listing.
-```
-- **Link:** `canonicalSlug` (address) joins a CRM deal to its website house. (Durable stored bridge — `canonicalSlug` on the deal + `crmLeadId` on the web User — is a later architectural phase; see §7.)
-- **Data-source law (unchanged):** Zillow value/schools/tax/history + photos via **OpenWeb Ninja**; **Redfin** photos only when Zillow ≤1; sold price = **MLS**, rendered "—" (KS/MO non-disclosure). **realtor.com / HomeHarvest BANNED.**
-
-##### 4. THE CANONICAL SPINE — ~1,750 UNIQUE SOLD HOUSES (not 1,954, not 1,852)
-- `hl_srg_mls_deals` = 1,954 rows = **1,812 Sold** + 142 never-closed (111 Cancelled / 18 Expired / 6 Pending / 5 Active / 2 Withdrawn). Only **Sold** → a sold page. `sale_price` present on exactly 1,812.
-- 1,812 Sold → **~1,750 unique houses** (96 addresses have repeat deals).
-- **Multi-closing model:** the 96 repeat-deal addresses are **96/96 the SAME client** (repeat clients — we helped buy AND sell). `our_roles` encodes side (`buy-*` / `list-*`). One `Listing` per house, carrying ALL its closings as price-history Sold events; the connected CRM lead gets a "repeat client — buy [date] → sell [date]" dossier (CRM-side, coordinate).
-
-##### 5. BLAST RADIUS of `hl_sold_profiles` (3-agent audit — safe to retire)
-- ZERO live app consumers (no `apps/houseloop-crm` or `apps/houseloop-web` reference). Seller Report + Home Report modal read `hl_srg_past_clients`+`hl_srg_home_valuations`. ZERO views/FKs. ZERO cron/Inngest.
-- ALL references = the offline `tools/houseloop-cards/` toolchain (17 readers, 8 writers). Only production seam = `backfill-past-clients.mjs:143` (copy → Listing).
-- `Listing` already has every render column (mapping proven in `backfill-past-clients.mjs:140-243`). **No `Listing` migration needed.**
-
-##### 6. BUILD PLAN (ordered; improvement-only — NO destructive SQL except the final approved DROP)
-
-###### ⏱ BUILD PROGRESS — 2026-06-17 (live)
-- **New engine built + proven:** `tools/houseloop-cards/enrich-listing-direct.mjs` — pulls Ninja (ONE `/search` call = full priceHistory+tax+schools+Zestimate, verified) and writes the REAL Zestimate + full price history + schools + tax **straight into `Listing`** (no middle table). GUARD: a missing/failed Ninja value NEVER writes sale/list price (proven on the misses). Resumable (`enrichmentSource='listing-direct:ninja'` skip) + shardable (`--shard R/N`).
-- **Proof:** 9405 Alden $341,500 → **$443,300** (real Zestimate), priceHistory 17 events 2011→2021, Sold="—". Verified in DB.
-- **Phase A RUN: IN FLIGHT** — 8 parallel shards over the 1,743 unique-sold spine. ~25+ wrong values already corrected. Value fix lands LIVE per-home as it runs (DB write to prod centerbeam).
-- **`priceHistory` jsonb column added to `Listing`** (surgical `ADD COLUMN IF NOT EXISTS`, non-destructive).
-- **Phase B1 SHIPPED 2026-06-17 (commit `c8885196c6`, pushed to houseloop-app → Railway auto-deploy):** `/home/<slug>` renders the real Zillow price-history TABLE (full timeline, Sold="—") from `Listing.priceHistory`. Files: `lib/listings/types.ts` (+fullPriceHistory), `app/home/[slug]/page.tsx` (graft), `components/listing/PriceHistory.tsx` (render). Lint clean, drift-check passed. **Verify live once Railway build completes.**
-- **Phase B2 BUILT (runs after Phase A):** `tools/houseloop-cards/rebuild-value-history.mjs` — pure-DB transform turns the real priceHistory into a real-anchored `valueHistory` (chart shows real 2010→2026 trajectory, e.g. 11134 Nieman $132k→$201.5k). The chart render already reads `valueHistory` → **no deploy needed**, data-only.
-
-###### Phase A — Correct the values (the thing Zach audited) 🟡 IN PROGRESS (8 shards running)
-- **A1.** Add a `priceHistory` jsonb column to `Listing` (`ALTER TABLE ADD COLUMN IF NOT EXISTS` — non-destructive).
-- **A2.** Patch `zillow-enrich.mjs` to STOP discarding Ninja `priceHistory[]` — persist the full array; write enrichment **directly into `Listing`** (by canonicalSlug), not `hl_sold_profiles`.
-- **A3.** Re-pull the 340 realtor + the 240+138 fallback homes through Ninja `property-details` (by row id where needed); write the REAL Zestimate (+low/high) into `Listing.zestimate*`. **GUARD:** a failed/missing Ninja pull NEVER writes closePrice/listPrice as the value — leave NULL (render falls back to the market block, not a lie). Never leave a realtor value.
-- **A4.** Fix the fallback at `backfill-past-clients.mjs:200` / the enrichers so sale price can never masquerade as Zestimate.
-- **Verify A:** 9405 Alden → ~$443,300; 6701 E 99th correct; spot-check 10 of the 240. On the LIVE page via the search bar.
-
-###### Phase B — Real price history + chart
-- **B1.** Feed real `priceHistory[]` into `PriceHistory.tsx` (already styled: multi-row, Sold="—"). Carry `pendingDate` through the adapter.
-- **B2.** Rewrite `valueHistory()` to piecewise-interpolate across the REAL price-history anchors (chart visual unchanged). Multi-closing houses show every Sold event.
-- **Verify B:** 9405 Alden shows the full 2011→2021 history table (Sold rows "—") + a stepped chart.
-
-###### Phase C — Enrich straight into Listing (kill the middle table)
-- **C1.** Rewire the 5 real enrichers (`zillow-enrich`, `enrich-from-mls`, `repliers-card-to-db`, `redfin-card-to-db`, `zpid-enrich`) to write `Listing` directly (fold in the geo-blend + valueHistory + R2 caching from `backfill-past-clients.mjs`).
-- **C2.** Run `backfill-past-clients.mjs` ONCE as the final copy-through to flush any stragglers into `Listing`.
-- **C3.** Retire the 6 bookkeeping/gap scripts (`dedup`, `mls-photo-fallback`, `backfill-tax-schools`, `gap-profiles`+`bulletproof-gap`, `homeharvest` already retired).
-- **C4.** Verify all ~1,750 unique sold houses complete in `Listing` (value, history, schools, tax, photos≥5 or street-view fallback).
-- **C5.** Repoint the audit/SELECT tools to `Listing`. Then **typed Zach approval naming `hl_sold_profiles` → DROP** (Constitutional Rule #0). No DROP before C4 passes.
-
-###### Phase D — Fill gaps + dossier
-- **D1.** Build the ~46 unique sold houses missing a `Listing` row.
-- **D2.** Feed `our_roles`+`close_date` per deal to the CRM dossier (the "repeat client" entry) — CRM-side, coordinate.
-
-###### Phase E — Forward (per `GT_HOUSELOOP_LIVE_LISTING_ENRICHMENT_PRD.md`)
-- Inngest `listing-sold` Ninja-enrich step + `listing.ingested` active-enrich fn so we never hand-backfill again. Sign-off → cron.
-
-##### 7. LATER (architectural, not blocking the data fix)
-- Durable bridges: stamp `crmLeadId` on web `User` (signup) + `canonicalSlug`/`hlid` on the CRM deal — kills recompute-every-run.
-
-##### 8. EXIT CRITERIA
-- Every one of the ~1,750 unique sold houses renders a `/home/<slug>` with: correct Zillow-anchored HouseLoop Value, full multi-event price history (Sold="—"), real-anchored value chart, schools, tax, photos. Verified via the search bar (not direct links, not DB %).
-- Zero realtor.com data anywhere in the pipeline. `hl_sold_profiles` dropped with typed approval. Forward Inngest live + signed off.
-
-##### 9. LAWS HONORED
-Ninja/Zillow + Redfin-photos + MLS only (realtor BANNED) · sold $ rendered "—" · photos→R2 · recurring=Inngest · two-DB · one tree/branch (`houseloop-app`) · per-file commits · NO destructive SQL without typed Zach approval naming the table · verify on the live rendered page.
-
----
-
-## WIP doc · `GT/GT - Pending/GT_SRG_RECONCILIATION_ENGINE_WIP.md`
+## PRD · `GT/GT - Pending/GT_SRG_RECONCILIATION_ENGINE_WIP.md`
 
 #### SRG RECONCILIATION ENGINE — WORK IN PROGRESS (started 2026-07-01, Caleb + Zach)
 
@@ -388,176 +234,8 @@ lost listing is invisible. **A scraper reporting `ok=true` on 0 records is LYING
 Haiku only (no Opus/Sonnet in the harvest/resolve path). No destructive SQL without typed Zach approval. Write canonical,
 no scrap tables. Prove on 20 before scale. Never report "done" without a query proving the data is in the table.
 
----
-
-## Handoff · `.claude/state/caleb-handoff.md`
-
-#### CALEB HANDOFF — SRG PAST-CLIENT RECONCILIATION ENGINE
-**Written 2026-07-01 PM · Branch `houseloop-app` · Tree `/Users/zachspradling/Code/BossLoop-Gold`**
-**Read this TOP-TO-BOTTOM before touching anything. It is self-contained — you should need nothing else to continue.**
-
----
-
-##### 0. WHO YOU ARE + THE ONE JOB
-You are **Caleb** (persona: `.claude/personas/caleb.md`). Zach is the CEO; Lee assigns work; you BUILD. Voice: hype, plain-English, "brotha/dude", never "king". Zach is not a developer — explain simply.
-
-**THE ONE JOB (the north star, never lose it):** Get every **Spradling Realty Group (SRG) past client** onto an **accurate reconciliation card** — the person + their home(s) + every transaction we did with them + the **agent who worked each deal (even if that agent has since left the team)** + any **lost listing** (a home we sold them that later re-sold WITHOUT us) + a rich relationship dossier. The card powers **past-client reactivation** (Ana texts them: "you worked with Mikey on my team when you bought 9920 Perry…").
-
-**THE ACCURACY DOCTRINE (Zach said it 50×):** "Accuracy is the only benchmark." Every field on a card comes from EXACTLY ONE canonical source (see §5). "The table is the truth" — every number from ONE SQL query against the canonical table, never a JSON file, never memory, never re-derived a second way. A scraper that returns `ok=true` on 0 records is LYING.
-
----
-
-##### 1. WHAT TO DO THE MOMENT YOU START (in order)
-1. Read this file fully. Then read `GT/GT - Pending/GT_SRG_RECONCILIATION_ENGINE_WIP.md` (the WIP — the living plan).
-2. Read `.claude/rules/HOUSELOOP_DATA_DOCTRINE.md` (CONSTITUTIONAL — the canonical tables + the per-field source law). It's auto-injected but READ it.
-3. Run the **STATUS SNAPSHOT** (§4) to see where the 3 background jobs are.
-4. **Do NOT re-derive or rebuild anything already built (§3).** Do NOT run destructive SQL without typed Zach approval (Rule #0 — DELETE &gt;100 / DROP / TRUNCATE / ALTER DROP COLUMN).
-5. Continue from the **NEXT ACTIONS** (§7). The immediate ones need no Zach input.
-
----
-
-##### 2. THE END GOAL — what "DONE" looks like
-Every one of ~1,834 SRG past clients (`hl_srg_past_clients`) has:
-- **The people** deduped (one card per person; households merged by FUB id).
-- **Their home(s)** — ONE row per physical home keyed by **HLID**, with multiple transactions UNDER it (mirror: one home → many transactions). Linked to the website `Listing` (`/home/<slug>/<HLID>`).
-- **Each transaction's agent-of-record** resolved via the waterfall (§5), keeping the departed agent (the relationship IS the asset).
-- **Lost listings** flagged (a home we sold, later re-sold by a non-SRG agent).
-- **A dossier** (Haiku over their full FUB history).
-The human surface is the **Seller Report dashboard** (`/settings/seller-report`, reads `hl_srg_past_clients` LEFT JOIN `hl_srg_home_valuations`). **PROVE the first 20 cards by hand vs the gold standards, get Zach sign-off, THEN scale. No auto-publish to FUB.**
-
----
-
-##### 3. THE ARCHITECTURE — CANONICAL TABLES (the only truth)
-**TWO Postgres DBs (env keys in `.env`, read with the snippet in §4):**
-- **CRM DB** = `HL_CRM_DATABASE_URL` (Railway autorack) — PEOPLE + DEALS + all the harvest/reconciliation tables.
-- **WEB DB** = `DATABASE_URL` (Railway centerbeam) — the website `Listing` table (houses, HLID, value).
-
-###### The past-client SSOT (CRM)
-| Table | Grain | It is |
-|---|---|---|
-| **`hl_srg_past_clients`** | 1 row / past client (~1,834) | THE past-client SSOT (name, `fub_identity` w/ `household_fub_ids`, `bucket`, `closings` jsonb, `dossier_json`, `resolved_canonical_address`, `website_hlid`). |
-| **`hl_srg_past_client_homes`** | 1 row / past-client HOME | the child master — ONE row per HLID, value cols, structural data. |
-| `hl_srg_mls_deals` | 1 row / MLS deal (1,971, **100% carry an MLS#**) | **THE canonical SRG sold-house bucket list.** Clean structured addresses ("10206 W 60TH TERRACE"). SOURCE for beds/baths/sqft/etc. |
-| `sisu_transactions` | 1 row / closing (~10,548) | **SISU = canonical CLOSING truth + the AGENT of record** (`agent` col). |
-| `hl_srg_home_valuations` | 1 row / client (~245) | the value join for the seller report. |
-
-###### The 4 HARVEST SOURCES (feed the reconcile) — all CRM
-| # | Source table | Grain | Tool | STATUS 2026-07-01 |
-|---|---|---|---|---|
-| A | **`hl_fub_person_facts`** | 1 / FUB person | `tools/houseloop-cards/harvest-fub-facts.mjs` (Haiku) | ✅ **DONE 2,178/2,178** past-client household members have a dossier |
-| B | **`hl_mls_property_history`** | rooftop MLS records | `tools/houseloop-cards/resolve-mls-rooftops.mjs` + Camp David `mls-address-lookup.mjs` | 🟢 **~1,450/1,862 rooftops verified**, running (~30 min left) |
-| C | **`hl_srg_loop`** (NEW today) + `hl_srg_agent_loops` (VIEW) | 1 / dotloop loop | `tools/houseloop-cards/harvest-loop-full.mjs` | 🟢 **~900/17,455 loops**, 88% get an agent, running (throttle-bound, hours) |
-| D | `hl_srg_dotloop_contracts` (12,143) + `hl_srg_dotloop_loops` (17,455) | dotloop raw | `dotloop-contract-fetch.mjs` / `reharvest-dotloop-contracts.mjs` | ⚠️ 2,064 licensees — SUPERSEDED by C for agent facts |
-
-###### The website house record (WEB DB)
-| Table | Grain | It is |
-|---|---|---|
-| **`Listing`** | 1 / house (~354K) | THE house record. Keyed by `identityKey` (canonical addr). Permanent id = **HLID** (opaque, sequence-backed, in the URL). Value/photos/schools/tax live here. |
-
-**THE JOINS THAT MATTER:** past client → home by `website_hlid` → `Listing.hlid`. MLS deal → house by **canonicalSlug (the ADDRESS)**. Home identity = the ADDRESS (`identityKey`/`canonicalSlug`, `lib/listings/address-identity.ts`). NEVER fuzzy name-match; NEVER MLS#-only.
-
----
-
-##### 4. STATUS SNAPSHOT — run this first (copy/paste)
-```bash
-cd /Users/zachspradling/Code/BossLoop-Gold
-echo "procs: loop=$(pgrep -f harvest-loop-full|wc -l) mls=$(pgrep -f 'resolve-mls-rooftops.mjs$'|wc -l) brain=$(pgrep -f harvest-fub-facts|wc -l)"
-node -e 'import("module").then(async ({createRequire})=>{const require=createRequire(new URL("file:///Users/zachspradling/Code/BossLoop-Gold/apps/houseloop-crm/package.json"));const pg=require("pg");const fs=require("fs");const e=k=>{const m=fs.readFileSync("/Users/zachspradling/Code/BossLoop-Gold/.env","utf8").match(new RegExp("^"+k+"=(.*)$","m"));return m?m[1].trim().replace(/^["\x27]|["\x27]$/g,""):null;};const c=new pg.Client({connectionString:e("HL_CRM_DATABASE_URL"),ssl:{rejectUnauthorized:false}});await c.connect();
-for(const q of [["hl_srg_loop extracted","SELECT count(*) FILTER (WHERE agent_source IS NOT NULL) n FROM hl_srg_loop"],["hl_srg_loop w/agent","SELECT count(*) n FROM hl_srg_loop WHERE buyer_agent IS NOT NULL OR listing_agent IS NOT NULL"],["MLS verified rooftops","SELECT count(*) n FROM hl_mls_rooftop_status WHERE status=\x27verified\x27 AND source=\x27mls-deals-clean\x27"],["brain rows","SELECT count(*) n FROM hl_fub_person_facts"]]) console.log("  "+q[0]+":",(await c.query(q[1])).rows[0].n);
-await c.end();});'
-```
-**DB connection pattern** (reuse everywhere — pg lives in the CRM app's node_modules): the `require` + `.env` reader in that snippet is the canonical way to hit the CRM DB from a script. For the WEB DB swap `HL_CRM_DATABASE_URL` → `DATABASE_URL`.
-
----
-
-##### 5. THE PER-FIELD SOURCE LAW (memorize — this is where accuracy lives)
-| Field | THE canonical source | NEVER use |
-|---|---|---|
-| Does a deal exist | **SISU** `status IN ('Closed','Pending')` (Pending counts as a deal) | MLS 'Sold' alone; a dotloop loop alone |
-| **Agent of record** (waterfall, in order) | (1) **SISU `agent`** (match client first+last + price ±$3k + date ±20d) → (2) **Repliers/MLS our-side** → (3) OpenWeb Ninja → (4) **dotloop** (now `hl_srg_loop` listing/buyer agent) → (5) **FUB `Team Exit -` tag** → else NOT resolved | ❌ `closings.agent`/`is_ana` flag; ❌ MLS *listing* agent on a deal we BOUGHT; ❌ **Ben Froeschl** (sales mgr, NEVER an agent); ❌ "SRG"/placeholder |
-| Bucket (Ana-Only/Team/Handoff) | **SISU-derived `bucket` COLUMN** (`deriveBucket`); Ana-Only = **461** | the `is_ana` boolean (dirty → false 260) |
-| Property ADDRESS | **MLS** `hl_srg_mls_deals` by `mls_number` (unit-bearing); fallback Google-Places-normalized SISU | raw SISU verbatim |
-| Home value / schools / tax / price history | **OpenWeb Ninja / Repliers** → `Listing` (web) | — |
-| Contacts (email/phone/name) | **FUB** person record | — |
-**KEY INSIGHT (Zach LOCKED):** the departed agent is the RELATIONSHIP asset — KEEP them (past tense: "you worked with Mikey on my team"). The whole team left; SRG owns the client; we're reclaiming them.
-
----
-
-##### 6. THE DOTLOOP `.loop` BUILD — what I built today + WHY (this is the fresh work; understand it)
-Dotloop was the source that was fundamentally WRONG all session. The fixes (each was a Zach correction — do NOT regress them):
-1. **Dotloop is its OWN source of truth.** `hl_srg_loop` = deterministic facts from dotloop ONLY. **NO SISU triangulation** (do not name the agent by matching addresses to SISU — that's the resolver's job later).
-2. **Agent is NOT in the contract PDF's "Licensee" field for most loops** (that only worked on 2,064 standard sale contracts). Referrals/drafts/listings carry the agent elsewhere.
-3. **`/participant` SCRUBS a departed teammate.** The agent survives in the **ACTIVITY LOG** (`GET /profile/:pid/loop/:lid/activity?batch_size=200`) — a `@spradlingrealtygroup.com` actor there IS the agent. PROOF: 11436 Conser — Walter Hawkins (buyer agent) is ONLY in the activity log; Wendy Manning (`LISTING_AGENT` participant) is the OTHER side (gmail/ReeceNichols).
-4. **Ana Spradling = account admin on every loop** — excluded from the single-Spradling-candidate auto-fill unless she's the only one.
-5. **Record listing_agent + buyer_agent per loop by ADDRESS. Do NOT decide "ours"** — the resolver does that later against the roster (SISU ∪ FUB Team-Exit ∪ loop-creators; NOT dotloop licensees).
-6. **`/detail`** gives the deterministic closing facts: full_address + street parts + **sale_price + closing_date** + contract/offer dates + legal.
-7. **Rate limits:** dotloop throttles concurrency. `dl()` in `dotloop-auth.mjs` now backs off (429/5xx, ≤3 retries). Run **≤3 parallel workers**. A fetch-failure guard throws so a rate-limited loop is retried, never written as a blank "done" row.
-**Tool:** `tools/houseloop-cards/harvest-loop-full.mjs`. Prove mode: `node … --loops 309345828,279393271,215058169` (Conser / Cedar Dr SOLD / Mikey Fletcher referral — the 3 canonical test cases, §11).
-
----
-
-##### 7. THE 7-BOX CHECKLIST + NEXT ACTIONS
-| # | Box | Status | Next |
-|---|---|---|---|
-| 1 | **Dedup** (cross-client + HLID home-collapse) | ⚠️ built dry-run (52 clusters/54 merges), NOT committed | `node tools/houseloop-cards/dedupe-past-clients.mjs` prints the plan. **`--commit` writes production = Rule #0, needs TYPED ZACH GO.** Also build the HLID home-collapse (1 row/HLID). |
-| 2 | **Brain** (Haiku dossier) | ✅ done 2,178/2,178 | — |
-| 3 | **MLS rooftop history** | 🟢 ~78% | let it finish; then re-probe `offmarket-empty` once to confirm genuine vs transient |
-| 4 | **HLID link on MLS table** | 🔴 | add `hl_property_id` col to `hl_mls_property_history` + backfill by canonical address → `Listing.hlid` (additive, allowed) |
-| 5 | **Dotloop `.loop`** | 🟢 running | let the 3 workers finish (~hours); verify final coverage |
-| 6 | **RECONCILE** (combine → ONE card) | 🔴 not started | per past client: SISU deals (surname+first-token) → MLS rooftop (disposition + lost listing) → `hl_srg_loop`/dotloop (agent) → brain (dossier) → write `hl_srg_past_clients` + `hl_srg_past_client_homes`. Agent waterfall = §5. |
-| 7 | **PROVE first 20** vs golds | 🔴 not started | golds: pc5 Mettman, Nations, pc9 Belcher + the verified set. 20/20 by hand → Zach sign-off → scale. |
-
-**IMMEDIATE (no Zach needed):** let the 3 jobs finish; build Box 4 (HLID link). **BLOCKED on Zach:** Box 1 `--commit`. **THEN:** Box 6 → 7.
-
----
-
-##### 8. RUNNING JOBS — how to check + restart (they're resumable)
-All 3 are `nohup` background node procs, logs in `/tmp/`. All RESUMABLE (skip already-done rows).
-- **Dotloop `.loop`** (3 workers): `for i in 0 1 2; do SHARD_N=3 SHARD_IDX=$i nohup node tools/houseloop-cards/harvest-loop-full.mjs --write >/tmp/loopfull-s$i.log 2>&1 & done`
-- **MLS rooftop** (3 shards, Camp David Chromes): `SHARD_N=3 SHARD_IDX=<0/1/2> CDP_PORT=<18804/18806/18807> nohup node tools/houseloop-cards/resolve-mls-rooftops.mjs >/tmp/mls-resolve-s<i>.log 2>&1 &` (Chromes on Camp David `ssh lee@192.168.1.211`; if a port is dead, clone `.chrome-mls-profile` → `.chrome-mls-profile-X` and launch Chrome `--remote-debugging-port=1880X`).
-- **If a job died:** just re-launch the same command — it resumes. Check a log: `tail -5 /tmp/loopfull-s0.log`.
-
----
-
-##### 9. CONSTITUTIONAL LAWS (the ones that burned us today — do NOT relearn these the hard way)
-- **Rule #0:** NO destructive SQL (DELETE &gt;100 / DROP TABLE / TRUNCATE / ALTER DROP COLUMN) without TYPED Zach approval naming the exact table, in the live session. `ADD COLUMN`, `CREATE TABLE`, `CREATE VIEW`, `DROP VIEW`, `UPDATE` are fine.
-- **Haiku only** in the harvest/resolve path (`claude-haiku-4-5-20251001`, key `ANTHROPIC_API_KEY_HOUSELOOP`). No Opus/Sonnet burning tokens.
-- **The table is the truth.** No scratch JSON "canonical/ssot/feed" files — they're dead (archived in `tools/houseloop-cards/_ARCHIVE_2026-06-19/`). Query the table.
-- **"Done" = correct data verified IN the table**, not "the script exited 0". A scraper returning `ok=true` on 0 records is LYING — flag genuine whiffs.
-- **MLS scraper:** drive off the CLEAN `hl_srg_mls_deals` address (not dirty SISU). STREET_NAME field = ONLY the street name (no suffix/unit/city). Dual-address duplex "4732 & 4736" → both house numbers, probe residential each + MF both. Multi-family (Duplex/Triplex/Fourplex) → `PROP_CLASS=mf`.
-- **No headless browsers** for MLS/FUB — real Chrome via Camp David CDP.
-- **One tree, one branch:** `/Users/zachspradling/Code/BossLoop-Gold` on `houseloop-app`. Per-file auto-commit; `git pull --rebase` before push.
-- **Dotloop token** is shared + rotates on refresh — `getToken` uses a pg advisory lock (parallel-safe). Never bypass it.
-
----
-
-##### 10. FILE MAP (everything, one place)
-**Tools (all `tools/houseloop-cards/` unless noted):**
-- `harvest-loop-full.mjs` — dotloop `.loop` deterministic extractor (Box 5) ⭐ freshest
-- `dotloop-auth.mjs` — dotloop OAuth (advisory-lock refresh + rate-limit backoff)
-- `resolve-mls-rooftops.mjs` — MLS rooftop history off the clean deal list (Box 3); calls Camp David `tools/mls-scraper/mls-address-lookup.mjs` (has `PROP_CLASS=mf`)
-- `harvest-fub-facts.mjs` — Haiku dossier (Box 2, done)
-- `dedupe-past-clients.mjs` — Box 1 dedup (dry-run; `--commit` gated)
-- `reharvest-dotloop-contracts.mjs` — OLD dotloop licensee re-parse (superseded by harvest-loop-full)
-**Tables (CRM):** `hl_srg_loop` (+ view `hl_srg_agent_loops`), `hl_mls_property_history` (+ `hl_mls_rooftop_status`), `hl_fub_person_facts`, `hl_srg_past_clients`, `hl_srg_past_client_homes`, `hl_srg_mls_deals`, `sisu_transactions`, `hl_srg_dotloop_loops`/`_contracts`, `hl_dotloop_connection`.
-**Docs:** `GT/GT - Pending/GT_SRG_RECONCILIATION_ENGINE_WIP.md` (the WIP plan) · `.claude/rules/HOUSELOOP_DATA_DOCTRINE.md` (constitutional) · Mintlify `guides/dotloop-integration` (published, has the `.loop` + activity-log section) · scope lock `.claude/state/session-scope-dotloop-facts.lock`.
-
----
-
-##### 11. THE THREE CANONICAL TEST CASES (use to verify ANY dotloop change)
-```
-node tools/houseloop-cards/harvest-loop-full.mjs --loops 309345828,279393271,215058169
-```
-- **279393271** (8830 Cedar Dr, SOLD) → listing **Lora Swarts** (ReeceNichols), buyer agent **Jessica Coggins** (Spradling), $565,000, close 2024-12-10.
-- **309345828** (11436 Conser, draft) → listing **Wendy Manning** (other side), buyer agent **Walter Hawkins** (activity-recovered).
-- **215058169** (Mikey Fletcher referral) → buyer/referring **Ana Spradling**, referral present (Haiku doc-fallback).
-If any of these regress, you broke the extractor — fix before scaling.
-
----
-**LAST WORD:** the 3 sources (people/homes/loops) are all landing. The remaining work is the JOIN (Box 6 reconcile) + Zach's dedup go (Box 1). Don't rebuild what's built (§3/§10). Don't triangulate dotloop from SISU. Prove 20 before scaling. Accuracy is the only benchmark.
-
 ## Related documentation
 
 Doc sections this work creates or updates:
 
-- [`guides/srg-reconciliation-wip`](/guides/srg-reconciliation-wip)
+- [`guides/srg-reconciliation-engine`](/guides/srg-reconciliation-engine)
