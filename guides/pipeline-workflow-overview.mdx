@@ -1,6 +1,6 @@
 ---
 title: "Pipeline & Workflow — Master Overview"
-description: "The one map of how a lead enters HouseLoop and what happens next. There is ONE platform (HouseLoop) and everything is a LEAD SOURCE with registration events, on a single Lead Sources page. Workflows are source-specific — Workflow = f(source × event) — grouped by lead source; Follow Up Boss is a special source that pulls in its own sub-sources (Zillow, realtor.com). Includes the architecture rails, the sign-off matrix, the build phases, and the quarantined legacy FUB door model."
+description: "The one map of how a lead enters HouseLoop and what happens next. There is ONE platform (HouseLoop) and everything is a LEAD SOURCE with events, on a single Lead Sources page. Workflows are source-specific — Workflow = f(source × event). Follow Up Boss is a special source with 5 event groups (Property Inquiry · Inbound Activity · Website Activity · Zillow Insights · Phone Call Activity) that pulls in its own sub-sources and phone lines; Myli dynamically reads which line a call/text came from (company · sign-box · past-agent · Ana's old cell). Includes the architecture rails, sign-off matrix, build phases, and quarantined legacy FUB door model."
 ---
 
 <Note>
@@ -25,7 +25,7 @@ retiring (kept, never deleted). Model LOCKED by Zach 2026-06-30 PM — it diverg
 
 **There is ONE platform: HouseLoop.** Like Sierra / Follow Up Boss / SureSend, you never name it — there's only
 one. So there is **no "platform" and no "integration" layer.** **Everything is a LEAD SOURCE**, and a lead source
-has **registration events**. That's the whole model.
+has **events**. That's the whole model.
 
 | Concept | What it is | Lives (data) | Shows (UI) |
 |---|---|---|---|
@@ -44,7 +44,7 @@ workflow with different copy.** Merge fields alone can't carry the difference in
   `hl_fub_webhook_settings`, since FUB binds via its own table).
 
 ### Follow Up Boss is a SPECIAL source — it pulls in sub-sources
-FUB *creates* its 5–6 webhook events **and pulls in the sub-source already stamped in FUB** (Zillow, realtor.com…).
+FUB *creates* its webhook events **and pulls in the sub-source already stamped in FUB** (Zillow, realtor.com…).
 So a FUB event carries a **sub-source**, and `(FUB · Zillow · Tour Request)` is its **own** workflow — distinct from
 a **native** `(Zillow · Tour Request)` — because the voice differs:
 
@@ -65,7 +65,7 @@ FUB pulled from). This is the keystone the two-different-Zillow-workflows depend
 
 ### The surfaces (no overlap)
 - **`/settings/lead-platform` — Lead Sources (the one page).** Every source is a block: split header
-  (`<name>` · **⚙ Configure**) → **KPI funnel** → its **registration events** (ON · EVENT · WORKFLOW · ACTIONS).
+  (`<name>` · **⚙ Configure**) → **KPI funnel** → its **events** (ON · EVENT · WORKFLOW · ACTIONS).
   Order: HouseLoop.ai · Follow Up Boss · Manual Entry. Merges the old Registration Events + Lead Sources pages.
 - **Configure** (per source) — that source's **defaults** (name · AI responder · human owner · messages-from ·
   tags · API key), one first-class page. FUB's Configure (`/settings/fub`) also holds its webhook config
@@ -88,7 +88,7 @@ Each lead source renders as a single block:
 LEAD SOURCES  (/settings/lead-platform)
 ┌─ HouseLoop.ai ································· [⚙ Configure]      ← split blue header
 │    KPIs:  Total Leads · Buyers UC/Sold · Sellers UC/Sold · Volume     ← the funnel
-│    Registration events:  ON · EVENT · WORKFLOW · ACTIONS(→ builder)     ← ordered by the Workflows order
+│    Events:  ON · EVENT · WORKFLOW · ACTIONS(→ builder)                  ← ordered by the Workflows order
 ├─ Follow Up Boss ······························· [⚙ Configure]
 │    KPIs  ·  its webhook events (from hl_fub_webhook_settings)
 └─ Manual Entry ································· [⚙ Configure]
@@ -103,6 +103,56 @@ LEAD SOURCES  (/settings/lead-platform)
 
 **Open follow-ups:** the FUB sub-source dimension (above — the big one); downhill origins (PPC · Zillow · Sphere ·
 Referral) become **tags** under a source vs their own blocks; FUB's single Save at the bottom of its Configure.
+
+## 📞 FOLLOW UP BOSS — Phone topology, routing & Myli's dynamic read (Zach LOCKED 2026-06-30, NOT built — locked design)
+
+Follow Up Boss is our phone system today (pre-Twilio). Verified from the FUB API + Zach's config: **42,382 calls
+on record; ~66% auto-match a person.** FUB has **NO programmatic outbound-SMS API** (Zach tested — you cannot send
+a text from a FUB inbox number in code). We do **not** own these numbers in a Twilio account. This whole section is
+the **locked design for the FUB phone events** — nothing is built yet.
+
+### The 3 FUB inboxes (all route to Zach)
+| Inbox | FUB id | Unread | Contents |
+|---|---|---|---|
+| **My Inbox** | Zach's user inbox (FUB line **913-490-2988**; personal cell 407-403-8088) | 169 | Zach's assigned contacts — **email-campaign replies** (e.g. Halimo replied "Yes" to "Top reasons to own your home"), voicemails, texts |
+| **Company** | teamInbox 1 | **1,245** | The company line's catch-all — mostly **UNMATCHED cold inbound** (missed calls, voicemails, "Hi Ana" texts, "Kyle with Zillow"). A mountain of unworked speed-to-lead. |
+| **Past Agents** | teamInbox 3 | 333 | Departed-agent lines — **FUB natively TAGS each conversation with the agent** (Walter · Glen · Raul · Carrie…). A MIX of BrokerBay showing-feedback (short code `78340` — noise) + **real humans reaching the old agent** (reactivation gold). |
+
+### The source categories Myli reads (the dialed `to` line = the intent)
+Every inbound carries the line they dialed — **that line IS the intent.** Mirrored in `hl_phone_numbers` (41 rows,
+categorized: `number · e164 · label · category · forwards_to · assigned_user_id · workflow_id · creates_event`).
+
+| Source category | Number(s) | What it means | Myli's play |
+|---|---|---|---|
+| **Company number** | **913-320-0906** (FUB's texting line) | new / unknown caller to the main line | speed-to-lead: "saw you called SRG…" |
+| **Sign box / Listings** | **913-354-8600** ("LISTINGS - KEEP") | a yard-sign / listing call | listing inquiry |
+| **Past-agent line** | ~38 lines, each tagged with the departed agent | a client of a **departed** agent | reactivation — **name the agent** (from the native tag + `hl_srg_agent_roster`) |
+| **⭐ Ana's old cell (Google Voice)** | **913-954-7123** | a **PAST CLIENT** — Ana's real old cell, saved in thousands of past-client phones | **past-client reactivation — highest value** |
+| Legacy routing | 913-270-0645 (Buyer's-OLD) · 913-453-5505 (Ana routing) | old routing lines | classify / route |
+
+### ⚠️ THE ANA 913-954-7123 GOOGLE-VOICE GOTCHA (Zach flagged — critical, do not lose this)
+**913-954-7123 is Ana Spradling's actual old cell phone number.** She released it; we captured it on **Google
+Voice**; a huge number of **past clients still have it saved as her cell**. **Any inbound to it = a potential past
+client, full stop — a text/call from a contact reaching that line is a reactivation signal.** The problem: TODAY
+it is **forwarded to the sign box 913-354-8600**, and **forwarding collapses the true destination** — FUB may see
+it as the sign-box line and we **LOSE** the "this was Ana's cell → past client" signal. That's a shit show Zach
+does not want. **REQUIREMENT: we must know NATIVELY that the contact came to 913-954-7123 (Ana's line), never the
+forward target.** The fix is to **own 913-954-7123 directly (Twilio port) and stop forwarding**, so the `to` is
+natively 913-954-7123 → auto-tag past-client. Until then, the forward masks it — **do NOT trust the sign-box tag
+for Ana's number.**
+
+### The workflow model — ONE workflow, Myli reads the number dynamically
+It is **one `(FUB · Phone Call)` workflow, not one per number.** On `callsCreated` (or inbound text), Myli:
+1. **Classifies human vs automated** — skip BrokerBay short-code `78340`, spam, robocalls. Only real humans get a text.
+2. **Reads the dialed line → its source category** (company · sign-box · past-agent · Ana-cell) and picks the copy.
+3. **Sends the text-back.** **Sender = Myli's own BlueBubbles number 913-208-1633** (live today, iMessage+SMS), *as
+   herself* — because we CANNOT send from FUB's numbers and won't spoof. Example: *"Hey, this is Myli — just saw a
+   call come into our company line, wanted to reach out personally. What are you looking for?"* Past-agent calls
+   name the agent; Ana-cell calls use the past-client voice.
+
+**After the Twilio port**, the reply instead comes **AS the exact number they dialed** (Twilio can only send from a
+number provisioned to OUR account — hence the port; no spoofing/masking an unowned number). Same workflow — the
+port just swaps the sender from Myli's number to the ported line.
 
 ## 🛤️ ARCHITECTURE RAILS — the preamble (must be ✅ before any matrix row passes)
 
@@ -120,6 +170,7 @@ the first inquiry can flow natively into HouseLoop and notify you cleanly."
 | **R6 — Card render** | Agnostic plain-text feed (scales infinitely) + the Zillow-inbound render MVP | The activity is visible in HouseLoop | ◐ (feed ✅; Zillow render MVP ☐) |
 | **R7 — Workflow dispatch** | The event's `workflow_id` attach + the dispatcher fires the right `(source × event)` workflow | The lead gets handled | ✅ (existing) |
 | **R8 — Webhook test harness** | Fire/replay a real FUB webhook on demand + verify every gate | Proof, per INNGEST_OR_IT_DOESNT_EXIST | ☐ |
+| **R9 — Native dialed-line preserved** | The webhook keeps the ORIGINAL destination number (esp. Ana 913-954-7123), never the forward target | Myli's dynamic read + the past-client tag depend on it | ☐ |
 
 **R2–R4 shipped 2026-06-30** (commits `e98e38e081`, `8d1f08a320`): migration `0270` adds
 `hl_fub_webhook_settings.notify_owner` (`realloop` default / `houseloop`). When a row is flipped to
@@ -141,7 +192,7 @@ governs the channels + sender). Default `realloop` preserves current behavior un
 | **RL Off** | Did Realloop's notification get retired for this event? | no 355 text, no dupe |
 | **✅ Verified** | Fired E2E through the Run Log + Zach signs off? | Run Log run-id + your ✅ |
 
-### 🟦 FUB — Property inquiry (Zillow inbound)
+### 🟦 FollowUpBoss — Property Inquiry *(Zillow / portal inbound)*
 | Event | Lead | Card | Workflow | HL Notify | RL Off | ✅ |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|
 | General property inquiry | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
@@ -150,21 +201,22 @@ governs the channels + sender). Default `realloop` preserves current behavior un
 | Seller request | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 | Virtual tour | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 
-### 🟦 FUB — Inbound activity
+### 🟦 FollowUpBoss — Inbound Activity
 | Event | Lead | Card | Workflow | HL Notify | RL Off | ✅ |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|
 | Zillow in-app message received | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 | Phone call received | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 | Text message received | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| **Email received (reply)** — FUB `emailsCreated`; already flows (dashboard catches it, body hidden). Email-reply campaigns run — the reply matters. | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 
-### 🟦 FUB — Website activity
+### 🟦 FollowUpBoss — Website Activity
 | Event | Lead | Card | Workflow | HL Notify | RL Off | ✅ |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|
 | Property viewed | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 | Property saved | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 | Property shared | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 
-### 🟦 FUB — Zillow insights *(→ route to Myli/AI, not auto-blast)*
+### 🟦 FollowUpBoss — Zillow Insights *(→ route to Myli/AI, not auto-blast)*
 For insights the **Workflow** gate = "routed to AI weighting" (a signal, not an outbound blast); **HL Notify** is optional/digest.
 | Event | Lead | Card | Workflow (AI) | HL Notify | RL Off | ✅ |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|
@@ -173,13 +225,16 @@ For insights the **Workflow** gate = "routed to AI weighting" (a signal, not an 
 | Viewed home 10× in 7 days | ☐ | ☐ | ☐ | — | ☐ | ☐ |
 | Looking in new area | ☐ | ☐ | ☐ | — | ☐ | ☐ |
 
-### ☎️ PHONE — inbound number classes
-**Workflow** gate here = the per-number routing + Myli text-back (Phase 4). Twilio port + voice agent are infra rows in Build Phase 4.
-| Event | Lead | Card | Workflow | HL Notify | RL Off | ✅ |
+### 🟦 FollowUpBoss — Phone Call Activity *(ONE workflow; Myli reads the dialed line → source)*
+The matrix is by **source category** (the line they dialed), not per-number — one `(FUB · Phone Call)` workflow,
+Myli classifies human-vs-automated (skip BrokerBay `78340`) then reads the `to` line → category → copy. All 41
+lines live in `hl_phone_numbers`. **Sender: Myli's BlueBubbles 913-208-1633 now / the ported number after Twilio.**
+| Source (dialed line) | Lead | Card | Workflow | HL Notify | RL Off | ✅ |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|
-| Google My Business number | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Sign-call number | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Agent phone numbers | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Company number — 913-320-0906 (speed-to-lead) | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Sign box / Listings — 913-354-8600 | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Past-agent line — ~38 lines, agent-tagged (reactivation, name the agent) | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| ⭐ Ana's old cell / Google Voice — 913-954-7123 (past client — needs native source, R9) | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 
 ### 🏠 HOUSELOOP — Registration (new lead)
 HouseLoop-source events — **no Realloop to retire**, so **RL Off = n/a**.
@@ -218,7 +273,7 @@ HouseLoop-source events — **no Realloop to retire**, so **RL Off = n/a**.
 
 ### ✅ PHASE 0 — Foundation (shipped)
 - ✅ FUB webhook config (per-webhook toggles + Workflow attach: Open in Builder / Create / Clone) — now on the FUB source's Configure (`/settings/fub`)
-- ✅ **Lead Sources** — the one page: each source = header + KPI funnel + its registration events (ON toggle + workflow Actions)
+- ✅ **Lead Sources** — the one page: each source = header + KPI funnel + its events (ON toggle + workflow Actions)
 - ✅ Phone Numbers registry (`hl_phone_numbers`, 41 FUB numbers) — `/settings/phone-numbers`
 - ✅ Unified Event table · dispatcher (`trigger_type`) · FUB source pass-through · Clone-workflow API · plain-text feed
 - ✅ **Workflows grouped by lead source** + **dynamic Back** to Lead Sources (2026-06-30 PM)
@@ -228,7 +283,7 @@ The shared plumbing from the Rails table above. **No matrix row passes until the
 - ☐ R1 Native FUB ingestion (Realloop mirrors `fub.*` data only, stops being the notifier)
 - ☐ R2 HouseLoop notifier (`hl_notification` → your channel, deduped) · ☐ R3 Notify-toggle repoint → HouseLoop
 - ☐ R4 Per-event Realloop kill-switch (gate the dashboard's 355/Telegram `notifyZach*`)
-- ☐ R5 Lead create/match · ☐ R6 Card render · ☐ R7 Workflow dispatch · ☐ R8 Webhook test harness
+- ☐ R5 Lead create/match · ☐ R6 Card render · ☐ R7 Workflow dispatch · ☐ R8 Webhook test harness · ☐ R9 Native dialed-line preserved (Ana 913-954-7123)
 - **The Realloop→HouseLoop notification migration is built into every FUB row's sign-off:** as a row goes live
   (HL Notify ✅), its Realloop notify is retired (RL Off ✅). We never cut Realloop wholesale — it migrates down the matrix.
 
@@ -237,6 +292,7 @@ The shared plumbing from the Rails table above. **No matrix row passes until the
 - ☐ 1b. Wire **virtual tour** + the 4 **insights** signals into the catalog/AI weighting.
 - ☐ 1c. Inbound phone/text/in-app `creates_lead` → flip ON once the text-back workflow exists (4b).
 - ☐ **1d. FUB sub-source dimension** — split FUB events by the incoming portal (Zillow/realtor.com/…) so each `(FUB × sub-source × event)` binds its own workflow. **The keystone for source-specific FUB copy.**
+- ☐ **1e. Email received (`emailsCreated`)** — add the settings row + native HL notify + matrix row (already flows via the dashboard).
 
 ### ☐ PHASE 2 — A workflow (text + email + nurture) for EVERY event
 - ☐ 2a. Add the missing **text step** to seller-report + seller-get-started
@@ -249,13 +305,13 @@ The shared plumbing from the Rails table above. **No matrix row passes until the
 - ☐ 3b. **"Find on HouseLoop"** — look the house up on click, not preloaded
 - ☐ 3c. iMessage-bubble restyle
 
-### ☐ PHASE 4 — Phone system *(4 numbers: Company · Signs · Ana old · Agent-fwd)*
-- ☐ 4a. Per-number routing: inbound `to_number` → registry → fire its workflow
-- ☐ 4b. **Myli text-back** workflow (company-call MVP) + bind to company numbers
-- ☐ 4c. Decouple `hl_dialer_assignments` (multiple numbers per user)
-- ☐ 4d. FUB Team-Inbox sync (real forwarding, not seeded)
-- ☐ 4e. **[Zach + external]** Port the 4 numbers to Twilio + repoint Ana's Google Voice (5–10 biz days/number)
-- ☐ 4f. **[later]** Voice agent answers all calls (Twilio → LiveKit bridge)
+### ☐ PHASE 4 — Phone system *(FUB Phone Call Activity — the locked design above)*
+- ☐ 4a. Capture `callsCreated` natively → match/create lead → `hl_lead_activity`
+- ☐ 4b. **The ONE `(FUB · Phone Call)` workflow**: Myli classifies human-vs-automated (skip BrokerBay `78340`), reads the dialed `to` line → source category → copy. Match `to` → `hl_phone_numbers`.
+- ☐ 4c. **Myli text-back from her BlueBubbles number 913-208-1633** (live today) — company=speed-to-lead, past-agent=agent-named reactivation, Ana-cell=past-client. FUB has no outbound-SMS API; we do not text from FUB numbers.
+- ☐ 4d. **R9 — preserve the native dialed line** (own Ana's 913-954-7123 directly, stop forwarding to the sign box, so the past-client signal survives).
+- ☐ 4e. **[Zach + external]** Port the numbers FUB → our Twilio (then the reply comes AS the dialed line, not Myli's number) — 5–10 biz days/number.
+- ☐ 4f. **[later]** Voice agent answers all calls (Twilio → LiveKit bridge). *(No AI voice needed for the text-back MVP.)*
 
 ### ☐ PHASE 5 — Past-client reconciliation
 - ☐ 5a. Reconcile all past clients into the single canonical table
@@ -274,7 +330,7 @@ enters through a **lead source**, fires an **event**, and that `(source × event
 ### Lead Sources *(route `/settings/lead-platform`)*
 The one page. Each lead source — **HouseLoop.ai · Follow Up Boss · Manual Entry** — is a block: split header
 (`<name>` · **⚙ Configure**) → **KPI funnel** (total leads · buyers/sellers UC·Sold · volume) → its
-**registration events** (ON · EVENT · WORKFLOW · ACTIONS). **Configure** = that source's defaults (AI responder ·
+**events** (ON · EVENT · WORKFLOW · ACTIONS). **Configure** = that source's defaults (AI responder ·
 human owner · messages-from · tags · API key); FUB's Configure also carries its webhook config (process ·
 creates-lead · notify · notify-via + master switch). Backed by `hl_lead_sources` + `hl_lead_source_events`
 (FUB via `hl_fub_webhook_settings`). Canonical: `GT_HOUSELOOP_LEAD_PLATFORM_PRD.md` *(its §2 "never one workflow
@@ -292,9 +348,10 @@ Existing-lead activity — tour/contact/saved/liked/shared/saved-search fired by
 own page (not lead-creation). Attach a workflow to each; agnostic (fires for any lead regardless of source).
 
 ### Follow Up Boss — the special source *(config shipped 2026-06-29; folded into the FUB source's Configure)*
-FUB is a lead source that *creates* webhook events **and pulls in its own sub-sources** (Zillow, realtor.com…).
-Backed by `hl_fub_webhook_settings` (migration 0267) — one row per FUB webhook **type** with three toggles + a
-global master switch:
+FUB is a lead source that *creates* webhook events **and pulls in its own sub-sources** (Zillow, realtor.com…) **and
+is our phone system** (3 inboxes, 41 lines — see the Phone topology section above). Its five event groups: **Property
+Inquiry · Inbound Activity · Website Activity · Zillow Insights · Phone Call Activity.** Backed by
+`hl_fub_webhook_settings` (migration 0267) — one row per FUB webhook **type** with three toggles + a global master switch:
 
 | Webhook Event | Process | Creates Lead | Notify |
 |---|---|---|---|
@@ -309,9 +366,10 @@ global master switch:
   the person). **Notify** = ping Zach when it fires. **Notify VIA** = Realloop (default) → HouseLoop (per-event cutover).
 - The dashboard webhook (`apps/dashboard/server/fub-webhooks.ts`) reads this table live (60s cache) and gates
   notify + lead-creation per row. Canonical: `GT_HOUSELOOP_FUB_LEAD_IMPORT_PRD.md`, [FUB Lead Import](/fub/lead-import).
-- **The open build:** these rows are per webhook **type**, not per **sub-source** — so today all Zillow / realtor
-  inquiries share one workflow. The **sub-source dimension** (Phase 1d) is what lets a FUB-Zillow tour request fire
-  a different workflow than a FUB-realtor one, and both differ from a native Zillow lead.
+- **The open builds:** (a) rows are per webhook **type**, not per **sub-source** — the **sub-source dimension**
+  (Phase 1d) is what lets a FUB-Zillow tour request fire a different workflow than FUB-realtor, both differing from a
+  native Zillow lead. (b) **Email received** (`emailsCreated`) isn't a row yet (Phase 1e). (c) **Phone Call Activity**
+  (Phase 4) — the ONE workflow, Myli's dynamic dialed-line read, sender = Myli's BlueBubbles now / ported number later.
 
 ---
 
