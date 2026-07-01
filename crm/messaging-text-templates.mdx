@@ -1,12 +1,54 @@
 ---
 title: "Text Templates"
-description: "Text Templates — HouseLoop CRM (Messaging). Documentation stub."
+description: "Reusable iMessage/SMS message templates in the HouseLoop CRM — create, categorize, preview segment counts, and see which templates are wired live into a workflow."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Messaging** → **Text Templates** — [`/settings/text-templates`](https://crm.houseloop.ai/settings/text-templates)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/text-templates/page.tsx` (route page + its components).
+## What it does
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+Text Templates is the library of reusable message bodies for iMessage and SMS outreach. It lists every active text template in a table with three stat cards up top (Total Templates, Shared with Team, My Templates), then lets you filter, preview, edit, and delete.
+
+Each row shows:
+
+- **Status** — `Live` (green) if the template's `key` is referenced by an **active workflow**, otherwise `Draft` (amber). A seeded template does nothing until an active workflow points at it.
+- **Event** — the category pill (e.g. Welcome, Follow-up, Tour Request), colored per the shared category palette.
+- **Pipeline** — Buyer (blue) or Seller (orange), derived from the category; agent-facing categories show `—`.
+- **Lifecycle** — New vs Returning lead, if set on the template.
+- **Folder**, **Template** (name + body snippet), **Chars**, **Segments** (SMS segment count), **Uses**, and **Visibility** (Private / Team).
+
+Filtering is client-side: a search box (matches name + body), an **All / My Templates** visibility toggle, a folder-tab strip, and a **Buyer / Seller** pipeline filter. Rows are grouped/sorted by category label then name.
+
+**Preview** opens a modal that flattens any HTML to plain SMS text, resolves `{{merge}}` fields against sample data, substitutes `{{ai.<key>}}` sections with their editable context-block fallback copy, and reports an honest character count and SMS segment count (1 segment ≤ 160 chars; then 153 chars per additional segment).
+
+**Delete** is a soft delete — it sets `is_active = false` rather than removing the row. Bulk-delete is available via row selection.
+
+## What you configure
+
+Templates are created/edited in the editor at `/settings/text-templates/new` and `/settings/text-templates/[id]/edit`.
+
+| Field | What it controls |
+|-------|------------------|
+| **Name** | Display name (required). |
+| **Body** | The message text; insert `{{merge}}` fields (and `{{ai.<key>}}` sections) via the merge-field picker. |
+| **Folder** | Grouping folder (drives the folder tabs). |
+| **Event** (category) | The template's category/type; pipeline (Buyer/Seller) is derived from it. Requires a folder first. |
+| **Lifecycle** | `new` or `returning` lead (optional). |
+| **Share with Team** | `team` (visible to all agents) or `private` (only you). |
+| **image_url** | Optional http(s) image URL attached to the template. |
+
+The **Live/Draft** status is not set here — it is computed from whether an active workflow references the template's `key`.
+
+## Data source
+
+- **Table:** `hl_templates` — text templates are the rows where `kind = 'text'` and `is_active = true`. Columns used: `id, name, key, body, image_url, category, folder, lifecycle, visibility, created_by, created_at, updated_at`. `created_by` joins to `hl_users` for the author name. (`use_count` is currently hardcoded to `0`.)
+- **Live status:** `getLiveTemplateKeys()` (`lib/templates/live-keys.ts`) reads `hl_workflows` where `status = 'active'` and collects every node's `config.template_key`; a template is `Live` if its `key` is in that set.
+- **AI sections:** the preview fetches `/api/context-blocks` and substitutes `{{ai.<key>}}` with each block's `fallback` copy.
+- **API routes:**
+  - `GET`/`POST` `app/api/text-templates/route.ts` — list (with `category`/`visibility` filters) and create.
+  - `PATCH`/`DELETE` `app/api/text-templates/[id]/route.ts` — update fields; DELETE soft-deletes (`is_active = false`).
+- **Category/pipeline/lifecycle metadata:** `lib/templates/categories.ts` (`categoryMeta`, `audienceForCategory`, `lifecycleMeta`, `folderMeta`).
+
+## How it fits
+
+`hl_templates` is the shared template store across the CRM — email templates live in the same table under a different `kind`, and both surfaces share the category palette (`lib/templates/categories.ts`) and the Live/Draft rule (`lib/templates/live-keys.ts`). Text templates become "live" only when an active **workflow** node references them, tying this page to the workflow builder. At send time, `{{merge}}` fields resolve against the lead and `{{ai.<key>}}` sections are personalized live by Myli from their context blocks.

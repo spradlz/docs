@@ -1,12 +1,49 @@
 ---
 title: "Background Jobs"
-description: "Background Jobs — HouseLoop CRM (Integrations & API). Documentation stub."
+description: "The Background Jobs scoreboard — live health, schedule, and last/next run for every HouseLoop Inngest function, each linking through to the Run Log and the Inngest dashboard."
 ---
 
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
+The **Background Jobs** tab is the operational scoreboard for every HouseLoop Inngest function: is it healthy, when did it last run, when does it fire next, and a click straight into the Run Log or the Inngest dashboard.
 
 **In the app:** CRM sidebar → **Integrations & API** → **Background Jobs** — [`/integrations?tab=jobs`](https://crm.houseloop.ai/integrations?tab=jobs)
 
-**Code:** `apps/houseloop-crm/app/(crm)/integrations/page.tsx` (route page + its components).
+It's the second tab of the **Integrations & API** page (the first is **Connections**). Both tabs render from the same `page.tsx`; the `?tab=` query param picks which set of cards shows, so the two sidebar items open one page.
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+## What it does
+
+- Renders **one card per background job**. A section-level rollup dot at the top summarizes the group ("All healthy" / "Some not connected" / "Attention needed").
+- Each card shows the job's **status** (`Healthy`, `Failing`, `Scheduled`, `Manual`, `Event-triggered`, or `Capturing`), a one-line description, its **schedule/cadence**, the **last run** timestamp, and the **next run** time for cron-driven jobs.
+- **Health is derived from the run ledger:** for each job it reads the most recent `hl_run_log` row — no row → `No runs captured yet`; last row `failed` → `Failing` (red); otherwise `Healthy`. Cron-scheduled jobs with no runs yet read `Scheduled` rather than "not connected", so idle-but-armed jobs aren't shown as broken.
+- **Multi-step pipelines collapse into one card.** Functions sharing a `group` (today: the **Heartland Market Report** — snapshot → AI narrative → publish) show as a single grouped card; its "View runs" link opens the Run Log filtered to the whole group. Ungrouped functions each get their own card.
+- **Internal `onFailure` companions are hidden** (e.g. Scheduled Action's failure handler) — they still write to the ledger, but they don't clutter the scoreboard.
+- The **Run Log Capture** job is special-cased: since it excludes itself from the log it writes, its "last run" is shown as the most recent row it captured (`MAX(started_at)` across `hl_run_log`).
+
+## What you configure
+
+This tab is a **read-only monitor** — jobs and their schedules are defined in code, not edited here. Each card exposes two actions:
+
+| Action | Where it goes |
+|--------|---------------|
+| **View runs** | The Run Log, filtered to that job — `/run-log?view=system&fn=<fnId>` (or `&group=<id>` for a grouped pipeline) |
+| **Open Inngest** | The function's page in the Inngest production dashboard (`app.inngest.com`) |
+
+Schedules themselves live in the registry (`SCHEDULES` in `inngest-registry.ts`) and, for the monthly Market Report, in a Camp David crontab — the card surfaces the effective cadence but does not let you change it. Service connections/auth are managed on the sibling **Connections** tab.
+
+## Data source
+
+- **`hl_run_log`** (CRM Postgres) — the run ledger. Per-job health/last-run comes from `SELECT status, started_at FROM hl_run_log WHERE fn ILIKE $1 ORDER BY started_at DESC LIMIT 1`; grouped cards match `fn = ANY(member fnIds)`. Written by the **Run Log Capture** Inngest function (`capture-fn.ts`), which subscribes to Inngest `function.finished` / `function.failed`.
+- **`lib/run-log/inngest-registry.ts`** — the static catalog (`INNGEST_REGISTRY`) of every surfaced HouseLoop Inngest function, the pipeline groups (`JOB_GROUPS`), the schedule map (`SCHEDULES`), and helpers (`scheduleFor`, `nextRunISO`, `fnIdsForGroup`, `inngestUrl`). PlacedAgent's functions are intentionally excluded. Non-`internal`, non-`group` functions become standalone cards.
+- **`lib/integrations/status.ts`** — `getIntegrationStatuses()` builds the `jobs[]` array (grouped cards + ungrouped cards) that the page maps to `CommandCenterCard`. Each check is independently guarded so one missing table can't break the page.
+- **Next-run** times are computed from the cron string via `nextRunISO()` (hourly, 6-hourly, and monthly-8th shapes); event/manual jobs return no next-run.
+
+## How it fits
+
+Background Jobs is the "settings/status" surface for the same Inngest functions whose executions stream in the **Run Log**. This page answers "is each job healthy and when does it fire?"; the Run Log answers "show me the individual runs." Because health is read straight from `hl_run_log`, the scoreboard stays truthful to the [Inngest-or-it-doesn't-exist](/guides/run-log) doctrine — a job only reads `Healthy` when it has real captured runs. It shares its page, tab strip (`IntegrationsTabs`), and card component (`CommandCenterCard`) with the **Connections** tab, giving one place for everything running behind the scenes.
+
+### Code
+
+- Page: `apps/houseloop-crm/app/(crm)/integrations/page.tsx`
+- Tab strip: `apps/houseloop-crm/components/integrations/IntegrationsTabs.tsx`
+- Card: `apps/houseloop-crm/components/command-center/CommandCenterCard.tsx`
+- Status builder: `apps/houseloop-crm/lib/integrations/status.ts`
+- Registry: `apps/houseloop-crm/lib/run-log/inngest-registry.ts`

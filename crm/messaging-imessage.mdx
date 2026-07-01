@@ -1,12 +1,44 @@
 ---
 title: "iMessage"
-description: "iMessage — HouseLoop CRM (Messaging). Documentation stub."
+description: "SendBlue / iMessage settings — BlueBubbles server status, iMessage send handles, per-member line assignments, and message history for the HouseLoop CRM."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Messaging** → **iMessage** — [`/settings/sendblue`](https://crm.houseloop.ai/settings/sendblue)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/sendblue/page.tsx` (route page + its components).
+The page renders as **"SendBlue / iMessage"** and controls how the CRM sends and receives iMessage through a self-hosted [BlueBubbles](https://bluebubbles.app) server running on Camp David (a Mac Mini), reached over a Cloudflare proxy.
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+## What it does
+
+The page has three tabs (`?tab=dashboard|managed|history`, deep-linkable via `?tab=managed&member=<id>`):
+
+- **Dashboard** — health of the BlueBubbles server: a live connection callout, a daily-volume health gauge, the outbound send-handle selector, total message / attachment counts, full server details, registered webhooks, and the last 20 server log lines. A **Refresh** action re-pulls status. If the server can't be reached it shows a "How to Connect BlueBubbles" troubleshooting card instead.
+- **Managed iMessage** — assigns the BlueBubbles line to individual team members (see `ImessageHandlesTable`). Each active user can be assigned the line and optionally marked as the default text channel; a per-line "Configure" modal handles assign / unassign / set-default.
+- **Message History** — a paginated log (50/page) of iMessage + SMS traffic. It pulls **live** from the BlueBubbles server when available and otherwise falls back to the communications SSOT. Each row links the counterpart handle to its matching CRM lead when one resolves.
+
+**Volume guardrail:** BlueBubbles is limited to roughly **50 new contacts/day** (`DAILY_LIMIT`), so the UI frames it as a personal-follow-up channel and steers high-volume / AI outreach to SMS (Twilio). The health gauge turns yellow at 70% and red at 90% of that limit.
+
+## What you configure
+
+| Setting | Where | Stored in |
+|---|---|---|
+| Outbound iMessage send handle | Dashboard → **iMessage Send Handle** card | `hl_settings` key `bb_send_handle` |
+| Per-member line assignment | Managed iMessage → row **⋮ → Configure** | `hl_imessage_assignments` |
+| Default text channel for a member | Configure modal / **For Texts** toggle | `hl_imessage_assignments.is_default` |
+| Line availability in the registry | Managed iMessage (registry-backed) | `hl_bb_lines` |
+
+Notes:
+- There is **one** HouseLoop BlueBubbles number, `+19132081633`. The `myli@placedagent.com` handle shown in the send-handle selector is **reserved for PlacedAgent** and locked — it can't be selected for HouseLoop.
+- A BlueBubbles line belongs to **exactly one user at a time**; assigning it to a member removes it from anyone else. Marking a member as default clears the default flag on all others.
+- Server connection itself is set by the `BB_URL` and `BB_PASSWORD` environment variables (not editable in the UI).
+
+## Data source
+
+- **`/api/bluebubbles`** — server status (info, message count, attachment count, webhooks, logs). Proxies the BlueBubbles REST API (`/api/v1/server/info`, `/message/count`, `/attachment/count`, `/webhook`, `/server/logs`) using `BB_URL` + `BB_PASSWORD`.
+- **`/api/bb/settings`** — `GET`/`POST` the preferred outbound handle. Reads/writes `hl_settings` key `bb_send_handle`. Only `houseloop`-app handles are accepted.
+- **`/api/bb/history`** — message log. Live path: `POST /api/v1/message/query` against the BlueBubbles server. Fallback path: `hl_messages` filtered to `channel IN ('sms','imessage')`. Counterpart handles are matched to leads via `hl_leads` (phone/email).
+- **`/api/bb/daily-stats`** — aggregates recent outbound BlueBubbles messages into today / 7-day buckets, unique-handle counts, and a brand breakdown (HouseLoop vs PlacedAgent vs other) resolved against `hl_leads` and `pa_leads`.
+- **`/api/team/imessage`** and **`/api/team/imessage/[id]`** — list active users with their assignment, assign/unassign a line, and set the default. Backed by `hl_users`, `hl_imessage_assignments`, and the `hl_bb_lines` registry (migration 0120; the code constant is a fallback if the table read fails).
+
+## How it fits
+
+Inbound iMessage arrives via a BlueBubbles webhook registered against the server (visible on the Dashboard's Webhooks card) and lands in the CRM's communications SSOT, `hl_messages` (channel `imessage`), alongside SMS. Outbound personal texts sent from the chat bar route through BlueBubbles when a member has the line assigned as their default text channel; otherwise they go out over SMS (Twilio). This settings page is the operator's control panel for that plumbing — it does not itself send messages, it configures the identity, assignments, and health monitoring behind them.

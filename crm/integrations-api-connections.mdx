@@ -1,12 +1,50 @@
 ---
 title: "Connections"
-description: "Connections — HouseLoop CRM (Integrations & API). Documentation stub."
+description: "The Connections tab of Integrations & API — one status card per external service the CRM is wired to (Gmail, Calendar, Twilio, BlueBubbles, Resend, Instantly, Repliers, dotloop), with live auth state and links to configure or open the vendor."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Integrations & API** → **Connections** — [`/integrations?tab=connections`](https://crm.houseloop.ai/integrations?tab=connections)
 
-**Code:** `apps/houseloop-crm/app/(crm)/integrations/page.tsx` (route page + its components).
+Connections is the default tab of the **Integrations & API** page (the other tab is **Background Jobs**). The page is query-param driven (`?tab=connections|jobs`) so both sidebar entries open the same route.
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+## What it does
+
+Renders one card per external service the CRM connects to. Each card shows a live status dot — **Connected** (green), **Not connected** (grey), or **Error** (red) — plus a short description, a detail line (e.g. the connected account email), and the time of the last sync. A rollup line at the top of the tab summarizes the whole group: **All healthy**, **Some not connected**, or **Attention needed** (if any card is in error).
+
+Every card carries up to three actions: **Manage** (its in-app config page), **Open &lt;vendor&gt;** (deep-link out to the external console), and **Docs** (developer docs) where available.
+
+Status is detected fresh on each page load against the real source-of-truth tables — it is not a stored guess. Each check is independently guarded, so a missing table or failed query degrades a single card to "Status unavailable" rather than breaking the page.
+
+## What you configure
+
+The tab ships with these eight connection cards. Clicking **Manage** opens each service's own configuration page:
+
+| Card | Connected when | Manage page |
+|------|----------------|-------------|
+| **Gmail** | An active Google OAuth connection exists for your account | `/settings/email` |
+| **Google Calendar** | A calendar connection with a refresh token exists for your user | `/settings/calendar-sync` |
+| **Twilio** | The `phone_provider` setting has an `account_sid` | `/settings/phone-provider` |
+| **BlueBubbles** | The `BB_URL` environment variable is set | `/settings/sendblue` |
+| **Resend** | The `resend` setting is present | `/settings/email?tab=bulk` |
+| **Instantly** | The `instantly` setting is present | `/settings/email?tab=bulk` |
+| **Repliers (IDX)** | An API key is configured (setting or env) and/or listing-cache runs are healthy | `/settings/idx/repliers` |
+| **dotloop** | A non-revoked row exists in the dotloop connection table (OAuth consent granted) | `/api/dotloop/oauth/start` (starts the OAuth consent flow) |
+
+You do not edit anything on the Connections tab itself — it is read-only status. The actual credentials and toggles live on the linked Manage pages.
+
+## Data source
+
+Status is assembled server-side by `getIntegrationStatuses()` in `apps/houseloop-crm/lib/integrations/status.ts`, which reads:
+
+- **`hl_oauth_connections`** — Gmail (Google provider, `recruiter_id IS NULL`, active). Same table `/api/email/status` reads.
+- **`hl_calendar_connections`** — Google Calendar connection + refresh token + `last_synced_at` per user.
+- **`hl_settings`** — key/value config rows: `phone_provider` (Twilio `account_sid`), `resend`, `instantly`, and `repliers` (`value->>'api_key'`).
+- **`hl_dotloop_connection`** — dotloop OAuth grant (`revoked_at IS NULL`), account name, and token expiry.
+- **`hl_run_log`** — for Repliers, the latest `%listing-cache%` run drives the "Syncing / Sync failing" detail.
+- **Environment variables** — `BB_URL` (BlueBubbles), `REPLIERS_API_KEY` (Repliers fallback), `DOTLOOP_CLIENT_ID` / `DOTLOOP_CLIENT_ID_API_KEY` (dotloop client configured).
+
+The page (`apps/houseloop-crm/app/(crm)/integrations/page.tsx`) is `force-dynamic` and passes the session's user id + email into the status function. Cards render via `CommandCenterCard`; the tab strip is `IntegrationsTabs`.
+
+## How it fits
+
+Connections replaces the old standalone "Command Center" page and the duplicate `/settings/integrations` page (Zach 2026-05-27 IA merge). It is the single at-a-glance answer to "is everything the CRM depends on actually hooked up?" — and the jump-off point to fix anything that is not. Its sibling tab, **Background Jobs**, does the same for the registry-driven Inngest functions, linking each into the Run Log instead of a vendor console.

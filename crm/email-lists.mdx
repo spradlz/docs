@@ -1,12 +1,55 @@
 ---
 title: "Lists"
-description: "Lists — HouseLoop CRM (Email). Documentation stub."
+description: "Email Lists — named groups of CRM contacts (static or rule-based) used as the recipient audience for email campaigns."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Email** → **Lists** — [`/settings/email-lists`](https://crm.houseloop.ai/settings/email-lists)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/email-lists/page.tsx` (route page + its components).
+**Code:** `apps/houseloop-crm/app/(crm)/settings/email-lists/page.tsx` (index), `.../email-lists/[id]/page.tsx` (detail).
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+## What it does
+
+Lists are named groups of contacts (rows in `hl_leads`) that a campaign sends to. The index page shows every list with its contact count, how many campaigns reference it, and when it last synced. From there you create a list, open one to manage it, or delete one (single or bulk-selected).
+
+A list is one of three types:
+
+- **Static** — you add and remove contacts by hand. Best for curated groups.
+- **Smart** — a rule set (`rules_json`) is meant to auto-qualify contacts by stage, tags, or saved searches. The rules are stored, but the membership auto-sync (the "nightly sync") is **not implemented in this code yet** — the member-management endpoints only act on static lists.
+- **Saved Search** — one system-generated list per (lead, saved search). Supported in the schema and API validation, but not offered in the "New List" modal (which only creates static or smart lists).
+
+The detail page (`/settings/email-lists/[id]`) has two tabs:
+
+- **Members** — the contacts on the list. For static lists you add members (search all contacts, multi-select) and remove them (single via the row menu, or bulk via checkbox selection).
+- **Campaigns** — every campaign that targets this list, with status, type, sent count, and created date. Links out to build a new campaign for the list (`/settings/email-campaigns/new?list_id=…`).
+
+Deleting a list first detaches any campaigns pointing at it (sets their `list_id` to `NULL`) before removing the list row.
+
+## What you configure
+
+| Field | Where | Notes |
+|---|---|---|
+| **Name** | New List modal | Required, max 120 chars |
+| **Description** | New List modal | Optional, max 500 chars |
+| **Type** | New List modal | `static` or `smart` (Saved Search is schema/API-only) |
+| **Members** | Detail → Members tab | Static lists only — add via contact search, remove single/bulk |
+| **rules_json** | API `PATCH` only | Smart/saved-search rules; required by the API when creating those types. No UI rules editor exists in this page yet |
+
+## Data source
+
+- **Tables:**
+  - `hl_email_lists` — one row per list (`id`, `name`, `description`, `type`, `rules_json`, cached `member_count`, `last_synced_at`, `created_by`, timestamps). Originally `hl_email_audiences`, renamed in migration `0035_hl_audiences_to_lists_rename.sql`.
+  - `hl_email_list_members` — static membership join table (`list_id`, `lead_id`, `added_at`).
+  - `hl_leads` — the contacts joined into member rows (name, email).
+  - `hl_email_campaigns` — referenced for the per-list `campaign_count` and the Campaigns tab (via its `list_id`).
+- **API routes:**
+  - `GET`/`POST` `/api/email/lists` — list all / create.
+  - `GET`/`PATCH`/`DELETE` `/api/email/lists/[id]` — read / edit / delete a list.
+  - `GET`/`POST`/`DELETE` `/api/email/lists/[id]/members` — read / add / remove static members. Each write recomputes cached `member_count` and stamps `last_synced_at`.
+  - `/api/leads/search` — powers the Add Members contact search.
+  - `/api/email/campaigns?list_id=…` — populates the detail page's Campaigns tab.
+- `member_count` is a cached column refreshed on every add/remove; `campaign_count` is computed live as a subquery. Write endpoints require an authenticated session.
+- Migrations: `0019_hl_email_audiences.sql` (original schema), `0020_hl_email_campaigns.sql` (campaign link), `0035_hl_audiences_to_lists_rename.sql` (audiences → lists rename).
+
+## How it fits
+
+Lists are the recipient layer of the CRM's Email Marketing system. Contacts live in `hl_leads`; a List groups them; a Campaign (`hl_email_campaigns`) picks one List as its audience and sends through the email send pipeline. The detail page's "New Campaign" action carries the list forward into the campaign builder, and deleting a list safely detaches its campaigns rather than cascading them away.

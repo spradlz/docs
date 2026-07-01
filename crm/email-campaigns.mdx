@@ -1,12 +1,61 @@
 ---
 title: "Campaigns"
-description: "Campaigns — HouseLoop CRM (Email). Documentation stub."
+description: "Send targeted email campaigns to a contact list from warmed-up, dedicated HouseLoop inboxes — templates or custom content, merge fields, and draft/send-now/schedule options."
 ---
 
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
+Email Campaigns is a fully built CRM surface for sending one email to many contacts at once: pick a contact list, compose from a template or write custom content, choose a sender, and save as a draft, send immediately, or schedule for later.
 
 **In the app:** CRM sidebar → **Email** → **Campaigns** — [`/settings/email-campaigns`](https://crm.houseloop.ai/settings/email-campaigns)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/email-campaigns/page.tsx` (route page + its components).
+**Code:** `apps/houseloop-crm/app/(crm)/settings/email-campaigns/page.tsx` (list), `new/page.tsx` + `[id]/edit/page.tsx` (editor), and the shared `components/settings/email-campaigns/EmailCampaignEditor.tsx`.
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+## What it does
+
+The list page shows every campaign with its type, target list (and member count), status, and — once sent — the send time. Campaigns filter by **All / Drafts / Scheduled / Sent**, and you can edit or delete individual campaigns or bulk-delete selected rows. A Getting Started card shows while you have fewer than 5 campaigns, and a Gmail warmup-limits notice is always shown.
+
+The editor (create or edit) is a single form: name the campaign, choose a type, point it at a contact list, pick the sending inbox, write the subject and body, then choose how to send.
+
+At send time the system resolves the list to its members, looks up each member's best email (primary, non-invalid, from `hl_lead_emails`, falling back to the lead record), runs the subject and body through the merge engine per recipient, sends via the Gmail API, and writes one row per recipient to the send log. It only marks the campaign `sent` if at least one email went out; if every send fails it reverts to `draft` so you can fix and retry. The send loop is synchronous (built for v1 list sizes under ~1k).
+
+## What you configure
+
+| Field | Notes |
+|-------|-------|
+| **Campaign Name** | Required. Free text, max 120 chars. |
+| **Campaign Type** | One of `listing_alert` (Saved Search), `open_house`, `market_report`, `outreach_sequence` (Outreach), `one_time_blast`. Type sets the default sender/inbox pool. Locked once a campaign is sent/sending. |
+| **Email List** | The `hl_email_lists` list whose members receive the email. Required to send. Can be pre-filled via `?list_id=` when deep-linked from a list detail page. |
+| **Send From** | The sending inbox. **Team** senders are always ready; **Bulk** (warmup-pool) senders are disabled until Instantly reports them warmed up (shows score / days warming). Default tracks the campaign type. |
+| **Subject Line** | Supports merge tokens (e.g. `{{listing.address}}`). |
+| **Email Content** | Rich-text body. Load from a template (**Use Template**, from `hl_templates`) or write custom content. **Preview** renders it against a live sample (your agent profile + the list's first contact). |
+| **Merge fields** | Inserted at the cursor into subject or body from the shared merge-field registry (`lib/merge-fields.ts`). |
+| **Send Options** | **Save as Draft**, **Send Now**, or **Schedule Send** (date + time). Scheduling stores `status='scheduled'` with `scheduled_at`. |
+
+## Data source
+
+**Database tables:**
+
+- `hl_email_campaigns` — the campaign record (name, type, status, `list_id`, `template_id`, `subject`, `notes` = custom body, `scheduled_at`, `sent_at`, `from_email`, and `send_count`/`open_count`/`click_count`).
+- `hl_email_lists` / `hl_email_list_members` — the target list and its members (joined for name + member count; resolved to `lead_id`s at send).
+- `hl_templates` — reusable subject/body/category/key used by the template picker and send.
+- `hl_leads` / `hl_lead_emails` — recipient identity and best-email resolution.
+- `hl_email_send_log` — one row per recipient per send (inbox used, subject, body preview, status, Gmail message id, or error).
+- `hl_sending_inboxes` — the dedicated sending mailboxes (OAuth-connected flag, warmup state).
+- `hl_inbox_send_log` — per-inbox, per-day send counts enforcing the daily cap.
+- `hl_settings` — holds the `instantly` API key used to verify bulk-sender warmup before sending.
+
+**API routes** (under `apps/houseloop-crm/app/api/`):
+
+- `GET /api/email/campaigns` — list (filters: `status`, `type`, `list_id`, `limit`). `POST` creates a draft or scheduled campaign.
+- `GET|PATCH|DELETE /api/email/campaigns/[id]` — read, update, delete a campaign.
+- `POST /api/email/campaigns/[id]/send` — resolve the list and send; returns `{ sent, failed, total }`.
+- Supporting reads: `/api/email/senders?campaign_type=`, `/api/email/lists`, `/api/email/lists/[id]/members`, `/api/email/templates`, `/api/profile`.
+
+**Libraries:** `lib/email/inbox-routing.ts` (campaign-type → inbox pool, round-robin with daily cap), `lib/email/gmail-send.ts` (`sendViaGmail`), and `lib/email/template-merge.ts` (`buildMergeScope` + `applyMerge`).
+
+Sending inboxes follow the Zillow deliverability pattern: one primary subdomain (`mail.houseloop.ai`) with semantic prefixes (e.g. `recommendations@`, `instant-updates@`, `my-saved-home@`), each campaign type mapped to a pool so reputation stays centralized. A backup subdomain stays pre-warmed as hot standby.
+
+## How it fits
+
+Campaigns are the bulk-send layer of the CRM's email stack. They draw recipients from **Email Lists** (`/settings/email-lists`), compose from the same **Templates** used across the CRM, and route through the same warmed-up sending inboxes managed under **Email Settings** (`/settings/email`) — where inbox/warmup status lives. Every send lands in `hl_email_send_log`, giving a per-recipient audit trail of what was sent, from which inbox, and whether it succeeded.
+
+<Note>Scheduled campaigns are stored with `status='scheduled'` and a `scheduled_at` timestamp; the send is triggered through the send endpoint. There is no separate cron/Inngest dispatcher for scheduled campaigns in the current code.</Note>
