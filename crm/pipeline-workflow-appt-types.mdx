@@ -1,12 +1,46 @@
 ---
 title: "Appt Types"
-description: "Appt Types — HouseLoop CRM (Pipeline & Workflow). Documentation stub."
+description: "Manage the appointment types agents can schedule — label, color, icon, default duration, and the pipeline stage a booked appointment advances a lead to."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Pipeline & Workflow** → **Appt Types** — [`/settings/appointment-types`](https://crm.houseloop.ai/settings/appointment-types)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/appointment-types/page.tsx` (route page + its components).
+## What it does
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+This page is the admin editor for the CRM's appointment types — the set of options an agent picks from when scheduling an event on a lead (e.g. Buyer Consultation, Showing, Listing Appointment). Each type carries a label, color, icon, an optional default duration, and an optional pipeline stage the lead is advanced to when an appointment of that type is booked.
+
+Types are shown in a sortable table (`HlDataTable`). You can create, edit, reorder (drag the grip handle), activate/deactivate, and delete types. Only **active** types appear in the scheduler dropdown; inactive ones are hidden but preserved.
+
+Some types are **System** types (`is_system = true`), marked with a Lock pill. System types are protected: they can't be deleted, deactivated, reordered, or renamed, and their duration/stage automation is locked — only their **color and icon** may be changed. This is because system types drive stage-advancement logic elsewhere in the app.
+
+## What you configure
+
+Per type, via the create/edit modal (`AppointmentTypeModal`):
+
+| Field | Control | Notes |
+|-------|---------|-------|
+| Type Name | text input (max 60 chars) | Required. On create, a stable `key` is auto-slugified from the label (e.g. `Buyer Showing` → `buyer_showing`), with a numeric suffix on collision. Locked for system types. |
+| Color | `ColorPicker` | Background of the type's icon swatch. Defaults to `#3B82F6` in the modal / `#6B7280` server-side. Editable even for system types. |
+| Icon | `IconPicker` | Lucide glyph rendered on the swatch. Defaults to `Calendar`. Editable even for system types. |
+| Default Duration (minutes) | number input (0–1440) | Optional; shown as e.g. `60m` in the table. Locked for system types. |
+| Stage Automation | select of active pipeline stages | Optional. Booking this type advances the lead to the chosen stage (`stage_advance_to_stage_id`). Table column labels it "ADVANCES TO", shown as `Pipeline · Stage`. Locked for system types. |
+| Active | checkbox / row toggle | Active types show in the scheduler dropdown. Locked (always active) for system types. |
+
+Table columns: **TYPE** (icon + label + System pill), **ADVANCES TO**, **DURATION**, **IN USE** (count of `hl_appointments` referencing the type), and **ACTIVE** (toggle).
+
+<Info>Delete is guarded. A type that is **in use** (has appointments) deactivates instead of deleting; a **system** type can't be deleted at all. Only a free, non-system type is hard-deleted. This applies to both per-row delete and the bulk select-all delete.</Info>
+
+## Data source
+
+- **DB tables:** `hl_appointment_types` (the type records), `hl_appointments` (joined by `type = key` to compute `in_use_count`), `hl_stages` + `hl_pipelines` (active-stage options for the Stage Automation dropdown).
+- **APIs:**
+  - `GET /api/appointment-types` — `?scope=admin` returns all rows (active + inactive) with `in_use_count`; default returns active rows only (legacy scheduler contract).
+  - `POST /api/appointment-types` — create (derives `key`, sets `sort_order = max + 10`, `is_system = false`).
+  - `PATCH /api/appointment-types` — bulk reorder (`{ order: [{ id, sort_order }] }`).
+  - `PATCH /api/appointment-types/[id]` — update one type; server enforces that system rows accept only `color`/`icon`.
+  - `DELETE /api/appointment-types/[id]` — delete; returns `409` with reason `system_protected` or `in_use` when blocked.
+- The route page (`page.tsx`) loads types and stage options server-side (`export const dynamic = 'force-dynamic'`) and passes them into the client components.
+
+## How it fits
+
+Appointment types are the taxonomy behind the CRM scheduler and the bridge between scheduling and the pipeline: booking a typed appointment can automatically advance a lead to a configured stage, keeping the pipeline in sync with real-world activity.

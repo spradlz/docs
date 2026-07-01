@@ -1,12 +1,47 @@
 ---
 title: "IDX Connection"
-description: "IDX Connection — HouseLoop CRM (Website Settings). Documentation stub."
+description: "The Repliers (MLS/IDX) connection detail page — API key status, a live proof-of-life check, and last-sync signals for the listing data provider."
 ---
-
-<Note>🚧 **Stub — documentation in progress.** This feature is **built and live** in the CRM. The full write-up is coming; this page exists so the docs nav matches the app 1:1.</Note>
 
 **In the app:** CRM sidebar → **Website Settings** → **IDX Connection** — [`/settings/idx/repliers`](https://crm.houseloop.ai/settings/idx/repliers)
 
-**Code:** `apps/houseloop-crm/app/(crm)/settings/idx/repliers/page.tsx` (route page + its components).
+## What it does
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace this stub with real docs when the feature is written up — the generator will not overwrite a page that already exists._
+This page is the connection detail card for **Repliers**, the MLS / IDX listing-data provider that powers the listing cache, search, and property detail pages. On load it resolves the configured API key, runs a **live verification call** against the Repliers API to prove the key can actually pull listings, and reads the two most recent sync signals from the run log. It is a read-only status page — configuration itself (plan, tier, connections) is managed in the Repliers account.
+
+The header status dot resolves to one of three states:
+
+- **Not connected** — no API key found.
+- **Connected · verified live** — key is set and the live check succeeded.
+- **Key set, but live check failed** — key exists but the API call errored (shows the error).
+
+## What you configure
+
+There are no editable fields on this page. It displays status and provides deep-links out. The card rows are:
+
+| Row | Meaning |
+| --- | --- |
+| **API key** | The resolved key, masked (`abcd••••wxyz`) or `Not configured`. |
+| **Live check** | Result of the live Repliers call — number of listings accessible, or the error. |
+| **Last live IDX event** | Timestamp of the most recent real-time IDX event (Repliers webhook feed). |
+| **Last cache sync** | Timestamp + status of the most recent listing-cache reconcile run. |
+| **Plan / tier / connections** | Pointer to the Repliers account (not managed here). |
+
+Action links at the bottom:
+
+- **View live IDX feed** → `/run-log?view=idx`
+- **Open Repliers account** → `https://account.repliers.io`
+- **Developer docs** → `https://docs.repliers.io`
+
+<Info>The two sync signals are deliberately separate. The **cache sync** is the hourly full-reconcile cron; the **live IDX event** is the real-time webhook feed. Showing only the cron once made the card read "stale since 3 AM" while listings were actually streaming in at 4:49 AM — so both are surfaced.</Info>
+
+## Data source
+
+- **API key resolution** — reads `hl_settings` where `key = 'repliers'` (`value->>'api_key'`), falling back to the `REPLIERS_API_KEY` environment variable.
+- **Live check** — a single request to `https://api.repliers.io/listings?numResults=1&status=A` with the `REPLIERS-API-KEY` header (5-second timeout), reading the returned `count`/`total`.
+- **Last cache sync** — `hl_run_log`, latest row where `fn ILIKE '%listing-cache%'` (returns `status` + `started_at`).
+- **Last live IDX event** — `hl_run_log`, latest row where `source = 'idx'` (`started_at`).
+
+## How it fits
+
+This is the detail layer behind the IDX Connection entry in Website Settings, giving an at-a-glance, live-verified answer to "is our MLS feed connected and flowing?" It reads the same `hl_run_log` that the Run Log surfaces, and links straight to the live IDX feed and the Repliers account for anything that needs changing.
