@@ -97,6 +97,28 @@ The sold home keeps the **same row and the same `/home/{canonicalSlug}` URL** �
 `sold`. The MLS sale price is captured (`closePrice`) but **display-restricted** in non-disclosure states
 (Heartland §12.3b). Value detail: [Sold Data & Price History](/guides/sold-data-and-price-history).
 
+## Past-client home seating (parallel to intake/disposition)
+
+Intake and disposition above are for homes **in our IDX feed**. **SRG past-client homes are seated by a parallel,
+one-time flow** — they are pre-existing homes from prior SISU/MLS transactions, so they never arrive via a Repliers
+webhook and never run through `catalog-listing`.
+
+```
+SISU/MLS deal (typed address)  →  MLS# anchor resolver (offline, one-time, 2026-07-02)
+   • CASS clean → Ninja multi-form search → validate mlsId vs our known MLS# → canonical address + zpid + value
+   →  pastclient-canonical-FINAL-2026-07-02.csv  (1 row per HLID)
+   →  seat into Listing by ADDRESS (status='sold', or 'active' if currently re-listed)  +  hl_srg_past_client_homes
+   =  home lives at /home/<slug>/<HLID>, same as any listing
+```
+
+- **Resolution is by ADDRESS + MLS#, not the webhook** — the MLS# on Zillow's property-details overrides the typed
+  address (the "miskey lesson"). See [Property Data & Address Identity](/guides/property-data-and-address-identity).
+- **Value** follows the five-bucket fork (Zestimate re-fetch, or ZHVI recompute for homes Zillow lacks) — see
+  [HouseLoop Home Value](/guides/houseloop-home-value).
+- **Seating is one-time** (the resolver ran 2026-07-02, all 1,936 homes). Going forward, a past-client home that
+  **re-lists** re-enters the normal intake flow and updates in place — same row, same URL.
+- Full spec: `GT_HOUSELOOP_PASTCLIENT_MLS_RESOLVER_PRD.md`. Owner of the seating/DB side: Caleb.
+
 ## Price history lives ON the row — never a live fetch
 
 The Price History table on `/home` renders from the **stored `Listing.priceHistory` column**, not a
