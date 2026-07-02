@@ -3,7 +3,7 @@ title: "Adam (Past Client Address Resolver)"
 description: "Work-in-progress dossier — Adam · HouseLoop CRM · Developer Docs. Past Client Address Resolver."
 ---
 
-<Info>Live dossier — auto-generated from `.claude/state/wip/adam/pastclient-address-resolver.md` on every push. **Progress: 8/12 done (67%).** _Updated 2026-07-02 PM — RESOLVER + VALUE PASS SHIPPED._</Info>
+<Info>Live dossier — auto-generated from `.claude/state/wip/adam/pastclient-address-resolver.md` on every push. **Progress: 8/15 done (53%).** _Updated 2026-07-02 PM — RESOLVER + VALUE PASS SHIPPED._</Info>
 
 **Owner:** Adam — HouseLoop CRM · Developer Docs
 
@@ -22,6 +22,56 @@ the correct address, all PAST (deals/MLS#s/sale history) + FUTURE (value/value-h
 transaction/agent resolution; I own the HOME side — correct address, canonical HLID + `/home` URL, and the
 HouseLoop Value/history. I hand him the canonical GT table; he resolves deals against it. One normalizer, both
 surfaces.
+
+---
+
+### 🔴 LIVE SESSION LOG — 2026-07-02 (running record; this IS "where are we / what's done")
+&gt; This is the ground-truth scoreboard. Everything below is verified against prod/DB. When done, verify vs code + rectify.
+
+**~11:00–12:30 CDT — QUARANTINE-BUG FIX (18 past-client homes, DONE + live).** Past clients whose homes were
+blank on `/home` because the de-fork engine picked the survivor BACKWARDS on a re-list (quarantined the live
+listing + deleted the enriched sold twin → 0 visible). Un-hid the correct keeper + carried value/photos +
+deduped, all reversible (`pastclient-unquarantine-exec.mjs`, reversal `pastclient-unquarantine-reversal-2026-07-02.json`).
+**Surfaced 8 live SELLER LEADS** (past clients on the market NOW with competitors — 13301 Lowell/KW, 703 E 109th,
+2917 E 61st, 1303 Larson, 7708 W 96th Ter=OURS, 715 E 72nd/Opendoor, 1412 SW Whistle, 8035 Madison). 1 wrong-merge
+resolved (309 5th St = Greenwood MO 2463036, not Osawatomie KS — different homes under one HLID; Osawatomie needs its own HLID).
+
+**~13:00–14:00 CDT — FORK-MERGE ENGINE built + PROVEN.** Model (Zach): ONE HLID per rooftop, most-active
+transaction = canonical keeper, all past transactions roll underneath as children. Scoped ONLY to the client's
+home via the MLS# → the MLS sheet (`hl_srg_mls_deals`) gives the true UNIT → cluster is same house#+street+zip+
+state+UNIT. Shadow (`pastclient-fork-merge-shadow.mjs`): **327 past-client homes forked / 377 children**, unit-
+anchored so BUILDINGS DON'T over-merge (1101 Walnut's 102 "units" isolate to the client's unit 1907; the MLS sheet
+was RIGHT — my scan read the wrong field). Tiers: ~325 SAFE (single-family + confirmed-unit, 2–4 forks) · buildings
+handled per-unit. Executor `pastclient-fork-merge-exec.mjs` (hard unit-safety ABORT if any cluster row ≠ anchor unit).
+**RAN on 411 W 46th Terrace #801 (HLID100849) — a 24-unit condo — as the proof:** unit 801 collapsed to ONE
+canonical HLID, the OTHER 21 units UNTOUCHED, reversible. Verified `/home/…-801-…/HLID100849` = 200. ✅ ENGINE PROVEN.
+
+**~14:30–15:30 CDT — 411 W 46th #801 flushed out THREE SYSTEMIC BUGS (all fixed on 801; scoped for the base):**
+1. **BUILDING-UNIT DATA CONTAMINATION (the big one).** The old `enrich-listing-direct.mjs` (OpenWeb Ninja) searched
+   Zillow by ADDRESS not a verified zpid → in a building it grabbed the WRONG unit's data for **every field**.
+   #801 had a penthouse's $1.6M value, a phantom "Sold 2021-12-30 $650k", 2018 $1.1M price history, wrong photos,
+   AND wrong tax. GROUND TRUTH (our MLS deal 1979715 + Zach): sold **$550K, 2016-08-24, Norman Mechlin, Ana buyer
+   agent**. FIXED #801 from the VERIFIED zpid 58612723: value **$888,922** (Zestimate 884,500 ×1.005) · price
+   history 2016/2013/2010 · **40 real photos → R2** · **tax $12,679/yr, assessed $139,509 (24 rows)** · soldDate
+   2016-08-24 / closePrice 550,000. **THE FIX FOR ALL BUILDING UNITS = a zpid-anchored RE-ENRICH pass that refreshes
+   EVERY field (value+date+photos+price-history+tax) from the MLS-validated zpid, not just value.**
+2. **`photosCached` OBJECT SHAPE.** `get.ts:81` reads `p.hlCdnUrl||p.url||p.originalUrl` — must be OBJECTS, not
+   plain URL strings, or the page silently ignores them + falls back to wrong-unit photos. (Logged; 801 rewritten as objects.)
+3. **BUILDING-UNIT SEARCH COLLAPSE (fixed + SHIPPED, 2 commits `0dcc7f7b17` + `ced4f7e5ae`).** The autocomplete
+   twin-dedupe key was `house#|street|zip` WITHOUT the unit → all 22 units collapsed to one arbitrary survivor;
+   unit-number queries returned 0. FIX in `apps/houseloop-web/app/api/locations/autocomplete/route.ts`:
+   `unitFromCanonicalSlug()` → unit in the dedupe key + shown in the result ("411 W 46th Terrace Unit 801"), and
+   match `canonicalSlug` (carries the unit) so a unit query finds the exact home. Also cleaned #801's garbled slug
+   `…terr-terrace-801…` → `…terrace-801…` (301 alias). **VERIFIED LIVE:** "411 W 46th Terrace 801" → Unit 801.
+
+**Deploy note:** these `houseloop-web` (port 3001) edits are separate from Zach's CRM (3020). Lee froze file writes
+mid-session for an HMR storm on 3020; Zach CEO-overrode ("push through"). Pushed via git → Railway auto-deploy.
+
+### OPEN WORKSTREAMS (next)
+- [ ] **Fork-merge the ~325 SAFE homes** — engine proven; run in batches, dry-run → spot-check → execute (Rule #0). 2 flagged (10110 W 96th Ter, 18000 E 25th Ct S) + buildings = per-unit.
+- [ ] **Building-unit zpid-anchored RE-ENRICH pass** — for every condo/apt past-client, refresh ALL fields (value,
+  soldDate/closePrice, priceHistory, photos, TAX) from the MLS-validated zpid. This is the systemic fix bug #1 needs.
+- [ ] **Autocomplete polish** — surface the queried unit above the MAX_SOLD=8 cap (a specific unit can still rank out on a big building).
 
 ### THE CORE INSIGHT — MLS# is the ground-truth anchor
 You can't *search* Zillow by MLS#, but Zillow's **property-detail carries it** (`attributionInfo.mlsId`). So:
