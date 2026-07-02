@@ -13,23 +13,35 @@ The current value is not one algorithm — it's a **fork**. Which branch a home 
 and two different monthly jobs feed the two branches. Getting this right is the difference between a dead-on
 Zillow-grade number and a rough index estimate.
 
-## HouseLoop Value — the fork (two tiers, locked 2026-06-17)
+## HouseLoop Value — the fork (five buckets, locked 2026-06-17, expanded 2026-07-02)
 
-Computed at read time in `lib/listings/get.ts`. There are two populations, and the branch is chosen by **data
-presence, not a per-home flag**:
+Computed at read time in `lib/listings/get.ts`. The core fork is chosen by **data presence, not a per-home flag**
+(cached Zestimate → dead-on tier; none → free ZHVI tier). The 2026-07-02 past-client resolver formalized the fork
+into **five value buckets**. The critical thing to understand: **every bucket is refreshed monthly on the table —
+they differ only in the monthly ENGINE.** "Native" means *native value source*, not *no monthly update*.
 
-| Home state | Branch | Value |
-|---|---|---|
-| **Active / coming-soon / pending** | list-price | `listPrice × 1.005 ± 3%` (it's listed at today's market) — `activeValueFromList` |
-| **Sold / off-market — PAST-CLIENT tier** (~2,000 homes) | **cached Zillow Zestimate** | `zestimate × 1.005 ± its own band` — dead-on Zillow, via `zestimateHouseLoopValue`. Used **when a cached Zestimate is present** |
-| **Sold / off-market — MASS tier** (everyone else, ~354k) | **ZHVI** | last **sold price × ZHVI area appreciation** (city→county, Zillow's own index) `± 5%` — `soldValueFromAppreciation`. The free path when there's no cached Zestimate |
-| **Sold / off-market — seated** | stored | a persisted `hlEstimate` on the `Listing` wins if present (past-client homes seeded by the monthly chain below) |
+| Bucket | When | Value | Monthly engine |
+|---|---|---|---|
+| **`ninja_monthly`** | sold/off-market **with** a cached Zestimate (most past clients, ~1,840) | `zestimate × 1.005` — `zestimateHouseLoopValue` | re-fetch a fresh Zestimate from OpenWeb Ninja (26th job) |
+| **`zhvi_monthly`** | sold, **no** Zestimate (Zillow has the home but no Zestimate, ~90) | last **sold price × ZHVI area appreciation** — `soldValueFromAppreciation` | recompute from the fresh ZHVI index (24th job) |
+| **`active`** | currently **for-sale / pending / coming-soon** | `listPrice × 1.005 ± 3%` — `activeValueFromList` | list price re-read; **flips to `ninja_monthly` on close** |
+| **`native`** | an **organically-created HouseLoop card** built from our own past-client sold data, not on Zillow (e.g. `12111 W 165th Ter`) | last value/sold × ZHVI appreciation | ZHVI recompute (no Zestimate to re-fetch) |
+| **`self_sourced_card`** | **new-construction** not on Zillow individually (e.g. `1809 SW Hightown Dr`, Stoney Creek) | our MLS sold data × ZHVI appreciation | ZHVI recompute |
+| **`self_sourced_card_land`** | **raw land** (e.g. `00000 Old Kansas City Rd`, 11.72 ac) | the **sale price** (ZHVI is a home index, doesn't apply to land) | held at sale price; card photo = our own screenshot |
 
 <Info>**The switch is the cached Zestimate's presence.** Past-client homes get a real Zillow Zestimate pulled onto
-their `Listing` each month (they're the ones who'll actually check Zillow), so they resolve to the dead-on tier.
-Every other sold home has no cached Zestimate, so it falls to the free ZHVI tier. No per-home boolean — the data
-decides. This is why the two populations you think of as "our past clients get the Zestimate treatment, everyone
-else gets the index" is literally how the code forks.</Info>
+their `Listing` each month, so they resolve to the dead-on `ninja_monthly` tier. Everything without a cached
+Zestimate falls to a ZHVI recompute. No per-home boolean — the data decides. The `native` / `self_sourced_card*`
+buckets exist for homes Zillow simply doesn't carry (organic cards, new-construction, land); they still get a fresh
+monthly value, driven by ZHVI instead of a Zestimate re-fetch. The bucket for every past-client home is recorded in
+`.claude/reports/pastclient-canonical-FINAL-2026-07-02.csv`.</Info>
+
+### Out-of-area homes
+
+A home that **closed with SRG but sits outside our display MLS** (e.g. Richland, MO — a different board) still gets
+a **past-client card + ZHVI value** — the relationship is the asset. But it does **not** render as a live IDX
+listing, because we lack display authority from that source MLS. The empty IDX feed for such an address is the
+*signal* it's out-of-area, not a data error.
 
 ### The value fields on `Listing` (centerbeam DB)
 

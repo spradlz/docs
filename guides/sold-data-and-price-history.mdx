@@ -65,3 +65,21 @@ The full sold universe (one row per sold transaction, ~426K Heartland sales back
 <Warning>
 **Repliers pagination gotcha.** Repliers paginates with **`pageNum`** + **`resultsPerPage`** — not `page`/`pageSize` (those are silently ignored → page 1 every time). Always use `pageNum` + `resultsPerPage` plus a stable `sortBy` (e.g. `createdOnDesc`).
 </Warning>
+
+## Past-client sold homes — a parallel value pipeline
+
+The sold pipeline above is for homes **in our IDX feed** (Repliers webhook → `listing-sold`). **SRG past-client
+sold homes are different** — they're pre-existing homes from prior SISU/MLS transactions, not live IDX events, so
+they never arrive via the webhook. They are **batch-resolved offline** (see the MLS# anchor in
+[Property data & address identity](/guides/property-data-and-address-identity)) into the canonical GT table
+(`.claude/reports/pastclient-canonical-FINAL-2026-07-02.csv`), then seeded into `Listing`.
+
+Their **value** follows the five-bucket fork, not the IDX sold path:
+- **`ninja_monthly`** — a cached Zillow Zestimate, refreshed monthly by the 26th `past-client-zillow-cache` job.
+- **`zhvi_monthly` / `native` / `self_sourced_card`** — no Zestimate → last sold price × ZHVI area appreciation,
+  recomputed monthly.
+- **`self_sourced_card_land`** — raw land, held at sale price.
+
+See [HouseLoop Home Value](/guides/houseloop-home-value) for the full bucket table. **Price history** for these
+still comes from Repliers `history[]` where the MLS# resolves; for off-Zillow / off-market homes we carry only what
+our own MLS record holds.
