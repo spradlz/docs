@@ -1,0 +1,90 @@
+---
+title: "Adam (Past Client Address Resolver)"
+description: "Work-in-progress dossier — Adam · HouseLoop CRM · Developer Docs. Past Client Address Resolver."
+---
+
+<Info>Live dossier — auto-generated from `.claude/state/wip/adam/pastclient-address-resolver.md` on every push. **Progress: 4/8 done (50%).** _Updated 2026-07-02 PM._</Info>
+
+**Owner:** Adam — HouseLoop CRM · Developer Docs
+
+## Checklist
+
+**Scope: PAST CLIENTS ONLY (the ~1,936 SRG past-client houses).** NOT the whole HouseLoop website. Active /
+under-contract listings get an **automatic resolver going forward** (resolve-on-status-change) — that's a
+follow-on, not this pass. This work makes **every past-client house a canonical PROPERTY: one permanent HLID,
+the correct address, all PAST (deals/MLS#s/sale history) + FUTURE (value/value-history) sitting under it.**
+
+**Ties into Caleb's [SRG Past Client Reconciliation](/wip/caleb-resolver):** Caleb owns the CRM child +
+transaction/agent resolution; I own the HOME side — correct address, canonical HLID + `/home` URL, and the
+HouseLoop Value/history. I hand him the canonical GT table; he resolves deals against it. One normalizer, both
+surfaces.
+
+### THE CORE INSIGHT — MLS# is the ground-truth anchor
+You can't *search* Zillow by MLS#, but Zillow's **property-detail carries it** (`attributionInfo.mlsId`). So:
+resolve the address → get the Zillow `zpid` → **validate `mlsId` against our known MLS#(s)** for the house =
+100% certainty it's the right rooftop (not "probably"). MLS# is unambiguous where addresses garble.
+
+### THE RESOLVER (per house, runs on all ~1,936)
+1. **CASS/USPS clean** the stored address (Google Address Validation, HouseLoop key `GOOGLE_GEO_SERVER_KEY`,
+   project houseloop-496200) — fixes wrong zip + garble. **99.9% validate** (1,935/1,936).
+2. **Find the Zillow record** — OpenWeb Ninja search, multi-form: CASS address → street-type variants
+   (St/Ter/Dr/Ct/Ln) → range-preserved (`10700-10702`) → original. → candidate `zpid`.
+3. **LOCK via MLS#** — `property-details(zpid).attributionInfo.mlsId` must match a known MLS# for the house →
+   CONFIRMED canonical. No match after all forms → FLAGGED for review (never silently wrong).
+4. Output per house: `HLID · website_hlid · canonical address · slug · /home URL · zpid · zestimate · status`.
+
+### VALUE — every house gets one, correct tier
+- **sold + Zestimate** → Zestimate × 1.005 (`ninja_monthly` bucket)
+- **active / pending / coming-soon** → list price × 1.005 (`active` — flips to Zestimate on close)
+- **sold, no Zestimate** → last sold price × **ZHVI area appreciation** (`zhvi_monthly` bucket) — proven:
+  1219 Helen Ct → $197,152 (Redfin $195–235k)
+- + a monthly value-history line for all. Two monthly Inngest cohorts: Ninja (Zestimate homes) + ZHVI (no-Zestimate).
+
+### CHECKLIST
+- [x] **Google Address Validation (CASS) enabled + wired** — API on houseloop-496200 + added to the Geo Server
+  Key scope; `validateAddress()` prefers `GOOGLE_GEO_SERVER_KEY`. Admin login documented (master sheet row 79).
+- [x] **Canonical GT table built** — `.claude/reports/pastclient-canonical-gt-2026-07-02.csv` (1,936 HLIDs;
+  99.9% CASS-validated; 1,792 Zestimate; 144 no-Zestimate flagged + reasoned). Handed to Caleb.
+- [x] **HouseLoop Value pass (VALUED GT)** — `.claude/reports/pastclient-canonical-gt-VALUED-2026-07-02.csv`:
+  1,792 ninja_monthly + 111 zhvi_monthly + 33 needs_data (mostly out-of-market). Every in-market house valued.
+- [x] **928 NE 87th Terrace fixed live** (the canary) — $333,300 + 18 photos + 175-mo history.
+- [~] **MLS# validation lock** — proven (928 zpid 66412035 → mlsId 2444944 matches); TO BUILD into the resolver
+  as the confirm step + recover the address-form misses (Dr↔St, `107 N`, ranges — e.g. 10700-10702 → $519,600).
+- [~] **Status-aware value tier** — add active/pending/coming-soon → list-price (~40 currently-listed homes).
+- [ ] **De-fork / un-quarantine (Rule #0)** — 134 currently-listed homes are quarantined → hidden from search
+  (55 orphan · 23 wrong-merge different homes · 28 inversion live-behind-sold · 28 dup). Rule: one live canonical
+  per suffix-aware address; live status beats sold; never key on geocoded coords. Needs Zach typed OK on `Listing`.
+- [ ] **Persist canonical property table + seed website Listings** (correct address/value/status, un-quarantined).
+- [ ] **Two monthly Inngest functions** (past-client Ninja + all-closed ZHVI) — keep it fresh; the ZHVI monthly is
+  the open build (`home-value-monthly` never built).
+- [ ] **Automatic resolver for active/under-contract (FUTURE, not this pass)** — resolve-on-status-change.
+
+### KNOWN ISSUES SURFACED
+- **Deployed Inngest enrich returns "no-record" for garbled homes** while identical code works locally — Prisma
+  5s transaction-timeout in the fan-out. The GT table sidesteps this (direct CASS+Ninja), but the write-back path
+  needs the timeout fixed.
+- **Address-form misses** (Dr↔St, `107 N`↔`107th St`, range/duplex, mangled MLS strings like
+  `10908 E 35th St. S Street 66052` / `10700-10702 NE 107th - N Kenwood Street`) — recoverable via multi-form
+  lookup + MLS# confirm; shrinks the 144 "no-Zestimate" substantially.
+
+### WHERE IT LIVES
+- Resolver + value tools: `tools/houseloop-cards/build-pastclient-canonical-gt.mjs`,
+  `add-houseloop-value-to-gt.mjs`, `sync-pastclient-worklist.mjs`; `tools/houseloop-photos/ninja-photo-writeback.mjs`.
+- Value fork code: `apps/houseloop-web/lib/listings/{get,ninja-enrich,zillow-enrich}.ts`,
+  `lib/valuation/{appreciation,zestimate-value}.ts`, `lib/listings/address-identity.ts` (CASS).
+- Source bucket: `.claude/reports/pastclient-homes-REAL-HLID-2026-07-02.csv` (Caleb, 1,936 real-HLID homes).
+
+---
+
+## PRD · `GT/GT - ACTIVE/GT_HOUSELOOP_DATA_DOCTRINE.md`
+
+_(File not found in-tree — path recorded for reference.)_
+
+## Related documentation
+
+Doc sections this work creates or updates:
+
+- [`guides/srg-reconciliation-engine`](/guides/srg-reconciliation-engine)
+- [`guides/houseloop-home-value`](/guides/houseloop-home-value)
+- [`guides/property-data-and-address-identity`](/guides/property-data-and-address-identity)
+- [`guides/sold-data-and-price-history`](/guides/sold-data-and-price-history)
