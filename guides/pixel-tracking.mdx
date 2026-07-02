@@ -80,12 +80,10 @@ The CRM derives a **repeat-view count** per lead + home (the "viewed N×" badge 
 New event types are just new strings passed to `hlTrack` — no schema change required.
 
 <Note>
-**Not yet wired (roadmap):** `share_home` — the ingest already maps it to `property_shared`, but the
-**Share** button currently opens the "Share this home" modal **without firing a pixel**. Behavioral share
-tracking (plus a login gate and a `shared_home_registration` lead workflow) ships with the shared-home
-flow. **Lead-creation / registration events** (`general_registration`, `liked_home_registration`,
-`saved_home_registration`, …) are fired **server-side** by the auth `complete-profile` route — they are
-lead events, not pixel events.
+**Lead-creation / registration events** (`general_registration`, `liked_home_registration`,
+`saved_home_registration`, `shared_home_registration`, …) are fired **server-side** by the auth
+`complete-profile` route — they are lead events, not pixel events. Share is now fully wired (login-gated,
+fires `share_home → property_shared`, and registers via `shared_home_registration` — see below).
 </Note>
 
 ## Social engagement — view · like · save · share
@@ -100,8 +98,12 @@ The three social actions have deliberately different gates (Zach LOCKED 2026-07-
   is NOT required** (decoupled 2026-07-01). Before that decouple, a phoneless signed-in like was
   re-prompted for a phone and the pixel never fired, so likes/saves landed **0 all-time**; the gate is now
   login only. `like_home → property_liked`, `save_home → property_saved` on the lead.
-- **Share** — opens the branded "Share this home" modal. **Not yet login-gated or pixel-tracked** — that
-  (login gate + `share_home` pixel + a `shared_home_registration` workflow) is the queued shared-home build.
+- **Share** — **login required**, with a **last-second gate** (Zach LOCKED 2026-07-01): the "Share this home"
+  modal opens for everyone; the gate fires at the moment of **send**. The **Email** option captures a recipient →
+  after the visitor registers, the **New Lead — Shared Home** workflow emails that recipient the branded home.
+  A completed share fires `share_home → property_shared` on the lead; a logged-out share registers via
+  `shared_home_registration`. Copy Link / Text / Facebook / X / WhatsApp are the visitor's own channels (also
+  login-gated). The Share modal reuses the same pill header as the Like/Save gate (no hand-rolled header).
 
 ## 5. View the activity
 
