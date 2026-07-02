@@ -1,111 +1,196 @@
 ---
 title: "Notifications"
-description: "How the HouseLoop CRM notification system works — the hl_notification spine, the bell, multi-channel delivery (in-app / SMS / email), and the event catalog."
+description: "The HouseLoop CRM notification system — the hl_notification spine, the branded centered email format, source-agnostic messages, the AI (Myli) format, every notification in one matrix, and the full build audit log."
 ---
 
-The CRM notification system is built on **one append table, `hl_notification`**. Every event
-(a lead changes stage, a lead texts in, a lead likes a home) writes a row. The topbar **bell**
-reads it, the lead-detail **dock badges** count it, and a **delivery dispatcher** reads the
-recipient's preferences and fires SMS / email. Add a new notification type by passing a new
+Every CRM notification writes one row to **`hl_notification`**, the topbar **bell** reads it, and a
+**dispatcher** delivers it over the recipient's enabled channels (in-app / SMS / email). Every email
+renders in **ONE canonical branded shell** (HouseLoop logo → white card → lockup → footer) with a
+**centered, Follow-Up-Boss-style body** (contact card + real message + assigned agent + button). Every
+text is a clean emoji-per-line message with a `— HouseLoop` sign-off. Add a notification by passing an
 `event_key` — no schema change.
 
 ## How it flows
 
 ```
-event source                     spine                         surfaces
-stage change / inbound text  ──▶  createNotification()  ──▶  hl_notification row
-lead likes/saves a home                                        │
-                                                               ├─▶ bell (unread count + dropdown)
-                                                               ├─▶ lead-detail dock badges
-                                                               └─▶ dispatcher → SMS / email (per prefs)
+event source                    spine                        surfaces
+stage change / inbound text ─▶ createNotification() ─▶ hl_notification row
+lead likes/tours/registers                              │
+AI (Myli) sends a text / logs a call                    ├─▶ bell (unread count + dropdown)
+                                                        ├─▶ lead-detail dock badges
+                                                        └─▶ dispatch.ts → SMS / branded email (per prefs)
 ```
 
-## 1. Write a notification
+## Architecture — where everything lives
 
-Everything goes through one helper — `lib/notifications/create.ts`:
-
-```ts
-import { createNotification } from "@/lib/notifications/create";
-
-await createNotification({
-  recipientUserId,            // hl_users.id — who gets it
-  eventKey: "stage_changed",  // matches the notification_prefs keys
-  title: "Jane Doe moved to Showing Homes",
-  body: null,                 // optional secondary line
-  leadId,                     // optional — links the notification to a lead
-  entityType: "lead",
-  payload: { to_stage_id, stage_name },
-});
-```
-
-It inserts the `hl_notification` row, then fires delivery (best-effort, off the request path).
-Pass `inAppOnly: true` to skip SMS/email and only surface in the bell.
-
-## 2. Data model
-
-- **`hl_notification`** — append log. `recipient_user_id`, `event_key`, `title`, `body`,
-  `lead_id` (soft link, `SET NULL` on lead delete), `entity_type` / `entity_id`, `payload` JSONB,
-  `channels_sent` (`sms` / `email` actually delivered), `seen_at`, `read_at`, `created_at`.
-- Migration: `apps/houseloop-crm/db/migrations/0045_hl_notification.sql`.
-- **Preferences** live on `hl_users.data` JSONB: `notification_prefs` (`{ eventKey: { email, sms } }`)
-  and `notification_channels` (`[{ type: 'sms'|'email', value }]`). Managed in **Settings →
-  Notifications**.
-
-## 3. Read it (API)
-
-| Endpoint | Returns |
+| Concern | File |
 | --- | --- |
-| `GET /api/notifications?filter=all\|unread` | the user's notifications + unread count |
-| `GET /api/notifications/unread-count` | cheap unread count (bell badge) |
-| `POST /api/notifications/[id]/read` | mark one read |
-| `POST /api/notifications/read-all` | mark all read |
-| `GET  /api/notifications/lead-badges?lead_id=` | per-lead unread counts by category (requests / homes / texts) |
-| `POST /api/notifications/lead-badges` | mark a lead category read (clears the dock badge) |
+| Write a notification (team fan-out) | `lib/notifications/create.ts` → `createNotification()` |
+| **Deliver** (prefs → SMS + branded email) | `lib/notifications/dispatch.ts` → `dispatchNotification()` |
+| **The branded email SHELL** (logo + footer) | `lib/email/notification-shell.ts` → `notificationShell()` |
+| **The centered BODY** (contact card + message + agent + CTA + settings) | `lib/email/notification-content.ts` → `renderNotificationInner()` |
+| Event → template mapping | `lib/notifications/template-registry.ts` (`NOTIFICATION_TEMPLATES`) |
+| Editable templates (email + SMS) | **`hl_templates`** table, keys `notify_<event>` / `notify_<event>_sms` |
+| Merge fields | `lib/merge-fields.ts` (preview) + `lib/email/template-merge.ts` (send) |
+| Prefs + channels | `hl_users.data.notification_prefs` + `notification_channels` (JSONB) |
+| Settings UI | `app/(crm)/settings/notifications/page.tsx` → **Settings → Notifications** |
+| AI Follow-Up ping | `lib/notifications/ai-follow-up-notify.ts` |
+| Website Activity digest engine | `lib/inngest/functions/website-activity-digest.ts` (Inngest cron) |
+| Sign-off harness | `scripts/notification-matrix.ts` |
 
-All session-gated. The bell (`components/notifications/NotificationBell.tsx`) polls the unread
-count every 20s and refreshes instantly on window focus.
+**Email templates are HEADLINE-ONLY.** The per-event `hl_templates` body is just the centered headline
+(e.g. `❤️ {{contact.full_name}} liked a home`). `dispatch.ts` wraps it in `renderNotificationInner()`
+(the shared chrome: contact card + message + assigned agent + Open-lead button + settings link) then in
+`notificationShell()` (logo + footer). So editing a template controls the *message*; the brand chrome is
+always correct. Never hand-roll a `<div>` email.
 
-## 4. Delivery (the dispatcher)
+## The email body (centered, FUB-style)
 
-`lib/notifications/dispatch.ts` reads the recipient's `notification_prefs[eventKey]` +
-`notification_channels` and sends what's enabled:
+```
+              [ HouseLoop logo ]
+      🏠 You've received a new lead named James Ross from Zillow Preferred
+              ╭─────╮   📞 (785) 330-6800
+              │  JR │   ✉️ james.ross@email.com
+              ╰─────╯   🏠 6213 E 109th Ter →   (address → /home link)
+        "I am interested in 6213 E 109th Ter… Requested Tour Mon Jun 22 2pm"
+                   Assigned Agent · Ana Spradling
+              [  Open lead in HouseLoop CRM  ]
+                 Change notification settings
+              [ HouseLoop | eXp · footer ]
+```
 
-- **SMS** via the shared `sendSms()` core (`lib/phone/send-sms.ts`, Twilio).
-- **Email** via `sendViaGmail()` from the first connected sending inbox.
+- **Contact card** — avatar (initials) left, phone / email / address right. Address links to `/home`.
+- **Inbound message** — **source-agnostic** `resolveInboundMessage()` in `dispatch.ts`: FUB
+  (`fub.events.message` via the `hl_leads.fub_person_id` bridge) **or** HouseLoop (latest inbound
+  `hl_messages.body`). Only shown when present.
+- **Assigned Agent** — the lead's owner (`hl_leads.assigned_user_id` → `hl_users.name`). Admin-level.
+- Team/system alerts (no lead) = just the centered headline + settings link.
 
-It's best-effort — per-channel failures are swallowed and never break ingest. Channels that
-delivered are recorded on `hl_notification.channels_sent`. (Configurable sender selection +
-templates are on the roadmap.)
+## The AI (Myli) format
 
-## 5. Event catalog
+AI-agent notifications use **✨** (not 🤖) and lead with the AI agent's name:
 
-| Event key | Fires when | Wired |
+```
+        ✨ Myli sent James Ross a text
+   "Hi James! Thanks for your interest in 2116 NW Harbor Place. Free Tuesday at 2pm for a tour?"
+                       Myli
+             [ Open lead in HouseLoop CRM ]
+```
+
+- Headline `✨ Myli {action}` — `dispatch.ts` composes `Myli ` + the lowercased action summary.
+- **Action payload block** (`resolveAiDetail()` in `dispatch.ts`): the real sent text (`hl_messages`
+  outbound, `actor_role` myli/ai_agent), the call date · length + **View transcript** link
+  (`hl_calls`), or the notification body for facts / homes / stages / appointments.
+- Agent line shows just **Myli** (no "AI Agent" label).
+
+## The full notification matrix
+
+Every notification. Email + SMS templates live in `hl_templates` under the keys shown. `LS` = lead-scoped
+(gets the contact card). Emoji is the branded heading marker.
+
+### Lead Activity
+| Notification | event key | emoji | template keys | LS | fires from |
+| --- | --- | --- | --- | --- | --- |
+| New lead | `lead_created` | 🏠 | `notify_lead_created` (+`_sms`) | ✅ | registration / FUB import |
+| Home liked | `home_liked` | ❤️ | `notify_home_liked` | ✅ | pixel / FUB |
+| Home saved | `home_saved` | 🔖 | `notify_home_saved` | ✅ | pixel / FUB |
+| Home shared | `home_shared` | 📤 | `notify_home_shared` | ✅ | pixel / FUB |
+| Property viewed | `property_viewed` | 👀 | `notify_property_viewed` | ✅ | pixel (off by default) |
+| Saved search | `saved_search` | 🔍 | `notify_saved_search` | ✅ | pixel / saved-search |
+| Tour request | `tour_request` | 📅 | `notify_tour_request` | ✅ | pixel / FUB inquiry |
+| Contact request | `contact_request` | 📨 | `notify_contact_request` | ✅ | website contact form |
+| Seller request | `seller_request` | 🏡 | `notify_seller_request` | ✅ | seller flow |
+| Home value report | `home_value_report` | 📊 | `notify_home_value_report` | ✅ | HVR request |
+| Email received | `email_received` | 📧 | `notify_email_received` | ✅ | inbound email / FUB |
+| Phone call received | `phone_call_received` | 📞 | `notify_phone_call_received` | ✅ | inbound call / FUB |
+
+### Communications + Lifecycle
+| Notification | event key | emoji | template keys | LS |
+| --- | --- | --- | --- | --- |
+| New message | `new_message` | 💬 | `notify_new_message` | ✅ |
+| Lead assigned | `lead_assigned` | 🎯 | `notify_lead_assigned` | ✅ |
+| Stage changed | `stage_changed` | 🔀 | `notify_stage_changed` | ✅ |
+| Collaborator added | `collaborator_added` | 👥 | `notify_collaborator_added` | ✅ |
+| Acknowledge lead | `agent_ack_request` | 🔔 | `notify_agent_ack_request` | ✅ |
+| AI clone stepped in | `clone_activated` | ✨ | `notify_clone_activated` | ✅ |
+| Lead reassigned | `lead_reassigned` | 🔄 | `notify_lead_reassigned` | ✅ |
+| Appointment scheduled | `appointment_set` | 📅 | `notify_appointment_set` | ✅ |
+| Appointment completed | `appointment_completed` | ✅ | `notify_appointment_completed` | ✅ |
+
+### AI Follow-Up (✨ Myli)
+| Notification | event key | template keys |
 | --- | --- | --- |
-| `stage_changed` | a lead's pipeline stage changes | ✅ |
-| `lead_assigned` | a lead is assigned to a user | ✅ |
-| `new_message` | a lead texts/emails in (any number/channel) | ✅ (BlueBubbles inbound) |
-| `tour_request` | a lead requests a tour on the website | ✅ (pixel) |
-| `home_liked` / `home_saved` / `home_shared` | lead likes/saves/shares a listing | ✅ (pixel) |
-| `contact_form` | lead submits the website contact form | type ready, fire-point pending |
-| `saved_search` | lead saves a search | type ready, fire-point pending |
-| `collaborator_added` / `team_invite` | collaborator/team events | type ready, trigger pending |
-| `gmail_disconnected` / `bb_disconnected` | a connection drops | type ready, trigger pending |
+| AI phone calls | `ai_calls` | `notify_ai_calls` (+`_sms`) |
+| AI messages sent | `ai_messages` | `notify_ai_messages` |
+| AI facts captured | `ai_facts` | `notify_ai_facts` |
+| AI homes searched | `ai_homes` | `notify_ai_homes` |
+| AI stages advanced | `ai_stages` | `notify_ai_stages` |
+| AI appointments set | `ai_appointments` | `notify_ai_appointments` |
 
-Website-activity events (`tour_request`, `home_*`) are routed to the **lead's owner**
-(`hl_leads.assigned_user_id`) from the pixel ingest (`app/api/pixel/track`). Inbound texts
-notify the owner from `app/api/bb/inbound`.
+### Team + System
+| Notification | event key | emoji | template keys | LS |
+| --- | --- | --- | --- | --- |
+| Team invite | `team_invite` | 🤝 | `notify_team_invite` | — |
+| Gmail disconnected | `gmail_disconnected` | ⚠️ | `notify_gmail_disconnected` | — |
+| iMessage disconnected | `bb_disconnected` | ⚠️ | `notify_bb_disconnected` | — |
 
-## 6. Where it surfaces
+### Website Activity (digest — separate Inngest engine)
+| Notification | pref key | delivery |
+| --- | --- | --- |
+| Daily website digest | `web_digest` | `website-activity-digest` Inngest cron, daily 7am CT, email + text |
+| Bot / crawler breakdown | `web_digest_bots` | appended to the digest when on |
 
-- **Topbar bell** — floating icon, red unread badge, dropdown (All / Unread, "Mark all read",
-  "View all notifications" → `/notifications`).
-- **Lead-detail dock badges** — the Requests / Homes / Texts icons show red unread counts
-  (`CenterLane.tsx`), cleared when you open that tab.
-- **Settings → Notifications** — per-event email/SMS toggles, notification channels, a "Lead
-  Website Activity" section, and System Alerts.
+The digest emails 👤 **Visitors** (active users · page views · registrations · homes viewed · searches ·
+high-intent) vs 🤖 **Crawlers & bots**, from `hl_pixel_event` + `hl_pixel_visitor.is_bot` (bot-classify)
++ `hl_leads`. Manual run: fire `houseloop/website-activity.digest.run` (optional `{testEmail, testPhone}`).
+
+## Data model
+
+- **`hl_notification`** — append log (`recipient_user_id`, `event_key`, `title`, `body`, `lead_id`,
+  `entity_type`/`entity_id`, `payload`, `channels_sent`, `seen_at`, `read_at`). Migration `0045`.
+- **Prefs** — `hl_users.data.notification_prefs` (`{ eventKey: { email, sms } }`) + `notification_channels`.
+  Defaults in `app/api/notification-preferences/route.ts` **and** `dispatch.ts` `PREF_DEFAULTS` (keep in sync).
+- **Templates** — `hl_templates`, keys `notify_<event>` (email) / `notify_<event>_sms` (text).
+
+## Sign-off harness
+
+`scripts/notification-matrix.ts` renders **every** notification's email + text with sample data through
+the SAME primitives as `dispatch.ts`, and sends both to a target for sign-off:
+
+```
+npx tsx --env-file=.env.local scripts/notification-matrix.ts [email] [phone]
+MATRIX_ONLY=ai_calls,ai_messages ...   # a subset
+MATRIX_EMAIL_ONLY=1 ...                # skip SMS
+```
+
+## Build audit log — Notifications Refactor (Benji)
+
+Zach-signed, shipped to production. Migrations `0277`–`0284`.
+
+| When (CT) | What | Commit |
+| --- | --- | --- |
+| 2026-07-01 | P1 7-section catalog-driven settings page; P2 new per-event classes; P3 "`{class}` via `{source}`" | P1–P3 |
+| 2026-07-01 18:12 | P4 — AI Follow-Up section (notify me when my AI does X) | `5698072899` |
+| 2026-07-01 18:29 | P5 — Website Activity daily digest (humans vs bots, email + text) | `5a81d8344b` |
+| 2026-07-01 18:53 | Rich flagship (New Lead) + AI templates; digest SMS + prose/layout fixes | `3676e13dcf` |
+| 2026-07-01 19:05 | **Canonical branded email shell** (logo + footer) — stop hand-rolling | `6a998720ef` |
+| 2026-07-01 19:08 | Docs: canonical email shells (agent vs lead) + NOTIFY merge group | `fa12a6759e` |
+| 2026-07-01 19:18 | Digest SMS — one metric per line, emoji per line | `fedf67c08d` |
+| 2026-07-01 19:38 | Rich lead-activity templates (0280) + website-activity-digest | `2f42090af0` |
+| 2026-07-02 05:25 | Center the CTA button in all notification emails (0281) | `a33d94cce8` |
+| 2026-07-02 06:04 | **Centered FUB-style emails** — contact card + message + assigned agent | `5dca70f55e` |
+| 2026-07-02 06:13 | **Source-agnostic live inbound message** (FUB + HouseLoop) | `83c1381242` |
+| 2026-07-02 06:20 | ALL notifications → branded centered + per-section emoji (0283); fix table wrap | `ebaab3c587` |
+| 2026-07-02 06:33 | AI polish — ✨ (not 🤖), Myli, action-payload block (0284) | `159d1a49ea` |
+| 2026-07-02 06:38 | AI agent line shows just "Myli" (no "AI Agent" label) | `d4e9fc2126` |
+| 2026-07-02 06:50 | **Wire AI production data** — Myli title + real payloads (sent text / call + transcript) | `ad220ba77b` |
+
+**Status: complete + deployed.** Every notification (30) renders in the branded centered format with its
+section emoji; lead notifications carry the contact card + real inbound message + assigned agent; AI
+notifications carry ✨ Myli + real action payloads; the Website Activity digest runs on the 7am cron.
 
 <Note>
-To add a brand-new notification: pick an `event_key`, add it to the `DEFAULTS` in
-`app/api/notification-preferences/route.ts` (+ the dispatcher's `PREF_DEFAULTS`), add a row to
-the settings page `SECTIONS`, then call `createNotification` from wherever the event happens.
+Add a new notification: pick an `event_key`, add a `NOTIFICATION_TEMPLATES` entry + seed `notify_<key>` /
+`notify_<key>_sms` rows (headline-only email), add `DEFAULTS` in `notification-preferences/route.ts` +
+`dispatch.ts` `PREF_DEFAULTS`, add it to the settings page section, and fire `createNotification`.
 </Note>

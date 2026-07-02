@@ -1,215 +1,110 @@
 ---
-title: "Benji (Trigger Event Reconciliation — the ONE canonical catalog)"
-description: "Work-in-progress dossier — Benji · HouseLoop Website. Trigger Event Reconciliation — the ONE canonical catalog."
+title: "Benji (Trigger Event / Lead Source Refactor)"
+description: "Work-in-progress dossier — Benji · HouseLoop Website. Trigger Event / Lead Source Refactor."
 ---
 
-<Info>Live dossier — auto-generated from `.claude/state/wip/benji/trigger-events.md` on every push. **Progress: 11/14 done (79%).** _Updated 2026-07-01._</Info>
+<Info>Live dossier — auto-generated from `.claude/state/wip/benji/trigger-events.md` on every push. **Progress: checklist pending.**</Info>
 
 **Owner:** Benji — HouseLoop Website
 
 ## Checklist
 
-**North star (Zach-signed 2026-07-01):** ONE canonical DB table `hl_trigger_events` is the single source
-of truth for every trigger in the system. Everything derives from it — the Lead Sources page, the System
-Events page, the workflow builder palette, the Workflows list — no second list, no patchwork. A "Trigger
-Event" = a trigger (starts a workflow) that fires on an event (a lead did something); one word everywhere.
+also: GT/GT - Pending/GT_HOUSELOOP_TRIGGER_EVENTS_CANONICAL_PRD.md (the original catalog PRD, rolled in below)
 
-**Why:** today the same trigger info is duplicated across 4 code lists (`WF_TRIGGERS`, `CANONICAL_LEAD_EVENTS`,
-`EVENT_TITLES`, `EVENT_TRIGGER`) + 3 DB tables, hand-synced — which is why a trigger added under Lead Sources
-/ System Events never flowed into the workflow builder. Researched with 3 sub-agents; full map in
-`.claude/checkpoints/workflow-trigger-catalog.md`.
-
-**Model:** each trigger event = `type · category (registration/system/follow_up/other) · lead_source_key ·
-label · description · icon`. Registration triggers group by Lead Source (HouseLoop.ai · FUB · Manual · future
-Google PPC → its own landing-page trigger events). Every trigger event gets a matching workflow ("Coming Soon"
-if unbuilt).
-
-### Build order (Zach-approved: P0→P2+P5 first, then P3/P4)
-- [x] P0 — migration `0276_hl_trigger_events.sql`: table + 24 deduped rows (10 registration / 10 system /
-      4 internal), 2 naming bugs fixed in the seed + UPDATE on live workflows (0 orphaned). Reader
-      `lib/workflows/trigger-catalog.ts`. Applied to prod CRM DB, verified.
-- [x] P1 — builder palette now READS the catalog via `GET /api/workflows/triggers` (WorkflowBuilder fetches
-      it; no more `WF_TRIGGERS` import). Lead Sources + System Events BOARDS already read `hl_lead_source_events`
-      directly (DB-driven). The 3 saved-search triggers show under System, verified from the DB.
-- [x] P2 — deleted the dead `WF_TRIGGERS` array + `triggerByType` from registry.ts (nothing imports them now).
-      Per-trigger config FIELDS stay in code as `TRIGGER_FIELD_OVERLAY` (UI, not catalog data).
-- [x] P5 — added `saved_search_agent` + `saved_search_system` to `DOOR_EVENT_KEYS` (runtime.ts) so attached
-      workflows fire. NOTE: Inngest has NO wildcard events (verified) → doors must be statically registered at
-      boot; a genuinely-new UI-created type still needs a deploy. True no-deploy generic door = separate spike.
-- [ ] P3 — Workflows LIST = every trigger event as a row, "Coming Soon" when unbuilt (second pass)
-- [ ] P4 — builder Lead-Source ↔ System-Event toggle from `category` (second pass)
-- [ ] Follow-up (deferred): derive `EVENT_TITLES` (lead-flow-shared) + repoint `/api/lead-sources/[id]/events`
-      off `CANONICAL_LEAD_EVENTS` onto the catalog. `EVENT_TRIGGER` is the event→trigger INTAKE routing (a
-      separate concern) — keep, don't force into the catalog.
-
-### UI terminology + canonical page (Zach LOCKED 2026-07-01)
-- [x] Nav: "System Events" → "Trigger Events" (route `/settings/trigger-events`); old system-events page + board deleted.
-- [x] NEW canonical page `app/(crm)/settings/trigger-events/page.tsx` + `TriggerEventsBoard.tsx` — every trigger
-      event from `hl_trigger_events`, grouped by category, pills `All · Registration · System · Follow-up`,
-      each row = toggle + attached workflow. REUSES useEventBoard / SectionHeader / PlatformTab(as pill) / DataTable.
-      Internal flow-control triggers excluded (not lead events). Verified: Registration 10 · System 10 (incl. the
-      3 saved-search origins) · Follow-up 0 (Coming soon).
-- [x] Model: Lead Sources = per-source registration wiring (unchanged structure); Trigger Events = the ONE
-      canonical catalog page; Workflows call upon trigger events. "System Events" is now just a CATEGORY.
-- [x] Column header `EVENT` → `TRIGGER EVENT` on all 5 boards (event-board-shared, RegistrationDoors,
-      SourceLeadSourceEvents, FubChannelRows, FubChannelBoard). Lead Sources labels: "Registration Events" →
-      "Registration Trigger Events"; section unit "event" → "trigger event"; subtitle updated.
-
-### Categorization corrected + TRIGGERED count (Zach 2026-07-01 PM)
-- [x] Pills = **Lead Source · System · Follow-up** (was Registration/System). Lead Source sectioned by SOURCE
-      (HouseLoop.ai · Follow Up Boss · Manual Entry), mirroring the Lead Sources page — FUB pulls all 17 webhook
-      trigger events via the real FubChannelRows.
-- [x] **TRIGGERED count column** — how many times each trigger event fired. HouseLoop/Manual/System from
-      `hl_run_log` door-&lt;event_key&gt; counts. FUB from the **FUB Railway mirror** (`FUB_RAILWAY_DATABASE_URL`,
-      prod-reachable) via new `GET /api/fub/fire-counts` + `qFub()` — Property Viewed 115,892 · Inquiry 12,838 ·
-      Texts 434,823 · In-App 10,059 · Calls 39,868 · Notifications 140,322 · Incoming Email 11,257. FubChannelRows
-      gets the column only when `withTriggered` (Trigger Events page); Lead Sources unchanged.
-- [x] Prod-safe: NO cross-DB-to-Camp-David, NO sync job — live query against the Railway FUB mirror.
-
-### Status (2026-07-01)
-tsc clean (only 2 pre-existing errors, both outside these files) · CRM `npm run build` green ·
-migration live on the prod CRM DB. Needs: deploy + Inngest re-sync → fire-test a `saved_search_agent` door →
-Zach spot-checks the builder.
-
-**Gate:** every prior trigger still present · no live workflow orphaned by a rename · the 3 saved-search
-trigger events show in the builder (System) + fire · tsc + build green both apps · Zach spot-checks the builder.
-
-**Blocks →** [[saved-search-process]] (can't finalize the saved-search origins until the catalog is canonical).
+**One line:** ONE canonical catalog (`hl_trigger_events`) is the spine; **Platform &gt; Lead Source &gt; Tags** is the
+attribution; each platform owns its trigger events + workflows; a trigger event **always fires** — the only knobs are
+*creates-lead* + *workflow-active*. Collapse the 4 redundant config routes → 2 screens (Lead Sources KPI scoreboard +
+platform-tabbed Trigger Events), enrich the row, make the workflow builder Trigger × Platform-scoped.
 
 ---
 
-## PRD · `GT/GT - Pending/GT_HOUSELOOP_TRIGGER_EVENTS_CANONICAL_PRD.md`
-
-#### GT — TRIGGER EVENTS: THE ONE CANONICAL CATALOG (PRD)
-Owner: Benji · Zach-signed 2026-07-01 (terminology + DB-table decision locked) · Status: PENDING → build
-
-##### THE LAW
-There is **ONE canonical table of Trigger Events: `hl_trigger_events`**. Every trigger in the system is a
-row here. **Everything derives from it — no second list, no patchwork.** A "Trigger Event" = a trigger
-(it starts a workflow) that fires on an event (a lead did something). One word across the whole app.
-
-##### WHY (the drift this kills)
-Today the same trigger info is duplicated across **4 code lists + 3 DB tables**, hand-synced — which is
-why adding a trigger under Lead Sources / System Events did NOT flow into the workflow builder:
-- `WF_TRIGGERS` (`lib/workflows/registry.ts`) — the builder palette (hardcoded, drifts)
-- `CANONICAL_LEAD_EVENTS` (`components/settings/lead-sources/lead-source-event-constants.ts`) — event defs
-- `EVENT_TITLES` (`components/settings/lead-flow/lead-flow-shared.tsx`) — duplicate labels
-- `EVENT_TRIGGER` / `DOOR_EVENT_KEYS` — event→trigger map + Inngest door registration
-- DB `hl_lead_source_events` (per-source wiring, incl. `workflow_id`), `hl_lead_sources`, `hl_fub_webhook_settings`
-
-##### THE MODEL (Zach-locked)
-Every Trigger Event has a **CATEGORY** and (for registration) a **LEAD SOURCE**:
-- **Registration** → grouped by Lead Source (HouseLoop.ai · Follow Up Boss · Manual · future: Google PPC →
-  its own landing-page trigger events, e.g. "$400K homes in Overland Park" = a trigger event under that source)
-- **System** → the "System Events" page (existing-lead actions)
-- **Follow-up** → future
-- **Other** → future / TBD
-
-UI keeps friendly labels ("Registration Events", "System Events") — the DATA unit is always a Trigger Event.
-
-##### SCHEMA — `hl_trigger_events`
-```sql
-CREATE TABLE hl_trigger_events (
-  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  type          text UNIQUE NOT NULL,        -- the trigger_type (workflows.trigger_type joins on this)
-  category      text NOT NULL,               -- 'registration' | 'system' | 'follow_up' | 'other'
-  lead_source_key text,                       -- hl_lead_sources.key (registration only); NULL otherwise
-  label         text NOT NULL,               -- display label
-  description   text,                         -- "Start when …"
-  icon          text,                         -- lucide icon name
-  platforms     text[] NOT NULL DEFAULT '{houseloop}',
-  fire_endpoint text,                          -- dev-facing "triggered when" web route
-  sort_order    int NOT NULL DEFAULT 100,
-  is_active     boolean NOT NULL DEFAULT true,
-  is_system     boolean NOT NULL DEFAULT true, -- system-seeded vs UI-created (landing-page triggers)
-  created_at    timestamptz NOT NULL DEFAULT now(),
-  updated_at    timestamptz NOT NULL DEFAULT now()
-);
-```
-Seed from the union of today's registration + system triggers (WF_TRIGGERS registration+system ∪
-CANONICAL_LEAD_EVENTS ∪ EVENT_TRIGGER) — dedupe by `type`, fix the 2 naming bugs (below).
-
-##### WHAT DERIVES FROM IT (all reads, zero duplication)
-- **Lead Sources page** = `WHERE category='registration'` grouped by `lead_source_key`.
-- **System Events page** = `WHERE category='system'`.
-- **Workflow builder palette** = ALL rows grouped by `category` + platform; **plus** the code-only
-  INTERNAL controls (stage_changed / tag_added / appointment_completed / manual_enrollment — NOT lead
-  trigger events, they stay in code and are appended).
-- **Workflows LIST page** (P3) = every Trigger Event LEFT JOIN `hl_workflows` ON `type=trigger_type`;
-  built → the workflow; unbuilt → **"Coming Soon"**. Grouped by category / lead source.
-- **event→trigger + titles** = derived (kill `EVENT_TRIGGER` static map + `EVENT_TITLES`).
-- **Inngest door registration** = `DOOR_EVENT_KEYS` derives from `SELECT type FROM hl_trigger_events WHERE is_active`.
-  (Firing note: Inngest fns are code-registered at boot, so a genuinely-new `type` still needs a deploy to
-  get its door; a GENERIC door for UI-created trigger events is a fast-follow so landing-page triggers fire
-  with no deploy.)
-
-##### KNOWN BUGS TO FIX IN THE SEED (readers found these)
-- registry `seller_request_registration` ≠ event-map `home_value_report_registration` — reconcile to ONE.
-- registry `seller_started_registration` ≠ event-map `seller_get_started_registration` — reconcile to ONE.
-  **Before renaming any `type`, verify NO live `hl_workflows.trigger_type` uses the old string** (else re-map it).
-- The 3 saved-search trigger events (`saved_search` client · `saved_search_agent` · `saved_search_system`)
-  live under System, each its own trigger, each attachable to its own workflow.
-
-##### BUILD PHASES
-- **P0** migration: create `hl_trigger_events` + seed from current sources (deduped, bugs fixed).
-- **P1** repoint the two settings pages + the builder palette to READ the table.
-- **P2** derive `WF_TRIGGERS` / `EVENT_TITLES` / `EVENT_TRIGGER` / `DOOR_EVENT_KEYS` from the table (delete the
-  hardcoded lists; keep INTERNAL controls in code, appended).
-- **P3** Workflows LIST page = every Trigger Event as a row, "Coming Soon" when unbuilt, grouped by source.
-- **P4** builder Lead-Source ↔ System-Event toggle (from `category`).
-- **P5** generic Inngest door so UI-created trigger events fire without a deploy (fast-follow).
-
-##### GATE
-Every prior trigger still present (count ≥ before). No live workflow orphaned by a rename. The 3 saved-search
-trigger events show in the builder (System) + fire. tsc + build green both apps. Zach spot-checks the builder.
+### ✅ TOP-LEVEL CHECKLIST
+| ✔ | Item | Who · When |
+|---|---|---|
+| ✅ | Canonical catalog `hl_trigger_events` (mig 0276) + `notify_class` (0277) — the spine | Benji · 2026-07-01 |
+| ✅ | Builder palette + Trigger Events page read the catalog; dead `WF_TRIGGERS` removed | Benji · 2026-07-01 |
+| ✅ | Trigger Events page — platform-grouped, TRIGGERED count (native from `hl_run_log`, FUB from mirror) | Benji · 2026-07-01 |
+| ✅ | **Classifier fix (Ali Burke): real-intent routing; passive events gated** (`51cfd38429`) | Benji · 2026-07-02 06:?? |
+| ✅ | **Atomic FUB trigger events** (Tour/Contact/Inquiry/Rental/Seller/Virtually-Toured) config-driven in `hl_fub_webhook_settings` (mig 0285, `b43ad744c7`) | Benji · 2026-07-02 |
+| ✅ | **Config-driven FUB source + auto `Source:` tag; no hardcoded tags** (`588e3d2e9a`) | Benji · 2026-07-02 |
+| ✅ | **Restore Platform › Lead Source › Tags on lead detail** (reverted the platform-kill) (`64c5398f4f`) | Benji · 2026-07-02 |
+| ⬜ | **Fire-count click-through** — Triggered # → leads list, newest→oldest (PRD §7.3) | Benji · next |
+| ⬜ | Split `is_active` → `workflow_active`; add `creates_lead` to native `hl_lead_source_events` (PRD §7.1/§7.2) | Benji |
+| ⬜ | Notification column = read-only `notify_class` + Realloop/HouseLoop pill (PRD §7.4) | Benji |
+| ⬜ | Collapse 4 routes → 2 (Lead Sources scoreboard + platform-tabbed Trigger Events) + enriched row (PRD §5) | Benji |
+| ⬜ | Workflow builder = Trigger Event × Platform scope (`houseloop`/`fub`/`any`) (PRD §7.7) | Benji |
+| ⬜ | Dev doc: Mintlify `guides/trigger-events` (shipped-only) | Benji |
+| 📝 | NOTE-only (do NOT build): aggregate/behavioral triggers ("viewed 10× in 3d", `platform=any`) — needs a count-over-window engine on the canonicalized activity stream (forward-compat only) | — |
 
 ---
 
-## Scope lock · `.claude/state/session-scope-trigger-catalog.lock`
+### 📋 AMENDMENT / UPDATE LOG  (running — newest first)
+- **2026-07-02 (Opus 4.8, Benji)** — Doc retitled **"Trigger Event / Lead Source Refactor"**; old "Trigger Event
+  Reconciliation" rolled in below. Top checklist + this log added.
+- **2026-07-02 (Opus 4.8, Benji)** — **Reverted the platform-kill** (`64c5398f4f`) per the signed PRD: Platform is the
+  spine (tab axis + workflow scope + lead-detail attribution). Restored `platform='follow_up_boss'` write + the Platform
+  row on the lead card. KEPT: `fub_import` source (Myli defaults), no hardcoded tags, config `default_tag_ids` + auto
+  `Source:` tag. Lead Source = the origin (Zillow Preferred).
+- **2026-07-02 (Opus 4.8, Benji)** — **#3 config-driven source + auto `Source:` tag** (`588e3d2e9a`, later partially
+  reverted for platform). Removed hardcoded `IMPORT_TAGS ['Zillow','SRG FUB Import']`; source derives from the
+  `fub_import` config row (name + `default_tag_ids`); auto `Source: <origin>` tag.
+- **2026-07-02 (Opus 4.8, Benji)** — **#2 atomic FUB trigger events + config-driven routing** (mig 0285, `b43ad744c7`).
+  FUB "Property Inquiry" split into Tour/Contact/Inquiry/Rental/Seller/Virtually-Toured rows in
+  `hl_fub_webhook_settings`, each with `enabled`+`creates_lead`+`workflow_id`. Import classifies via
+  `classifyFubEvent` and reads that kind's config to decide lead-creation + workflow. Nothing hardcoded.
+- **2026-07-02 (Opus 4.8, Benji)** — **#1 Ali Burke fix** (`51cfd38429`). "Virtually Toured Property" was substring-
+  matched to `tour` → minted a lead + fired the HouseLoop Tour-Request workflow + wrong-branded text. Root cause:
+  import used the naive `fubRequestKind` instead of `classifyFubEvent`. Now classifies real intent; passive/off events
+  never mint a lead or fire (config-gated). Verified on person 49460.
+- **2026-07-02 (Lee, spec)** — Amended WIP with **P6**: Zach-signed PRD `GT_HOUSELOOP_LEAD_PLATFORM_TRIGGER_CATALOG` —
+  Lead Sources + Trigger Events unification, platform-scoped workflows, restore Platform attribution.
+- **2026-07-01 (Benji)** — Categorization corrected (pills = Lead Source · System · Follow-up); **TRIGGERED count**
+  column added (native from `hl_run_log`, FUB from the Railway mirror via `/api/fub/fire-counts`).
+- **2026-07-01 (Benji)** — Canonical **Trigger Events page** built (`/settings/trigger-events`), catalog-driven;
+  "System Events" → "Trigger Events"; `EVENT` → `TRIGGER EVENT` on all 5 boards.
+- **2026-07-01 (Benji)** — P0–P2, P5: catalog `hl_trigger_events` (mig 0276) + `notify_class` (0277); builder reads
+  the catalog; dead `WF_TRIGGERS` removed; saved-search doors registered.
 
-#### SCOPE LOCK — UNIFIED TRIGGER CATALOG (Benji, Zach-signed 2026-07-01) · Mode: BUILD
-#### Tree: /Users/zachspradling/Code/BossLoop-Gold · Branch: houseloop-app
-#### Brainstorm checkpoint: .claude/checkpoints/workflow-trigger-catalog.md (full research + synthesis)
+---
 
-##### NORTH-STAR (Zach signed)
-ONE catalog of triggers (registration events + system events). Everything derives from it — the
-workflow-builder trigger palette, the event titles, the Inngest door registration. Add a trigger to
-the catalog → it auto-flows into the builder AND fires. No more 4-hardcoded-lists drift.
+### Background & model (rolled in — the original reconciliation)
 
-##### ZACH DECISIONS (signed 2026-07-01)
-- Catalog HOME = extend `CANONICAL_LEAD_EVENTS` in components/settings/lead-sources/lead-source-event-constants.ts
-  (add icon + family + platforms; make it the COMPLETE registration+system catalog).
-- SEQUENCE = ship P1 + P2 + P5 first (this lock). P3 (Workflows list auto "Coming Soon") + P4 (builder
-  Lead-Source↔System-Event toggle) = a SECOND pass, after.
-- Workflows page WILL auto-list every catalog event with "Coming Soon" when unbuilt (that's P3, next).
+**North star (Zach-signed 2026-07-01):** ONE canonical DB table `hl_trigger_events` is the single source of truth for
+every trigger. Everything derives from it (Lead Sources page, Trigger Events page, workflow builder palette, Workflows
+list) — no second list. A "Trigger Event" = a trigger (starts a workflow) that fires on an event a lead did.
 
-##### IN SCOPE (this pass — apps/houseloop-crm)
-- P1: `lead-source-event-constants.ts` — add icon/family/platforms to CanonicalEvent + every entry; EXPAND
-  it to the full registration+system catalog (add the system/pixel/FUB events WF_TRIGGERS has that CANONICAL
-  lacks: tour_requested/contact_requested/seller_requested/property_viewed/saved/liked/shared/fub_tour_request_registration).
-- P2: `lib/workflows/registry.ts` — DERIVE WF_TRIGGERS from the catalog + append INTERNAL_TRIGGERS (workflow-only:
-  stage_changed/tag_added/appointment_completed/manual_enrollment). FIX 2 naming bugs (seller_request_registration→
-  home_value_report_registration; seller_started_registration→seller_get_started_registration to match event-trigger-map).
-  `lead-flow-shared.tsx` EVENT_TITLES — derive from the catalog (kill the duplicate).
-- P5: `lib/workflows/runtime.ts` — DOOR_EVENT_KEYS derive from the catalog (register every event's door fn,
-  incl. saved_search_agent/saved_search_system so attached workflows actually fire).
+**Why:** the same trigger info was duplicated across 4 code lists (`WF_TRIGGERS`, `CANONICAL_LEAD_EVENTS`,
+`EVENT_TITLES`, `EVENT_TRIGGER`) + 3 DB tables, hand-synced — so a trigger added under Lead Sources never flowed into
+the builder. Full map: `.claude/checkpoints/workflow-trigger-catalog.md`.
 
-##### KEEP (do NOT break)
-- Existing trigger_types on live workflows (don't rename any type that's stored on hl_workflows.trigger_type —
-  the 2 "naming bug" renames are registry-display-only; verify no live workflow uses those 2 old strings first).
-- The Lead Source / System Events boards' current rendering (adding catalog fields must be additive).
-- Inngest door registration must include EVERY prior DOOR_EVENT_KEY (no regressions) + the new ones.
+**Attribution (PRD §3):** every lead = **Platform** (the system it arrived through — Follow Up Boss / houseloop.ai / any)
+› **Lead Source** (the finer origin within the platform — Zillow Preferred / houseloop.ai Organic) › **Tags** (page /
+campaign). Shown on lead detail; grouped under platform on the scoreboard. `platform=any` is a first-class scope.
 
-##### GATE (verify)
-- tsc clean both apps. WF_TRIGGERS still contains every prior trigger (diff count &gt;= before). DOOR_EVENT_KEYS
-  still contains every prior key + the 3 saved_search. The 3 saved_search triggers appear in the builder,
-  grouped System Events. No live workflow's trigger_type got orphaned by the 2 renames.
-- Build (CRM) green. Ship → both apps → verify the 3 saved-search triggers show in the builder + fire.
+**Config (PRD §9):** two axes — Platform = the tab (`houseloop`/`fub`/`any`); Category = the group
+(registration/system/follow-up). Per-platform config = two toggles (Creates-Lead, Workflow-Active) + FUB's Process.
+Workflows bind to **(trigger × platform-scope)**; `any` = agnostic. Notification = read-only `notify_class` rolling up
+to the Notifications section. **The event always fires — toggles gate the lead + the workflow, never the firing.**
 
-## Related documentation
+### Build phases (rolled in)
+- **P0** — mig `0276_hl_trigger_events.sql`: catalog table + 24 deduped rows; reader `lib/workflows/trigger-catalog.ts`.
+- **P1** — builder palette reads `GET /api/workflows/triggers`; boards read `hl_lead_source_events` directly.
+- **P2** — deleted dead `WF_TRIGGERS` + `triggerByType`; per-trigger FIELDS stay as `TRIGGER_FIELD_OVERLAY`.
+- **P5** — `saved_search_agent`/`saved_search_system` in `DOOR_EVENT_KEYS`. (Inngest has no wildcard events → doors
+  are statically registered at boot; a brand-new UI type still needs a deploy.)
+- **P6 (current, PRD-driven)** — the unification + Ali Burke fixes above. Detail in the PRD.
 
-Doc sections this work creates or updates:
+**Gate:** every prior trigger present · no live workflow orphaned · verify per PRD §10 · Zach spot-checks.
+**Blocks →** [[saved-search-process]] (finalize saved-search origins once the catalog is canonical).
 
-- [`guides/workflows`](/guides/workflows)
-- [`guides/lead-sources`](/guides/lead-sources)
-- [`guides/lead-flow`](/guides/lead-flow)
+---
+
+## PRD · `**GT/GT - ACTIVE/GT_HOUSELOOP_LEAD_PLATFORM_TRIGGER_CATALOG_PRD.md** (Zach-signed 2026-07-02)`
+
+_(File not found in-tree — path recorded for reference.)_
+
+---
+
+## Scope lock · `.claude/state/session-scope-trigger-catalog.lock · touches: guides/trigger-events, guides/lead-sources, guides/workflows`
+
+_(File not found in-tree — path recorded for reference.)_
