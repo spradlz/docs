@@ -1,0 +1,105 @@
+---
+title: "Notification Templates (Benji WIP)"
+description: "The canonical spec for every USER (agent-facing) notification email + text. Template-driven, human-editable, preview == what sends. What each template is, the branded chrome, the merge fields, the folder + Buyer/Seller/All classification, and the mistakes never to repeat."
+---
+
+<Warning>
+**BENJI WIP — under active rebuild (2026-07-02).** This is the ground-truth so the work is never lost or
+re-vibe-coded again. If anything here disagrees with the DB or the code, THIS spec is the intended state and
+the drift is the bug. Owner: **Benji**.
+</Warning>
+
+## The law (non-negotiable)
+
+**Every notification — email AND text — is a complete, human-editable TEMPLATE row in `hl_templates`. No code
+assembles email HTML. The template PREVIEW equals exactly what SENDS.**
+
+The old sin (killed 2026-07-02): the branded card (logo, contact card, agent, CTA, footer) was built in CODE
+(`renderNotificationInner()` + `notificationShell()`) and wrapped around a bare one-line template body — so the
+real email was invisible to the template editor, and previews showed a bare paragraph. That is banned. The card
+is now a template.
+
+## Architecture — chrome template + content template
+
+- **`notify_base`** (`hl_templates`, kind=email) — the canonical **branded chrome**, editable HTML with ONE
+  `{{notify.content}}` slot: logo → `{{notify.content}}` → contact card (`{{contact.initials/phone/email}}` +
+  `{{listing.address}}`) → `{{notify.message}}` → `Assigned Agent · {{notify.agent}}` →
+  `Open lead in HouseLoop CRM →` (`{{contact.crm_url}}`) → `{{company.footer}}`. **Edit the chrome once, here.**
+- **`notify_base_system`** — same chrome WITHOUT the contact card (system alerts, no lead).
+- **Each `notify_<event>` template = the CONTENT only** (the event headline; the chrome adds the rest).
+- **`composeNotificationEmail(baseBody, contentBody)`** (`lib/email/compose-notification.ts`) injects the content
+  into the base slot. Used by **both** send and preview — they can never diverge.
+
+### Send + preview flow
+- **Send** (`lib/notifications/dispatch.ts`): resolve the merge scope → compose base+content → `applyMerge()` once
+  → `sendViaResend()`. Registry: `lib/notifications/template-registry.ts` maps event → `{emailKey, smsKey, group,
+  leadScoped}`.
+- **Preview** (`NotificationTemplateModal` on Settings → Notifications; `EmailTemplatePreviewModal` on Settings →
+  Email Templates): `resolveForPreview(compose(base, content))` → the FULL branded email, live as you edit.
+
+## Merge fields the templates use
+
+| Field | Resolves to |
+|---|---|
+| `{{notify.content}}` | the per-event content (composed into the base by the composer) |
+| `{{notify.message}}` | the real inbound message / AI action detail |
+| `{{notify.agent}}` | the lead's ASSIGNED agent (Ana) — or Myli for AI |
+| `{{notify.title}}` | the AI-composed dynamic headline (AI notifications) |
+| `{{notify.link}}` | the home/search the lead acted on |
+| `{{event.activity}}` | the per-event word from `hl_trigger_events.activity` (scales on catalog rows) |
+| `{{contact.full_name/first_name/phone/email/crm_url/initials}}` | the lead |
+| `{{listing.address}}` | the property the event carried |
+| `{{lead.platform}}` / `{{lead.source}}` | HouseLoop.ai / Follow Up Boss · Zillow etc. |
+| `{{company.footer}}` | the canonical CAN-SPAM brand footer |
+
+## The canonical template set (User Notifications folder)
+
+Every row lives in `folder='user_notifications'`, classified **Buyer/Seller/All** by activity nature (category-derived,
+`lib/templates/categories.ts`): browsing → **Buyer**, seller-intent → **Seller**, rest → **All**.
+
+| Event key | EVENT group | Pipeline | Headline (email content) |
+|---|---|---|---|
+| `notify_lead_created` | Lead Alerts | All | `🏠 {{contact.full_name}} registered on {{lead.platform}} via {{lead.source}} — {{event.activity}} {{listing.address}}` |
+| `notify_tour_request` | Lead Alerts | All | `📅 {{contact.full_name}} requested a tour` |
+| `notify_contact_request` | Lead Alerts | All | `📨 {{contact.full_name}} asked an agent to reach out` |
+| `notify_new_message` | Lead Alerts | All | `💬 {{contact.full_name}} sent you a message` |
+| `notify_email_received` | Lead Alerts | All | `📧 {{contact.full_name}} replied by email` |
+| `notify_phone_call_received` | Lead Alerts | All | `📞 {{contact.full_name}} called you` |
+| `notify_home_liked` | Website Activity | Buyer | `❤️ {{contact.full_name}} liked a home` |
+| `notify_home_saved` | Website Activity | Buyer | `🔖 {{contact.full_name}} saved a home` |
+| `notify_home_shared` | Website Activity | Buyer | `📤 {{contact.full_name}} shared a home` |
+| `notify_saved_search` | Website Activity | Buyer | `🔍 {{contact.full_name}} saved a search` |
+| `notify_property_viewed` | Website Activity | Buyer | `👀 {{contact.full_name}} viewed a home` |
+| `notify_seller_request` | Seller Activity | Seller | `🏡 {{contact.full_name}} wants to sell their home` |
+| `notify_home_value_report` | Seller Activity | Seller | `📊 {{contact.full_name}} requested a home value report` |
+| `notify_appointment_set` | Team | All | `📅 New appointment with {{contact.full_name}}` |
+| `notify_appointment_completed` | Team | All | `✅ Appointment with {{contact.full_name}} complete` |
+| `notify_lead_assigned` | Team | All | `🎯 {{contact.full_name}} was assigned to you` |
+| `notify_lead_reassigned` | Team | All | `🔄 {{contact.full_name}} was reassigned to you` |
+| `notify_stage_changed` | Team | All | `🔀 {{contact.full_name}} moved to a new stage` |
+| `notify_collaborator_added` | Team | All | `👥 You were added as a collaborator on {{contact.full_name}}` |
+| `notify_agent_ack_request` | Team | All | `🔔 {{contact.full_name}} needs your acknowledgment` |
+| `notify_clone_activated` | Team | All | `🤖 Your AI clone stepped in on {{contact.full_name}}` |
+| `notify_team_invite` | Team | All | `🎉 You have been invited to join the team` |
+| `notify_ai_calls` | AI Follow-Up | All | `✨ Myli logged a call with {{contact.full_name}}` |
+| `notify_ai_messages` | AI Follow-Up | All | `✨ Myli sent {{contact.full_name}} a message` |
+| `notify_ai_facts` | AI Follow-Up | All | `✨ Myli captured a new detail about {{contact.full_name}}` |
+| `notify_ai_homes` | AI Follow-Up | All | `✨ Myli found homes for {{contact.full_name}}` |
+| `notify_ai_stages` | AI Follow-Up | All | `✨ Myli moved {{contact.full_name}} to a new stage` |
+| `notify_ai_appointments` | AI Follow-Up | All | `✨ Myli booked an appointment with {{contact.full_name}}` |
+| `notify_gmail_disconnected` | System Alerts | All (system chrome) | `⚠️ Your Gmail connection needs attention` |
+| `notify_bb_disconnected` | System Alerts | All (system chrome) | `⚠️ The iMessage bridge lost connectivity` |
+
+Each has a matching `_sms` text template (emoji line + `{{contact.crm_url}}` + `— HouseLoop`).
+
+## Migrations
+`0296` notify_base + notify_base_system chrome · `0297` folder=user_notifications + Buyer/Seller/All category ·
+`0298` real per-event content (rebuild). Base seeds/history: `0279`–`0284`.
+
+## Mistakes never to repeat
+1. **No code-built email HTML.** The card is a template (`notify_base`), not `renderNotificationInner`.
+2. **No stubs.** Every content template is distinct + event-specific, not `body == subject` and not one shared
+   `✨ {{notify.title}}` copied across all AI events.
+3. **No orphaned duplicates in the folder.** `*_agent_alert` / `new_lead_saved_search_agent` are legacy, not fired
+   by dispatch — they do NOT belong in User Notifications.
+4. **Preview == send.** If the preview shows a bare paragraph, the composer isn't wired — that's a bug.

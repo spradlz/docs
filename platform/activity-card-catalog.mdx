@@ -3,6 +3,28 @@ title: "Activity Card Catalog"
 description: "The render spec for every lead-activity card — the visual, the exact code, and where it comes from (trigger + source). A build-out reference, not a CRM screen. Design → verify → lock → ship."
 ---
 
+<Warning>
+**🚧 WORK IN PROGRESS — process log (Lee). Wiped once the catalog is locked.** A running log of what's being
+built, what was found, and what's next — so anyone (incl. Adam, docs owner) sees the live state.
+
+**🎨 Live design canvas (rendered cards, iterates faster than this page):**
+[claude.ai/code/artifact/00b38797-8c40-4fc3-963f-010fba6623a5](https://claude.ai/code/artifact/00b38797-8c40-4fc3-963f-010fba6623a5)
+
+**2026-07-02 — Card = ONE template, every value a merge field (catalog-driven).**
+- **Found:** the card headline was **hardcoded** in `lib/leads/registration-labels.ts` (`REG_MECHANISM` map) —
+  a vibe-coded duplicate that drifts. Benji already had the scalable system: the merge-field registry
+  `lib/merge-fields.ts` + the `activity` phrase column on `hl_trigger_events` (mig 0295).
+- **Did (shipped):** (1) card headline now renders `{{contact.first_name}} {{event.activity}}` resolved from
+  `hl_trigger_events.activity`; card **size** reads `hl_trigger_events.category` (registration → hero, system →
+  compact). `REG_MECHANISM` demoted to fallback-only. Commit `a913a02483` (activity API resolver + `CenterLane` +
+  `PixelFeedStream`). (2) Backfilled the **10 system-event** `activity` phrases (mig `0299`: "liked a home",
+  "saved a home", "requested a tour", …) so existing-lead cards are catalog-driven too — no NULL fallback left.
+- **Next:** verify the live render of every card type; then fill the remaining catalog rows (Property Inquiry,
+  Contact Request, …) — each is now **just a catalog row** through the one template. Lock each as verified.
+- **Lock criteria:** every card headline resolves from `hl_trigger_events.activity` (no code map), verified on a
+  live lead. When all locked → **delete this WIP log**.
+</Warning>
+
 <Note>
 **This is a build-out / system reference, not a CRM screen.** It answers "what does a lead's activity
 **look like**, what **code** renders it, and where does it **come from**" — the counterpart to
@@ -24,6 +46,29 @@ Every activity renders as one of two cards, decided by **category** (see
 
 The *same* action renders both ways: a tour that creates a lead is a hero card; an existing lead's tour is
 a compact row.
+
+## ONE template · every value is a merge field (the scalable pattern)
+
+**There is ONE card template; every card is DATA, not code.** A card is never hand-authored — it's the
+template filled by **merge fields** from the registry `lib/merge-fields.ts` (the one place every field lives)
++ the trigger-event catalog `hl_trigger_events`. **Add a card = add a catalog row. Zero per-card code, zero
+drift.** This is the exact same merge-field system Benji's New Lead notification uses (mig 0295).
+
+| Card slot | Merge field(s) | Resolved from |
+|---|---|---|
+| **Card SIZE** (hero vs compact) | the event's **category** | `hl_trigger_events.category` — `registration` → **hero**, `system` → **compact** |
+| **Headline** | `{{contact.first_name}} {{event.activity}}` | `hl_trigger_events.activity` — the per-event phrase ("requested a tour", "saved a home", "inquired about a home") |
+| **Address** | `{{listing.address}}` / `{{request.address}}` | the home on the activity |
+| **Facts** | `{{listing.price}} · {{listing.beds}} bd · {{listing.baths}} ba · {{listing.sqft}}` | listing |
+| **Picture tile** | `{{request.photo}}` + `{{lead.source}}` | native → the photo; else the source (Zillow logo / source text) |
+| **"via" badge + links** | `{{lead.source}}` | `lib/leads/card-source.ts` — HouseLoop link **left**, portal **right** |
+| **Message / quote** | `{{request.message}}` | the buyer's typed text |
+| **Tour date chip** | `{{request.date}} {{request.time}}` | dynamic — shows only when present |
+
+To add a card you touch **no card code**: add its `hl_trigger_events` row with a `category` (→ hero/compact)
+and an `activity` phrase. It flows into the card, the New Lead notification, and the workflow automatically —
+one registry, one catalog, every surface. The sections below show the template *rendered* for each event; the
+words in them are `{{event.activity}}` etc., not hardcoded strings.
 
 ## The 3 source variants (every card)
 

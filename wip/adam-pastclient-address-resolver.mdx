@@ -67,10 +67,41 @@ canonical HLID, the OTHER 21 units UNTOUCHED, reversible. Verified `/home/…-80
 **Deploy note:** these `houseloop-web` (port 3001) edits are separate from Zach's CRM (3020). Lee froze file writes
 mid-session for an HMR storm on 3020; Zach CEO-overrode ("push through"). Pushed via git → Railway auto-deploy.
 
+### 📁 WHERE EVERYTHING LIVES (canonical files — don't lose these)
+- **MASTER past-client list (the source of truth):** `.claude/reports/pastclient-canonical-FINAL-2026-07-02.csv`
+  — 1,937 rows, 1/HLID: hlid · address · city · zip · canonical_slug · `/home` URL · zpid · zestimate ·
+  **houseloop_value** · value_bucket · address_source. Caleb seated it into CRM `hl_srg_pastclient_gt` +
+  `hl_srg_past_client_homes` (the DB truth). MLS ground truth for unit-bearing address = `hl_srg_mls_deals`.
+- **BUILDING-UNIT RE-ENRICH worklist:** `.claude/reports/pastclient-building-units-reenrich-2026-07-02.csv`
+  — the **44** condo/apt past-client homes (of 1,936) that have WRONG-UNIT data. Cols: hl_property_id ·
+  unit_address (MLS) · mls_number · city · zip · website_hlid · current_value · value_source · **reenriched**
+  (YES-2026-07-02 for HLID100849=411 W 46th #801 done by hand; **43 remaining = NO**).
+- **Hand-verified overrides:** `.claude/reports/pastclient-mls-resolver-overrides.csv`.
+- **Reversal logs (undo):** `.claude/reports/pastclient-{unquarantine,fork-merge}-reversal-2026-07-02.json`.
+- **Tools:** `tools/houseloop-cards/{pastclient-mls-resolver,resolve-stragglers,merge-canonical-final,pastclient-unquarantine-exec,pastclient-fork-merge-shadow,pastclient-fork-merge-exec}.mjs`.
+
+**~15:30–16:10 CDT — BATCH RE-ENRICH ENGINE built + RUN + PRICE-DISPLAY ROOT FIX (before a crash killed the session).**
+Built `tools/houseloop-cards/pastclient-building-unit-reenrich.mjs` (mirrors the by-hand #801 fix: MLS unit-address
+→ resolve VERIFIED zpid → refresh value/soldDate/closePrice/priceHistory/photos→R2-objects/TAX). **Ran it: 33 of 44
+building-unit homes re-enriched (YES-2026-07-02); 11 remaining NO.** While re-enriching 10136 W 96th #B, flushed a
+PRICE-DISPLAY DRIFT bug + fixed it at root (both SHIPPED to Railway, live-verified — screenshot
+`.claude/reports/10136-96th-B-priceHistory-fix-VERIFIED.png`):
+- `get.ts` (commit 5e3c145792): pill / "Listed for" / sold price ALL derive from the ONE `priceHistory` column,
+  newest cycle wins. Stale `listPrice`/`closePrice`/`soldDate` cols are fallback-only. (#B showed "Listed for $95,000"
+  from a 2017 cycle; real 2024 cycle = $175k list / $170k sold.)
+- `lifecycle-time.ts` (commit 5b867ba6af): days-to-sale anchors on derived `listDate` not stale `mlsListedAt`
+  (#B was "2343 days" spanning both cycles → now ~20, the actual selling cycle).
+Memory written: `feedback_price_display_derives_from_pricehistory`.
+
 ### OPEN WORKSTREAMS (next)
+- [ ] **Building-unit zpid-anchored RE-ENRICH — 11 of 44 remaining** (33 DONE). Engine built + proven:
+  `tools/houseloop-cards/pastclient-building-unit-reenrich.mjs`. Worklist:
+  `.claude/reports/pastclient-building-units-reenrich-2026-07-02.csv` (11 rows still `NO`). Remaining 11:
+  HLID100419 (11671 S Roundtree #200) · HLID100612 (600 Admiral #904) · HLID100740 (15584 S Church #1600) ·
+  HLID100791 (723 SW Liggett #A) · HLID100977 (4511 Headwood #2) · HLID101058 (4524 Broadway #3N) ·
+  HLID101092 (11605 Tomahawk Creek Pkwy #D) · HLID101401 (10110 W 96th Ter #E, flagged) · HLID101469 (6218 Robinson #1) ·
+  HLID101609 (11615 Tomahawk Creek Pkwy #B) · HLID101630 (4007 S Crysler #5).
 - [ ] **Fork-merge the ~325 SAFE homes** — engine proven; run in batches, dry-run → spot-check → execute (Rule #0). 2 flagged (10110 W 96th Ter, 18000 E 25th Ct S) + buildings = per-unit.
-- [ ] **Building-unit zpid-anchored RE-ENRICH pass** — for every condo/apt past-client, refresh ALL fields (value,
-  soldDate/closePrice, priceHistory, photos, TAX) from the MLS-validated zpid. This is the systemic fix bug #1 needs.
 - [ ] **Autocomplete polish** — surface the queried unit above the MAX_SOLD=8 cap (a specific unit can still rank out on a big building).
 
 ### THE CORE INSIGHT — MLS# is the ground-truth anchor
