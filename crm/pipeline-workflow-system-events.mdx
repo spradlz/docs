@@ -1,46 +1,70 @@
 ---
-title: "System Events"
-description: "Toggle the site-activity events an EXISTING lead can fire — tour, contact, saved home, liked home, saved search — and attach the workflow each one runs, per platform."
+title: "Trigger Events"
+description: "The ONE canonical catalog of every event that can start a workflow — tabbed by platform (HouseLoop.ai / Follow Up Boss / Any), grouped by category (Registration / System / Follow-up), each row carrying its create-lead + workflow-active toggles and the notification it rolls up to."
 ---
 
-**In the app:** CRM sidebar → **Pipeline & Workflow** → **System Events** — [`/settings/system-events`](https://crm.houseloop.ai/settings/system-events)
+**In the app:** CRM sidebar → **Pipeline & Workflow** → **Trigger Events** — [`/settings/trigger-events`](https://crm.houseloop.ai/settings/trigger-events)
 
-System Events was split out of Registration Events (Zach, 2026-06-30). Registration Events covers **lead creation**; System Events covers what happens **after** a lead exists.
+<Note>
+**This page describes the TARGET model** (Zach-signed 2026-07-02) that the unification is building toward — the
+ground-truth spec is `GT/GT - ACTIVE/GT_HOUSELOOP_LEAD_PLATFORM_TRIGGER_CATALOG_PRD.md`. The "System Events" name is
+retired: what fires *after* a lead exists is now just the **System category** inside this one Trigger Events catalog.
+</Note>
 
-## What it does
+## What it is
 
-System Events lists the actions an **already-existing lead** takes on the site — request a tour, request contact, save a home, like a home, save a search — and lets you decide, per event, whether it is **on** and which **workflow** it fires. These are platform-level "surface" events: they fire regardless of which source the lead originally came from, which is why they're grouped by **platform** (HouseLoop, Follow Up Boss) rather than by source, and deduped so each event appears once per platform.
+A **trigger event** is a thing that can happen (a lead did something) that can **start a workflow**. There is exactly
+**ONE canonical catalog** — the DB table **`hl_trigger_events`** — and everything derives from it (this page, the Lead
+Sources config, the Workflow Builder palette). No second list.
 
-Lead-creation events (anything whose key ends in `_registration`) are intentionally excluded here — they live on Registration Events.
+The page is **tabbed by platform** and, inside each tab, **grouped by category**:
 
-The page reuses the same platform tabs, blue section header, event table, and workflow row-actions as Registration Events (shared building blocks in `components/settings/lead-platform/event-board-shared.tsx`).
+- **Platform tabs:** `HouseLoop.ai` · `Follow Up Boss` · `Manual` · `Any`. Each platform emits its own events; the
+  **Any** tab holds cross-platform behavioral triggers (see *Platform scope* below).
+- **Categories (groups within a tab):**
+  - **Registration** — the event **creates a lead** (New Lead — Liked Home, Shared Home, Tour Request, …).
+  - **System** — an **existing** lead's on-site behavior (Property Viewed / Liked / Saved / Shared, Saved Search, …).
+  - **Follow-up** — internal **nurture** triggers (timers / no-reply), fired by the system, not by a source.
 
-## What you configure
+## The two layers (why there isn't a duplicate)
 
-Each row is one system event. Two independent controls:
+- **`hl_trigger_events`** = the event **definitions** — the one catalog, the ground truth for *what can happen*.
+- **`hl_lead_source_events`** (native) + **`hl_fub_webhook_settings`** (FUB) = the per-source **config / routing** —
+  *for this source, is it on, does it create a lead, which workflow fires*. This is **not** a copy of the catalog; it's
+  how every door actually routes (read by the workflow dispatch in `lib/workflows/runtime.ts` and the website
+  lead-intake). Both layers are required.
 
-| Control | Column | What it does |
-|---|---|---|
-| **ON toggle** | `ON` | Flips the event active/inactive (`is_active`). Independent of whether a workflow is attached. |
-| **Workflow** | `WORKFLOW` | Shows the bound workflow as a pill, or "General (catch-all)" when none is attached. Clicking a row (or **Open in Builder**) opens the workflow. |
-| **Row menu (⋮)** | `ACTIONS` | If a workflow is bound: **Open in Builder** and **Clone & assign** (duplicates the workflow and binds the copy). If none is bound: **Create Workflow** (creates a workflow seeded with the event's trigger type, then binds it). |
+## The row
 
-Newly created or cloned workflows open in the Workflow Builder with a `from=/settings/lead-platform` back-link, so **Back** returns here.
+Each row is one trigger event. **The event always fires once it exists** — the toggles gate the lead + the workflow,
+never the firing itself.
+
+| Column | What it does |
+|---|---|
+| **Trigger Event** | Icon + label + description (from `hl_trigger_events`). |
+| **Triggered** | How many times it fired (`hl_run_log` door counts + the FUB mirror). **Click it → the leads that fired it, newest first.** |
+| **Creates Lead** | Toggle — does this event spin up a NEW lead? **Category-gated:** System behaviors default off (a property view never mints a lead); a few (Virtually Toured) are toggleable; Follow-up is N/A. |
+| **Workflow Active** | Toggle — do you want the attached workflow to fire? (The event still fires + notifies regardless.) |
+| **Notification** | **Read-only** — which notification class it rolls up to (`notify_class`) + a **Realloop / HouseLoop** indicator. The real on/off + channels + templates live under [Notifications](/guides/notifications). |
+| **Process** *(FUB only)* | Whether we ingest that FUB webhook type into the lead's history at all. Native events always process. |
+| **Actions (⋮)** | Open in Builder · Clone & assign · (create workflow if none bound). |
+
+## Platform scope on workflows
+
+A workflow's Trigger node = **Trigger Event × Platform scope** (`houseloop` / `fub` / `any`). Firing = *trigger
+matches* **AND** (*workflow platform == the event's platform* **OR** *workflow platform == any*). `any` is a wildcard —
+one workflow that fires for a tour from any platform. **Notifications are platform-agnostic by default** (they ride the
+`notify_class` on the canonical trigger), so you only pick `any` on a workflow for an agnostic *action/nurture*.
 
 ## Data source
 
-Everything is read/written live from the CRM Postgres — no separate config store.
-
-- **Page query** (`app/(crm)/settings/system-events/page.tsx`): joins `hl_lead_source_events` → `hl_lead_sources` → `hl_workflows`. It selects events where the event and source are active, the source has a `platform`, the source `source_type` is **not** `platform`/`system`, and the `event_key` does **not** end in `_registration`. Rows are deduped by `event_key` per platform and ordered `houseloop`, then `follow_up_boss`.
-- **Toggle / attach** — `PATCH /api/lead-flow` (`app/api/lead-flow/route.ts`) updates `is_active` or `workflow_id` on `hl_lead_source_events` (each field independently; it never nulls the other).
-- **Create workflow** — `POST /api/workflows`, seeded with `trigger_type` from `EVENT_TRIGGER[event_key]` (`lib/workflows/event-trigger-map.ts`), then bound via the same `PATCH /api/lead-flow`.
-- **Clone workflow** — `POST /api/workflows/[id]/duplicate`, then the copy is bound to the event.
+Everything is read/written live from the CRM Postgres — no separate config store. Catalog: `hl_trigger_events`
+(mig 0276) + `notify_class` (0277). Per-source config: `hl_lead_source_events` / `hl_fub_webhook_settings`.
+Toggle/attach: `PATCH /api/lead-flow`. Create/clone workflow: `POST /api/workflows` / `.../duplicate`. Fire-count
+drill-through: `/api/trigger-events/fires`.
 
 ## How it fits
 
-System Events is one of the two event boards under **Pipeline & Workflow**:
-
-- **Registration Events** — events that **create** a lead (`*_registration`), grouped by channel/source.
-- **System Events** — events an **existing** lead fires on the site, grouped by platform (this page).
-
-Both write to the same `hl_lead_source_events` rows and bind the same `hl_workflows`; the workflows themselves are authored in the **Workflow Builder** (`/workflows`).
+Trigger Events is the middle of the pipeline: **[Lead Sources](/guides/lead-sources) → Trigger Events →
+[Workflows](/guides/workflows)**. Lead Sources is where each platform's events are *configured* (Configure deep-links
+into this page's tab); Trigger Events is the *catalog*; the Workflow Builder is where the bound workflow is *authored*.
