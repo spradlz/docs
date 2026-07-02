@@ -10,6 +10,28 @@ built, what was found, and what's next — so anyone (incl. Adam, docs owner) se
 **🎨 Live design canvas (rendered cards, iterates faster than this page):**
 [claude.ai/code/artifact/00b38797-8c40-4fc3-963f-010fba6623a5](https://claude.ai/code/artifact/00b38797-8c40-4fc3-963f-010fba6623a5)
 
+**🔑 THE JOIN CONTRACT — read this before seating ANY card (so nobody relearns it):**
+A card renders from `hl_trigger_events`. `event_activity` + `event_category` are resolved in
+`app/api/leads/[id]/activity/route.ts` → `resolveEventCatalog()`. The keys MUST line up or the card falls
+back / goes blank:
+- **System event** (existing lead): resolver does `sysByType.get(canonicalEventType(kind))`. There is NO
+  alias for most kinds, so the catalog row's **`type` must EQUAL the `hl_lead_activity.kind` verbatim**
+  (`property_inquiry`, NOT a past-tense form). ⚠️ The older system rows (`property_viewed`, `tour_requested`)
+  are past-tense and do NOT match their kinds (`property_view`, `tour_request`) — their `activity` never
+  resolves; it's masked only because the **compact** row prints the badge label, not `event_activity`.
+- **Registration event** (new lead's first action): resolver keys by `normKey(action)`, so the row's `type`
+  must be **`<action>_registration`** (e.g. `property_inquiry_registration`, action `property_inquiry`).
+- **HERO vs COMPACT** is decided in `PixelFeedStream.tsx` by `isRegistration || isRequest` (catalog
+  `badge.request`) — NOT by `category`. Requests (tour/inquiry/contact/seller/home-value) hero;
+  views/likes/saves/searches/deals stay compact. Headline for every hero = `{{first_name}} {{event.activity}}`.
+
+**2026-07-02 PM — inquiry family seated + requests restored to hero (Lee).** `property_inquiry` /
+`rental_inquiry` / `seller_inquiry` had ZERO catalog rows → no phrase, no hero. Fixed: **mig 0301** seats all
+six (registration + system, keyed per the contract above; activity "inquired about a home/rental/selling").
+Render gate widened from `isRegistration` → `isRegistration || isRequest` so the request family heroes per this
+spec, and `heroTitle` is now catalog-driven for every hero (commit pending). Verified on leads with real
+`property_inquiry` rows.
+
 **2026-07-02 — Card = ONE template, every value a merge field (catalog-driven).**
 - **Found:** the card headline was **hardcoded** in `lib/leads/registration-labels.ts` (`REG_MECHANISM` map) —
   a vibe-coded duplicate that drifts. Benji already had the scalable system: the merge-field registry
