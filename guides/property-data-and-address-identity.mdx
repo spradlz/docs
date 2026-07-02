@@ -213,6 +213,47 @@ A home a lead **browsed on Zillow** (captured via FUB activity) is **not** a lis
 
 The correct resolution for these is the same one-resolver principle: match on the address parts that **don't** drift — **house number + directional + street name + suffix** — region-gated (same ZIP, same city, or same 3-digit ZIP prefix) so a cross-metro collision can't produce a wrong link, and resolve **once at ingest**, storing the resulting `hlPropertyId`/slug on the activity so nothing is re-matched at read time. (Today the CRM lead-activity card does a drift-tolerant read-time match as a stopgap; the durable version folds this into `resolveHome` as a street-based rung and stores the id.)
 
+## Past-Client Address Resolution — the MLS# anchor (the canonical tier)
+
+Past-client homes are the hardest addresses we resolve: they come from **typed source data** (old CRM/SISU
+entries), so the street is often garbled — a wrong house number, a misspelled or abbreviated street, a missing
+city. A missing city is the worst: CASS then geocodes the fragment to **the wrong state entirely** (`105 E
+Washington` with no city → Attica, **Indiana**, not Paola, KS). Address text alone cannot be trusted for these.
+
+**The anchor is the MLS#.** You cannot *search* Zillow by MLS number, but Zillow's **property-details** page
+carries it (`attributionInfo.mlsId`). So the resolver treats the MLS# as ground truth and the typed address as a
+hint:
+
+1. **CASS-clean** the typed address (Google Address Validation, HouseLoop key `GOOGLE_GEO_SERVER_KEY`).
+2. **Ninja multi-form search** — CASS address → street-type variants (`St`/`Ter`/`Dr`/`Ct`/`Ln`) → range-preserved
+   (`10700-10702`) → the full `street, city, STATE zip` form (CASS mangles rural/garbled streets) → candidate `zpid`.
+   Multi-unit buildings resolve by picking the unit from Zillow's autocomplete **dropdown** (a location string with
+   `APT n` won't match) → the unit's own `zpid`.
+3. **Validate** `property-details(zpid).attributionInfo.mlsId` against our known MLS#(s) for the home.
+
+Each home lands in one of four states — never silently wrong:
+
+| Status | Meaning |
+|---|---|
+| **confirmed** | `mlsId` matches our known MLS# → 100% certain it's the right rooftop (MLS-locked) |
+| **address_match** | house # + street-name verified, Zillow exposed no `mlsId` (normal for older sales) — correct home |
+| **mls_mismatch** | candidate's MLS ≠ ours → flagged for review |
+| **not_found** | no Zillow record → flagged (new-construction / off-Zillow / land) |
+
+<Note>
+**The miskey lesson (LOCKED 2026-07-02): the MLS# overrides the typed address, every time.** When the typed
+address and the MLS#-derived Zillow address disagree, the MLS# wins. Real fixes from the run:
+- `12673 S Hallet St, Olathe` — typed as **13673 Hallett** (wrong house #, extra `t`, no city)
+- `7224 Widmer Rd, Shawnee` — typed as **72245 Widmer St** (extra digit + `St`→`Rd`)
+- `1226 Bluestem Dr, Eudora` — typed as **Blue Stem** (two words)
+- `105 E Washington St, Paola KS` — typed with no city → CASS sent it to **Attica, Indiana**
+
+The 2026-07-02 run resolved **all 1,936 SRG past-client homes** (1,020 MLS-locked + 833 address-match +
+stragglers), 99.9% valued. Full spec: `GT_HOUSELOOP_PASTCLIENT_MLS_RESOLVER_PRD.md`. Tools:
+`tools/houseloop-cards/{pastclient-mls-resolver,resolve-stragglers,merge-canonical-final}.mjs`. Deliverable:
+`.claude/reports/pastclient-canonical-FINAL-2026-07-02.csv`.
+</Note>
+
 ## Data sources for a home
 
 Each field has exactly one authoritative source:
