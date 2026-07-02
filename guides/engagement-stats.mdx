@@ -95,6 +95,42 @@ currently rolled into the website's `ListingStats`. Wiring FUB/pixel activity in
 by `hlid`) is a possible future enhancement, not current behavior. See [Pixel Tracking](/guides/pixel-tracking).
 </Note>
 
+## The hydration bug — "0 views until you refresh" (root-caused 2026-07-02)
+
+**Symptom:** on an **active** `/home` listing the engagement bar rendered **0 views / blank counts on first
+load**, and only showed the real numbers after a hard URL refresh. The console logged **React error #418**
+(a hydration text mismatch).
+
+**Root cause — NOT the data.** The `ListingStats` columns are correct and the server HTML ships the right
+numbers (verified: SSR shipped `172 views / 139 days / Like 10 / Save 5 / Share 3`). The bug is a **render
+determinism** problem: `ListingEngagementBar` is a **client component** that computed the "**X days on
+HouseLoop**" metric inline via `lifecycleTimeMetric()`, whose *active* branch uses **`Date.now()`**
+(`lib/listings/lifecycle-time.ts` line ~58). The server rendered that text at server-now; the client
+recomputed it at hydration-now. When the two disagree, React throws **#418** and **discards the server HTML
+for that whole subtree**, re-rendering it on the client — which is what blanks the counts to 0 until a full
+reload. **Only ACTIVE/coming-soon listings hit it** — sold/pending freeze the metric on stored dates
+(`listDate → soldDate`), so they're deterministic and never mismatched.
+
+**Fix shipped (2026-07-02, Adam).** Compute the lifecycle metric **once on the server** and pass it down as
+a prop, so the client renders it verbatim and never calls `Date.now()` during hydration:
+- `lib/listings/get.ts` — `getListing()` now computes `lifecycleTime` server-side and returns it on the
+  domain `Listing`.
+- `components/listing/HomeDetailView.tsx` — recomputes `lifecycleTime` with the reconciled sold-pill date
+  (kept server-side) so days-to-sale matches the pill.
+- `lib/listings/types.ts` — added the optional `lifecycleTime` field to `ListingSchema`.
+- `components/listing/ListingEngagementBar.tsx` — reads `listing.lifecycleTime` and only falls back to the
+  live compute when the prop is absent.
+
+<Warning>
+**RESIDUAL — someone still needs to fix the CARD path.** The **feed / search cards** (`ListingCard.tsx`)
+ALSO call `lifecycleTimeMetric()` client-side, and the card read path (`searchFromDb` in
+`lib/listings/search`/`cache.ts`) does **not** yet populate the server-computed `lifecycleTime`. So an
+**active-listing card can still throw the same #418 hydration mismatch** on its "days on HouseLoop" text.
+**TODO:** thread the server-computed `lifecycleTime` into the card/search path (set it in `searchFromDb`
+the same way `getListing` does) and make `ListingCard` read the prop instead of computing `Date.now()`.
+Until then the detail page is fixed but cards carry the latent bug.
+</Warning>
+
 ## Turning the ticker off (later)
 
 When real volume eclipses synthetic (target: real > 5× synthetic), set the `engagement-stats-drift` cron
