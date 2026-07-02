@@ -1,6 +1,6 @@
 ---
-title: "Benji (Trigger Event / Lead Source Refactor)"
-description: "Work-in-progress dossier — Benji · HouseLoop Website. Trigger Event / Lead Source Refactor."
+title: "Benji (Lead Platform + Trigger Events + Template System — ONE BUNDLE)"
+description: "Work-in-progress dossier — Benji · HouseLoop Website. Lead Platform + Trigger Events + Template System — ONE BUNDLE."
 ---
 
 <Info>Live dossier — auto-generated from `.claude/state/wip/benji/trigger-events.md` on every push. **Progress: checklist pending.**</Info>
@@ -9,12 +9,21 @@ description: "Work-in-progress dossier — Benji · HouseLoop Website. Trigger E
 
 ## Checklist
 
-also: GT/GT - Pending/GT_HOUSELOOP_TRIGGER_EVENTS_CANONICAL_PRD.md (the original catalog PRD, rolled in below)
+**GT/GT - ACTIVE/GT_HOUSELOOP_NOTIFICATIONS_REFACTOR_PRD.md** (the template side)
+also: GT/GT - Pending/GT_HOUSELOOP_TRIGGER_EVENTS_CANONICAL_PRD.md (original catalog PRD, rolled in below)
+session-scope-trigger-catalog.lock + session-scope-notification-templates.lock) · touches: guides/trigger-events,
+guides/lead-sources, guides/workflows, platform/notification-templates
+
+**⚠️ THIS IS ONE BODY OF WORK (Zach 2026-07-02 PM).** The Lead-Source / Trigger-Event refactor AND the
+notification / email-template / text-template system are the SAME bundle — a trigger event fires a workflow, a
+workflow step sends a template, a template shows where it's used + how many times it fired. Both halves tracked here.
 
 **One line:** ONE canonical catalog (`hl_trigger_events`) is the spine; **Platform &gt; Lead Source &gt; Tags** is the
 attribution; each platform owns its trigger events + workflows; a trigger event **always fires** — the only knobs are
 *creates-lead* + *workflow-active*. Collapse the 4 redundant config routes → 2 screens (Lead Sources KPI scoreboard +
-platform-tabbed Trigger Events), enrich the row, make the workflow builder Trigger × Platform-scoped.
+platform-tabbed Trigger Events), enrich the row, make the workflow builder Trigger × Platform-scoped. **Templates:**
+every notification is a full-HTML row in the builder; the Email/Text template tables group by Buyer/Seller/TC/Agent,
+show USED IN (→ workflow canvas, highlights the step) + a SENT count (→ leads drill-down).
 
 ---
 
@@ -56,9 +65,40 @@ platform-tabbed Trigger Events), enrich the row, make the workflow builder Trigg
 | ⬜ | Dev doc: Mintlify `guides/trigger-events` (shipped-only) | — |
 | 📝 | NOTE-only (do NOT build): aggregate/behavioral triggers ("viewed 10× in 3d", `platform=any`) — count-over-window engine on the canonicalized activity stream (forward-compat only) | §6 |
 
+**🧩 TEMPLATE-SYSTEM HALF OF THE BUNDLE (Notification / Email / Text templates) — Notifications-Refactor PRD:**
+| ✔ | Item | commit |
+|---|---|---|
+| ✅ | **Every notification email = a full self-contained HTML row in the builder** (mig 0300); runtime `composeNotificationEmail` code-compose KILLED — preview == send | `eacf8665de` |
+| ✅ | `categories.ts` **4-group model** (`groupForTemplate` → Buyer/Seller/Transaction Coordination/Agent Notifications) | `1958b1e5cd` |
+| ✅ | **Email Templates table redesign** — ONE flat pill row (All · Buyer · Seller · TC · Agent Notifications); columns `TEMPLATE · USED IN · SENT · CREATED · VIEW`; dropped Event/Pipeline/Lifecycle/Folder + Live/Draft Status (Zach: a template is reusable content, not a thing that publishes) | `0f886c851b` |
+| ✅ | **USED IN** (derived, read-only) — workflow chip is clickable → `/workflows?wf=<id>&highlightTemplate=<key>`; resolver returns workflow id (`/api/template-usage`) | `0c83b0d97b` |
+| ✅ | **SENT count** — real per-template count from `hl_email_send_log`, a plain clickable number → `TemplateSendsModal` (flat list of every lead who received it, newest first, links into lead); `/api/template-sends` | `0c83b0d97b` |
+| ✅ | **Workflow canvas highlights the step** deep-linked from a template's USED IN — selects the node whose `config.template_key` matches, scrolls to it, flashes a 3s blue ring hugging the 360px card (reuses the builder's selected-node mechanic + the notifications row-flash pattern) | `701eabf42c` / `699e1eea2b` (ring-hug fix) |
+| ✅ | Fixed team-blocking docs mirror — backticked raw `{{merge}}` fields in `notification-templates.mdx` that broke the Mintlify MDX build | `7b37cd4147` |
+| ⬜ | **Text Templates page** — mirror the Email redesign (flat pill row + USED IN + SENT drill-down) | — |
+| ⬜ | **Junk purge** — retire dead templates (`new_lead_welcome`, `*_request_received`, `new_reg_join_only_sms`, `new_reg_claim_home_email`) + Zach's call on `contact_confirmation` (nuke the hardcoded-Myli-phone one, or rebuild token-based) | — |
+| ⬜ | Create/edit **form** simplification — drop the Event/Lifecycle dropdowns to match the table | — |
+| ⬜ | **Branch-node highlight** — USED IN → canvas highlight only scroll-flashes TRUNK steps; a template step inside a Yes/Otherwise branch selects + opens its panel but doesn't scroll-flash yet | — |
+| ⬜ | System-event **activity-phrase backfill** (Lee ask #11263) — `property_liked/saved/shared/tour_requested/contact_requested` have `activity=NULL` in `hl_trigger_events`; set phrases so lead-activity card headlines go 100% catalog-driven | — |
+| ⬜ | Dev doc: `platform/notification-templates.mdx` → update to the shipped table redesign | — |
+
 ---
 
 ### 📋 AMENDMENT / UPDATE LOG  (running — newest first)
+- **2026-07-02 PM (Opus 4.8, Benji)** — **BUNDLE CONSOLIDATED + template half folded in.** After the Trigger
+  Events restructure shipped this morning, the session detoured into the **notification/email-template system**
+  (same bundle, different screen). Shipped there: notification emails are now full-HTML rows (mig 0300, killed
+  `composeNotificationEmail`); **Email Templates table redesigned** — one flat pill row (All/Buyer/Seller/TC/Agent),
+  columns `TEMPLATE · USED IN · SENT · CREATED · VIEW`, killed Live/Draft Status per Zach; **USED IN** chip
+  deep-links to the workflow canvas and **highlights the exact step** (`701eabf42c`, ring-hug fix `699e1eea2b`);
+  **SENT** count → leads drill-down from `hl_email_send_log` (`0c83b0d97b`). Also un-blocked the team docs mirror
+  (backticked raw `{{merge}}` in notification-templates.mdx, `7b37cd4147`). **The two scope locks
+  (trigger-catalog + notification-templates) are consolidated into ONE:
+  `session-scope-lead-template-bundle.lock`.** ⚠️ Lesson re-confirmed: after ~1h up + heavy edits the CRM `:3020`
+  dev server serves a STALE bundle (looks "regressed") though all work is committed at HEAD — fix is
+  `restart-dev.sh --clean`, NOT a panic. **STILL UNFINISHED on the trigger side: §4 Lead Sources KPI scoreboard,
+  §14 platform-scoped Workflow builder, §5b/§5c/§7.4, nav collapse.** Template side: Text Templates mirror + junk
+  purge + form simplification. NEXT (resume point): §4 Lead Sources scoreboard + §14 Workflows platform-scope.
 - **2026-07-02 (Opus 4.8, Benji)** — **§5 Screen-2 RESTRUCTURE SHIPPED** (`a47bad9425`, mig 0290). Trigger Events is
   now **2 platform tabs (HouseLoop.ai · Follow Up Boss)** → **category groups (New Lead Registration · System ·
   Follow-up)** → **rich rows** (icon + name + "what triggers it" desc), replacing the by-source slicing Zach
@@ -146,12 +186,12 @@ to the Notifications section. **The event always fires — toggles gate the lead
 
 ---
 
-## PRD · `**GT/GT - ACTIVE/GT_HOUSELOOP_LEAD_PLATFORM_TRIGGER_CATALOG_PRD.md** (Zach-signed 2026-07-02)`
+## PRD · `**GT/GT - ACTIVE/GT_HOUSELOOP_LEAD_PLATFORM_TRIGGER_CATALOG_PRD.md** (Zach-signed 2026-07-02) +`
 
 _(File not found in-tree — path recorded for reference.)_
 
 ---
 
-## Scope lock · `.claude/state/session-scope-trigger-catalog.lock · touches: guides/trigger-events, guides/lead-sources, guides/workflows`
+## Scope lock · `**.claude/state/session-scope-lead-template-bundle.lock** (consolidated 2026-07-02 PM; supersedes`
 
 _(File not found in-tree — path recorded for reference.)_
