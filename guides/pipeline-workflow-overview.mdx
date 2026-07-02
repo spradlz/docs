@@ -1,6 +1,6 @@
 ---
 title: "Lee (Pipeline & Workflow — Master Overview)"
-description: "WORK IN PROGRESS (updated 2026-07-01). The one map of how a lead enters HouseLoop and what happens next. There is ONE platform (HouseLoop) and everything is a LEAD SOURCE with events, on a single Lead Sources page. Workflows are source-specific — Workflow = f(source × event). Follow Up Boss is a special source with 5 event groups (Property Inquiry · Inbound Activity · Website Activity · Zillow Insights · Phone Call Activity) that pulls in its own sub-sources and phone lines; Myli dynamically reads which line a call/text came from. Includes the architecture rails, sign-off matrix, build phases, the phone/porting plan, and the quarantined legacy FUB door model."
+description: "WORK IN PROGRESS (updated 2026-07-02, Lee). The one map of how a lead enters HouseLoop and what happens next. Model RE-LOCKED platform-first: TWO platforms (HouseLoop.ai + Follow Up Boss), hierarchy Platform › Lead Source › Tags, Workflow = f(platform × trigger event) scoped per platform (never any), hl_trigger_events is the one catalog spine. Follow Up Boss is a first-class PLATFORM with 5 event groups (Property Inquiry · Inbound Activity · Website Activity · Zillow Insights · Phone Call Activity) that pulls in its own sub-sources and phone lines. This doc owns the MODEL + sign-off matrix; Benji owns the build; the Activity Card Catalog owns the render. Includes ownership + change log, the sign-off matrix, phone/porting plan, and the quarantined legacy models."
 ---
 
 <Note>
@@ -11,10 +11,35 @@ This is the **master reference + working doc** for everything under Settings →
 **Lead Sources**, **System Events**, and **Workflows**. The **Model** section defines how it fits together;
 the **Work In Progress** scoreboard (Rails → Sign-Off Matrix → Build Phases) tracks the MVP build; the
 **Current State** documents what ships today; the **Quarantine** section records the legacy model we are
-retiring (kept, never deleted). Model LOCKED by Zach 2026-06-30 PM — it diverged hard from the earlier
-"two platforms / agnostic engine" plan; that language is dead. **Phone + number porting** has its own deep
-doc: **[Phone Numbers, Call Routing & Number Porting](/guides/phone-numbers-and-call-routing).**
+retiring (kept, never deleted). **Model RE-LOCKED by Zach 2026-07-02 — platform-first: TWO platforms
+(HouseLoop.ai + Follow Up Boss), Platform › Lead Source › Tags** (supersedes both the earlier "agnostic engine"
+plan AND the 2026-06-30 "one platform / everything is a source" model — see the Mental Model + Quarantine).
+**Phone + number porting** has its own deep doc:
+**[Phone Numbers, Call Routing & Number Porting](/guides/phone-numbers-and-call-routing).**
 </Note>
+
+## 👤 OWNERSHIP & CHANGE LOG — who owns what · who changed what
+
+**One model, one map, one render — each owned once (Zach LOCKED 2026-07-02).**
+
+| Doc | Owner | Scope |
+|---|---|---|
+| **[Pipeline & Workflow — Master Overview](/guides/pipeline-workflow-overview)** *(this doc)* | **Lee** | THE MODEL — Platform › Lead Source › Tags + the sign-off matrix + phone/porting plan. The map + QA. |
+| **[Activity Card Catalog](/platform/activity-card-catalog)** | **Lee** | THE RENDER — what each event looks like as a card + how cards are generated (ONE tokenized template, catalog-driven). |
+| **[Lead Platform + Trigger Events + Template System](/wip/benji-trigger-events)** | **Benji** | THE BUILD — the CRM screens + migrations that implement this model. |
+| **[Saved Search Process](/wip/benji-saved-search-process)** | **Benji** | THE BUILD — saved-search full lifecycle. |
+
+**The rule (so it never drifts again):** the model is defined **once — here.** Benji's build docs *implement* it
+and link up. Model changes → **Lee** updates this map. Code changes → **Benji** updates his build log.
+**No doc describes the model twice.**
+
+**CHANGE LOG**
+- **2026-07-02 · Lee** — RE-LOCKED **platform-first**: TWO platforms (HouseLoop.ai + Follow Up Boss),
+  `Platform › Lead Source › Tags`, `Workflow = f(platform × trigger event)` scoped per platform. Killed the
+  2026-06-30 "one platform / everything is a Lead Source" language (quarantined below). This doc = canonical
+  MODEL; Benji owns the build; the Activity Card Catalog owns the render.
+- **2026-06-30 · Zach/Lee** — *[superseded]* "one platform, everything is a Lead Source, `Workflow = f(source × event)`."
+- **earlier** — *[dead]* "two agnostic platforms / merge-fields-carry-voice engine."
 
 ## 🧪 SIGN-OFF MATRIX — every webhook, top to bottom (Zach + Lee, iterate live)
 
@@ -127,10 +152,12 @@ alone can't carry the difference in voice. Workflows are scoped **Trigger × Pla
 - `/api/workflows` resolves each workflow's source from **both** binding tables (`hl_lead_source_events` **and**
   `hl_fub_webhook_settings`, since FUB binds via its own table).
 
-### Follow Up Boss is a SPECIAL source — it pulls in sub-sources
-FUB *creates* its webhook events **and pulls in the sub-source already stamped in FUB** (Zillow, realtor.com…).
-So a FUB event carries a **sub-source**, and `(FUB · Zillow · Tour Request)` is its **own** workflow — distinct from
-a **native** `(Zillow · Tour Request)` — because the voice differs:
+### Follow Up Boss — the PLATFORM with 5 event groups
+FUB is a **platform** (not a source). It carries **5 event groups** — **Property Inquiry · Inbound Activity ·
+Website Activity · Zillow Insights · Phone Call Activity** — creates its own webhook trigger events, **and pulls
+in the sub-source already stamped in FUB** (Zillow, realtor.com…). So a FUB event carries a **sub-source**, and
+`(FUB · Zillow · Tour Request)` is its **own** workflow — distinct from a **native** `(HouseLoop.ai · Zillow ·
+Tour Request)` — because the voice differs:
 
 ```
 FUB-import · Zillow · Tour Request   → "Hey Jon, this is Myli — just got your tour request for 123 Main from
