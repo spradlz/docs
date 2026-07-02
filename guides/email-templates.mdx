@@ -38,6 +38,30 @@ broken image in email clients (and in the preview iframe) because there's no `ho
 to resolve against. Use `https://houseloop.ai/brand/logo-full.png`.
 </Warning>
 
+## Canonical email shells — agent-facing vs. lead-facing
+
+Every HouseLoop email is wrapped in ONE canonical branded shell: HouseLoop logo header
+(`logo-full.png`) → white card → HouseLoop lockup → footer. There are **two expressions of the
+same shell, split by audience** — same look, different footer:
+
+| Audience | Shell | Where it lives | Footer |
+| --- | --- | --- | --- |
+| **Lead-facing** — listing alerts, saved searches, seller updates (sent *to the lead*) | `marketing_base` template | `hl_templates` (DB) — full branded HTML per template | `{{company.footer}}` with CAN-SPAM unsubscribe |
+| **Agent-facing** — New Lead alert, AI Follow-Up, website digest, system alerts (sent *to the team*) | `notificationShell()` | `lib/email/notification-shell.ts` (code) | canonical brand footer, no unsubscribe (internal) |
+
+**How agent notifications get the shell:** `lib/notifications/dispatch.ts` wraps every team/system
+notification email in `notificationShell()` at send time. A notification template body is therefore
+just the **inner** message (heading + card + CTA) — the shell owns the logo header + lockup + footer,
+so no notification email is ever hand-rolled. `client_message` templates (tour/contact acks sent to
+leads) are already full standalone emails and are **not** re-wrapped.
+
+<Warning>
+**REUSE_NOT_RECREATE — never hand-roll a `<div>` email.** Lead-facing email → build on the
+`marketing_base` structure; agent notification → `notificationShell()`. The two shells are visually
+identical and must stay in sync (or be unified). A hand-rolled notification email with no logo/footer
+is a bug.
+</Warning>
+
 ## Merge fields
 
 Templates use `{{namespace.field}}` placeholders that get resolved with real data at send
@@ -48,11 +72,12 @@ the body is never itself a single token.
 | Group | Fields |
 | --- | --- |
 | **CONTACT** | `first_name`, `last_name`, `full_name`, `email`, `phone`, `crm_url` |
-| **LISTING** | `address`, `price`, `beds`, `baths`, `sqft` |
+| **LISTING** | `address`, `url` (home link), `price`, `beds`, `baths`, `sqft` |
 | **AGENT** | `full_name`, `email`, `phone` |
 | **MARKET** | `area_name`, `avg_price` |
 | **SEARCH** | `name`, `match_count`, `url` |
 | **REQUEST** | `address`, `date`, `time`, `message`, `type`, `url`, `photo`, `price`, `beds`, `baths` |
+| **NOTIFY** | `title` (computed team-alert headline, e.g. "Jordan liked 123 Main St"), `body`, `source` (lead source) — injected at fire time by `dispatch.ts` |
 
 `{{contact.crm_url}}` is the per-lead deep link into the CRM — used by team-alert "View lead"
 buttons. Custom fields from `hl_custom_fields` automatically join via `{{contact.<key>}}`.
@@ -116,8 +141,11 @@ Templates live in `hl_templates` (Railway houseloop-crm database):
 
 Beyond marketing templates, `hl_templates` also holds the **notification** templates — the
 team/system alert emails + SMS and the client-facing acks — seeded by migrations `0085`/`0086`
-and mapped per event in `lib/notifications/template-registry.ts`. Categories: `team_alert`,
-`system_alert`, `welcome`, `listing_alert`, `tour_request`, `contact_request`. Full detail in
+(+ `0278`/`0279` for the P2/rich rebuild) and mapped per event in
+`lib/notifications/template-registry.ts`. Categories: `team_alert`, `system_alert`, `welcome`,
+`listing_alert`, `tour_request`, `contact_request`. The team/system alert **email body is the inner
+message only** — `dispatch.ts` wraps it in `notificationShell()` (logo header + lockup + footer) at
+send, so notification templates never carry brand chrome themselves. Full detail in
 [Notifications](/guides/notifications).
 
 ## Logo
@@ -134,6 +162,8 @@ above. See [Brand Assets](/guides/brand-assets).
 | `apps/houseloop-crm/components/shared/EmailPreviewModal.tsx` | Preview modal (iframe) |
 | `apps/houseloop-crm/lib/merge-fields.ts` | Canonical merge field registry (preview) |
 | `apps/houseloop-crm/lib/email/template-merge.ts` | Send-time merge scope + applyMerge |
+| `apps/houseloop-crm/lib/email/notification-shell.ts` | Canonical agent-facing branded shell (logo + lockup + footer) |
+| `apps/houseloop-crm/lib/notifications/dispatch.ts` | Wraps team/system notification emails in the shell at send |
 | `apps/houseloop-crm/lib/templates/categories.ts` | Category label + token-color SSOT |
 | `apps/houseloop-crm/app/api/email/templates/` | CRUD API for templates |
 | `GT/GT - ACTIVE/GT_HOUSELOOP_EMAIL_TEMPLATE_SYSTEM.md` | Ground truth document |

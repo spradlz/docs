@@ -3,33 +3,58 @@ title: "Caleb (SRG Past Client Reconciliation)"
 description: "Work-in-progress dossier — Caleb · Data intel · past-client resolver. SRG Past Client Reconciliation."
 ---
 
-<Info>Live dossier — auto-generated from `.claude/state/wip/caleb/resolver.md` on every push. **Progress: 4/6 done (67%).** _Updated 2026-07-01 PM._</Info>
+<Info>Live dossier — auto-generated from `.claude/state/wip/caleb/resolver.md` on every push. **Progress: 4/4 done (100%).** _Updated 2026-07-01 PM._</Info>
 
 **Owner:** Caleb — Data intel · past-client resolver
 
 ## Checklist
 
-**The ONE master doc is now the Mintlify guide → `docs-site/guides/srg-reconciliation-engine.mdx`
-("calebwip — Spradling Realty Group Past Client Reconciliation").** It absorbed the old
-`past-client-data-pipeline` + `srg-reconciliation-wip` guides + this WIP. Everything — the architecture, the
-canonical-source-per-field law, the locked GT laws, the full live table map, the card format, the 3-tab Audit UI,
-the Nations reference case, the fuck-up log — lives there, with every count current as of 2026-07-01. Read that.
+**The ONE master doc is the Mintlify guide → `docs-site/guides/srg-reconciliation-engine.mdx`
+("calebwip — Spradling Realty Group Past Client Reconciliation").** Architecture, canonical-source-per-field law,
+live table map, card format, 3-tab Audit UI, Nations reference, fuck-up log all live there.
 
 ### ✅ MASTER CHECKLIST — the ONE, live
-_Last amended: 2026-07-01 03:43 PM EDT — dedup committed (54 merges), MLS 100%, HLID linked, dotloop 87%, docs consolidated._
+_Current as of the latest amendment below._
 
+- [x] **1 — Dedup** — 54 merges (1,834 → 1,780), reversible (`hl_srg_dedupe_log`).
 - [x] **2 — Brain** (`hl_fub_person_facts`) — 2,178/2,178 household members.
-- [x] **3 — MLS rooftop** (`hl_mls_property_history`) — 100% (1,955/1,955), 6,017 selling agents, 151 cols.
-- [x] **4 — HLID on the MLS table** — 7,152 rows / 1,886 homes.
-- [x] **1 — Dedup** — 54 merges (1,834→1,780), reversible (`hl_srg_dedupe_log`).
+- [x] **3 — MLS rooftop** (`hl_mls_property_history`) — 100%; scraper now captures the **buyer-side S Agent** + stores all **151 cols** in `raw`.
+- [x] **4 — HLID on the MLS table** — **re-stamped from the web authority `hl_property`** (unit-aware `identityKey`); cross-city collapse **221 → 0**; `canonical_slug` stamped so the table carries the full `/home/<slug>/<HLID>` URL.
 - [~] **5 — Dotloop `.loop`** — 86.9% agent / 88.7% address on the 2,128 real closings.
-- [ ] **6 — Reconcile engine** — ACTIVE. Rework `triangulate-resolver.mjs` to ingest ALL sources (esp. the 1,458 `resolver_block`s) → union → canonical-source-per-field → write the new child.
-- [ ] **7 — Prove first 20** → Nations → Zach sign-off → scale. No auto-publish to FUB.
+- [~] **6 — Reconcile engine** — ACTIVE. HLID-anchored resolver (MLS# → identityKey → HLID → transactions) proven on Chari + Nations; fuzzy `%street%` disposition killed. **S-Agent discriminator built + proven** (owns vs lost-buy). STILL TO CODE INTO THE RESOLVER: the triangulation picker + S-Agent classify + card wiring.
+- [~] **7 — Prove first 20** — Chari GREEN by himself (no false lost listings), Nations 5-txn, 20 staged to the Reconciled tab. Full 468-home classification run (293 owns / 28 lost buys / 29 no-data).
+
+### 📝 AMENDMENTS (newest → oldest)
+
+**Amended 2026-07-01 ~11:15 PM EDT — Lost-buy card PLACEMENT fixed + RELATIONSHIP DOSSIER design LOCKED (Zach).**
+- LOST BUY now renders under **LOST PROPERTIES** as red "OWNS" (not under CURRENT) — `🔴 OWNS 7325 Oakview St $620,000 06/12/2026 — Audrie King (bought without us)`. `card-note.mjs`: `lostBuys` → `lost` array (kind 'OWNS'); `current` filtered to exclude `lostBuyKeys` (no double-render). Verified on Nations.
+- **RESOLUTION MATRIX (pc 1–23)** re-staged through the wired resolver into `hl_srg_pch_staging` — these are the MANUALLY-done set Zach still VERIFIES (not signed off). Real `hl_srg_past_client_homes` UNTOUCHED. 2 lost buys (Nations, Franzon), 10 lost listings.
+- **DATA MAP (Zach): source tables = SISU + hl_srg_mls_deals + hl_mls_property_history (+ S Agent) + resolved_current_home. We do NOT need county deed for the ~1,312 missing — current home = the home we sold them that never re-sold (from our data) + soft messaging. Fixed the numbered-street search (Matrix wants "28" not "28th") + multi-word SSH quoting in scrape-deed-homes.mjs.**
+- **🔒 RELATIONSHIP DOSSIER — DESIGN LOCKED, NOT YET BUILT → PRD: `GT/GT - Pending/GT_RELATIONSHIP_DOSSIER_PRD.md` (the next build).** the card's dossier must be a **genuinely written, personality-driven relationship paragraph** (unique human details + evidence quotes + an actionable angle — NOT the "did 5 deals with Ana" transaction trend), synthesized by a focused **Haiku pass** over each household member's `hl_fub_person_facts.facts` (+ `evidence`). UNDER it, a **compact 2-column table** of the categories Zach picked: **👨‍👩‍👧 Family · 📋 Logistics · 📍 Current Situation · 💬 Communication · 💵 Financial Motivation**. TWO renderings from one source: card = paragraph + 2-col table; Myli's KB = paragraph + labeled bullets. Facts link by `fub_person_id` (past_client_id is NULL on all 5,694 rows) → pull the household by the client's fub_ids. `/tmp/reldossier.mjs` is a working prototype of the grouped output.
+
+**Amended 2026-07-01 ~7:15 PM EDT — LOST BUY wired end-to-end (resolver → persist → card) + Nations manual override.**
+- `triangulate-resolver.mjs` §4c now classifies the current home deterministically: OWNS (SISU/closings match, streetKey collapses arborridge=arboridge so our own deals aren't mislabeled) vs LOST BUY (competitor on the MLS S Agent) vs OWNS-RECOVERED (S Agent=Spradling → ours, SISU missed it). **DATE-GUARD** drops any sale &gt;2yr older than the client's own history (kills the false Sandra-Kenney-2019 pick).
+- **NATIONS MANUAL OVERRIDE (Zach-directed, unresolvable case):** 7325 Oakview's sale was never recorded in the MLS (listing agent Terrell Walls never converted the Active listing). Hardcoded in `MANUAL_OVERRIDES[1]`: LOST BUY, buyer agent = **Audrie King** (the agent on their OWN lost listing, NOT Terrell Walls), date = **2026-06-12** (their 68th Terrace close), price = **$620,000** (list price), URL = `/home/7325-oakview-street-shawnee-ks-66216/HLID101829`.
+- `persist-reconcile.mjs` writes lost_buys as child rows (`disposition='lost_buy'`). `card-note.mjs` renders them RED under CURRENT PROPERTIES with the competitor agent + price + date, and EXCLUDES them from "TRANSACTIONS WITH US". **Nations' card verified correct**: 5 deals with us · owns 801 Poplar + 816 Saddlewood + 7325 Oakview (lost buy) · lost listing 301 E 68th Terrace.
+- **NEXT:** run the 20 (+ the 28 lost buys) through the wired resolver → stage → spot-check; write back the OWNS deals the MLS recovered that SISU lacks (Earl Wilson, Burchfield, Burdge, Byers); fix numbered-street/MLS# search for the 15 empties; distill current-home for the other ~990.
+
+**Amended 2026-07-01 ~6:35 PM EDT — S-AGENT DISCRIMINATOR = the deterministic owns/lost-buy classifier (Zach's "gold").**
+- Ran all **468** deed current homes through the MLS buyer-side **S Agent**: **293 OWNS · 28 REAL LOST BUYS · 29 no-data** (`/tmp/classify.mjs`).
+- **The MLS recovers deals SISU is missing** — Earl Wilson 8510 NE 108th, Burchfield, Burdge, Byers = ours via MLS S-Agent="Spradling Group", NOT in SISU.
+- **28 real lost buys**, each a named competitor to reclaim (Nations→Sandra Kenney KW $372k; Franzon→Bryan Huff KW $1.1M; Calkins→Katie Adams $1.075M; Demore→Jacob Klenda KW $840k …). My earlier "36 / 30-no-MLS" was garbage — checked our table instead of the real MLS.
+- Doctrine locked: **deterministic SISU+MLS = ground truth; the $200 Sonnet `resolver_block` is ONE source, never a verdict** (it falsely labeled our own deals "lost"). Built `tools/houseloop-cards/scrape-deed-homes.mjs` (scrapes deed homes from Matrix MLS; `--all` pulled 20/35). Known false-positives in the 28 (Chari "arborridge" vs "arboridge" spelling) → fix with the triangulation picker.
+
+**Amended 2026-07-01 ~5:10 PM EDT — HLID RE-STAMP (the Chari cross-city bug) + resolver HLID-anchored.**
+- `tools/houseloop-cards/restamp-mls-hlid.mts` re-stamps `hl_mls_property_history.hl_property_id` from `hl_property` (the website authority) by exact unit-aware `identityKey`; **HLIDs spanning &gt;1 zip: 221 → 0** (HLID100198 was on 3 cities → now only Chari's 5200 Sycamore Ave 64129). Reversible (`hl_property_id_old`, `--revert`).
+- `triangulate-resolver.mjs`: home identity = OUR MLS# → identityKey → HLID → transactions under that HLID; **deleted the fuzzy `%street%` disposition** that invented Chari's false lost listings. Chari now GREEN by himself, 4 homes, real `/home/<slug>/<HLID>` links.
+- Scraper STORAGE fix (Zach: "storage, not the scraper"): `tools/mls-scraper/mls-address-lookup.mjs` address-path now emits `sellingAgent` (S Agent) + returns all 151 cols; deployed to Camp David.
+
+**Amended 2026-07-01 03:43 PM EDT — dedup committed (54 merges), MLS 100%, HLID linked, dotloop 87%, docs consolidated.**
 
 ### Next concrete action
-Box 6: the resolver ingests `hl_srg_resolver_quarantine.resolver_block` + `hl_srg_pch_quarantine` + SISU + MLS +
-dotloop + brain → union transactions (dedup by rooftop+side) → agent waterfall → carry URLs + deed current home.
-Prove on Nations (all 6 txns + 7325 Oakview red) → sign-off → write new child → scale.
+Code the **S-Agent discriminator + triangulation picker** INTO `triangulate-resolver.mjs` (owns vs lost-buy vs
+lost-listing, deterministic) → clean the spelling false-positives → wire the LOST BUY line onto the card
+(`card-note.mjs`) → then distill current-home for the other ~990 clients so the full set surfaces.
 
 ---
 

@@ -1,28 +1,65 @@
 ---
 title: "HouseLoop Home Value & Value History"
-description: "How HouseLoop computes a home's value, and the monthly value-history series (the Zestimate-history equivalent) — stored, back-seeded, and rendered as a graph or table."
+description: "How HouseLoop computes a home's value — the two-tier fork (past-client Zestimate vs mass ZHVI), the monthly refresh chain (24th ZHVI ingest → 26th OpenWeb Ninja → 27th value persist), and the monthly value-history series rendered as a graph or table."
 ---
 
 ## What this is
 
 Every home on houseloop.ai has a **HouseLoop Value** and a **HouseLoop Home Value History** — our equivalent of
 Zillow's Zestimate + "Zestimate history." The value is a single current number; the history is a **monthly series**
-of that value going back as far as the data allows, rendered on the home page as either a **graph** or a **table**.
+of that value going back as far as the data allows, rendered on the home page as a **graph** or a **table**.
 
-One home = one **HLID** = one value-history series.
+The current value is not one algorithm — it's a **fork**. Which branch a home takes depends on what data it has,
+and two different monthly jobs feed the two branches. Getting this right is the difference between a dead-on
+Zillow-grade number and a rough index estimate.
 
-## HouseLoop Value (the current number)
+## HouseLoop Value — the fork (two tiers, locked 2026-06-17)
 
-The value lives on the website `Listing` row (centerbeam DB), computed at read time in `lib/listings/get.ts`:
+Computed at read time in `lib/listings/get.ts`. There are two populations, and the branch is chosen by **data
+presence, not a per-home flag**:
+
+| Home state | Branch | Value |
+|---|---|---|
+| **Active / coming-soon / pending** | list-price | `listPrice × 1.005 ± 3%` (it's listed at today's market) — `activeValueFromList` |
+| **Sold / off-market — PAST-CLIENT tier** (~2,000 homes) | **cached Zillow Zestimate** | `zestimate × 1.005 ± its own band` — dead-on Zillow, via `zestimateHouseLoopValue`. Used **when a cached Zestimate is present** |
+| **Sold / off-market — MASS tier** (everyone else, ~354k) | **ZHVI** | last **sold price × ZHVI area appreciation** (city→county, Zillow's own index) `± 5%` — `soldValueFromAppreciation`. The free path when there's no cached Zestimate |
+| **Sold / off-market — seated** | stored | a persisted `hlEstimate` on the `Listing` wins if present (past-client homes seeded by the monthly chain below) |
+
+<Info>**The switch is the cached Zestimate's presence.** Past-client homes get a real Zillow Zestimate pulled onto
+their `Listing` each month (they're the ones who'll actually check Zillow), so they resolve to the dead-on tier.
+Every other sold home has no cached Zestimate, so it falls to the free ZHVI tier. No per-home boolean — the data
+decides. This is why the two populations you think of as "our past clients get the Zestimate treatment, everyone
+else gets the index" is literally how the code forks.</Info>
+
+### The value fields on `Listing` (centerbeam DB)
 
 | Field | Meaning |
 |---|---|
-| `zestimate` (+`zestimateLow/High`) | raw Zillow Zestimate (via OpenWeb Ninja), cached for homes that have it |
-| `hlEstimate` (+`hlEstimateLow/High`) | **the HouseLoop Value** = `zestimate × 1.005` |
-| `hlEstimateAt` · `hlEstimateSource` | when it was computed · provenance |
+| `zestimate` (+`zestimateLow/High`) | raw Zillow Zestimate (via **OpenWeb Ninja**), cached only on homes that get the Ninja refresh |
+| `hlEstimate` (+`hlEstimateLow/High`) | **the HouseLoop Value** = `zestimate × 1.005` (or list/ZHVI per the fork), persisted for seated homes |
+| `hlEstimateAt` · `hlEstimateSource` | when it was computed · which branch produced it |
 
-The value resolves through tiers (active = list price × 1.005; sold/past-client = cached Zestimate; everyone else =
-last sold price × the ZHVI area appreciation index). The current number is always live from these tiers.
+⚠️ **A stale `zestimate` = a stale value.** If a home's `zestimate` still holds an **old sale price** instead of a
+fresh Ninja Zestimate, `× 1.005` just inflates the wrong number (e.g. a $215k old sale shows $216,075 even though
+Zillow says $333k). The fix is a **Ninja refresh** for that home (the 26th job below) — not a code change.
+
+## The monthly refresh chain — three jobs, in order
+
+Three registered Inngest functions run on a staggered monthly cron. Each feeds a different branch of the fork:
+
+| Day (UTC) | Function | id | Feeds |
+|---|---|---|---|
+| **24th** 09:00 | Zillow Research — monthly **ZHVI** ingest | `zillow-research-ingest` | the **MASS / ZHVI** branch — downloads Zillow's free ZHVI CSVs (county/city/zip/metro) → `hl_market_index`. Powers value + history for **all ~354k homes** |
+| **26th** 10:00 | Past-Client Zillow Cache — dead-on Zestimate | `past-client-zillow-cache` | the **PAST-CLIENT** branch — fans out one **OpenWeb Ninja** call per past-client home → caches the real **Zestimate** (+ tax/price history) onto the `Listing`. Worklist = `hl_past_client_homes`, so new past clients auto-enroll |
+| **27th** | Value-History Persist | `value-history-persist` | applies **× 1.005**, writes the current month's value + back-seeds the full monthly series into `hl_value_history` (target: `hl_past_client_homes`) |
+
+The order matters: ZHVI (24th) lands first so the mass tier is fresh, then the Ninja Zestimates (26th) refresh the
+past-client tier, then the value/history persist (27th) reads the now-current numbers and writes the monthly point.
+
+<Info>Each is a real registered Inngest function — trigger manually via the dashboard **Invoke** button, never a
+one-off script (see [Listing intake pipeline](/guides/listing-intake-pipeline)). `value-history-persist` also takes
+the event `value-history/persist.run` (`{ limit?, hlids?[] }`) for targeted back-seeds/re-runs. Files:
+`apps/houseloop-web/lib/inngest/functions/{zillow-research-ingest,past-client-zillow-cache,value-history-persist}.ts`.</Info>
 
 ## HouseLoop Home Value History (the monthly series)
 
@@ -38,39 +75,33 @@ A dedicated table in the website DB, **one row per HLID per month**, append-only
 | `source` | `backseed` (historical) · `current` (the latest month) |
 | `created_at` · `updated_at` | audit |
 
-Primary key `(hlid, month)` — every monthly write is idempotent (re-runs never duplicate a month). It's a real
+Primary key `(hlid, month)` — every monthly write is idempotent (re-runs never duplicate a month). A real
 relational table, not a JSON blob, so the series is queryable, immutable per point, and cheap to append at scale.
 
-### How it's built — back-seed to the earliest anchor
+### How it's built — the universal history builder
 
-The series is generated by **one algorithm** (shared with the live graph): start at the home's **oldest real sale**
-(which can predate 2012), otherwise floor at **2012** using the Zillow Home Value Index (ZHVI, `hl_market_index`),
-then climb monthly to today's HouseLoop value. The percentage shown spans the whole line ("+X% since {year}").
-
-The back-seed is **free** — pure index math, no Zillow API call.
-
-### How it stays current — monthly append
-
-A registered Inngest function, **`value-history-persist`**, owns both jobs:
-
-- **Back-seed** (first time a home is seen): writes the full computed monthly series.
-- **Monthly append** (every run): writes the current calendar month's point from the live HouseLoop value.
-
-It runs on a **monthly cron (27th)** — after the ZHVI ingest (24th) — and can be triggered manually with the
-event `value-history/persist.run` (`{ limit?, hlids?[] }`) for back-seeds and ad-hoc runs. Per
-[Run the pipeline through Inngest](/guides/listing-intake-pipeline), it is a registered function, not a one-off script.
-
-**Target:** the current **past-client homes** (`hl_past_client_homes`). The worklist is derived from that table each
-run, so new past clients are covered automatically as they're added.
+**One algorithm** (`flooredHistory` in `get.ts`, shared with the live graph and the persist job) builds the line
+for **every** tier: start at the home's **oldest real sale** (which can predate 2012), otherwise floor at **2012**
+using the **ZHVI** (`hl_market_index`), then climb monthly to today's HouseLoop value. The percentage shown spans
+the whole line ("+X% since {year}"). The back-seed is **free** — pure index math, no Zillow API call.
 
 ### How it renders
 
 `getListing(hlid)` reads `hl_value_history` as the source once a home is seeded (falling back to the computed line
-for any home not yet seeded), and exposes it as `houseLoopValue.history`. On the home page, the **HouseLoop Value**
+for any home not yet seeded), and exposes it as `houseLoopValue.history`. On the home page the **HouseLoop Value**
 hero shows the value range plus a **HouseLoop Home Value History** section with a **Graph ↔ Table** toggle:
 
 - **Graph** — an interactive line + scrubber.
 - **Table** — the Zillow-style monthly table: Date | HouseLoop Value, newest first, with "+X% since {year}".
+
+## Troubleshooting a wrong value
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Value = an **old sale price** (× 1.005) | `Listing.zestimate` holds a stale sale price, not a fresh Ninja Zestimate | re-run **`past-client-zillow-cache`** for that hlid (26th job) to pull the current Zestimate |
+| Value looks **index-y / round** on a past client | home isn't in `hl_past_client_homes`, so it fell to the **ZHVI** tier | add it to the past-client set; the 26th job then enrolls it |
+| `hlEstimate` **blank** | never seeded by `value-history-persist` | run `value-history/persist.run` with `{ hlids: ["…"] }` |
+| **Two HLIDs for one home** | the address `identity_key` differs (e.g. a dropped `NE` directional) so the resolver treated it as two homes | identity/de-fork merge (see [Property data & address identity](/guides/property-data-and-address-identity)) |
 
 ## Related
 

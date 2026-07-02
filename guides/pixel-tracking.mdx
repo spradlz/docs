@@ -63,25 +63,50 @@ The CRM derives a **repeat-view count** per lead + home (the "viewed N×" badge 
 
 ## 4. Event catalog
 
-| Event | Fires when |
-| --- | --- |
-| `page_view` | Any page / route change (auto) |
-| `property_view` | Listing detail page (auto) |
-| `save_home` / `unsave_home` | Visitor saves / unsaves a listing |
-| `like_home` | Visitor likes a listing |
-| `share_home` | Visitor shares a listing |
-| `tour_request` | Visitor requests a tour (carries email → identifies the lead) |
-| `saved_search` | Visitor saves a search |
-| `account_created` / `login` | Sign-up / login |
-| `cta_click` | Visitor clicks a tracked CTA |
+| Event | Fires when | Canonical event (CRM) |
+| --- | --- | --- |
+| `page_view` | Any page / route change (auto, `HlPixelInit`) | — (counter) |
+| `property_view` | Listing detail page (auto, `HlPropertyTrack`) | `property_viewed` |
+| `like_home` | Signed-in visitor **likes** a listing (login-gated) | `property_liked` |
+| `save_home` / `unsave_home` | Signed-in visitor **saves / unsaves** a listing (login-gated) | `property_saved` |
+| `search` | A filter search runs (city / price / beds …) or an address autocomplete pick | — |
+| `ai_search` | AI Smart Home Search is run | — |
+| `saved_search` | Visitor saves a search | `saved_search` |
+| `tour_request` | Visitor requests a tour (carries email → identifies the lead) | `tour_requested` |
+| `contact_request` | Visitor submits **Contact an agent** | `contact_requested` |
+| `identify` | After login / signup — links prior anonymous events to the lead by email | — (stitch) |
 
 New event types are just new strings passed to `hlTrack` — no schema change required.
 
+<Note>
+**Not yet wired (roadmap):** `share_home` — the ingest already maps it to `property_shared`, but the
+**Share** button currently opens the "Share this home" modal **without firing a pixel**. Behavioral share
+tracking (plus a login gate and a `shared_home_registration` lead workflow) ships with the shared-home
+flow. **Lead-creation / registration events** (`general_registration`, `liked_home_registration`,
+`saved_home_registration`, …) are fired **server-side** by the auth `complete-profile` route — they are
+lead events, not pixel events.
+</Note>
+
+## Social engagement — view · like · save · share
+
+The three social actions have deliberately different gates (Zach LOCKED 2026-07-01):
+
+- **View a home** — open to everyone, no login. Fires `property_view` → `property_viewed`, and the CRM
+  derives the "viewed N×" repeat-view badge per lead + home.
+- **Like / Save** — **login required.** Tapping the heart / bookmark while signed out pops the
+  *"…create your free account"* gate; the intent is stashed and **replays after registration**. Once the
+  visitor has an account, the reaction **and** the pixel fire the moment they're authenticated — **a phone
+  is NOT required** (decoupled 2026-07-01). Before that decouple, a phoneless signed-in like was
+  re-prompted for a phone and the pixel never fired, so likes/saves landed **0 all-time**; the gate is now
+  login only. `like_home → property_liked`, `save_home → property_saved` on the lead.
+- **Share** — opens the branded "Share this home" modal. **Not yet login-gated or pixel-tracked** — that
+  (login gate + `share_home` pixel + a `shared_home_registration` workflow) is the queued shared-home build.
+
 ## 5. View the activity
 
-- **CRM lead detail → Homes tab:** the lead's property events (viewed / saved / liked /
-  shared) — each card shows photo, price, address, beds/baths, timestamp, a repeat-view
-  badge, and a **View Property Details** link.
+- **CRM lead detail → Homes tab:** the lead's property events (viewed / saved / liked) — each card
+  shows photo, price, address, beds/baths, timestamp, a repeat-view badge, and a **View Property
+  Details** link.
 - **CRM lead detail → Requests tab:** high-intent actions (tour requests, saved searches).
 - **Settings → Website → Pixel Tracking:** live event counts + recent activity across all visitors.
 
