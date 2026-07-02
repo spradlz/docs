@@ -3,7 +3,7 @@ title: "Caleb (SRG Past Client Reconciliation)"
 description: "Work-in-progress dossier — Caleb · Data intel · past-client resolver. SRG Past Client Reconciliation."
 ---
 
-<Info>Live dossier — auto-generated from `.claude/state/wip/caleb/resolver.md` on every push. **Progress: 4/4 done (100%).** _Updated 2026-07-01 PM._</Info>
+<Info>Live dossier — auto-generated from `.claude/state/wip/caleb/resolver.md` on every push. **Progress: 4/4 done (100%).** _Updated 2026-07-02 AM._</Info>
 
 **Owner:** Caleb — Data intel · past-client resolver
 
@@ -25,6 +25,31 @@ _Current as of the latest amendment below._
 - [~] **7 — Prove first 20** — Chari GREEN by himself (no false lost listings), Nations 5-txn, 20 staged to the Reconciled tab. Full 468-home classification run (293 owns / 28 lost buys / 29 no-data).
 
 ### 📝 AMENDMENTS (newest → oldest)
+
+**Amended 2026-07-02 AM — HLID DE-FORK (home identity cleaned) + enrollment gap found + not_srg wired.**
+- **HLID directional/suffix de-fork on our past-client MLS-history.** One physical home was landing under TWO HouseLoop IDs
+  because the MLS wrote the address two ways (`928 NE 87th Terrace` = HLID101864 vs `928 87th Terrace` = HLID255314, 1 m
+  apart), which split a home's transactions across both IDs and broke disposition (buy under one, later sale under the other
+  → card read "owns" instead of "lost listing"). **37 real same-rooftop forks** consolidated onto their keeper (reversible via
+  `hl_mls_property_history.hl_property_id_old2`, `hlid_source='defork'`). First pass over-merged to a false 113 using a
+  self-referential distance gate — corrected to a keeper→loser ≤30 m gate. **928 (Mettman/pc5) now correctly flips to a
+  lost listing** (sold 2023-08-29 $295k by Benjamin Lytle, without us).
+- **The identity doctrine (locked):** same-home = a **shared MLS number** across two HLIDs (bulletproof; coords are geocoded
+  off the address so they lie on a bad suffix — coords only a ≤30 m tiebreaker). "Is it OUR home" = a **Spradling roster agent
+  on any transaction** (7600 133rd St had Ana; the Terrace twin had Keller Williams → different house). That agent test took
+  the fork list 37 → 31 confirmed; **6 non-Spradling rooftops** (17201 E 32nd, three 2029 Wyandotte units, 611 N 8th, 518 E
+  Cedar) were pulled out of past-client attribution (`not_srg=true`, 19 rows, reversible) — NOT deleted.
+- **not_srg wired into the resolver** — all 5 `hl_mls_property_history` reads filter `NOT COALESCE(not_srg,false)`, so the 6
+  can never resurface. Verified no regression on Mettman.
+- **Enrollment gap found (handed to Adam, web lane):** the CRM master `hl_srg_past_client_homes` (SSOT) and the web worklist
+  `hl_past_client_homes` (what the value/history Inngest jobs read) DON'T line up — **141 real-HLID homes not enrolled** (928
+  was one → stale $215k value). Deeper: **`last_cached_at` NULL on ALL 1,836** worklist rows (value job never ran). Handed Adam
+  the real-HLID bucket (`.claude/reports/pastclient-homes-REAL-HLID-2026-07-02.csv`, 2,166 rows / 1,936 homes). Adam fixed 928
+  live (~$338,866 + 175 mo history). **NO CRM dedup** — the 143 "duplicate" rows are legit multi-closing rows (distinct
+  `closing_key`), deleting would destroy transaction history.
+- **STATE NOW:** 1,780 clients · 2,166 real-HLID homes · value coverage ~92% · **but disposition filled on only 591/2,168 and
+  a determined agent on only 535.** Engine proven on ~23 staged clients. **Next lever: full 1,780 run → staging → Zach sign-off
+  → promote.**
 
 **Amended 2026-07-01 ~11:15 PM EDT — Lost-buy card PLACEMENT fixed + RELATIONSHIP DOSSIER design LOCKED (Zach).**
 - LOST BUY now renders under **LOST PROPERTIES** as red "OWNS" (not under CURRENT) — `🔴 OWNS 7325 Oakview St $620,000 06/12/2026 — Audrie King (bought without us)`. `card-note.mjs`: `lostBuys` → `lost` array (kind 'OWNS'); `current` filtered to exclude `lostBuyKeys` (no double-render). Verified on Nations.
@@ -52,9 +77,12 @@ _Current as of the latest amendment below._
 **Amended 2026-07-01 03:43 PM EDT — dedup committed (54 merges), MLS 100%, HLID linked, dotloop 87%, docs consolidated.**
 
 ### Next concrete action
-Code the **S-Agent discriminator + triangulation picker** INTO `triangulate-resolver.mjs` (owns vs lost-buy vs
-lost-listing, deterministic) → clean the spelling false-positives → wire the LOST BUY line onto the card
-(`card-note.mjs`) → then distill current-home for the other ~990 clients so the full set surfaces.
+**The identity foundation is clean (de-fork + not_srg done, 928 proven).** Next lever = the **full-scale run**:
+`triangulate-resolver.mjs --all` → `persist-reconcile.mjs --all` (write to `hl_srg_pch_staging`) → Zach reviews the whole
+2,168-home set on the Reconciled tab → sign-off → promote staging into the real child. That's what turns disposition from
+591/2,168 and agent from 535 into a full card per client. Parallel (Adam, web lane): enroll the 141 un-enrolled real-HLID
+homes + run the value/history Inngest job (cached 0/1,836). Deferred: Relationship Dossier build (PRD), card display-collapse
+(one address → one home block).
 
 ---
 
