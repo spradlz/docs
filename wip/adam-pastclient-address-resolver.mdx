@@ -3,11 +3,71 @@ title: "Adam (Past Client Address Resolver)"
 description: "Work-in-progress dossier — Adam · HouseLoop CRM · Developer Docs. Past Client Address Resolver."
 ---
 
-<Info>Live dossier — auto-generated from `.claude/state/wip/adam/pastclient-address-resolver.md` on every push. **Progress: 8/15 done (53%).** _Updated 2026-07-03 — VALUE ENGINE LOCKED (2 buckets) + 9 no-URL homes closed + CRM mis-link worklist for Caleb._</Info>
+<Info>Live dossier — auto-generated from `.claude/state/wip/adam/pastclient-address-resolver.md` on every push. **Progress: 8/15 done (53%).** _Updated 2026-07-03 (late marathon) — VALUE ENGINE LOCKED + 63 CRM links re-pinned + all 28 no-sold homes resolved._</Info>
 
 **Owner:** Adam — HouseLoop CRM · Developer Docs
 
 ## Checklist
+
+### 🏁 FULL CLOSEOUT — 2026-07-03 marathon (every address, how resolved, so nothing is lost)
+
+**STATE:** 1,951 past-client homes · **1,951/1,951 carry a value** · **9 remain value-only** (never sold — correct).
+Verified in Chrome with real eyes (not the API): Bluestem, 12111, 10071 Roe, 5903 N Howard all render full **Sold cards**.
+
+**THE LAWS I LEARNED THE HARD WAY TONIGHT (memorize):**
+- **If Zach can't SEE it render in Chrome, it's NOT correct.** Data-perfect ≠ visual. Screenshot EVERY fix.
+  [[feedback_render_with_eyes_is_truth]] · [[feedback_data_first_then_render_offmarket]].
+- **Step 1 = the data must exist. Step 2 = render what it supports.** Never vibe-render a sale that didn't happen.
+- **Non-disclosure states: NEVER publish the sold PRICE.** Anchor value on the LIST price × ZHVI; show the sold DATE.
+- **The sold-date WATERFALL (my lane, NOT Caleb's):** SISU (`sisu_transactions`, Closed) → dotloop
+  (`hl_srg_dotloop_contracts.close_date`) → Zillow (Ninja priceHistory Sold event) → Redfin → the SETTLEMENT
+  STATEMENT (Zach). Address-match must be LOOSE (num+street-word+city) — SISU stores "165th Terrace, Kansas" w/ periods.
+- **Cancelled / Expired / Withdrawn listings NEVER SOLD** → they are correctly VALUE-ONLY cards (we were the listing
+  agent, it didn't sell, the client still owns it — the relationship is the reactivation asset).
+- **Ninja key:** read in-script from .env (`fs.readFileSync`); passing via an env var → "Unauthorized".
+
+**THE 28 "NO-SOLD-DATA" HOMES — every one resolved:**
+| Home | HLID | Resolution |
+|---|---|---|
+| 1226 Blue Stem Dr, Eudora | 100121 | SISU close 2020-10-08 (Pruitt purchase) → Sold; enriched beds/baths/sqft/tax/schools from Zillow |
+| 12111 W 165th Ter, OP | 456920 | SISU Closed 2026-05-01 $1.72M (Chris Jones, Starr Homes new build; dotloop loop stale=under_contract) |
+| 7237 Craig St, OP | 100559 | SISU Closed 2022-08-17 |
+| 5626 Brownridge Dr, Shawnee | 100527 | our MLS / SISU close 2022-04-27 (Kaemmer, Erica Keese) |
+| 830 Vacation Blvd, Stockton | (set) | SISU Closed 2026-02-13 |
+| 16000 Ess Rd | (set) | dotloop close 2023-06-08 $975k |
+| 13955 K68 Hwy, Louisburg | (set) | dotloop close 2022-12-28 $811.5k |
+| 27479 Mission Belleview, Louisburg | 100659 | Heartland MLS #2401328 SOLD 2022-10-05 $440k (Jamie Munden buyer agent) |
+| 10071 Roe Ave, OP | 101911 | Redfin public-records SOLD 2023-04-25 (off-market; price undisclosed) |
+| 5903 N Howard Ave, Gladstone | 100851 | SETTLEMENT STMT: SOLD 2024-10-08 $223k (FSBO, Chelton bought from Scantlin/Floberg); enriched from Zillow, 48 R2 photos |
+| 21908 W 119 Ter, Olathe | — | MLS #2203238 **Cancelled** (Ana 2020) → VALUE-ONLY (never sold) |
+| 22603 Wellington Ct, Blue Springs | — | MLS #2221009 **Cancelled** → VALUE-ONLY |
+| 5711 Highland Ave, KC | — | MLS #2588718 **Cancelled** → VALUE-ONLY |
+| 1904 E Frontier Ln, Olathe | — | MLS #2203233 **Cancelled** (Ana) → VALUE-ONLY |
+| 10425 Richmond Ave, KC | — | MLS #2602492 **Cancelled** → VALUE-ONLY |
+| 700 SW Gulfport Ave, Lees Summit | — | MLS #2489790 **Expired** → VALUE-ONLY |
+| 10908 Ewing Ave, KC | — | MLS #2608320 **Withdrawn** → VALUE-ONLY |
+| 20397 W 193rd Ter, Spring Hill | — | no sale on Zillow OR Redfin → VALUE-ONLY ($355k est) |
+| 7137 NW Winter Ave, KC | 100152 | REVERTED — expired listing, a wrong SISU "Pending" (Newson) had matched; NOT sold |
+| (actives: 8050 Lakeview, 601 Holbrook, 1205 Linwood, 1500 Ridgeview, 5310 Blue Pkwy, 5500 NW 62nd, 7708 W 96th…) | — | never broken — list price + active/pending pill; my audit misread listPrice |
+
+**SYSTEMIC FIXES SHIPPED TONIGHT (code, deployed to Railway):**
+- **Value-fork "flat value" bug** — get.ts branch order (appreciation before stored-value fallback); 239/244 no-Zestimate
+  homes were rendering flat → now appreciate. Commit `1f26b7dfeb`. Audit `audit-value-buckets.mjs` → FLAT_BUG=0.
+- **2-engine value model LOCKED** — PRD `GT_HOUSELOOP_HOME_VALUE_ENGINE.md` + both guides. Land NOT held flat.
+- **`$0` headline fix** — off-market/no-list-price homes show the HouseLoop Value, never $0 (`ListingDetail.tsx`, `a75f024a6a`).
+- **63 CRM master links re-pinned** — `hl_srg_past_client_homes.website_hlid` had 87 wrong-house fuzzy collisions;
+  re-pinned collision-safe via identityKey (`repin-crm-master.mts`), reversal logged. 22 out-of-area flagged.
+- **The 9 "no-URL" homes** de-forked/minted (`fix-nourl-homes.mts`).
+- Cole Chelton FSBO deal (5903 N Howard) flagged to Benji for FUB + the referral-attribution engine.
+
+**WHAT'S STILL OPEN (fresh push):**
+1. **Off-market/cancelled RENDER** — the 9 value-only cards (status=off_market→domain "other") should show a clean
+   **"Off Market"** pill (+ Cancelled/Expired/Withdrawn where known), not active-looking. FRONT-END, brand tokens only.
+2. **FUB address update** for Cole Chelton — Zach owns (his current address is unknown; 201/221 SE Colony sold).
+3. **Disposition trigger + sold backstop + "Home Value Update" Run Log lane** — Task #9, PRD `GT_HOUSELOOP_DISPOSITION_AND_RUNLOG_HARDENING.md`.
+4. Re-run `audit-card-render.mjs` after the render work.
+
+---
 
 ### ⭐ 2026-07-03 — WHAT SHIPPED TODAY (read this first)
 
