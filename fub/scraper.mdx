@@ -67,13 +67,25 @@ case. Fallbacks if the session lapsed: `FUB_WEB_GOOGLE_PASSWORD` → `FUB_WEB_PA
 `notify.sh`** (a human must clear it).
 
 When the session expires and auto-login can't re-establish it, the scraper sits **stuck on the FUB login page** and
-the workers crash-loop (heartbeat error: *"FUB session expired — auto-login failed"*). **The fix is one tool:**
+the workers crash-loop (heartbeat error: *"…hit expired FUB session mid-scrape"* / *"auto-login failed"*).
 
+**The `fub-watchdog` now self-heals this AUTONOMOUSLY (Zach LOCKED 2026-07-03) — a human should almost never touch
+it.** Every 60s it checks Chrome A (18800) and B (18802). If a login tab is up, it first runs the in-session
+login-bot; **if that fails on ≥ `LOGIN_THRESHOLD` (2) consecutive checks — i.e. a REAL logout, not a transient
+redirect — it does a HARD relaunch: kill the Chrome process + relaunch it fresh on the saved profile (which
+re-establishes the Google SSO session) + re-run the login-bot.** This is the same thing `fub_chrome_restart` does,
+now done automatically for BOTH Chromes. It only escalates to a `notify.sh` alert if even a hard relaunch can't
+re-auth — i.e. a genuine 2FA/password wall a human must clear. Code: `runLoginBot` → hard-relaunch branch in
+`fub-backfill-watchdog.mjs` STEP 2 (Chrome A) + STEP 4 (Chrome B).
+
+**Manual override (rarely needed):**
 ```
 mcp__camp-david__fub_chrome_restart
 ```
-It kills + relaunches the FUB Chrome (port 18800), re-logs-in, and returns `logged_in: true` + the landing URL.
-The `fub-watchdog` does this automatically every 60s; run it by hand when the status shows the session expired.
+Kills + relaunches the FUB Chrome (port 18800), re-logs-in, returns `logged_in: true` + the landing URL. Use it if
+you want an instant fix instead of waiting for the ≤2-min watchdog cycle, or if a 2FA alert fired. **Before
+2026-07-03 the watchdog only ran the in-session login-bot and, on a real logout, gave up + alerted a human — so it
+could sit spinning until someone ran this tool by hand. That gap is now closed.**
 
 ## Processes (pm2 on Camp David)
 
