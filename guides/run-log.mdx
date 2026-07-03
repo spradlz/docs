@@ -8,7 +8,7 @@ observability timeline. Every meaningful event — an inbound email, a home view
 website, a Repliers listing update, an AI search, a nightly cron — lands here in real time,
 and **each row carries one explicit `category` flag** that decides which tab it belongs to.
 
-## The six tabs
+## The tabs
 
 Each tab is just a filter on the row's own `category`:
 
@@ -19,6 +19,7 @@ Each tab is just a filter on the row's own `category`:
 | **Website Activity** | `website_activity` | First-party pixel behavior on houseloop.ai — homes Viewed / Liked / Saved / Shared and tour requests, each with the street address. Has a **Humans / Bots** lens. |
 | **IDX Feed** | `idx_feed` | The listing-lifecycle event feed from Repliers (see [IDX Feed](#idx-feed-the-listing-lifecycle)). |
 | **AI Search** | `ai_search` | Request-time LLM calls — AI search, search routing, re-rank, market-report narration. Shows `model · $cost · tokens · results`. |
+| **Home Value Update** | `value_feed` | The four home-value engines (`view=value`) — the 3 monthly (ZHVI ingest → past-client Zestimate → persist value history) as one grouped pipeline card + the daily sold-disposition backstop, each with its **atomic step trail**. See [HouseLoop Value → Run Log lane](/guides/houseloop-home-value#the-home-value-update-run-log-lane). |
 | **Inngest** | `background_job` | Every Inngest function / workflow run, each with a short **type pill** and — for multi-step workflows — its **steps** (see [Inngest workflows](#inngest-workflows-and-steps)). |
 
 The **Type** column shows a short pill on every row, so the categorization is always visible —
@@ -62,11 +63,19 @@ lenses — the IDX Feed shows what happened to the home, the Inngest tab shows w
 
 ## Inngest workflows and steps
 
-The **Inngest** tab shows every Inngest function run. A **multi-step workflow** (e.g.
-`catalog-listing`, which resolves → enriches → caches photos → AI-tags a new listing) renders
-as **one thick row with its steps stacked**, each step `✓` (ran) or `✗` (failed), and a
+The **Inngest** tab (and the **Home Value Update** tab) shows every Inngest function run. A
+**multi-step workflow** (e.g. `catalog-listing`, which resolves → enriches → caches photos → AI-tags a new listing)
+renders as **one thick row with its steps stacked**, each step `✓` (ran) or `✗` (failed), and a
 deep-link to that single run. A genuinely single-action job stays a one-line row. So you see a
 workflow *and* which of its steps succeeded, never a flat atomic line per sub-task.
+
+**How the steps get there (not hardcoded).** A function records each step's real outcome into a `steps` object as it
+runs — `steps[name] = { status: 'ok' | 'failed', description }` — and **returns** it. The capture-fn
+(`apps/houseloop-crm/lib/run-log/capture-fn.ts`) stores that return as `hl_run_log.payload.steps` (kept only if the
+compacted output is under ~2 KB), and the feed projects `payload->'steps'` onto the row. A couple of lifecycle
+functions (`catalog-listing`, `listing-sold`) additionally get a curated trail prefix in `feed.ts`; everything else —
+including all four home-value engines — renders straight from its own `payload.steps`. The bullets are what the run
+**actually did**, with live counts.
 
 ## What the Run Log does NOT log
 
@@ -87,7 +96,7 @@ job appears, add it to the skip set.
 ## Filtering
 
 <ParamField query="view" type="string" default="all">
-  `all` · `comms` · `website` · `idx` · `ai` · `system`. Selects the tab (category).
+  `all` · `comms` · `website` · `idx` · `ai` · `value` · `system`. Selects the tab (category).
 </ParamField>
 <ParamField query="audience" type="string">
   Website Activity only — `human` or `bot`. Splits real visitors from SEO crawlers

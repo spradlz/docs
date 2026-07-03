@@ -77,23 +77,68 @@ listing, because we lack display authority from that source MLS. The empty IDX f
 fresh Ninja Zestimate, `× 1.005` just inflates the wrong number (e.g. a $215k old sale shows $216,075 even though
 Zillow says $333k). The fix is a **Ninja refresh** for that home (the 26th job below) — not a code change.
 
-## The monthly refresh chain — three jobs, in order
+## The refresh jobs — three monthly + one daily backstop
 
-Three registered Inngest functions run on a staggered monthly cron. Each feeds a different branch of the fork:
+Four registered Inngest functions keep the value fresh. Three run on a staggered **monthly** cron (each feeds a
+different branch of the fork), and one runs **daily** to reconcile close prices and backstop any sold home that never
+got dispositioned:
 
 | Day (UTC) | Function | id | Feeds |
 |---|---|---|---|
 | **24th** 09:00 | Zillow Research — monthly **ZHVI** ingest | `zillow-research-ingest` | the **MASS / ZHVI** branch — downloads Zillow's free ZHVI CSVs (county/city/zip/metro) → `hl_market_index`. Powers value + history for **all ~354k homes** |
 | **26th** 10:00 | Past-Client Zillow Cache — dead-on Zestimate | `past-client-zillow-cache` | the **PAST-CLIENT** branch — fans out one **OpenWeb Ninja** call per past-client home → caches the real **Zestimate** (+ tax/price history) onto the `Listing`. Worklist = `hl_past_client_homes`, so new past clients auto-enroll |
 | **27th** | Value-History Persist | `value-history-persist` | calls `getListing(hlid)` (so it reuses the ONE value fork above — no second formula), writes the current month's value + back-seeds the full monthly series into `hl_value_history`, **and refreshes the stored `Listing.hlEstimate` column** so the CRM seller-report/exports that read it directly stay current (target: `hl_past_client_homes`) |
+| **Daily** 08:00 | Sold data reconcile + **disposition backstop** | `sold-data-reconcile` | fills any missing `closePrice` from Repliers, then re-emits `listing.sold` for **genuinely-flat** sold homes so nothing stays flat (see [Disposition](#disposition--no-sold-home-renders-flat-hardened-2026-07-03)) |
 
-The order matters: ZHVI (24th) lands first so the mass tier is fresh, then the Ninja Zestimates (26th) refresh the
-past-client tier, then the value/history persist (27th) reads the now-current numbers and writes the monthly point.
+The monthly order matters: ZHVI (24th) lands first so the mass tier is fresh, then the Ninja Zestimates (26th) refresh
+the past-client tier, then the value/history persist (27th) reads the now-current numbers and writes the monthly point.
 
 <Info>Each is a real registered Inngest function — trigger manually via the dashboard **Invoke** button, never a
 one-off script (see [Listing intake pipeline](/guides/listing-intake-pipeline)). `value-history-persist` also takes
 the event `value-history/persist.run` (`{ limit?, hlids?[] }`) for targeted back-seeds/re-runs. Files:
-`apps/houseloop-web/lib/inngest/functions/{zillow-research-ingest,past-client-zillow-cache,value-history-persist}.ts`.</Info>
+`apps/houseloop-web/lib/inngest/functions/{zillow-research-ingest,past-client-zillow-cache,value-history-persist,sold-data-reconcile}.ts`.</Info>
+
+## Disposition — no sold home renders flat (hardened 2026-07-03)
+
+A sold home only gets its value **minted** (and its AI overview written) when the `listing-sold` Inngest function
+runs. Two gaps used to leave homes **flat** (no value / raw close price):
+
+**1. The webhook trigger only fired on a status TRANSITION.** `apps/houseloop-web/app/api/repliers/webhook/route.ts`
+required `previous.lastStatus` to be present before sending `houseloop/listing.sold`. A metadata **re-sync** of an
+already-sold record carries `previous.lastStatus = null`, so if the webhook missed the *original* `Sld` transition the
+sold chain never ran and the home stayed flat forever (the "1011 Fontana" bug). **Fix:** fire `listing.sold` whenever
+the record is `Sld` and the row is **not already archived** — the `listing-sold` idempotency-check
+(`status='sold' AND soldDate AND enrichmentSource='repliers_webhook'`) makes an already-archived re-emit a cheap
+no-op, so re-firing is safe. Only genuinely-archived rows keep the `sold_resync_skipped` label.
+
+**2. No backstop for the historical backlog.** `sold-data-reconcile` (daily) now has an `emit-missing-disposition`
+step that finds the **genuinely-flat** sold homes and re-emits `listing.sold` for each. "Flat" is precise — a home
+renders a value from EITHER a stored `hlEstimate` OR a `closePrice` (× ZHVI appreciation, computed read-time in
+`get.ts`), so it is only flat when it has **neither**:
+
+```sql
+status = 'sold' AND "hlEstimate" IS NULL AND "closePrice" IS NULL
+```
+
+<Warning>"Flat" is **NOT** "no `hlEstimate`". ~346k sold homes carry no stored estimate on purpose and render fine
+from their close price × ZHVI. Scoping the backstop to `hlEstimate IS NULL` alone matched **345,882** homes (the whole
+catalog); the real genuinely-flat set is **~29**. Step 1 of the same job fills `closePrice` from Repliers first, so
+only the truly-broken tail remains. Emitting is idempotent — dispositioned homes no-op via `listing-sold`.</Warning>
+
+## The Home Value Update Run Log lane
+
+All four engines are a first-class **Home Value Update** tab in the CRM Run Log (`/run-log?view=value`). The three
+monthly engines render as ONE grouped pipeline card (`group:'home-value-update'`, 24th→26th→27th); the daily
+reconcile + backstop is its own row. Registered in `apps/houseloop-crm/lib/run-log/inngest-registry.ts`
+(`category:'value'`, `valueFnIds()`), surfaced via `feed.ts` (the `value_feed` classification + the `SYSTEM_SELECT`
+union for the `value` view) and `RunLogTable.tsx` (the tab).
+
+**Atomic step audit trail.** Each engine records every step's **real** status + description into its return `steps`
+object — exactly the mechanism `catalog-listing` intake uses. The capture-fn
+(`apps/houseloop-crm/lib/run-log/capture-fn.ts`) stores it as `hl_run_log.payload.steps`, and the Run Log renders the
+green ✓ / red ✕ step bullets. Nothing is hardcoded — the bullets are what the run **actually did**, with live counts
+(e.g. `value-history-persist`: ensure-table → collect-hlids → current-month → persist-value-history "3/3 homes, 524
+points").
 
 ## HouseLoop Home Value History (the monthly series)
 
