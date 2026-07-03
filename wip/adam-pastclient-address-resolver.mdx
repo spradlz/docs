@@ -75,6 +75,41 @@ unit-correct · (7) beds/baths/sqft present · (8) tax history present · (9) en
   (HLID100612 600 Admiral #904 is ACTIVE = skip the sold-scrub). Follow-up: MLS#-anchored zpid resolution restores
   rich history (portal-data-extraction skill).
 
+### 🧾 CARD-INTEGRITY SYSTEM — the matrix, the sources, the worklists (Zach LOCKED 2026-07-02, "document it, it's hard to find")
+
+**THE ONE RENDER SOURCE:** every number on a `/home` card comes from `getListing(hlid)`, exposed at
+`GET /api/listings/<hlid>`. Verify against THAT, not the DB columns, not Chrome one-by-one.
+
+**THE MATRIX (card field → CANONICAL source → where it's stored):**
+| Card field | CANONICAL source | Stored | If Zillow/Ninja whiffs |
+|---|---|---|---|
+| Sold pill + **sold price/date** | **`hl_srg_mls_deals`** (CRM — Caleb's download of ALL our past-client MLS listings; `sale_price`+`close_date` on 1,828/1,971). Match by MLS# from hlid `hl_heartlandmls_<mls>`. | `Listing.priceHistory` (Sold event) + `soldDate`/`closePrice` | — (MLS table is authoritative; Zillow is WRONG on multifamily/duplex e.g. 8316 Travis) |
+| "Listed for" price | priceHistory current cycle (get.ts current-cycle scoping) | `Listing.priceHistory` | MLS table list price |
+| HouseLoop Value + value-history | value fork (5 buckets) → `houseLoopValue.estimate`; graph endpoint pinned to it | `hl_value_history` (persisted) / computed | **REDFIN scrape** (Redfin shows a Zestimate when you can't find one) |
+| Photos | **check existing FIRST — never blind `--force`.** Ninja (Zillow) → **REDFIN** (Camp David; has the gallery for multifamily Zillow misses — 8316 Travis = 11 photos on Redfin) → Street View floor | `Listing.photosCached` (R2 objects) | Redfin |
+| Tax | OpenWeb Ninja | `Listing.taxHistory` | ~23/1,700 genuinely absent = NORMAL (don't chase) |
+
+**THE 5 VALUE BUCKETS:** ninja_monthly (Zillow Zestimate ×1.005) · zhvi_monthly (sold × ZHVI index) · active
+(list ×1.005) · native (HL-organic card × ZHVI) · self_sourced_card[_land] (our MLS × ZHVI / land = sale price).
+
+**WHERE THE WORKLISTS + REPORTS LIVE:**
+- **Card-matrix report (per-home PASS/FAIL + exact failed check):** `.claude/reports/pastclient-card-matrix-2026-07-02.csv`
+  (rebuild: `node tools/houseloop-cards/verify-pastclient-cards.mjs`). Baseline: **1,671/1,951 fully clean**.
+- **MLS-table price/date fix report (hlid·addr·MLS#·price·date·action):** `.claude/reports/mls-card-fix-report-2026-07-02.csv`.
+- **Photo backfill log:** `.claude/reports/photo-backfill-2026-07-02.log`. **Reversals:** `mls-card-fix-reversal-*.json`, `*-scrub-reversal-*.json`.
+- **Resolved list VIEW (Caleb's spine):** WEB `hl_pastclient_resolved` (`tools/houseloop-cards/build-resolution-table.mjs`).
+
+**THE TOOLS (idempotent, reversible):**
+- `verify-pastclient-cards.mjs` — the matrix verifier (HARD=broken render vs SOFT=needs-eyes/legit-absence).
+- `fix-cards-from-mls-deals.mjs` — rebuild sold cycle from `hl_srg_mls_deals`, SAFE (skips homes whose
+  priceHistory already carries our sale → never destroys legit rich history). Reversible.
+
+**⏭ REDFIN BATCH — LATER (Zach 2026-07-02):** for photos (multifamily Zillow misses) AND value (Zestimate
+fallback). Engine `tools/houseloop-photos/hl-photo-engine.mjs` (Camp David, queue-based). **8316 Travis = 11
+photos on Redfin (perfect).** Owed restore: 8316 Travis photos (I clobbered 10→1 with a careless `--force` —
+lesson: check existing photos, NEVER blind `--force`). Queue the Redfin batch off the matrix `no_photos` +
+`no_hl_value` rows.
+
 ### 🔴 LIVE SESSION LOG — 2026-07-02 (running record; this IS "where are we / what's done")
 &gt; This is the ground-truth scoreboard. Everything below is verified against prod/DB. When done, verify vs code + rectify.
 
