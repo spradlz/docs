@@ -268,7 +268,9 @@ agent hidden) = +1 dotloop probe · 🔴 **RED** (3+ deals or conflicting/ambigu
 |---|---|---|
 | **`hl_srg_past_clients`** | **1,780** | PARENT — person, `bucket`, `dossier_json`, `resolved_current_home`, `website_hlid`. **13 signed off** (`houseloop_resolved_at`) · **481** have a `dossier_json` · **1,743** HLID-linked (97.9%) |
 | **`hl_srg_past_client_homes`** | **2,168** | CHILD SSOT — 1 row / house-deal; role buy 1,596 / sell 572; `hl_property_id`/URL on 2,166 (99.9%). **⚠️ `determined_agent` on only 21 · `disposition` on only 19 — the child is STALE/thin (see honest state)** |
-| **`hl_srg_pastclient_gt`** | **1,937** | Adam's CASS/USPS-clean GT address table (correct street/city/zip + slug + `/home` URL + zestimate_status per HLID). The resolver ADOPTS this by HLID. |
+| **`hl_srg_pastclient_gt`** | **1,949** | Adam's CASS/USPS-clean GT address table (correct street/city/zip + slug + `/home` URL + zestimate_status per HLID). The resolver ADOPTS this by HLID. Synced from the final EXPORT 2026-07-03 (`refresh-pastclient-gt.mjs`). |
+| **`hl_srg_deal_ledger`** | 🆕 building | **THE deterministic client×deal match table (see §THE DEAL LEDGER).** 1 row / (pc_id × sisu deal): mls#, HLID, side, price, date, agent, `match_method`, tier GREEN/YELLOW/RED, evidence jsonb. Rebuilt by `build-deal-ledger.mjs` (upsert-only), never hand-edited. Everything downstream reads it. |
+| **`hl_srg_deal_overrides`** | 🆕 building | human/LLM verdicts on RED residue (propose→confirm); consumed by the ledger rebuild — verdicts survive every rebuild |
 | **`hl_srg_resolver_quarantine`** | **1,473** | prior rich Sonnet resolution — 1,458 `resolver_block`s (read-only SOURCE) |
 | `hl_srg_pch_quarantine` | 2,168 | snapshot of the child (read-only SOURCE + undo) |
 | `hl_srg_resolver_stage2` | 26 | Stage-2 Haiku dossier output (staging — awaiting render + promote) |
@@ -484,19 +486,31 @@ it in."*
 - HLID de-fork (37 same-rooftop forks collapsed) + `not_srg` (6 non-ours rooftops pulled), reversible.
 - The relationship dossier engine is LOCKED and proven on Nations + Hutchens.
 
-**What is NOT done (the gap to the finish line):**
-- **The live child `hl_srg_past_client_homes` is STALE and thin.** `determined_agent` on only **21** rows ·
-  `disposition` on only **19** (a re-seat from the canonical FINAL thinned the columns; earlier docs claimed
-  535/591). It is safely snapshotted in `hl_srg_pch_quarantine` (the undo). **This is exactly why Box 6 is
-  "not promoted" — the resolver output has not been written to the child yet.**
-- The dossier is **not rendered on the card** (card-note.mjs) and **not persisted to the person row**.
-- Only **13** clients are `houseloop_resolved` (stamped). Prove-20 → sign-off → PROMOTE has not run.
-- No UI sign-off button (CLI only).
+**What IS done as of 2026-07-03 PM (this session, verified in the table):**
+- **Dossier render + persist ✅** — the card renders the 2 paragraphs + facts matrix end-to-end
+  (`card-note.mjs` → audit route → `AuditReport`); `persist-dossier.mjs` landed **19** new-format Stage-2
+  dossiers onto `hl_srg_past_clients.dossier_json`.
+- **The CRM GT synced from Adam's FINAL export** (`refresh-pastclient-gt.mjs`): 1,924 homes updated + 12
+  inserted + **33 `hl_mls_property_history` HLID stamps corrected** (incl. the Hutchens holden-mo poison).
+- **First 20 reconciled + STAGED:** 71 rows in `hl_srg_pch_staging` (label `2026-07-03`), 20/20 cards sweep
+  clean on the Reconciled tab. `persist-reconcile` bug fixed on the way (a BUY we repped never carries
+  `sold_not_by_us` — the lost sale is its OWN row; Nations pc1 is spec-exact again).
+- **The promote tool exists:** `sign-off-reconcile.mjs` — value-preserving merge (staged reconcile fields win;
+  the home's value/enrichment columns carry over; old rows → quarantine; per-client transaction). Dry-verified:
+  73 old → 71 reconciled. `--write` refuses without `--zach-approved` (Rule #0).
 
-**The next lever (the whole ballgame):** run `triangulate-stage2` (dossier) on the 20 → wire `card-note.mjs`
-to render the dossier + persist it → persist the 20 homes (GT-clean address) into staging → Zach walks the
-20 on the Audit → sign off the PROCESS → **PROMOTE** staging → child (value-preserving; replaces the stale
-21/19) → scale the same motion to 1,780 (Rule #0 typed go for the full child write).
+**What is NOT done (the gap to the finish line):**
+- **The PROMOTE has not run** — the live child still reads `determined_agent` 21 / `disposition` 19. It waits
+  on Zach's audit walk + typed Rule #0 approval. **19 of the first 20 are promote-ready; pc7 Richardson is HELD**
+  (her staged home `HLID100386` is a confirmed PHANTOM pending Adam's Rule #0 split pass).
+- **The fork classes A–F** are mapped (5 rooftops hand-verified) but the full-book sweep runs via the DEAL
+  LEDGER detectors (§THE DEAL LEDGER) — ledger build in progress under
+  `.claude/state/session-scope-deal-ledger.lock`.
+- Only **13** clients are `houseloop_resolved` (stamped). No UI sign-off button (CLI only).
+
+**The next lever:** Zach walks the Reconciled tab (first 20, Nations first) → typed Rule #0 GO → PROMOTE via
+`sign-off-reconcile.mjs` → gate + sign-off → scale the motion to 1,780, with the deal ledger feeding every
+match from here on.
 
 ---
 
@@ -555,6 +569,18 @@ dossier) · `HOUSELOOP_DATA_DOCTRINE.md` §4b (canonical source per field). Priv
 
 ## 📜 RUNNING LOG (newest → oldest)
 
+- **2026-07-03 (late PM)** — 🧭 **THE DEAL LEDGER strategy LOCKED (Zach) + first-20 STAGED.** The session that
+  reframed the problem: **match DEALS, not addresses** (see §THE DEAL LEDGER — two deterministic edges measured
+  at 85% / 1,452 + 1,492 of 1,780 clients; LLM proposes, never decides). Executed: `persist-dossier.mjs` (19
+  dossiers → person rows) · `refresh-pastclient-gt.mjs` (GT synced from Adam's final export, 33 history restamps)
+  · first-20 reconcile → **71 rows staged, 20/20 cards clean** · `persist-reconcile` BUY-contamination fix
+  (Nations spec-exact) · `sign-off-reconcile.mjs` built (the Rule #0 promote, value-preserving, dry-verified
+  73→71). **The fork saga:** 5 same-slug HLID pairs found INSIDE the signed-off export → Adam's first keeper
+  calls (render-ranked) reversed in full after retraction → SISU-mls#-authority procedure locked → 850th
+  verified + applied (both Hutchens/Duston on `HLID100059`; prior-owner 2022 sale = child row) → **two Adam
+  claims refuted by canonical source** (Hutchens IS the 850th buyer — her SISU row mirrors Duston's; her 1621st
+  sale is REAL — MLS 2543272 carries her name). pc7 held on the phantom `HLID100386`. Adam's A–F class hunt
+  handed off → runs as ledger detectors. Scope-lock: `session-scope-deal-ledger.lock`. (Caleb)
 - **2026-07-03 (PM)** — 🏁 **Adam's address/HLID/value lane SIGNED OFF + the END GOAL locked (Zach).** All
   1,951 past-client homes resolved + valued (`pastclient-resolved-EXPORT-2026-07-03.csv`, key `mls_hlid`+`hlid`);
   63 wrong-house `website_hlid` links re-pinned collision-safe (22 out-of-area flagged); the 2-engine value

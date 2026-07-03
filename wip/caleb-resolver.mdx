@@ -3,7 +3,7 @@ title: "Caleb (SRG Past Client Reconciliation — WIP Log)"
 description: "Work-in-progress dossier — Caleb · Data intel · past-client resolver. SRG Past Client Reconciliation — WIP Log."
 ---
 
-<Info>Live dossier — auto-generated from `.claude/state/wip/caleb/resolver.md` on every push. **Progress: 7/9 done (78%).** _Updated 2026-07-03 (Adam's addresses signed off — prepping the reconcile-engine RUN)._</Info>
+<Info>Live dossier — auto-generated from `.claude/state/wip/caleb/resolver.md` on every push. **Progress: 9/13 done (69%).** _Updated 2026-07-03 (Adam's addresses signed off — prepping the reconcile-engine RUN)._</Info>
 
 **Owner:** Caleb — Data intel · past-client resolver
 
@@ -25,7 +25,19 @@ Run the reconciliation engine across all data → **TWO PERFECT TABLES:**
    transactions grouped under it, each with its agent-of-record + disposition + Adam's clean address/HLID/value.
 So Zach can send every past client a dead-on **HouseLoop Home Value Report**. Accuracy is the only benchmark.
 
-### Checklist (live 2026-07-03 — 7/9 done)
+### 🧭 LOCKED STRATEGY — THE DEAL LEDGER (Zach LOCKED 2026-07-03)
+**Match DEALS, not addresses.** A deal fingerprints as client name + price + close date; two independent
+ledgers join deterministically — **Edge 1** SISU↔MLS (name + price ±$3k + date ±20d: **85% of closings,
+1,452/1,780 clients**) and **Edge 2** the MLS row's own client name (**1,782/1,971 rows named; 1,492/1,780
+clients**). Three hops: CLIENT → MLS# → HLID → child row — the MLS# names the TRUE UNIT. All matches
+materialize ONCE in **`hl_srg_deal_ledger`** (CRM `autorack`): both edges agree = GREEN · one = YELLOW ·
+conflict/no key = RED → the LLM **explains** the residue into a review queue (`hl_srg_deal_overrides` —
+it proposes, code disposes, a human confirms; **an LLM never assigns identity**). Adam's fork classes A–F
+run as SQL **detectors over the ledger**; the Rule #0 fix map is *generated*. Full section:
+[`guides/srg-reconciliation-engine`](/guides/srg-reconciliation-engine) §THE DEAL LEDGER · build contract
+`.claude/state/session-scope-deal-ledger.lock`.
+
+### Checklist (live 2026-07-03 — 9/13 done)
 
 - [x] **1 — Dedup** — 54 merges (1,834 → 1,780), reversible (`hl_srg_dedupe_log`).
 - [x] **2 — Brain** (`hl_fub_person_facts`) — 2,178/2,178 household members.
@@ -61,6 +73,16 @@ So Zach can send every past client a dead-on **HouseLoop Home Value Report**. Ac
   home's value/enrichment cols carry over by HLID/rooftop, old rows → quarantine, per-pc transaction). Dry-verified
   on the 20: 73 old → 71 reconciled, agents 63/71, values carried. `--write` REFUSES without `--zach-approved` (Rule #0).
 - [ ] **9 — PROMOTE → scale to 1,780** — staging → live child + parent (replaces stale 21/19; full write = Rule #0).
+  Promote tool BUILT + dry-verified (`sign-off-reconcile.mjs`, value-preserving, refuses --write w/o --zach-approved).
+- [x] **L1 — Build `hl_srg_deal_ledger` — WRITTEN 2026-07-03**: 1,898 deal rows / 1,780 clients · GREEN 1,564 ·
+  YELLOW 132 · RED 202 (the L3 residue) · clients matched 1,545 (GREEN-best 1,434 + YELLOW-best 111) · 82 have
+  no SISU deal. Third edge added (price+date-unique) catches cross-side deals — the ledger reproduced Hutchens'
+  3 deals + the Duston mirror + Nations' one-HLID pairs on its own. Spot-checked by query.
+- [x] **L2 — Detectors A–F → verdict map GENERATED 2026-07-03**: `fork-verdict-map-2026-07-03.csv` — **751
+  verdicts** (A=27 MERGE · B=2 SPLIT · C=299 SEAT · D=45 REPIN · E=26 QUARANTINE · F=352 verify-provenance).
+  Regression: all 5 hand-verified rooftops re-found by detector. Feeds Adam's ONE Rule #0 pass.
+- [ ] **L3 — Residue queue** — RED rows → LLM-explainer (propose-only) → human review → `hl_srg_deal_overrides`.
+- [ ] **L4 — Downstream reads the ledger** — resolver/persist/GT pins consume ledger matches; re-derivation dies.
 
 ### Next concrete action
 Zach walks the **Reconciled tab** of `/settings/seller-report/audit` (the fresh 2026-07-03 staging — first 20,
