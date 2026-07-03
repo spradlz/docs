@@ -3,7 +3,7 @@ title: "Caleb (SRG Past Client Reconciliation — WIP Log)"
 description: "Work-in-progress dossier — Caleb · Data intel · past-client resolver. SRG Past Client Reconciliation — WIP Log."
 ---
 
-<Info>Live dossier — auto-generated from `.claude/state/wip/caleb/resolver.md` on every push. **Progress: 5/9 done (56%).** _Updated 2026-07-03 (Adam's addresses signed off — prepping the reconcile-engine RUN)._</Info>
+<Info>Live dossier — auto-generated from `.claude/state/wip/caleb/resolver.md` on every push. **Progress: 7/9 done (78%).** _Updated 2026-07-03 (Adam's addresses signed off — prepping the reconcile-engine RUN)._</Info>
 
 **Owner:** Caleb — Data intel · past-client resolver
 
@@ -25,7 +25,7 @@ Run the reconciliation engine across all data → **TWO PERFECT TABLES:**
    transactions grouped under it, each with its agent-of-record + disposition + Adam's clean address/HLID/value.
 So Zach can send every past client a dead-on **HouseLoop Home Value Report**. Accuracy is the only benchmark.
 
-### Checklist (live 2026-07-03 — 5/9 done)
+### Checklist (live 2026-07-03 — 7/9 done)
 
 - [x] **1 — Dedup** — 54 merges (1,834 → 1,780), reversible (`hl_srg_dedupe_log`).
 - [x] **2 — Brain** (`hl_fub_person_facts`) — 2,178/2,178 household members.
@@ -33,19 +33,40 @@ So Zach can send every past client a dead-on **HouseLoop Home Value Report**. Ac
 - [x] **4 — HLID on the MLS table** — re-stamped from the web authority `hl_property`; cross-city 221 → 0.
 - [x] **5 — Adam's address/HLID/value spine — DONE + signed off** — `pastclient-resolved-EXPORT-2026-07-03.csv`
   (1,951, all valued), 63 wrong-house links re-pinned, 22 out-of-area flagged, value engine locked. Consume it.
-- [ ] **6 — Dossier render + persist** — wire `card-note.mjs` to render the 2 paragraphs + facts matrix +
-  persist Stage-2 dossier (`hl_srg_resolver_stage2`, 26 staged) → `hl_srg_past_clients.dossier_json`.
-- [ ] **7 — Run the reconcile engine per client** — resolver → stage2 → adopt Adam's clean home data →
-  complete-closings → link-contacts-fub → persist-reconcile to `hl_srg_pch_staging`. Fills agent + disposition
-  (currently STALE: 21 / 19).
-- [ ] **8 — Prove 20 → sign-off** — Nations + Hutchens + golds; Zach walks the audit → `resolution-gate --signoff`.
+- [x] **6 — Dossier render + persist** — render was already wired (`card-note.mjs` DOSSIER section + AuditReport);
+  built `persist-dossier.mjs` (gated, jsonb-merge, idempotent) → 19 new-format Stage-2 dossiers persisted to
+  `hl_srg_past_clients.dossier_json` (verified by query + render). 6 legacy-format rows re-run in step 7; pc9 merged→#56 skipped.
+- [x] **7 — Run the reconcile engine per client (FIRST 20 DONE 2026-07-03)** — built `refresh-pastclient-gt.mjs`
+  (synced `hl_srg_pastclient_gt` from Adam's final EXPORT: 1,924 updated + 12 inserted + 33 history restamps —
+  killed the Hutchens holden-mo poison) → complete-closings (2 inserts, 8 no-HLID flags) → link-contacts-fub →
+  persist-reconcile → 71 rows staged (label 2026-07-03), 20/20 cards sweep clean on the Reconciled tab. FIXED
+  persist-reconcile: a BUY we repped no longer carries sold_not_by_us (Nations 301 E 68th was dropped from
+  TRANSACTIONS + lost row double-rendered). ⚠️ 5 fork pairs found INSIDE Adam's export (same slug, 2 HLIDs:
+  Fontana-306, Granada-230, 10240-96th-F, 10136-96th-B, 1676 NW 850th bates/holden) — pinged Adam #11317.
+- [ ] **8 — Prove 20 → sign-off** — READY: Zach walks `/settings/seller-report/audit` → Reconciled tab (label
+  2026-07-03; pc1 Nations = spec-exact: 5 txns · 2 owns · lost 68th Ter + red Oakview) → `resolution-gate --signoff`.
+  **⚠️ FORK-PAIR HOLD (Adam retracted #11324):** his first keeper calls were malformed (ranked by render/value;
+  the AUTHORITY = the client's SISU closing mls#, which names the UNIT). Keeper application fully REVERSED +
+  query-verified (5/5 GT rows restored, 8/8 history stamps back — reversal `defork-keeper-reversal-2026-07-03.json`).
+  **850th since VERIFIED (#11327) + applied surgically** (GT HLID232431 out, mls 2388535 → HLID100059 child
+  stamp, reversal `defork-850th-verified-reversal-2026-07-03.json`): **pc15 + pc4 UNBLOCKED** — pc4 kept her
+  850th BUY (refuted Adam's "not on 850th" with her SISU Closed buyer row = the other side of Duston's sale).
+  **Only pc7 Richardson still HELD** — Adam's verified map (#11330) calls her staged HLID100386 a **PHANTOM**
+  (mls 2076493 not in the 10136 building); her real sale = mls 2471893 unit B (Kuchta pc139 bought the other
+  side). She re-stages after Adam's Rule #0 split pass mints the real unit-B keeper. → **19 of the first 20
+  promote-ready.** Also refuted (MLS 2543272): Hutchens' 1621st sell is REAL, not a mislabel — her card keeps
+  sell 1621st $545k + buy 850th $387k (same day) + buy Nottingham. Adam's procedure (locked): same-unit
+  relists/buy+sell MERGE into one HLID as priceHistory; different units SPLIT to their own HLID.
+  **PROMOTE TOOL BUILT:** `sign-off-reconcile.mjs` — value-preserving merge (staged reconcile fields win, old
+  home's value/enrichment cols carry over by HLID/rooftop, old rows → quarantine, per-pc transaction). Dry-verified
+  on the 20: 73 old → 71 reconciled, agents 63/71, values carried. `--write` REFUSES without `--zach-approved` (Rule #0).
 - [ ] **9 — PROMOTE → scale to 1,780** — staging → live child + parent (replaces stale 21/19; full write = Rule #0).
 
 ### Next concrete action
-Wire the dossier render in `card-note.mjs` + persist to the person row, then run `triangulate-stage2.mjs` on
-the first 20 (Nations first) → `persist-reconcile.mjs` to staging (adopting Adam's clean address/HLID by
-`website_hlid=mls_hlid`) → Zach walks `/settings/seller-report/audit` → `resolution-gate --signoff` → PROMOTE
-→ scale. Full contract: the scope-lock PRD.
+Zach walks the **Reconciled tab** of `/settings/seller-report/audit` (the fresh 2026-07-03 staging — first 20,
+Nations pc1 first). On his GO: `resolution-gate --signoff` per client → **PROMOTE staging → live child
+(Rule #0: typed Zach approval naming `hl_srg_past_client_homes`)** → scale the same motion to all 1,780.
+Waiting on Adam (#11317): which HLID wins each of the 5 fork pairs in his export.
 
 ### Related documentation
 - [`guides/srg-reconciliation-engine`](/guides/srg-reconciliation-engine) — **THE GROUND-TRUTH MASTER.**

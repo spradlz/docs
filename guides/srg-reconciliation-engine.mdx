@@ -109,6 +109,54 @@ a narrower spine.
 
 ---
 
+## 🧭 THE DEAL LEDGER — match deals, not addresses (Zach LOCKED 2026-07-03)
+
+**The insight that ended three weeks of resolver pain: we were answering the wrong question.** "Whose house is
+this ADDRESS?" is unanswerable deterministically — addresses lie (dropped unit letters, colliding slugs, condo
+floorplans that repeat, miskeyed streets). Every failure of 2026-07-03 (a deleted real sale, wrong-unit pins, a
+phantom HLID, "Hutchens isn't on 850th") came from reasoning by **address similarity or render quality**. The
+right question is **"which DEAL is this?"** — a deal fingerprints as **client name + price + close date**, and
+we hold TWO independent ledgers of the same deals that join on those keys:
+
+- **Edge 1 — SISU↔MLS:** `sisu_transactions` (client→deal) ↔ `hl_srg_mls_deals` (deal→listing) by last name +
+  price ±$3k + close date ±20d. **Measured live 2026-07-03: 85% of all SISU closings since 2015 match; 1,452 of
+  1,780 past clients resolve through this edge alone.**
+- **Edge 2 — the MLS row's own client name:** **1,782 of 1,971 `hl_srg_mls_deals` rows carry `client_first`/
+  `client_last`**; 1,492 of 1,780 past clients match it exactly.
+
+**The three hops (no similarity anywhere):**
+> **CLIENT** →(name+price+date)→ **MLS#** →(history stamp)→ **HLID** → child row on the card.
+
+The MLS# is the hero: it names the **true unit** (the client's own closing listing), which kills the entire
+wrong-unit/slug-collision bug class at the root.
+
+**The ledger:** all matches materialize ONCE in **`hl_srg_deal_ledger`** (CRM DB `autorack`,
+`HL_CRM_DATABASE_URL`) — 1 row per client×deal: `pc_id · sisu_id · mls_number · hlid · side · price ·
+close_date · agent · match_method · tier · evidence jsonb`. Rules:
+- Both edges agree → **GREEN** · one edge only → **YELLOW** · edges disagree or no key → **RED**.
+- The ledger is **rebuilt idempotently by tool (`tools/houseloop-cards/build-deal-ledger.mjs`, UPSERT-only —
+  no DELETE/TRUNCATE ever) and NEVER hand-edited.** Human/LLM verdicts land in **`hl_srg_deal_overrides`**,
+  which the rebuild consumes. A disagreement is a ROW, not an argument between agents.
+- **Every downstream consumer** (child rows, GT pins, cards, fork fixes) READS the ledger instead of re-deriving
+  a match. Re-derivation is how drift happens.
+
+**The LLM law:** an LLM **never assigns identity** — keys assign identity. Its three legitimate jobs: (1) the
+relationship dossier prose (shipped); (2) fact extraction from unstructured sources (FUB notes → departed
+agents); (3) for the RED residue (off-market, referrals, garbled source addresses), read ALL evidence and write
+a structured verdict + reasoning into the review queue — **it proposes, code disposes, a human confirms.**
+
+**The fork hunt (classes A–F) runs as detectors over the ledger** — not a manual sweep. Adam's six bug classes
+(same-home multi-txn forked · mixed units under one HLID · client's listing not seated · wrong-unit pin ·
+phantom listings · mislabeled closings) are each ONE SQL query against the ledger + `hl_mls_property_history`
++ WEB `Listing`; the per-rooftop verdict map for the single Rule #0 fix pass is **generated**
+(`tools/houseloop-cards/deal-ledger-detectors.mjs`). Regression bar: the 5 hand-verified rooftops (850th ·
+Granada #230 · Fontana #306 · 10240-F · 10136-B) must each be re-found by their class detector.
+
+Build contract: `.claude/state/session-scope-deal-ledger.lock`. Phases: L1 ledger → L2 detectors/verdict map →
+L3 residue queue → L4 downstream reads the ledger.
+
+---
+
 ## 🔒 CANONICAL-SOURCE-PER-FIELD LAW (Zach LOCKED 2026-07-01)
 
 Union everything; when sources disagree on a field, the CANONICAL source wins — `resolver_block` fills gaps only.
