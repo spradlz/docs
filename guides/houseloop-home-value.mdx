@@ -13,12 +13,27 @@ The current value is not one algorithm — it's a **fork**. Which branch a home 
 and two different monthly jobs feed the two branches. Getting this right is the difference between a dead-on
 Zillow-grade number and a rough index estimate.
 
-## HouseLoop Value — the fork (five buckets, locked 2026-06-17, expanded 2026-07-02)
+## HouseLoop Value — TWO monthly engines + one live state (Zach LOCKED 2026-07-03)
 
-Computed at read time in `lib/listings/get.ts`. The core fork is chosen by **data presence, not a per-home flag**
-(cached Zestimate → dead-on tier; none → free ZHVI tier). The 2026-07-02 past-client resolver formalized the fork
-into **five value buckets**. The critical thing to understand: **every bucket is refreshed monthly on the table —
-they differ only in the monthly ENGINE.** "Native" means *native value source*, not *no monthly update*.
+Computed at read time in `lib/listings/get.ts`, chosen by **data presence, not a per-home flag**. The old "5–6 bucket"
+framing collapses to exactly this — **every home's value is one of these:**
+
+| # | Engine | When | Value | Monthly engine |
+|---|---|---|---|---|
+| **①** | **Past-Client Home Value · Ninja Monthly** | `sold` **AND** past-client (has a cached Zestimate) | `Zestimate × 1.005` — `zestimateHouseLoopValue` | re-fetch the Zestimate from OpenWeb Ninja (26th) → persist (27th). **Zestimate is used ONLY here.** |
+| **②** | **Sold Home Value · ZHVI Monthly** | `sold` **AND** (not a past client **OR** no Zestimate) | `sold price × ZHVI[now]/ZHVI[soldMonth]` — `soldValueFromAppreciation` | recompute from the fresh ZHVI index (24th) → persist (27th) |
+| — | **Active** (live, no cron) | `active` / `coming_soon` / `pending` | `list price × 1.005` — `activeValueFromList` | live at render; **on close flips to ① if past-client, else ②** |
+
+**Engine ② is the default — ALL property types fold in: single-family, condo, apartment, AND land.** There is **no
+separate land / native / self-sourced bucket.**
+- **Land is NOT held flat.** Land appreciates on the same zip → city → county → metro ZHVI ladder as homes. ZHVI has
+  no land-specific series, so **land stays lockstep with single-family** for its area — if the zip appreciates, the
+  land appreciates the same.
+- **Self-sourced / new-construction not on Zillow:** Zillow carries no Zestimate for it → it runs **②** on its sold
+  anchor price. We **cannot** get a Zestimate for a self-sourced home.
+- **The only "held flat" case** is a home with **no anchor date at all** (an organic new-build minted from scratch,
+  e.g. `12111 W 165th Ter`). The moment it has any sale/list date, Engine ② takes over. Held-flat is the *anchorless*
+  exception, never a property-type rule.
 
 <Warning>
 
@@ -37,21 +52,11 @@ ZHVI recompute vs the live render; must report `FLAT_BUG = 0`).
 
 </Warning>
 
-| Bucket | When | Value | Monthly engine |
-|---|---|---|---|
-| **`ninja_monthly`** | sold/off-market **with** a cached Zestimate (most past clients, ~1,840) | `zestimate × 1.005` — `zestimateHouseLoopValue` | re-fetch a fresh Zestimate from OpenWeb Ninja (26th job) |
-| **`zhvi_monthly`** | sold, **no** Zestimate (Zillow has the home but no Zestimate, ~90) | last **sold price × ZHVI area appreciation** — `soldValueFromAppreciation` | recompute from the fresh ZHVI index (24th job) |
-| **`active`** | currently **for-sale / pending / coming-soon** | `listPrice × 1.005 ± 3%` — `activeValueFromList` | list price re-read; **flips to `ninja_monthly` on close** |
-| **`native`** | an **organically-created HouseLoop card** built from our own past-client sold data, not on Zillow (e.g. `12111 W 165th Ter`) | last value/sold × ZHVI appreciation | ZHVI recompute (no Zestimate to re-fetch) |
-| **`self_sourced_card`** | **new-construction** not on Zillow individually (e.g. `1809 SW Hightown Dr`, Stoney Creek) | our MLS sold data × ZHVI appreciation | ZHVI recompute |
-| **`self_sourced_card_land`** | **raw land** (e.g. `00000 Old Kansas City Rd`, 11.72 ac) | the **sale price** (ZHVI is a home index, doesn't apply to land) | held at sale price; card photo = our own screenshot |
-
 <Info>**The switch is the cached Zestimate's presence.** Past-client homes get a real Zillow Zestimate pulled onto
-their `Listing` each month, so they resolve to the dead-on `ninja_monthly` tier. Everything without a cached
-Zestimate falls to a ZHVI recompute. No per-home boolean — the data decides. The `native` / `self_sourced_card*`
-buckets exist for homes Zillow simply doesn't carry (organic cards, new-construction, land); they still get a fresh
-monthly value, driven by ZHVI instead of a Zestimate re-fetch. The bucket for every past-client home is recorded in
-`.claude/reports/pastclient-canonical-FINAL-2026-07-02.csv`.</Info>
+their `Listing` each month → Engine **①**. Everything else — every non-past-client sold home, plus any home Zillow
+doesn't carry a Zestimate for (new-construction, land, off-Zillow organic cards) — runs Engine **②** (ZHVI on the sold
+price). No per-home flag and no `native`/`self_sourced`/`land` sub-buckets: **the data decides, and ② handles every
+property type the same way.** Canonical spec: `GT/GT - ACTIVE/GT_HOUSELOOP_HOME_VALUE_ENGINE.md`.</Info>
 
 ### Out-of-area homes
 
