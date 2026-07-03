@@ -69,9 +69,11 @@ show USED IN (→ workflow canvas, highlights the step) + a SENT count (→ lead
 | ✅ | **The crux, solved on paper** — a FUB (or PPC) lead has no HouseLoop account, so HouseLoop existing-lead activity can never fire for them → auto-register a silent HouseLoop website account on import so they become "existing." | §16 (new) |
 | ✅ | **Double-message problem, solved** — the silent account must NOT fire the New-Lead registration workflow (else Myli double-welcomes). Reuse the §5c fire-gate: import bypasses the registration door; the "here's your account" line rides the platform workflow that already messaged them. | §16 |
 | ✅ | **Passwordless auth, confirmed built** — email IS the identity, no password ever created/stored; every workflow/nurture/saved-search link is a magic link (`apps/houseloop-web/lib/auth/magic-token.ts` — HMAC, reusable). PPC form-fills stay genuine self-registrations (origin=imported flag). | §16 |
-| ⬜ | **BUILD piece 1** — rename "System" → **"Existing Lead Activity"** in the workflow-builder trigger palette + Lead-Flow folder labels (the Trigger Events page already says it) | §16 |
-| ⬜ | **BUILD piece 2** — expose all 17 FUB existing-lead events from `hl_fub_webhook_settings` into `hl_trigger_events` (platforms=['follow_up_boss'], category='system') so the builder's FUB palette is complete | §16 |
-| ⬜ | **BUILD piece 3** — auto-register: silent passwordless HouseLoop website account on cross-platform import, gated to NEVER fire the registration workflow (magic-link auth). **Cross-database (CRM→web) + touches real leads → verify end-to-end before "done"; awaiting Zach's call on the trigger point (on-import / lazy / per-source toggle).** | §16 |
+| ✅ | **A1 (piece 1)** — rename "System Events" → **"Existing Lead Activity"** in the builder FAMILY_LABEL + WorkflowsTable folder label (label-only; DB keys unchanged). | §16 · `ef753d4331` |
+| ✅ | **A2** — "Any platform" scope for Existing-Lead-Activity triggers: `system` triggers default agnostic (persists `hl_workflows.platform=NULL`) w/ a Fires-for toggle; Registration/Follow-up stay welded to the concrete platform. NO migration (NULL already = fires-for-all). | §14/§16 · `ee661e6c8c` |
+| ✅ | **A3 (piece 2)** — mig 0305: complete FUB Existing-Lead-Activity catalog — 4 shared behaviors (property_viewed/saved/shared, virtually_toured) gain `follow_up_boss` (ONE shared agnostic set); 13 FUB-only signals seated (comms + insights incl. `insight_viewed_10x_7d` + phone-line splits). Builder FUB palette now complete. | §16 · `facb4988cd` |
+| ⏸️ | **A4 (piece 3) — silent auto-register (BUILT-READY, AWAITING ZACH GATE).** De-risked via internals map: a raw `qWeb` passwordless `"User"` INSERT on FUB import (mirror `seedStarterSavedSearch`); the gate is FREE (the FUB import path never hits the CRM intake route → no `NEW_LEAD_WELCOME`); magic-link already logs a passwordless user in. **CROSS-DB + touches real production lead imports → NOT unleashed unattended. Need Zach's one-word go on the trigger point (on-import-for-all = my rec / lazy / per-source toggle).** | §16 |
+| ⏸️ | **A5 — trailing items (BLOCKED/SURFACE).** (a) `/settings/lead-sources` is NOT a dead flat list — it's a rich source-config page (care-team routing, API tokens, AI responder). Do NOT nuke; **surface to Zach** whether its config is superseded by `/settings/lead-platform/configure`. (b) Dev doc `guides/trigger-events` waits on A4 (docs law = document only what's live; the guide covers the silent-account close-out). | §15 |
 
 **🧩 TEMPLATE-SYSTEM HALF OF THE BUNDLE (Notification / Email / Text templates) — Notifications-Refactor PRD:**
 | ✔ | Item | commit |
@@ -344,7 +346,12 @@ config into ONE platform-tabbed surface, enrich the trigger-event row, and make 
 &gt;    auto-provision creates the website user record but BYPASSES the registration door / `crm-intake` path (carries an
 &gt;    `origin='imported'` / `silent` flag). Registration workflows fire ONLY for GENUINE self-registrations on the site.
 &gt;    Same principle as the §5c `fireWorkflow` gate — system-created ≠ user-initiated. Gated at the system level; not a
-&gt;    user toggle. (Gate point: `apps/houseloop-web/lib/crm-intake.ts` fires the `general_registration` door event.)
+&gt;    user toggle. **(Gate is nearly FREE — code-verified 2026-07-03: the welcome + `general_registration` door fire on
+&gt;    the CRM intake route `apps/houseloop-crm/app/api/integrations/website/lead-intake/route.ts` (`NEW_LEAD_WELCOME`
+&gt;    :679, `houseloop/door.<eventKey>` :760), NOT `crm-intake.ts` (that file is only the web→CRM transport). The FUB
+&gt;    import path NEVER hits that route, so a raw `qWeb` "User" insert — mirroring `seedStarterSavedSearch()` in the same
+&gt;    route, :47-67, which is deliberately a raw insert so it does NOT re-fire a workflow — creates the account and fires
+&gt;    NOTHING. Rule: never route silent-import account creation through the intake route.)**
 &gt; 2. **The "I set you up an account" message is OWNED by the journey the lead actually started** — never a standalone
 &gt;    registration workflow. It's a native LATER STEP inside the platform-specific workflow (FUB Property Tour: 2–4 days
 &gt;    out, "I also set you up on my site — here are a few more homes [link]"), OR an agnostic nurture plan ("1 day after
@@ -564,25 +571,35 @@ used (→ workflow canvas, highlights the step) + how many times it fired (→ l
 TRIGGER SIDE:  catalog spine hl_trigger_events (0276) · Trigger Events screen = 2 platform tabs → category groups →
   rich rows (a47bad9425, 0290) · enriched rows: Creates-Lead + Workflow-Active toggles, workflow_active gates at
   fire-time (61095f2484/82668b0179, 0288/0289) · fire-count → leads drill-down (a0ee2e581d) · lead-detail Platform›Source›Tags.
+  OVERNIGHT 2026-07-03: §4 Lead Sources = KPI scoreboard (events stripped; count-chip deep-link) · §5b Configure =
+  defaults only + dynamic back button + FUB Configure→defaults · §5c Add-New-Lead manual fire GATE (fireWorkflow +
+  GET /api/leads/manual-fire) · §7.4 Notification column (already on rich rows) · §14 Workflow platform scope (mig 0304
+  hl_workflows.platform houseloop|follow_up_boss; NULL=unscoped=fires-for-both; runtime fire-match + builder persist/API).
 TEMPLATE SIDE: notification emails = full HTML rows (0300, killed composeNotificationEmail, eacf8665de) · categories.ts
   4-group model (1958b1e5cd) · Email Templates table redesign: flat pill row All/Buyer/Seller/TC/Agent + cols
   TEMPLATE·USED IN·SENT·CREATED·VIEW, killed Live/Draft Status (0f886c851b) · USED IN clickable → /workflows?wf=&lt;id&gt;&
   highlightTemplate=&lt;key&gt; + resolver returns wf id (0c83b0d97b) · SENT count from hl_email_send_log → TemplateSendsModal
   (0c83b0d97b) · workflow canvas highlights the deep-linked step, 3s ring hugs the 360px card (701eabf42c, 699e1eea2b) ·
-  docs mirror unblocked (7b37cd4147).
+  create/edit form → ONE Group picker, mig 0303 template_group (killed Folder/Event/Lifecycle) · docs mirror unblocked (7b37cd4147).
+ARCHITECTURE (designed + PRD-locked 2026-07-03, pushed 3a637c213c — NOT yet built): cross-platform close-out (§16) —
+  platform-scope reconciliation (New Lead=specific / Existing Lead Activity=agnostic; §14 NULL already = agnostic),
+  silent auto-register crux, double-message solution (silent account, journey-owned comms), passwordless magic-link auth.
 
-##### 🔲 REMAINING (the resume list)
-TRIGGER SIDE (the two big unfinished pieces Zach flagged):
-  - §4  Lead Sources = KPI scoreboard (strip events out from under sources; KPI cards + Configure per source)
-  - §14 Workflow builder = Trigger × Platform scope (houseloop / follow_up_boss — no `any`)
-  - §5b Configure = defaults only + "Trigger Event Settings" button · §7.4 Notification column (read-only notify_class +
-    HouseLoop/Realloop pill) · §5c Add-New-Lead manual fire gate · §15 nav collapse 4 routes → 2
-TEMPLATE SIDE:
-  - Text Templates page mirror (flat pill row + USED IN + SENT drill-down)
-  - Junk purge (new_lead_welcome, *_request_received, new_reg_join_only_sms, new_reg_claim_home_email) + Zach's
-    contact_confirmation call (nuke hardcoded-Myli-phone vs rebuild token-based)
-  - Create/edit form simplification (drop Event/Lifecycle dropdowns) · branch-node canvas highlight · doc update
+##### 🔲 REMAINING (the resume list — PLAN: ~/.claude/plans/calm-dreaming-yeti.md, Zach-approved 2026-07-03)
+PHASE A — cross-platform close-out (the rest of the workflows PRD):
+  - A1 Rename "System Events" → "Existing Lead Activity" in builder FAMILY_LABEL (WorkflowBuilder.tsx:40) — label-only
+  - A2 Add "Any platform" scope for Existing-Lead-Activity (persists platform=NULL; NO migration; builder :245/:585-592)
+  - A3 Complete FUB catalog — mirror ~17 hl_fub_webhook_settings system events into hl_trigger_events (follow_up_boss/system)
+  - A4 Silent auto-register (CROSS-DB) — qWeb passwordless "User" INSERT on FUB import (mirror seedStarterSavedSearch);
+       gate = guardrail (import path never hits the CRM intake route → no welcome); magic-link already logs in. VERIFY E2E.
+       ⚠️ re-confirm on-import-for-all trigger point w/ Zach at the gate.
+  - A5 §15 retire dead /settings/lead-sources route (Sidebar already 2 items) · dev doc guides/trigger-events (shipped-only)
+PHASE B — Text-Messaging template section (mirror the shipped email redesign):
+  - Text Templates page = email page's twin (flat pill row + USED IN canvas-highlight + real SENT drill-down; parameterize
+    TemplateSendsModal + /api/template-sends by channel — do NOT fork) · single Group picker · text SEND-LOG discovery first
+  - Junk purge (new_reg_join_only_sms, etc.) + Zach's contact_confirmation call (nuke hardcoded-Myli-phone vs token-based)
   - System-event activity-phrase backfill (Lee #11263: property_liked/saved/shared/tour/contact = NULL activity)
+PHASE C — FUTURE (noted only): detailed message grouping/threading.
 
 ##### IN SCOPE (paths)
 apps/houseloop-crm: components/settings/&#123;trigger-events,lead-platform,lead-sources&#125;/** · components/workflows/** ·

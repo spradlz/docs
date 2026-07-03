@@ -1,0 +1,71 @@
+---
+title: "Task & Appointment Assignment"
+description: "The grouped polymorphic 'Assign to' picker in HouseLoop CRM — three sections (Agents · AI Agents · Transaction Coordinators), how the lane a task lands in is derived from the assignee's type and clone_of_user_id, and the AI-Clone task-level override that fires the clone without the global AI toggle."
+---
+
+Leads, tasks, and appointments all share **one** grouped, polymorphic **"Assign to"** control. The
+assignee is a single `hl_users` id — the *lane* it lands in is **derived**, not chosen separately.
+
+## The grouped picker
+
+One control, three sections with hard dividers:
+
+```
+ASSIGN TO ▾
+  AGENTS (human)              ← hl_users type='human', role 'Real Estate Agent'
+    • Ana Spradling
+    • Zach Spradling
+  ──────────────
+  AI AGENTS                   ← hl_users type='ai_agent'
+    • Myli                    (AI ISA, clone_of_user_id NULL)
+    • Zach Spradling (AI)     (AI Clone, clone_of_user_id → Zach)
+  ──────────────
+  TRANSACTION COORDINATORS    ← members holding the Transaction Coordinator role
+    • (added when a TC is seated)
+```
+
+- **Agents** — humans holding the Real Estate Agent role.
+- **AI Agents** — `ai_agent` members: Myli (standalone) and each human's AI Clone.
+- **Transaction Coordinators** — members holding the Transaction Coordinator role.
+
+## Lane derivation
+
+The assignee is ONE `hl_users` id; the lane a task/appointment lands in is **derived** from that
+user's `type` + `clone_of_user_id`:
+
+| Assignee | Lands in |
+|----------|----------|
+| **Human** (Real Estate Agent) | that agent's **LEFT-lane** Tasks & Appointments |
+| **AI Clone** (`clone_of_user_id` set) | the clone acts **as its human** → LEFT lane; because an AI owns it, it **mirrors into Next Actions** |
+| **Myli** (`ai_agent`, `clone_of_user_id` NULL) | Myli's **RIGHT lane** → mirrors into Next Actions |
+| **TC role** | the Transaction Coordinator section |
+
+A human's tasks **never** route to Myli — a clone ≠ Myli. See
+[Lead Detail — Parity Lanes](/guides/lead-detail-parity-lanes) for the mirror rule.
+
+## The AI-Clone task-level override
+
+A task/appointment **assigned directly to an AI Clone triggers the clone WITHOUT the global AI-Assist
+toggle being on.** There are two independent paths:
+
+- **Global AI mode ON** → the clone handles everything eligible on the lead.
+- **A single clone-assigned task** → the clone handles just that one item, **even with AI mode OFF**.
+
+Only **AI-capable** items are eligible: **text · email · follow-up**. A **physical appointment (a
+showing) cannot be handed to AI** — there is no clone option on those. When the clone owns an item it
+renders **faint in Tasks & Appointments** (the AI has it) and **lit in Next Actions** (the AI is
+running it).
+
+<Note>
+**Status.** The grouped 3-section picker, allowing an `ai_agent` assignee at the data layer, and the
+task-level clone-delegation flag + dispatch are the intended build described here. Today the assignee
+control (`AgentAssignDropdown` / task fields) is human-only. This page is the SSOT for that build.
+</Note>
+
+## Related
+
+- [Lead Detail — Parity Lanes](/guides/lead-detail-parity-lanes) — where an assigned item renders
+- [Roles & Team-Member Identity](/guides/roles-and-team-member-identity) — the roles behind the sections
+- [Tasks](/crm/tasks-tasks) — the standalone task worklist + Assign To field
+- [Calendar](/crm/calendar-calendar) — appointment creation + "Created By"
+- Internal PRD: `GT/GT - ACTIVE/GT_HOUSELOOP_LEAD_DETAIL_PARITY_AND_ASSIGNMENT_PRD.md`

@@ -1,0 +1,103 @@
+---
+title: "Lead Detail — Parity Lanes"
+description: "The two-lane parity model on the HouseLoop lead detail: LEFT = the human agent + their AI clone, RIGHT = Myli. Both lanes share one skeleton — an always-on Tasks & Appointments section plus a gated AI Workflow section — and AI-owned tasks mirror up into Next Actions."
+---
+
+The lead detail page has **two parity lanes** that render the exact same skeleton:
+
+- **LEFT lane** — the **human agent + their AI clone** (the human's own AI, acting *as* the human).
+- **RIGHT lane** — **Myli**, the assigned AI (relationship owner).
+
+Both lanes can be active at once — LEFT (clone) and RIGHT (Myli) are two distinct AI actors, never
+merged into "one AI responder". See [AI Clone](/guides/ai-clone) for clone-vs-Myli identity.
+
+## One skeleton, both lanes
+
+Each lane stacks the same two sections, top to bottom:
+
+```
+┌ LANE (LEFT = human+clone · RIGHT = Myli) ─────────────┐
+│ 📋 TASKS & APPOINTMENTS        ← ALWAYS visible        │  dynamic items OUTSIDE a workflow
+│    • appointments (future)                             │  hl_appointments (assignee = this lane's user)
+│    • tasks (open)                                      │  hl_tasks       (assignee = this lane's user)
+│ ━━ 🤖 AI WORKFLOW ━━           ← gated                 │  divider + heading
+│    Active Triggers                                     │
+│    Current Workflow                                    │
+│    Current Action                                      │
+│    Next Actions                                        │  the workflow chain + AI-owned mirrored items
+│    Recent Actions                                      │
+└────────────────────────────────────────────────────────┘
+```
+
+### 📋 Tasks & Appointments — always on
+
+This section is the **canonical home** for a lead's dynamic tasks and appointments — the items that
+live *outside* a workflow. It is **never gated**: it shows whether AI mode is on or off, on both
+lanes. Each lane shows only the tasks/appointments whose assignee resolves to that lane's user.
+
+- Open tasks (`hl_tasks`) assigned to this lane's user.
+- Future appointments (`hl_appointments`) assigned to this lane's user.
+
+### 🤖 AI Workflow — gated
+
+Below a `🤖` divider sits the AI reasoning chain, in the exact order operations happen:
+
+| Section | Answers | Fed by |
+|---------|---------|--------|
+| **Active Triggers** | What happened? | `hl_workflow_runs.trigger_payload` |
+| **Current Workflow** | What's running? | `hl_workflows` via `hl_leads.active_workflow_id` |
+| **Current Action** | What's it doing right now? | `hl_workflow_runs.current_node_id` |
+| **Next Actions** | What happens next? | the workflow chain **+** AI-owned mirrored items |
+| **Recent Actions** | What already happened? | `hl_lead_activity` (`actor_role='ai_agent'`) |
+
+The AI Workflow section is what the `aiActive` gate controls:
+
+- **RIGHT (Myli)** shows the AI Workflow whenever Myli is engaged on the lead.
+- **LEFT (clone)** shows it when the human's **AI Mode** is on.
+
+The gate now covers **only** the AI Workflow section — never Tasks & Appointments.
+
+<Note>
+Both lanes share ONE component (`AiReasoningChain`), driven by an `actor` param (`clone` | `myli`).
+Change one, you change both — the two lanes are literally identical in structure.
+</Note>
+
+## Next Actions vs Tasks & Appointments (the rule)
+
+This is the distinction that removes the old conflation:
+
+- **Next Actions** = the running chain of a **workflow** (workflow-derived steps) **plus** any
+  task/appointment an **AI** owns, **mirrored up**. A mirror shows in *both* places; its home in
+  Tasks & Appointments stays put.
+- **Human-owned** tasks/appointments live **only** in Tasks & Appointments — they never appear in
+  Next Actions.
+
+So `hl_tasks` / `hl_appointments` come **out** of the Next-Actions union; Next Actions keeps
+`hl_scheduled_actions` (the workflow/AI chain) plus a mirror of AI-assigned tasks/appointments.
+
+When a clone owns an item, it renders **faint in Tasks & Appointments** (the AI has it) and **lit in
+Next Actions** (the AI is running it).
+
+## Why this exists
+
+The LEFT lane's enriched column was gated behind `ai_mode_enabled && humanOwned`. Because "Next
+Actions" was a union of `hl_scheduled_actions` + `hl_tasks` + `hl_appointments`, that gate also hid
+the human's own tasks/appointments when AI mode was off — the column showed on old AI-on leads and
+vanished on newer ones, which read as a regression. Splitting Tasks & Appointments into its own
+always-on section, and gating only the AI Workflow, fixes it cleanly on both lanes.
+
+<Note>
+**Status.** Tasks & Appointments as its own always-on section on both lanes, and mirroring AI-owned
+items into Next Actions, are the intended behavior in the parity build; today the sections are still
+being split out of the single gated column. The parity model and the mirror rule are the SSOT for
+that build.
+</Note>
+
+## Related
+
+- [AI Clone](/guides/ai-clone) — the clone (LEFT-lane AI) vs Myli (RIGHT-lane AI)
+- [Care Team & Lead Routing](/guides/care-team-routing) — how each lane's AI is assigned
+- [Closed Loop Follow-Up](/guides/closed-loop-follow-up) — the AI Workflow reasoning chain + engine
+- [Task & Appointment Assignment](/guides/task-and-appointment-assignment) — the grouped picker + lane derivation
+- [Roles & Team-Member Identity](/guides/roles-and-team-member-identity) — role shells + multi-role members
+- Internal PRD: `GT/GT - ACTIVE/GT_HOUSELOOP_LEAD_DETAIL_PARITY_AND_ASSIGNMENT_PRD.md`

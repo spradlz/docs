@@ -20,6 +20,23 @@ Computed at read time in `lib/listings/get.ts`. The core fork is chosen by **dat
 into **five value buckets**. The critical thing to understand: **every bucket is refreshed monthly on the table —
 they differ only in the monthly ENGINE.** "Native" means *native value source*, not *no monthly update*.
 
+<Warning>
+
+**The fork ORDER is the contract (Zach LOCKED 2026-07-03).** The branches are evaluated in this exact
+priority, and the order matters:
+1. **active/pending/coming-soon** → `list × 1.005`
+2. **Zestimate present** → `zestimate × 1.005` (ninja_monthly — dead-on)
+3. **sold + `closePrice` + `soldDate`** → `soldValueFromAppreciation` = `closePrice × ZHVI[now]/ZHVI[soldMonth]`
+   (zhvi_monthly / native / self_sourced — the appreciation branch)
+4. **stored `hlEstimate`** → LAST-RESORT fallback ONLY (raw land held at sale price, or a home missing a `soldDate`).
+Branch 3 (appreciation) **must** run before branch 4 (stored value). Previously the stored-`hlEstimate` branch was
+evaluated first and short-circuited the appreciation — so every no-Zestimate sold home rendered **flat at its raw
+close price** (e.g. 3025 NW 95th showed $596,813 forever; 10908 E 35th sold $135k in 2021 still showed $135,675).
+The formula was correct but unreachable. Verified by `tools/houseloop-cards/audit-value-buckets.mjs` (independent
+ZHVI recompute vs the live render; must report `FLAT_BUG = 0`).
+
+</Warning>
+
 | Bucket | When | Value | Monthly engine |
 |---|---|---|---|
 | **`ninja_monthly`** | sold/off-market **with** a cached Zestimate (most past clients, ~1,840) | `zestimate × 1.005` — `zestimateHouseLoopValue` | re-fetch a fresh Zestimate from OpenWeb Ninja (26th job) |
@@ -63,7 +80,7 @@ Three registered Inngest functions run on a staggered monthly cron. Each feeds a
 |---|---|---|---|
 | **24th** 09:00 | Zillow Research — monthly **ZHVI** ingest | `zillow-research-ingest` | the **MASS / ZHVI** branch — downloads Zillow's free ZHVI CSVs (county/city/zip/metro) → `hl_market_index`. Powers value + history for **all ~354k homes** |
 | **26th** 10:00 | Past-Client Zillow Cache — dead-on Zestimate | `past-client-zillow-cache` | the **PAST-CLIENT** branch — fans out one **OpenWeb Ninja** call per past-client home → caches the real **Zestimate** (+ tax/price history) onto the `Listing`. Worklist = `hl_past_client_homes`, so new past clients auto-enroll |
-| **27th** | Value-History Persist | `value-history-persist` | applies **× 1.005**, writes the current month's value + back-seeds the full monthly series into `hl_value_history` (target: `hl_past_client_homes`) |
+| **27th** | Value-History Persist | `value-history-persist` | calls `getListing(hlid)` (so it reuses the ONE value fork above — no second formula), writes the current month's value + back-seeds the full monthly series into `hl_value_history`, **and refreshes the stored `Listing.hlEstimate` column** so the CRM seller-report/exports that read it directly stay current (target: `hl_past_client_homes`) |
 
 The order matters: ZHVI (24th) lands first so the mass tier is fresh, then the Ninja Zestimates (26th) refresh the
 past-client tier, then the value/history persist (27th) reads the now-current numbers and writes the monthly point.
@@ -110,6 +127,7 @@ hero shows the value range plus a **HouseLoop Home Value History** section with 
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
+| A **no-Zestimate** sold home shows a **flat value = its raw close price** (never appreciated) | the value fork evaluated the stored-`hlEstimate` branch before the appreciation branch (the pre-2026-07-03 bug) | fixed in `get.ts` (fork order); re-persist via `value-history/persist.run { hlids }`. Verify with `audit-value-buckets.mjs` → `FLAT_BUG = 0` |
 | Value = an **old sale price** (× 1.005) | `Listing.zestimate` holds a stale sale price, not a fresh Ninja Zestimate | re-run **`past-client-zillow-cache`** for that hlid (26th job) to pull the current Zestimate |
 | Value looks **index-y / round** on a past client | home isn't in `hl_past_client_homes`, so it fell to the **ZHVI** tier | add it to the past-client set; the 26th job then enrolls it |
 | `hlEstimate` **blank** | never seeded by `value-history-persist` | run `value-history/persist.run` with `{ hlids: ["…"] }` |
