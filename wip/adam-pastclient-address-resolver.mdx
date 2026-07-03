@@ -3,13 +3,44 @@ title: "Adam (Past Client Address Resolver)"
 description: "Work-in-progress dossier — Adam · HouseLoop CRM · Developer Docs. Past Client Address Resolver."
 ---
 
-<Info>Live dossier — auto-generated from `.claude/state/wip/adam/pastclient-address-resolver.md` on every push. **Progress: 8/15 done (53%).** _Updated 2026-07-02 PM — RESOLVER + VALUE PASS SHIPPED._</Info>
+<Info>Live dossier — auto-generated from `.claude/state/wip/adam/pastclient-address-resolver.md` on every push. **Progress: 8/15 done (53%).** _Updated 2026-07-03 — VALUE ENGINE LOCKED (2 buckets) + 9 no-URL homes closed + CRM mis-link worklist for Caleb._</Info>
 
 **Owner:** Adam — HouseLoop CRM · Developer Docs
 
 ## Checklist
 
-**STATUS: the resolver + value pass is SHIPPED (2026-07-02).** Deliverable
+### ⭐ 2026-07-03 — WHAT SHIPPED TODAY (read this first)
+
+**1. Home-value model LOCKED to TWO monthly engines + Active (Zach 2026-07-03).** PRD
+`GT/GT - ACTIVE/GT_HOUSELOOP_HOME_VALUE_ENGINE.md`. ① Past-Client·Ninja Monthly (`Zestimate×1.005`, past-clients only) ·
+② Sold·ZHVI Monthly (`sold price × ZHVI[now]/ZHVI[soldMonth]` for EVERY other sold home — SFH/condo/apt/**LAND, land NOT
+held flat**, self-sourced) · Active = `list×1.005`, flips to ①/② on close. Only anchorless organic new-builds (12111)
+stay held. The value-fork "flat value" bug FIXED (get.ts branch order, commit 1f26b7dfeb; 239/244 no-Zestimate homes
+were rendering flat → now appreciate; audit `tools/houseloop-cards/audit-value-buckets.mjs` → FLAT_BUG=0). Full
+past-client re-persist run through Inngest (`value-history/persist.run`, 1,913 homes). value-history-persist now also
+refreshes `Listing.hlEstimate`.
+
+**2. The 9 "no /home URL" homes CLOSED → 1,950/1,951 linkable.** They were de-fork cases (junk `hl_pastclient_*` twins
+shadowing enriched rows), not missing homes. Minted HLIDs (12111→456920, Alhambra→456921, 3025→456922), adopted
+(336→101868), carried 2024 sale (3701 Benton→367522), collapsed 6 twins (Rule#0, reversible), anchored 3025 ($596,813
+SBA @2025-01-31→$617k) + Ditzler ($100k cancelled listing). Tool `tools/houseloop-cards/fix-nourl-homes.mts`.
+
+**3. 🔴 CALEB HANDOFF — the CRM master needs re-pinning.** The resolved VIEW `hl_pastclient_resolved` is correct for all
+1,951. BUT `hl_srg_past_client_homes` (CRM master) has **87 broken `website_hlid` links** (69 wrong-house fuzzy street
+collisions e.g. "336 S 78th → 336 S 42nd", "3025 NW 95th Ter → 3025 NW 96th St", "12111 W 165th → 12111 Goodman St";
++18 dead). Two files delivered:
+- **`.claude/reports/pastclient-resolved-EXPORT-2026-07-03.csv`** — the CLEAN list (1,951 homes: address → canonical HLID
+  → /home URL → HouseLoop value → bucket). **This is the file to consume.**
+- **`.claude/reports/pastclient-crm-mislinks-2026-07-03.csv`** — the 87 broken CRM rows WITH the correct keeper to re-pin
+  to (44 auto-matched by address; 43 need investigation). The re-pin worklist for the CRM master.
+Regenerate both: `node tools/houseloop-cards/export-resolved-and-mislinks.mjs`.
+
+_TODO: (a) 336 S 78th WEB address is garbled ("Kansas City KS KS") — fix. (b) re-pin the 87 CRM links (Caleb's table).
+(c) Run Log has no "Home Value Update" lane — the 4 value engines fall to the Inngest catch-all (disposition note below)._
+
+---
+
+**STATUS (prior): the resolver + value pass is SHIPPED (2026-07-02).** Deliverable
 `.claude/reports/pastclient-canonical-FINAL-2026-07-02.csv` (1,937 rows, 1/HLID) handed to Caleb + consumed. The
 remaining boxes (DB seating, 2 monthly Inngest fns) are FUTURE, owned with Caleb.
 
@@ -283,104 +314,14 @@ consumed into `hl_srg_pastclient_gt` + pushed across `hl_srg_past_client_homes`.
 
 ---
 
-## PRD · `GT/GT - ACTIVE/GT_HOUSELOOP_PASTCLIENT_MLS_RESOLVER_PRD.md`
+## PRD · `GT/GT - ACTIVE/GT_HOUSELOOP_HOME_VALUE_ENGINE.md (value model) + GT_HOUSELOOP_PASTCLIENT_MLS_RESOLVER_PRD.md (resolver)`
 
-#### GT — HOUSELOOP PAST-CLIENT MLS-ANCHORED ADDRESS RESOLVER (🟢 COMPLETE 2026-07-02)
-
-**Owner:** Adam (resolver + address/value side) · **Seating/DB:** Caleb (CRM child) + Lee (website `Listing`).
-**Status:** Phase A (resolve + value every past-client home) **COMPLETE 2026-07-02.** Seating = follow-on.
-**Deliverable:** `.claude/reports/pastclient-canonical-FINAL-2026-07-02.csv` (1,937 rows, 1 per HLID).
-**Indexed in:** `GT_HOUSELOOP_MASTER.md` §11 (Valuation / Home Value). Subordinate to
-`GT_HOUSELOOP_ADDRESS_SSOT.md` + `HOUSELOOP_DATA_DOCTRINE.md`.
-
----
-
-##### THE PROBLEM
-Past-client homes come from **typed source data** (old CRM/SISU entries), so the street is frequently garbled — a
-wrong house number, a misspelled or abbreviated street, or a **missing city**. A missing city is the worst: CASS
-then geocodes the fragment to the **wrong state entirely** (`105 E Washington` with no city → Attica, **Indiana**).
-Address text alone cannot be trusted, so the address-only reconciliation engine (identityKey → LLM → Redfin) can
-land on the wrong rooftop or mint a fork.
-
-##### THE CORE INSIGHT — the MLS# is the ground-truth anchor
-You **cannot search** Zillow by MLS number, but Zillow's **property-details** page carries it
-(`attributionInfo.mlsId`). So the resolver treats the MLS# as truth and the typed address as a hint:
-resolve an address → get the `zpid` → read `property-details(zpid).attributionInfo.mlsId` → **validate it against
-our known MLS#(s)** for the home = 100% certainty it's the right rooftop, not "probably."
-
-###### THE MISKEY LESSON (LOCKED 2026-07-02) — the MLS# overrides the typed address, every time
-When the typed source address and the MLS#-derived Zillow address disagree, **the MLS# wins.** Real fixes:
-| Typed source (wrong) | MLS#-anchored truth |
-|---|---|
-| 13673 Hallett (no city) | **12673 S Hallet St, Olathe KS 66062** (MLS 2040181) |
-| 72245 Widmer St | **7224 Widmer Rd, Shawnee KS 66216** (extra digit + St→Rd) |
-| Blue Stem | **1226 Bluestem Dr, Eudora KS 66025** (one word) |
-| 105 E Washington (no city → Attica, IN) | **105 E Washington St, Paola KS 66071** |
-
-##### THE RESOLVER (per home; ran on all ~1,936)
-1. **CASS/USPS clean** the typed address — Google Address Validation, HouseLoop key `GOOGLE_GEO_SERVER_KEY`
-   (project houseloop-496200). Fixes wrong ZIP + garble. 99.9% validate.
-2. **Find the Zillow record** — OpenWeb Ninja multi-form search: CASS `street, zip` → `street, city, STATE zip`
-   (CASS mangles rural/garbled streets) → street-type variants (St/Ter/Dr/Ct/Ln) → range-preserved
-   (`10700-10702`) → original. Pick the candidate by **house# + street-name-token overlap**. Multi-unit buildings:
-   pick the unit from Zillow's autocomplete **dropdown** → the unit's own `zpid` (a location string with `APT n`
-   won't match).
-3. **Validate via MLS#** — `property-details(zpid).attributionInfo.mlsId` vs our known MLS#s
-   (`hl_srg_past_client_homes.mls_number` ∪ `hl_mls_property_history` ∪ `website_hlid \d+`).
-4. **Classify (never silently wrong):** `confirmed` (MLS-locked) · `address_match` (house#+street verified, Zillow
-   exposed no mlsId — normal for older sales) · `mls_mismatch` (flag) · `not_found` (flag).
-
-##### THE VALUE — five buckets, all refreshed monthly, differing only in the monthly ENGINE
-| Bucket | When | Value | Monthly engine |
-|---|---|---|---|
-| `ninja_monthly` | sold, has a cached Zestimate | zestimate × 1.005 | re-fetch Zestimate (OpenWeb Ninja) |
-| `zhvi_monthly` | sold, no Zestimate | sold price × ZHVI area appreciation | ZHVI recompute |
-| `active` | currently for-sale/pending/coming-soon | list × 1.005 | list re-read; flips to `ninja_monthly` on close |
-| `native` | HL-organic card from our sold data, not on Zillow (12111 W 165th Ter) | last value × ZHVI appreciation | ZHVI recompute |
-| `self_sourced_card` | new-construction not on Zillow (1809 SW Hightown) | our MLS sold × ZHVI appreciation | ZHVI recompute |
-| `self_sourced_card_land` | raw land (00000 Old Kansas City Rd) | sale price (ZHVI is a home index) | held at sale price |
-
-"Native" = *native value source*, not *no monthly update*. Out-of-area homes (closed with us but outside our
-display MLS) get a card + ZHVI value but **no live IDX listing** (no display authority).
-
-##### PHOTOS
-Every card needs photos → Zillow `originalPhotos` → R2 (`tools/houseloop-photos/ninja-photo-writeback.mjs`),
-Redfin scraper fallback; land / off-Zillow → our own screenshot (00000 Old KC Rd uses Zach's aerial).
-
-##### RESULTS (2026-07-02)
-**1,937 / 1,937 resolved (100%), 1,936 valued (99.9%).** 1,020 MLS-locked + 833 address-match + 22 straggler
-city-fill + 22 hand-verified (Zach Zillow URLs). Buckets: ninja_monthly 1,839 · zhvi_monthly 90 · active 4 ·
-self_sourced_card 1 · native 1 · self_sourced_card_land 1 · needs_data 1 (22603 Wellington Ct — no value source).
-
-##### TOOLS + DELIVERABLE
-- `tools/houseloop-cards/pastclient-mls-resolver.mjs` — the full MLS-anchored run (resumable, conc 15).
-- `tools/houseloop-cards/resolve-stragglers.mjs` — the mismatch/not-found ladder (DB city-fill → city+state search).
-- `tools/houseloop-cards/merge-canonical-final.mjs` — authoritative merge (base GT + resolver + stragglers +
-  hand-verified overrides) → the FINAL CSV, with value bucket assigned.
-- Hand-verified overrides: `.claude/reports/pastclient-mls-resolver-overrides.csv` (22 rows, Zach URLs).
-- **FINAL:** `.claude/reports/pastclient-canonical-FINAL-2026-07-02.csv` — 1 row/HLID: `hlid, website_hlid,
-  client_name, street, city, state, zip, canonical_slug, home_url, zpid, zestimate, houseloop_value, value_bucket,
-  value_note, address_source`.
-
-##### STATUS + WHAT'S NEXT (follow-on, not this PRD's Phase A)
-- ✅ Phase A — resolve + value every past-client home + hand the FINAL to Caleb. COMPLETE. Caleb consumed it into
-  `hl_srg_pastclient_gt` + pushed address/URL/slug across `hl_srg_past_client_homes`.
-- 🔨 Seed the website `Listing` rows from FINAL so `/home` renders the real value (Lee's render lane; Rule #0 on
-  `Listing`). De-fork/un-quarantine the 134 currently-listed quarantined homes (rule locked with Lee).
-- 🔨 Two monthly Inngest functions — past-client Ninja re-fetch + all-closed ZHVI recompute (`home-value-monthly`).
-- 🔨 Automatic resolve-on-status-change for active/under-contract (a later pass; this PRD is past-clients only).
-
-##### LAWS HONORED
-`HOUSELOOP_DATA_DOCTRINE.md` (the table is the truth; MLS# ground truth; two-table law — value_bucket lives on
-`hl_srg_past_client_homes`, no new value table) · `GT_HOUSELOOP_ADDRESS_SSOT.md` (address is the home key) ·
-`INNGEST_OR_IT_DOESNT_EXIST.md` (the monthly refresh must be registered Inngest fns) · Rule #0 (no `Listing`
-merge/delete without typed Zach approval).
+_(File not found in-tree — path recorded for reference.)_
 
 ## Related documentation
 
 Doc sections this work creates or updates:
 
-- [`guides/property-data-and-address-identity`](/guides/property-data-and-address-identity)
 - [`guides/houseloop-home-value`](/guides/houseloop-home-value)
 - [`guides/sold-data-and-price-history`](/guides/sold-data-and-price-history)
 - [`guides/listing-lifecycle`](/guides/listing-lifecycle)
