@@ -1,55 +1,58 @@
 ---
 title: "Audit Report"
-description: "The CRM Audit Report — the human-readable proof surface for the SRG past-client resolver. Lives under Seller Report. Reads resolver_block live: every client's resolved transaction history, the resolution matrix (how each house was resolved + provenance), and the Follow-Up Boss dossier note, with a deep link to each client's FUB profile."
+description: "The CRM Audit Report — the human proof surface for the SRG past-client reconciliation. Lives under Seller Report. Five tabs: Master Houses (the resolved book with per-transaction evidence pills), Needs Resolution (the contradiction verify queue + gaps), Transaction History, FUB Notes Pending (the staged reconcile run rendered as the exact FUB card), and FUB Notes Final (signed-off). Reads the deal ledger's master-house view + the parent/child/staging tables — never a jsonb blob."
 ---
 
-The **Audit Report** is the human-readable proof surface for the [SRG Past-Client Reconciliation](/guides/srg-reconciliation-engine) pipeline. It's where you (or Zach) check the resolver's work on every past client — the transactions it found, who it decided each house belongs to, and the exact dossier note that landed in Follow Up Boss.
+The **Audit Report** is the human proof surface for the
+[SRG Past Client Reconciliation Master](/guides/srg-reconciliation-engine). It's where Zach checks the
+engine's work — every house, every deal, the evidence behind each connection, and the exact dossier card
+that will land in Follow Up Boss.
 
-It lives in the CRM under **Seller Report → Audit Report**.
+It lives in the CRM under **Seller Report → Audit Report** (`/settings/seller-report/audit`).
 
 ## What it is
 
-A full-width CRM page (`apps/houseloop-crm/components/seller-report/AuditReport.tsx`) backed by `/api/settings/seller-report/audit`, which reads the resolver's output (`resolver_block` jsonb on `hl_srg_past_clients`) **live** — no copy, no cache. What the resolver wrote is what the Audit Report shows.
+A full-width CRM page (`components/seller-report/AuditReport.tsx` + `MasterHouses.tsx`) backed by
+`/api/settings/seller-report/audit`. It reads **tables, never blobs**: the `hl_srg_master_houses` VIEW
+(derived from the deal ledger) for the house tabs, and the parent (`hl_srg_past_clients`) + child
+(`hl_srg_past_client_homes`) or staging (`hl_srg_pch_staging`) for the card tabs — rendered through the ONE
+shared card builder (`lib/pastclient/card-note.mjs`), so the audit card and the FUB note are byte-for-byte
+identical. (The old `resolver_block` jsonb read is dead — superseded 2026-06/07.)
 
-It is intentionally rendered with **gold tables** (separate from the tokenized CRM `DataTable` — it carries an `eslint-disable hl/no-raw-table`), with tokenized fonts/buttons and a navy header, so it reads as a report rather than a data grid.
+Gold-table styling is deliberate (an `eslint-disable hl/no-raw-table` exception): it reads as a report,
+not a data grid.
 
-## The jump bar
+## The 5 tabs (Zach's spec, 2026-07-03)
 
-Four anchored sections:
-
-| Section | What it shows |
+| Tab | What it shows |
 |---|---|
-| **All** | Every resolved client, one row each — name, bucket, current-home disposition, transaction count. |
-| **Transaction History** | Per client: every deal we did with them — date, BOUGHT/SOLD, address, price, and the **SG agent who repped that deal** (chain of custody). |
-| **Resolution Matrix** | How each house was resolved — the determined agent, the disposition verdict (deed-confirmed / sold / unverified), and the **`*_source` provenance** for each fact (dotloop contract vs SISU vs MLS vs recon). This is the "show your work" view. |
-| **Follow-Up Boss Notes** | The exact dossier note (`note_markdown`) the resolver produced and the transport wrote to FUB — the [card format](/guides/srg-reconciliation-engine#the-card-the-follow-up-boss-note-format-locked). |
+| **🏠 Master Houses** | RESOLVED houses only — one block per house (address = the `/home` link, HLID, value) with every deal-ledger transaction beneath it: date · BOUGHT/SOLD · client · price · agent · MLS/tier · **evidence pills**. |
+| **🔧 Needs Resolution** | Opens with **Contradictions — resolutions to verify** (each card: the conflict, the resolver's proposed fix with its receipt, and a **Verify ✓** button) and **under investigation**; then field-gap houses, unplaced deals (raw SISU address as the clue), and missing-address houses. A house lives here OR on Master Houses — never both. |
+| **Transaction History** | Every deal we repped, from the live child — date, side, address, price, chain-of-custody agent. |
+| **FUB Notes Pending** | The staged reconcile run (`hl_srg_pch_staging`, **transactions sourced from the deal ledger** as of 2026-07-04) rendered as the full card — contacts · transactions · current/lost properties · the relationship dossier. **This is the surface Zach walks before the Rule #0 PROMOTE.** |
+| **FUB Notes Final** | Signed-off cards only (`houseloop_resolved_at` set) — the green tab. |
 
-## Deep link to Follow Up Boss
+## Trust you can see
 
-Each client name links straight to their **FUB profile**:
+- **Evidence pills** on every transaction row — the stored `verified_sources` from the verification engine
+  (`✓ SISU addr · ✓ MLS name · ✓ Zach ✓`) or the red contradiction text. Which independent sources confirm
+  each client↔house connection is visible on the row, not implied.
+- **"data built at"** on the scoreboard — the page can never silently serve a stale build again.
+- The **Verify ✓** button settles a contradiction: it flips the pending override to
+  `verify_status='verified'` / `decided_by='zach'` and clears the row's contradiction — verification
+  metadata only; identity changes go through overrides + a ledger rebuild, never a hand-edit.
 
-```
-https://spradlinggroup.followupboss.com/2/people/view/<fub_id>
-```
+## Deep links
 
-So you can jump from the resolver's verdict to the live person record in one click — confirm the note landed, cross-check the contact, see the real timeline.
+Every client name links to their FUB profile
+(`https://spradlinggroup.followupboss.com/2/people/view/<fub_id>`); every house address links to its
+`/home/<slug>/<HLID>` page on houseloop.ai.
 
-## What it reads
-
-| Field on `resolver_block` | Surfaces as |
-|---|---|
-| `contacts[]` | the contact line(s) |
-| `transactions[]` (each carries `agent`) | Transaction History + the per-line agent column |
-| `disposition` / `dispositions[]` | current-home verdict (deed-confirmed / sold / unverified) |
-| `bucket` + `bucket_basis` | the bucket pill + why it resolved that way |
-| `dnc` | DNC / Internal suppression state |
-| `tags[]` | the FUB tag taxonomy applied |
-| `note_markdown` | the Follow-Up Boss Notes section |
-
-Because it reads `resolver_block` directly, the Audit Report is always in sync with the latest resolver run — re-run the resolver on a client and refresh the page to see the new verdict.
+Sign-off remains **CLI-only** (`resolution-gate.mjs <pc> --signoff`) — there is no sign-off button in the
+UI by design.
 
 ## Related
 
-- [SRG Past-Client Reconciliation](/guides/srg-reconciliation-engine) — the full pipeline that produces what this page audits.
+- [SRG Past Client Reconciliation Master](/guides/srg-reconciliation-engine) — the full engine this page audits.
 - [Seller Report Dashboard](/guides/home-valuation-dashboard) — the past-client reactivation surface.
-- [dotloop Integration](/guides/dotloop-integration) — how the final-truth contract agent is pulled.
+- [HouseLoop Home Value Report](/guides/home-value-report) — the end state.
