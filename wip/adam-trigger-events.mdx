@@ -1,0 +1,292 @@
+---
+title: "Adam (Lead Platform + Trigger Events + Workflows + Notifications — Adam's Buildout)"
+description: "Work-in-progress dossier — Adam · HouseLoop CRM · Developer Docs. Lead Platform + Trigger Events + Workflows + Notifications — Adam's Buildout."
+---
+
+<Info>Live dossier — auto-generated from `.claude/state/wip/adam/trigger-events.md` on every push. **Progress: 1/8 done (13%).** _Updated 2026-07-04 (Opus 4.8) · Lee = model/architect · transferred from Benji (Zach directive 2026-07-04)._</Info>
+
+**Owner:** Adam — HouseLoop CRM · Developer Docs
+
+## Checklist
+
+_This dossier is the ONE home for all HouseLoop CRM **workflow / registration-events / platform-scoping / notification**
+work (Zach directive 2026-07-04 — transferred to Adam from Benji). It auto-publishes to
+houseloop.mintlify.io/wip/adam-trigger-events. ALL documentation for this buildout lives HERE._
+
+---
+
+### 🔧 ADAM'S ACTIVE BUILDOUT — Platform-Scoping + Notifications (from the Msale live audit, 2026-07-04)
+
+**Full handoff/plan (source of truth for the fix work):** `~/.claude/plans/calm-giggling-pie.md` (Adam owns; Fable-5 restart boots into `.claude/state/adam-handoff.md` which points here).
+
+Trigger: a live FUB lead (**Msale Olongo**, `platform=follow_up_boss`) exposed 4 bugs. The intended law is **`Workflow = f(platform × trigger event)`, scoped, never `any`** (`hl_workflows.platform`: NULL=agnostic; canonical values `houseloop`|`follow_up_boss` — NOT `houseloop.ai`). Findings:
+- [ ] **P0-A — Platform leak:** "New Lead — Tour Request" (`platform=NULL`) fired for a FUB lead via the agnostic fallback (`runtime.ts:243-253`). Fix: backfill `hl_workflows.platform` on registration/tour workflows (Rule #0), + migration to weld, + gate the 3 earlier `dispatchDoor` tiers.
+- [ ] **P0-B — Agent notifications:** the "New tour request… Accept:" note went to the AGENT (recipient `4074038088`), NOT the lead — but (a) it renders in the customer Texts thread + Run Log says "→ Msale", and (b) there's NO run-log/actor step for the notification send. Fix: tag agent notifications (recipient_role/event_type) so the customer thread excludes them + Run Log shows "→ agent", AND log an atomic step (actor Myli + recipient + reason).
+- [ ] **P1 — Blank merge fields** ("on ___ at ___"): FUB door fires with no `payload`; templates hardcode `{{request.date}} at {{request.time}}`. Fix per plan (`{{request.when}}` / fallback).
+- [ ] **FEATURE — Clickable "Current Workflow" → editor:** add `w.id` to `ai-activity` payload + link to `/workflows?wf=<id>` in `AiReasoningChain.tsx`.
+- [x] **RESOLVED (not a bug):** the "two addresses" = two separate tour requests.
+
+**Guardrails:** Rule #0 for the DB backfill (typed Zach OK), branch `houseloop-app`, coordinate with Benji (builder UI) + Lee (model doc), docs-first, verify eyes-on prod.
+
+---
+
+### 🎯 THE 3 ACTIVE FLOWS OF WORK  (top-level scoreboard — each has its own section + checklist below)
+
+- [ ] **FLOW 1 — Lead Platform + Trigger Events + Template System** → [§1](#§1) · _mostly SHIPPED; open: A4 silent auto-register (awaiting Zach gate), A5 nav/dev-doc, Text-Templates mirror + junk purge_
+- [ ] **FLOW 2 — FUB Lead-Source Canonicalization** → [§2](#§2) · _SCOPED (verified vs real fub.* data), not started_
+- [ ] **FLOW 3 — Past-Client Mode + Referral Attribution** → [§3](#§3) · _FUNCTIONALLY COMPLETE (toggle + hero cards + priority/relationship/dossier + header polish + BOTH referral-capture paths — Add-Lead "Referred by" AND the past-client card "Add Referral" list, all live). Only P2-E2E of path #2 + Mintlify guide left · ⏳ Ana import ~3–4 days_
+
+&gt; Related PRDs: Flow 1 = `GT_HOUSELOOP_LEAD_PLATFORM_TRIGGER_CATALOG_PRD.md` + `GT_HOUSELOOP_NOTIFICATIONS_REFACTOR_PRD.md` ·
+&gt; Flow 3 = `GT_HOUSELOOP_PAST_CLIENT_REFERRAL_PRD.md`. Scope locks: Flow 1+2 = `session-scope-lead-template-bundle.lock` ·
+&gt; Flow 3 = `session-scope-past-client-referral.lock`.
+
+---
+
+&lt;a id="§1"&gt;&lt;/a&gt;
+### §1 — FLOW 1: Lead Platform + Trigger Events + Template System
+
+**One line:** ONE canonical catalog (`hl_trigger_events`) is the spine; **Platform &gt; Lead Source &gt; Tags** is the
+attribution; each platform owns its trigger events + workflows; a trigger event **always fires** — the only knobs are
+*creates-lead* + *workflow-active*. Collapse the 4 redundant config routes → 2 screens (Lead Sources KPI scoreboard +
+platform-tabbed Trigger Events); enrich the row; make the workflow builder Trigger × Platform-scoped. **Templates:**
+every notification is a full-HTML row in the builder; the Email/Text template tables group by Buyer/Seller/TC/Agent,
+show USED IN (→ workflow canvas, highlights the step) + a SENT count (→ leads drill-down).
+
+**Foundation — already existed (2026-07-01):**
+| ✔ | Item |
+|---|---|
+| ✅ | Canonical catalog `hl_trigger_events` (mig 0276) + `notify_class` (0277) — the spine |
+| ✅ | Builder palette + Trigger Events page READ the catalog; dead `WF_TRIGGERS` removed |
+| ✅ | Trigger Events page exists — platform-grouped, TRIGGERED count (native `hl_run_log`, FUB from mirror) |
+
+**Trigger-event / lead-source restructure — SHIPPED:**
+| ✔ | Item | PRD · commit |
+|---|---|---|
+| ✅ | Classifier fix (Ali Burke): real-intent routing; passive events gated | `51cfd38429` |
+| ✅ | Atomic FUB trigger events (Tour/Contact/Inquiry/Rental/Seller/Virtually-Toured), mig 0285 — render under Follow Up Boss | `b43ad744c7` |
+| ✅ | Config-driven FUB source + auto `Source:` tag; no hardcoded tags | `588e3d2e9a` |
+| ✅ | Restore Platform › Lead Source › Tags on lead detail (reverted the platform-kill) | `64c5398f4f` |
+| ✅ | **Fire-count click-through** — Triggered # → leads drill-down modal | §7.3 · `a0ee2e581d` |
+| ✅ | Enriched row (native + FUB) — Creates-Lead + Workflow-Active toggles, workflow_active honored at fire-time (mig 0288/0289) | §7.1/§7.2 · `61095f2484`/`82668b0179` |
+| ✅ | **Screen 2 Trigger Events = 2 platform tabs** → category groups → RICH rows (mig 0290) | §5 · `a47bad9425` |
+| ✅ | **Configure = defaults only** + dynamic "← Back to Lead Sources"; FUB Configure → simple defaults page | §5b · overnight 07-03 |
+| ✅ | **Screen 1 Lead Sources = KPI scoreboard** — events stripped; count-chip deep-link | §4 · overnight 07-03 |
+| ✅ | **Notification column** (read-only notify_class + HouseLoop/Realloop pill) | §7.4 |
+| ✅ | **Workflow builder = Trigger × Platform scope** (mig 0304 `hl_workflows.platform`; NULL=fires-both) | §14 · overnight 07-03 |
+| ✅ | **A1** rename "System Events" → **"Existing Lead Activity"** (builder FAMILY_LABEL + WorkflowsTable) | §16 · `ef753d4331` |
+| ✅ | **A2** "Any platform" scope for Existing-Lead-Activity triggers (persists `platform=NULL`; Fires-for toggle) | §14/§16 · `ee661e6c8c` |
+| ✅ | **A3** complete FUB Existing-Lead catalog (mig 0305) — 4 shared behaviors + 13 FUB-only signals (incl. `insight_viewed_10x_7d`) | §16 · `facb4988cd` |
+
+**Add-New-Lead polish — SHIPPED:**
+| ✔ | Item | commit |
+|---|---|---|
+| ✅ | **§5c fire gate keyed on the SELECTED SOURCE** — warns "&lt;source&gt; is associated with &lt;workflow&gt;"; fires that source's `general_registration` door | `2bbb07041a` |
+| ✅ | **Fire/suppress warning redesigned** — big box, workflow name on its own line, TWO toggle buttons (Yes fire / Suppress), default = Suppress | `98fb3c98b5` |
+| ✅ | **Killed dead "Time Frame" field** · Stage full-width | `98fb3c98b5` |
+| ✅ | **Manual Entry no longer a source** — dropped from the Add-Lead dropdown + the Lead Sources scoreboard | `98fb3c98b5` |
+
+**Template system half (Notifications-Refactor PRD) — SHIPPED:**
+| ✔ | Item | commit |
+|---|---|---|
+| ✅ | Every notification email = full self-contained HTML row (mig 0300); `composeNotificationEmail` KILLED — preview == send | `eacf8665de` |
+| ✅ | `categories.ts` 4-group model (Buyer/Seller/TC/Agent) | `1958b1e5cd` |
+| ✅ | **Email Templates table redesign** — flat pill row + cols TEMPLATE·USED IN·SENT·CREATED·VIEW; killed Live/Draft | `0f886c851b` |
+| ✅ | **USED IN** → workflow canvas (highlights the step) · **SENT** → `TemplateSendsModal` leads drill-down | `0c83b0d97b` · `701eabf42c`/`699e1eea2b` |
+| ✅ | mig 0303 `template_group` + create/edit forms → ONE Group picker (killed Folder/Event/Lifecycle) | — |
+| ✅ | Fixed team-blocking docs mirror (backticked raw `{{merge}}`) | `7b37cd4147` |
+
+**🔲 FLOW 1 — REMAINING:**
+| ⬜ | Item | note |
+|---|---|---|
+| ⏸️ | **A4 — silent cross-platform auto-register** (built-ready, AWAITING ZACH GATE) — raw `qWeb` passwordless `"User"` INSERT on FUB import; gate is FREE (import bypasses the CRM intake route → no welcome); magic-link already logs in. Cross-DB + real leads → not unleashed unattended. **Need Zach's trigger-point call** (on-import-for-all = rec / lazy / per-source). | §16 |
+| ⏸️ | **A5** — (a) `/settings/lead-sources` is a RICH config page, NOT dead — surface to Zach whether it's superseded by `/settings/lead-platform/configure` before any retire. (b) Dev doc `guides/trigger-events` waits on A4. | §15 |
+| ⬜ | **Text Templates page** — mirror the Email redesign (flat pill row + USED IN + SENT drill-down); parameterize `TemplateSendsModal` + `/api/template-sends` by channel |  |
+| ⬜ | **Junk purge** — retire dead templates (`new_reg_join_only_sms`, `*_request_received`…) + Zach's `contact_confirmation` call |  |
+| ⬜ | Create/edit form simplification (drop Event/Lifecycle) · Branch-node canvas highlight · `notification-templates.mdx` doc |  |
+| ⬜ | System-event **activity-phrase backfill** (Lee #11263: property_liked/saved/shared/tour/contact = NULL activity) |  |
+| 📝 | NOTE-only (do NOT build): aggregate/behavioral triggers ("viewed 10× in 3d", `platform=any`) — count-over-window engine | §6 |
+
+---
+
+&lt;a id="§2"&gt;&lt;/a&gt;
+### §2 — FLOW 2: FUB Lead-Source Canonicalization  (Zach LOCKED 2026-07-03, verified vs real `fub.*` Railway data)
+
+**The rule:** every FUB lead source is prefixed **`FUB - `**, platform=follow_up_boss. Resolution order per lead:
+① tag `Google Adwords PPC` → `FUB - Google PPC` (4,907 people; source usually blank) · ② canonicalize `source`.
+Makes FUB sub-sources first-class `hl_lead_sources` rows so they show in the Add-Lead dropdown, drive per-source KPIs,
+and are referenceable in workflows (`{{lead.source}}`).
+
+| ⬜ | Item |
+|---|---|
+| 📋 | **Canonical map** (folds): Zillow ← Zillow Preferred/zillow.com/Premier Agent/Zillow/**trulia.com**/Trulia/Zillow Rentals · Realtor.com · COI ← Agent COI/"Agent  COI"/**SOI** · **Opcity** (standalone) · **Referral** (standalone) · Google Organic ← Google · Spradling Realty ← spradlingrealtygroup.com/Website · HomeLight · RealScout · Open House · FiveStreet · Homes.com · DROP ← `<unspecified>`(minus PPC)/CSV Import/Import/Other/Company/Sierra/Referral Exchange |
+| ⬜ | `source-canonicalize.ts` resolver (tag-first Google PPC → source map) — pure + tested |
+| ⬜ | FUB import (`import-fub-lead.ts`) **upserts** the canonical source into `hl_lead_sources` (platform=follow_up_boss) + sets `source_id` |
+| ⬜ | **Lead Sources page redesign** — Platform card (aggregate) → **nested flat source list** underneath, each a master KPI row (Total · Buyers UC/Sold · Sellers UC/Sold · Volume); select a source filters its KPI. HouseLoop.ai gets "HouseLoop.ai Organic". |
+| ⬜ | Backfill existing leads' `source_id` from their `source` text via the resolver |
+| 📝 | Past-client override is now handled by **Flow 3** (stage=Closed + bucket/rank), NOT a source flip — source stays pure origin. |
+
+---
+
+&lt;a id="§3"&gt;&lt;/a&gt;
+### §3 — FLOW 3: Past-Client Mode + Referral Attribution  (Zach LOCKED 2026-07-03 — Benji owns END-TO-END)
+
+**Deadline:** Ana's FUB past-client import in ~3–4 days → the data model + attribution must be live first.
+**PRD:** `GT_HOUSELOOP_PAST_CLIENT_REFERRAL_PRD.md` · **Scope lock:** `.claude/state/session-scope-past-client-referral.lock` · **Plan:** `~/.claude/plans/calm-dreaming-yeti.md`.
+**Thesis — 4 independent dimensions, never overloaded:** SOURCE=origin (immutable) · STAGE=Closed (=past client) ·
+**OWNER + BUCKET** (decomposed: `relationship_owner_user_id` person + `relationship_bucket` enum native/handoff/team —
+scales to HouseLoop-native, no "Ana" in schema) · **RANK** A/B/C/D (A=best, LEFT). A toggle flips 3 surfaces.
+
+| ✔ | Item | phase · commit |
+|---|---|---|
+| ✅ | **Data model** — `hl_leads` += `relationship_owner_user_id` + `relationship_bucket` + `referral_rank` + `is_past_client`; **`hl_lead_referrals`** link table; `hl_lead_referral_rollup` VIEW (referrals given/closed · volume · GCI from referred leads' closed hl_transactions); LeadDetail type/SELECT wired; purge-guard excludes VIEWS | P1 · mig 0307 · `92f5df46e0` |
+| ✅ | **Active ⟷ Past Client toggle** — `PastClientToggle` (clone of AiModeToggle persist pattern + hl-toggle) pinned FAR-LEFT of `LeadLane`'s navy header; PATCH `is_past_client` + refresh | P2 · `6003864c38` |
+| ✅ | **Center hero cards flip** — `PastClientStats` (same 6-up StatStrip grid): Contacts · Last Ctct · Last Reply · Referrals · Lifetime Vol · Lifetime GCI (referrals from the rollup view via `/api/leads/[id]/referral-rollup`) | P3 · `151e1fe08b` |
+| ✅ | **Center strip flip** — `PastClientRelationshipStrip`: Referral Priority (A/B/C/D) on top → **Relationship dropdown** (Ana Only/Ana Handoff/SRG Team Only/Do Not Client/Do Not Contact, mig 0308) → **Relationship Dossier** editable text | P4→refined · `88a72d3a16`/`4505873f87` |
+| ✅ | **Owner picker DROPPED** (Zach: the card's Agent IS the owner) — left lane stays Buyer/Seller chips; RelationshipChip retired | refined · `4505873f87` |
+| ✅ | **Header polish** — Active/Past-Client toggle far-left + both navy headers taller; faint divider line under the toggle row (both cards); Myli strip label "Myli · your AI assistant working this lead" (bold/white) | `ad0ccdfa4d`/`7eea7f0d27`/`7fe42d4d40` |
+| ✅ | **Referral capture — PATH #1 (P6)** — Add-Lead on a Referral source shows a "Referred by" picker (debounced `/api/leads/search`) → on create writes `hl_lead_referrals`; the referrer's Lifetime GCI/Volume + Referrals hero cards already read the rollup, so a closed referred deal rolls up automatically. **E2E-verified live** (crm.houseloop.ai): created "Referral TestBenji" → linked to "zach test" → DB link + rollup `referrals_given=1` confirmed | P6 · `653439d1d1` |
+| ✅ | **Referral capture — PATH #2** — `ReferralsGivenSection` on the past-client card (left lane, Past-Client mode only): lists every referred lead (name · status · closed $, each links to the lead) + inline **"+ Add Referral"** search picker. New `/api/leads/[id]/referrals` GET/POST/DELETE over the SAME `hl_lead_referrals` link + rollup as path #1 → both feed one Lifetime GCI | `3cabeb3342` |
+| ✅ | **REFERRAL ENGINE — the funnel (Zach LOCKED end-to-end 2026-07-03).** Add New Lead is now a funnel: Step 1 "Is this lead a referral?" Yes/No. No→plain form. Yes→referral card: WHO referred them (search existing client OR "+ add the referrer" when not in DB) + the referred person + relationship/looking-to/timeframe/price/area/priority(A-B-C)/notes. Save = referred lead (source=Referral) + find-or-create referrer (existing OR new "Referral Partner" sphere contact) + hl_lead_referrals link w/ full context (mig 0309). **Both people captured** (the missing piece). Add-Lead modal also made first-class (IpadModal, over-iPad, blue heading, scrollable). Card "+ Add Referral" opens the SAME funnel pre-locked to that client (window event); card body = history. ONE engine, three doors. **E2E-verified live**: funnel Step-1 Yes→referral card; save writes referred lead + referrer link + ALL metadata (friend/buyer/0-3mo/$/Leawood/A/notes, referrer=Abshiro) confirmed in DB; card "+" opens pre-locked to zach test; prod cleaned. `2628334ce9` (+ P1 `9e978d8589`) | ✔ |
+| ✅ | **PATH #2 REDESIGNED → the REFERRALS KPI card (Zach 2026-07-03).** Left-lane section KILLED (broke 3-col flow). The Referrals hero card is the single entry point: click card = view/manage; click the **+** = jump to add. Opens **`ReferralModal`** (`IpadModal`, centered over the iPad like the appointment modal) — search-to-add + list of every referral (person · transaction address/price · status pill · remove). GET returns each referral's transaction; count + Lifetime tiles refresh on change. **E2E-verified live**: card+/modal open, search→link (count 0→1), remove (1→0), DB clean | `3a196303af` |
+| ⬜ | Follow-up: graduate the Mintlify guide (property-data / lead-platform reference) | P7 |
+| 📝 | Data model refinements shipped: mig 0308 (5 bucket values + `relationship_dossier`); LaneHeader `cornerActionLeft`/`stripLabel`/divider (shared → both lanes). Follow-ups: Last-HVR-Opened + Comm-Style hero cards (need email-open + a comm-style field); per-agent bucket lists (currently one hard-coded set). |
+| 📝 | OUT (defer): Buffini referral NURTURE engine (auto cadence) · COI referral pipeline. This build = attribution + UI only. |
+| ⚠️ | COORDINATE: `LeadLane`/`CenterLane`/`MilestoneBand` overlap Lee's PARITY-LANES build — rebase on his HEAD + ping before editing (he's out per #11306). |
+
+---
+
+### 📋 AMENDMENT / UPDATE LOG  (running — newest first, across all 3 flows)
+- **2026-07-03 (Benji) — FLOW 3 PAST-CLIENT UI ~COMPLETE (P2–P5 + refinement + polish).** Active⟷Past-Client toggle
+  (P2), hero-card flip (P3), the center strip refined to Referral Priority → Relationship dropdown (5 SRG buckets,
+  mig 0308) → editable Dossier (P4), Owner picker dropped (Agent = owner), header polish (toggle far-left, taller
+  headers, faint divider both cards, bold Myli strip label). Commits 6003864c38 · 151e1fe08b · 88a72d3a16 · a9feae0907
+  (reverted) · 4505873f87 · ad0ccdfa4d · 7eea7f0d27 · 7fe42d4d40. Only **P6 referral capture** + E2E remain.
+- **2026-07-03 (Benji) — DOSSIER REORGANIZED into the 3 open flows (Zach directive):** top scoreboard of the 3 flows,
+  each its own section + checklist (§1 Lead Platform/Trigger/Templates · §2 FUB Canonicalization · §3 Past-Client/Referral),
+  amendment log beneath. No work changed — pure reorg for legibility.
+- **2026-07-03 (Benji) — FLOW 3 P0+P1 SHIPPED.** PRD `GT_HOUSELOOP_PAST_CLIENT_REFERRAL_PRD.md` (`53fd354bf5`) + the
+  data model (mig 0307, `92f5df46e0`): 4 hl_leads cols + `hl_lead_referrals` + rollup view + LeadDetail wiring +
+  purge-guard view-exclusion fix. Owner+bucket DECOMPOSED per Zach (scales to HouseLoop-native). Ana's import now has a home.
+- **2026-07-03 (Benji) — DOSSIER became the ONE home for all Benji work (Zach directive).** Folded in Add-Lead polish,
+  FUB canonicalization scope, and the Past-Client build.
+- **2026-07-03 (Benji) — ARCHITECTURE PASS: cross-platform close-out designed + PRD-locked (§14 reconciliation + §16).**
+  New Lead Registration = platform-specific; Existing Lead Activity = agnostic (`platform=NULL` already). Crux = silent
+  auto-register a HouseLoop account on import; double-message solved via the §5c fire-gate; passwordless magic-link auth
+  (`apps/houseloop-web/lib/auth/magic-token.ts`). 3-piece build queued (A1/A2 done, A3 done, A4 pending gate). PRD `3a637c213c`.
+- **2026-07-03 (Benji) — OVERNIGHT: §4/§5b/§5c/§7.4/§14 + email-template content-first SHIPPED.** Lead Sources scoreboard,
+  Configure=defaults+back button, Add-Lead fire gate, Notification column, workflow platform-scope (mig 0304), full-HTML
+  notify templates (mig 0300), Email Templates table + Group picker (mig 0302/0303). Fixed a red prod build (`9e2cfd424e`).
+- **2026-07-02 PM (Benji) — BUNDLE CONSOLIDATED + template half folded in.** Trigger Events restructure shipped, then the
+  notification/email-template redesign (mig 0300; USED IN → canvas `701eabf42c`/`699e1eea2b`; SENT drill-down `0c83b0d97b`).
+  Two scope locks consolidated into `session-scope-lead-template-bundle.lock`. Lesson: `:3020` serves a stale bundle after
+  ~1h up — fix is `restart-dev.sh --clean`, not a panic.
+- **2026-07-02 (Benji) — §5 Screen-2 RESTRUCTURE SHIPPED** (`a47bad9425`, mig 0290): 2 platform tabs → category groups →
+  rich rows. ⚠️ `next build` in the CRM dir clobbers the running :3020 `.next` — recovered with restart-dev --clean.
+- **2026-07-02 (Benji) — §7.1/§7.2 Enriched row SHIPPED** (mig 0288/0289): Creates-Lead + Workflow-Active toggles;
+  workflow_active is a REAL fire-time gate (`runtime.ts` + FUB import), event always fires/notifies.
+- **2026-07-02 (Benji) — §7.3 Fire-count click-through SHIPPED** (`a0ee2e581d`): TRIGGERED # → `TriggerFiresModal`;
+  `/api/trigger-events/fires` over `hl_lead_activity`; shared `fub-event-kinds.ts` drives count + drill-down.
+- **2026-07-02 (Benji) — Reverted the platform-kill** (`64c5398f4f`): Platform is the spine. KEPT `fub_import` source +
+  config `default_tag_ids` + auto `Source:` tag.
+- **2026-07-02 (Benji) — atomic FUB trigger events** (mig 0285, `b43ad744c7`) + **Ali Burke fix** (`51cfd38429`):
+  `classifyFubEvent` classifies real intent; passive/off events never mint a lead or fire.
+- **2026-07-02 (Lee, spec) — Amended WIP with P6:** Zach-signed PRD `GT_HOUSELOOP_LEAD_PLATFORM_TRIGGER_CATALOG`.
+- **2026-07-01 (Benji) — Canonical Trigger Events page built** + TRIGGERED count column; P0–P2/P5: catalog `hl_trigger_events`
+  (mig 0276) + `notify_class` (0277); dead `WF_TRIGGERS` removed; saved-search doors registered.
+
+---
+
+### Background & model (Flow 1 — the original reconciliation, rolled in)
+**North star (Zach 2026-07-01):** ONE canonical DB table `hl_trigger_events` is the SSOT for every trigger — Lead Sources
+page, Trigger Events page, workflow builder palette, Workflows list all derive from it. A "Trigger Event" = a trigger
+(starts a workflow) that fires on an event a lead did. **Why:** the same trigger info was duplicated across 4 code lists
++ 3 DB tables, hand-synced, so a trigger added under Lead Sources never flowed into the builder.
+**Attribution (PRD §3):** every lead = **Platform** › **Lead Source** › **Tags**.
+**Config (PRD §9):** Platform = the tab; Category = the group (registration/system/follow-up). Per-platform config = two
+toggles (Creates-Lead, Workflow-Active) + FUB's Process. Workflows bind to (trigger × platform-scope). **The event always
+fires — toggles gate the lead + the workflow, never the firing.**
+**Blocks →** [[saved-search-process]] (finalize saved-search origins once the catalog is canonical).
+
+---
+
+## PRD · `GT/GT - ACTIVE/GT_HOUSELOOP_LEAD_PLATFORM_TRIGGER_CATALOG_PRD.md · model: docs-site/guides/pipeline-workflow-overview.mdx`
+
+_(File not found in-tree — path recorded for reference.)_
+
+---
+
+## Scope lock · `.claude/state/session-scope-lead-template-bundle.lock`
+
+#### SCOPE LOCK — LEAD PLATFORM + TRIGGER EVENTS + TEMPLATE SYSTEM (ONE BUNDLE) · Benji · Mode: BUILD
+#### Consolidated 2026-07-02 PM — SUPERSEDES session-scope-trigger-catalog.lock + session-scope-notification-templates.lock
+#### Tree: /Users/zachspradling/Code/BossLoop-Gold · Branch: houseloop-app
+#### PRDs: GT/GT - ACTIVE/GT_HOUSELOOP_LEAD_PLATFORM_TRIGGER_CATALOG_PRD.md (Zach-signed) +
+####       GT/GT - ACTIVE/GT_HOUSELOOP_NOTIFICATIONS_REFACTOR_PRD.md (template side)
+#### Checklist (SSOT): .claude/state/wip/benji/trigger-events.md  → dev doc docs-site/wip/benji-trigger-events.mdx
+
+##### THE ONE BUNDLE (Zach LOCKED 2026-07-02 PM)
+The Lead-Source / Trigger-Event refactor AND the notification / email-template / text-template system are the SAME
+body of work: a trigger event fires a workflow → a workflow step sends a template → the template table shows WHERE it's
+used (→ workflow canvas, highlights the step) + how many times it fired (→ leads drill-down). Do not treat them separately.
+
+##### ✅ DONE (committed, on houseloop-app @ HEAD)
+TRIGGER SIDE:  catalog spine hl_trigger_events (0276) · Trigger Events screen = 2 platform tabs → category groups →
+  rich rows (a47bad9425, 0290) · enriched rows: Creates-Lead + Workflow-Active toggles, workflow_active gates at
+  fire-time (61095f2484/82668b0179, 0288/0289) · fire-count → leads drill-down (a0ee2e581d) · lead-detail Platform›Source›Tags.
+  OVERNIGHT 2026-07-03: §4 Lead Sources = KPI scoreboard (events stripped; count-chip deep-link) · §5b Configure =
+  defaults only + dynamic back button + FUB Configure→defaults · §5c Add-New-Lead manual fire GATE (fireWorkflow +
+  GET /api/leads/manual-fire) · §7.4 Notification column (already on rich rows) · §14 Workflow platform scope (mig 0304
+  hl_workflows.platform houseloop|follow_up_boss; NULL=unscoped=fires-for-both; runtime fire-match + builder persist/API).
+TEMPLATE SIDE: notification emails = full HTML rows (0300, killed composeNotificationEmail, eacf8665de) · categories.ts
+  4-group model (1958b1e5cd) · Email Templates table redesign: flat pill row All/Buyer/Seller/TC/Agent + cols
+  TEMPLATE·USED IN·SENT·CREATED·VIEW, killed Live/Draft Status (0f886c851b) · USED IN clickable → /workflows?wf=&lt;id&gt;&
+  highlightTemplate=&lt;key&gt; + resolver returns wf id (0c83b0d97b) · SENT count from hl_email_send_log → TemplateSendsModal
+  (0c83b0d97b) · workflow canvas highlights the deep-linked step, 3s ring hugs the 360px card (701eabf42c, 699e1eea2b) ·
+  create/edit form → ONE Group picker, mig 0303 template_group (killed Folder/Event/Lifecycle) · docs mirror unblocked (7b37cd4147).
+ARCHITECTURE (designed + PRD-locked 2026-07-03, pushed 3a637c213c — NOT yet built): cross-platform close-out (§16) —
+  platform-scope reconciliation (New Lead=specific / Existing Lead Activity=agnostic; §14 NULL already = agnostic),
+  silent auto-register crux, double-message solution (silent account, journey-owned comms), passwordless magic-link auth.
+
+##### 🔲 REMAINING (the resume list — PLAN: ~/.claude/plans/calm-dreaming-yeti.md, Zach-approved 2026-07-03)
+PHASE A — cross-platform close-out (the rest of the workflows PRD):
+  - A1 Rename "System Events" → "Existing Lead Activity" in builder FAMILY_LABEL (WorkflowBuilder.tsx:40) — label-only
+  - A2 Add "Any platform" scope for Existing-Lead-Activity (persists platform=NULL; NO migration; builder :245/:585-592)
+  - A3 Complete FUB catalog — mirror ~17 hl_fub_webhook_settings system events into hl_trigger_events (follow_up_boss/system)
+  - A4 Silent auto-register (CROSS-DB) — qWeb passwordless "User" INSERT on FUB import (mirror seedStarterSavedSearch);
+       gate = guardrail (import path never hits the CRM intake route → no welcome); magic-link already logs in. VERIFY E2E.
+       ⚠️ re-confirm on-import-for-all trigger point w/ Zach at the gate.
+  - A5 §15 retire dead /settings/lead-sources route (Sidebar already 2 items) · dev doc guides/trigger-events (shipped-only)
+PHASE B — Text-Messaging template section (mirror the shipped email redesign):
+  - Text Templates page = email page's twin (flat pill row + USED IN canvas-highlight + real SENT drill-down; parameterize
+    TemplateSendsModal + /api/template-sends by channel — do NOT fork) · single Group picker · text SEND-LOG discovery first
+  - Junk purge (new_reg_join_only_sms, etc.) + Zach's contact_confirmation call (nuke hardcoded-Myli-phone vs token-based)
+  - System-event activity-phrase backfill (Lee #11263: property_liked/saved/shared/tour/contact = NULL activity)
+PHASE C — FUTURE (noted only): detailed message grouping/threading.
+
+##### IN SCOPE (paths)
+apps/houseloop-crm: components/settings/&#123;trigger-events,lead-platform,lead-sources&#125;/** · components/workflows/** ·
+  app/(crm)/settings/&#123;trigger-events,lead-platform,email-templates,text-templates&#125;/** · app/api/&#123;template-usage,
+  template-sends,trigger-events,lead-flow,fub&#125;/** · lib/&#123;notifications,templates,workflows&#125;/** · db/migrations/03xx.
+docs-site: wip/benji-trigger-events.mdx (auto-gen — edit source .claude/state/wip/benji/trigger-events.md) ·
+  platform/notification-templates.mdx.
+
+##### OUT OF SCOPE (defer)
+TC template content build · workflow-canvas visual restyle beyond the highlight · FUB aggregate/behavioral triggers
+(NOTE-only, forward-compat) · Lee's card-catalog / PixelFeedStream (his lane).
+
+##### LAWS
+- ONE TREE, branch houseloop-app · per-file staging · NEVER `git add .claude/state`.
+- NO `next build` on the running :3020 (clobbers .next → stale/"regressed" page). Verify: tsc + hl/* eslint.
+  Recover a stale :3020 with `bash tools/houseloop-crm/restart-dev.sh --clean` (kills ONLY 3020).
+- BATCH edits → ONE commit (no save-by-save HMR storms on Zach's :3020). Migration idempotent + shipped WITH its code.
+- Dev doc = auto-gen from the WIP .md via `node tools/docs/wip-sync.mjs`; backtick every `{{merge}}` token or MDX breaks.
+- Reuse existing components (REUSE_NOT_RECREATE): HlDataTable, HlFormModal, the builder's selected-node + notifications flash.
+
+## Related documentation
+
+Doc sections this work creates or updates:
+
+- [`guides/trigger-events`](/guides/trigger-events)
+- [`guides/lead-sources`](/guides/lead-sources)
+- [`guides/workflows`](/guides/workflows)
+- [`platform/notification-templates`](/platform/notification-templates)
