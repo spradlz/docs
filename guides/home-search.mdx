@@ -127,6 +127,27 @@ curl -X POST "https://houseloop.ai/api/search/classify" \
 - Location typeahead comes from `GET /api/locations/autocomplete` (addresses, cities, counties,
   neighborhoods, school districts, schools). Selecting an address goes straight to the listing.
 
+### Any status surfaces on a DIRECT address search (Zach 2026-07-03)
+
+The dropdown has **two address sources** (`app/api/locations/autocomplete/route.ts`):
+1. **Active + on-market** — a live Repliers query (`status=A`). Each hit renders its **true** status via the
+   shared `mapStatus` (Active · Coming Soon · Under Contract) — never a hardcoded "active".
+2. **Everything else — pending, coming-soon, sold, AND off-market (cancelled / expired / withdrawn / terminated)** —
+   matched from our `Listing` cache **by address slug only** (`status IN ('pending','coming_soon','sold','off_market')`,
+   `deletedAt`/`quarantinedAt` NULL).
+
+So if you **type a specific address**, a non-active home surfaces with a status pill and links to its `/home` page —
+e.g. searching `2112 W 48th` returns the off-market `2112 W 48th Terrace`. It is **NOT a browse filter**: these homes
+only appear when you search their address directly, never in the general gallery/results (which stay `forSale,comingSoon`).
+
+<Warning>
+**Cancelled / Expired / Withdrawn currently render the generic `off_market` pill.** Our `Listing.status` enum has no
+per-sub-status value — the raw MLS `lastStatus` (Cnc/Exp/Wdn/Ter) isn't stored, so all four collapse to `off_market`.
+A distinct per-sub-status pill (and rolling every cycle of an address up under ONE HLID) is **future work** — deliberately
+not built yet (Zach: "not boiling the ocean"). The architecture already surfaces the home on address search; only the
+pill label is coarse.
+</Warning>
+
 <Note>
 **One brain, two surfaces.** The bar (`classify`) and the AI modal (`nlp`) share `search-defaults.mjs`, so
 they emit **identical** params for the same query — the bar just never converses.
