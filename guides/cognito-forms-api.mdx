@@ -1,0 +1,84 @@
+---
+title: "Cognito Forms API — Reverse Engineering"
+description: "How SRG's TC intake runs on Cognito Forms today, the REST API we use to pull the form definitions live, the 140-field TC Intake schema mapped to our A-Frame collections + hl_tc_* model, and the plan to replace Cognito with a native HouseLoop intake we own."
+---
+
+<Note>
+**🚧 Reverse-engineering reference (build in progress).** SRG currently pays ~$40/mo for **Cognito Forms** and
+**does not own the data**. This page documents the live Cognito API + form structure so we can rebuild the intake
+**natively in HouseLoop**. See [Native Transaction Intake Form](/guides/native-transaction-intake) for the target flow.
+</Note>
+
+## What Cognito is (and why we're replacing it)
+
+Cognito Forms is the external form builder SRG uses for **transaction-coordination intake** — the TC fills a form
+per transaction, and its fields (contract, EMD, inspections, financing, commission) + the **key dates** are the real
+source of a transaction. We're replacing it because: it's a recurring cost, the data lives outside HouseLoop, and
+the intake belongs *on the lead's TC dashboard*, not in a separate SaaS. The plan: **rebuild the form natively from
+its own schema (which we can read via the API) and own the data.**
+
+## The REST API
+
+- **Base URL:** `https://www.cognitoforms.com/api`
+- **Auth:** Bearer token — `Authorization: Bearer <token>` (or `?access_token=<token>`). The org owner mints keys
+  under **Organization → Settings → Integrations → + New API Key**; a key is shown once.
+- **Our key:** stored as **`COGNITO_FORMS_API_KEY`** in `.env` + the Master Credentials Sheet (row 172, API Keys
+  section). Org: **The Spradling Group** (`thespradlinggroup1`). *Never printed — read it from `.env`.*
+
+| Capability | Endpoint | Status for us |
+|---|---|---|
+| List forms | `GET /forms` | ✅ works |
+| **Form schema/definition** (the field tree — "how the form is built") | `GET /forms/{id}/schema` | ✅ works — this is what we rebuild from |
+| Entries (submissions) | `GET/POST/PUT/DELETE /forms/{id}/entries` | ⛔ 404 — the key's **Entry Scope = No Scopes**; bump to **Read** in Cognito to pull submissions |
+| Files / documents | `GET /forms/{id}/entries/{n}/files…` | (needs entry scope) |
+| Webhooks | POST on submit → our endpoint | available (for real-time ingest) |
+
+## The live forms (pulled 2026-07-04)
+
+| Id | Name |
+|---|---|
+| **103** | **TC Intake Form – Buyers** |
+| **108** | **TC Intake Form – Sellers** |
+| 84 / 74 / 75 / 76 | Pending Transaction Intake (+ Buyers / Sellers / Referrals) |
+| 47 | New Listing Form |
+| 52 | Status Change Form |
+| 113 | Contact Us Form (Website) |
+
+The **TC Intake Forms (103/108)** are the transaction intake we're rebuilding first.
+
+## The TC Intake schema → our model (the map)
+
+`GET /forms/103/schema` returns a JSON Schema of **~140 fields** in groups that map **1:1** to the A-Frame
+[Collections](/guides/aframe-data-model) and our `hl_tc_*` model:
+
+| Cognito group | A-Frame collection | Key fields |
+|---|---|---|
+| `Address` | — | property address (Line1/City/State/Postal/Lat/Lng) |
+| `IntakeDoneBy` | Transaction Info | who did the intake |
+| `TransactionInfo` | Transaction Summary › Transaction Info | SisuID, DotloopName, AdditionalIntakeDetails |
+| `PropertyInfo` | Transaction Summary › Property Info | MLSID, PropertyType, SqFt, YearBuilt, LBP (built &lt;1978), HouseAccess, LockboxCode |
+| `MainContactForTC` · `PreferredContactMethods` · `ImportantInfoForTCStaff` | Client Info | primary contact + how to reach |
+| **`ContractDetails`** | Contract Info | ContractTitle, ContractPrice, BuyerContingency, **`EffectiveDate`** (Under Contract), **`ClosingDate`** |
+| `EMDInfo` | Contract › EMD | earnest money held-by/amount/type/status/receipt/refundable |
+| `HOA` | Contract › HOA | is-there-HOA, dues, paid-when, docs |
+| `HomeWarranty` | Contract › Home Warranty | cost, trade-call, paid-by, ordered-by |
+| `InspectionsSummary` · `Inspections` | Inspections | wants-inspections + Home/Radon/Termite/Sewer/Structural/Roof/Mold/Septic/Pool/Chimney |
+| `Lending` · `Title` | Financing | financing type, pre-approval, appraisal, clear-to-close, title commitment, remote closing |
+| `CommissionBreakdown` | Commission | commission type, buying/listing side %, flat fee, split |
+| `LeadSource` | — | lead source + agent-referral |
+
+<Warning>
+**The two anchor key dates live in `ContractDetails`:** **`EffectiveDate`** = Under Contract (A-Frame's `effective`)
+and **`ClosingDate`**. These are exactly the anchors our date engine needs — entering them drives the whole stepper
+(see [the date cascade](/guides/native-transaction-intake)).
+</Warning>
+
+## The plan (what we're doing)
+
+1. **Rebuild the form natively** from this schema — a HouseLoop intake stored in our own tables (the A-Frame-style
+   `Collection → Group → Field` model + `hl_tc_*`), config-not-code. We own it.
+2. **Wire it to the loop** — on save it creates/links the TC loop, writes the 2 anchor dates, and the date engine
+   projects the stepper. See [Native Transaction Intake Form](/guides/native-transaction-intake).
+3. **Migrate the existing data** (optional) — bump the API key's Entry Scope to **Read**, pull entries, seed loops;
+   or wire a **webhook** on submit for real-time ingest during the parallel-run cutover.
+4. **Retire Cognito** once the native intake is live and the data's migrated.

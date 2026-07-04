@@ -1,0 +1,88 @@
+---
+title: "Native Transaction Intake Form"
+description: "The plan to replace Cognito Forms with a native HouseLoop transaction intake: one Add Transaction flow on the lead's TC dashboard that creates/links the loop, captures the intake, sets the anchor dates, records the deal, and projects the dated stepper — for buyers or sellers."
+---
+
+<Note>
+**🚧 Work in progress — architecture locked, UI + wiring next.** This documents where everything goes. The UI is
+iterated in HTML first (per the [UI Design process](/claude-process/ui-design)), then wired. The intake form itself
+is rebuilt from the [Cognito Forms schema](/guides/cognito-forms-api) — we own the data.
+</Note>
+
+## The goal
+
+An agent opens a lead in **TC view** and clicks **Add Transaction**. A native intake funnel — the Cognito-equivalent,
+but in-app — **auto-fills from the lead** (name, phone, address, agent) **and the AI-created buyer-agency loop**,
+captures the transaction (contract, EMD, inspections, financing, commission) + the **key dates**, and on save it
+**creates/links the loop, sets the anchor dates, records the deal, and projects the dated stepper.** Buyers or
+sellers. One flow. We own the data.
+
+## The problem it fixes (current state)
+
+Today the TC surfaces are fragmented — three unlinked pieces:
+
+| Piece | Where it is now | Gap |
+|---|---|---|
+| **Create Loop** | `TcCreateLoopPrompt` — shows in TC view ONLY when the lead has *no* `hl_transactions` row | Hidden the moment any row exists (even a deal); no one can find "create new loop" |
+| **Add Deal** | Deals tab → `DealMilestoneModal` (Pending / Closed / Lost) → a separate `hl_transactions` row | Creates a *deal*, never a *loop*; no intake, no dates |
+| **Move to Under Contract** | opens the deal sheet, creates a deal row, commits the stage | Does **not** create/link a loop or write any milestone dates |
+
+**Loops and deals are separate, unlinked rows** in `hl_transactions` produced by two independent flows. Nothing
+joins them, nothing captures the intake, and the stepper has no dates.
+
+## The target — one "Add Transaction" flow
+
+**One entry point** replaces the hidden Create-Loop prompt: an **Add Transaction** button on the TC Dashboard band
+(and the band's empty state). It — and moving a lead to **Under Contract** — open the **same native intake funnel**:
+
+<Steps>
+<Step title="Pre-fill">
+From the lead (`hl_leads`: name, phone, address, agent) + the AI-created loop if one exists (side, price, participants).
+</Step>
+<Step title="Capture">
+The intake (Contract · EMD · HOA · Inspections · Financing · Commission — the [Cognito schema](/guides/cognito-forms-api))
++ the two **anchor key dates**: **Effective / Under Contract** and **Closing**.
+</Step>
+<Step title="Create / link the loop">
+`createLoop` (if none for that side) seeds the 14/16 milestones + tasks from the side templates.
+</Step>
+<Step title="Set dates → project the stepper">
+Write the anchor dates to the loop → the **date engine** projects every other milestone/task date (`anchor ± offset`)
+→ the dated stepper renders.
+</Step>
+<Step title="Record + link the deal">
+The deal (commission / close) is recorded and **linked to the loop** — deal + loop become ONE transaction, not two orphan rows.
+</Step>
+</Steps>
+
+Same funnel for buyers and sellers; same funnel whether triggered by the button or the Under-Contract stage move.
+
+## What's built vs what we build
+
+| | Status |
+|---|---|
+| `createLoop` → `instantiateMilestones` / `instantiateTasks` (`lib/tc/loop-engine.ts`) | ✅ built |
+| The deal route (`app/api/leads/[id]/deal`) + milestone templates (14 buyer / 16 seller) | ✅ built |
+| `computeDue` — the date offset math (`lib/tc/date-engine.ts`, tested) | ✅ built |
+| **Native intake form** (from the Cognito schema) + auto-fill from the lead | ⛔ build |
+| **Add Transaction** button + funnel on the TC band (replaces `TcCreateLoopPrompt`) | ⛔ build |
+| **Key-date write endpoint** — `PATCH /api/tc/loops/[id]/dates` writing `hl_tc_loop_event.event_date` | ⛔ build (mine) |
+| **`computeLoopSchedule`** — the loop-aware cascade wrapping `computeDue` | ⛔ build (Adam's G4) |
+| **Deal ↔ loop link** (`loop_id` on the deal / shared transaction id) | ⛔ build |
+
+## Ownership + reuse
+
+- **Per-lead band (Benji):** the Add-Transaction funnel, the native intake form, the key-date write endpoint, the
+  deal↔loop link, `createLoop` lead-data seeding.
+- **Adam:** `computeLoopSchedule` (his G4 — read anchors → write projected dates). Aligned via
+  [PRD §12](/guides/transaction-coordination); confirm before building so we don't double-build.
+- **Reuse, don't rebuild:** `createLoop`/`instantiateMilestones`, the deal route, `computeDue`, the A-Frame
+  `Collection → Group → Field` model, `IpadModal` + CRM form components. **No new `hl_transactions` fork — link the
+  two existing row types.**
+
+## Where the data lives (own it)
+
+The intake is stored natively in `hl_tc_*` using the A-Frame-style **Collection → Group → Field** model
+(config-not-code), seeded from the [Cognito schema](/guides/cognito-forms-api). Cognito's New Listing / Status Change
+/ Pending Transaction forms map the same way as future native forms. The [key dates](/guides/cognito-forms-api)
+(`ContractDetails.EffectiveDate` + `ClosingDate`) are the anchors the stepper runs on.
