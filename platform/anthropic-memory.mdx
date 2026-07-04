@@ -72,23 +72,28 @@ Those three already recite exactly the four moves.
 
 ## Status
 
-<Info>Updated as each phase lands. Last update: 2026-07-03 — Phases 0 + 1 complete; Phase 2/3 held for sign-off.</Info>
+<Info>Updated as each phase lands. Last update: 2026-07-03 — Phases 0–3 shipped. ~48KB (~12K tokens) cut off every session's always-on context, plus the per-turn duplicate + empire block gone.</Info>
 
 | Phase | State |
 |---|---|
 | 0 — Checkpoint + this doc | ✅ done |
 | 1 — De-dup hook + kill Ezra | ✅ done |
 | 2 — Slim AIOS empire (keep comms) | ✅ done |
-| 3 — Slim CLAUDE.md + scope rules | 🟡 in progress (Zach approved) |
+| 3 — Slim CLAUDE.md + archive dead rules | ✅ done (`paths:` scoping deferred) |
 
 **Phase 1 shipped (2026-07-03):**
 - Removed the duplicate `inbox-hook.sh` registration from `~/.claude/settings.json` (kept the project one so team comms survive) → the ~27KB block now injects **once**, not twice.
 - Removed `ezra` from `sla-daemon.mjs` + `self-healing-daemon.mjs` rosters, `agent-model-config.json` is already `active:false`, and the 5 restart scripts (relay defaults repointed to `caleb`).
 - Deleted the single stale `ezra` row from `aios_agent_health` (last updated 2026-04-26) → he's gone from TEAM STATUS. `sla-daemon` (bare node PID 1182) left running with harmless stale roster; reloads clean on next natural restart.
 
-**Open / needs Zach:**
-- **706 stale `ezra` rows in `aios_agent_inbox`** — a >100-row delete = Rule #0, needs typed approval. Not deleted.
-- **Phase 2** fully retires `inbox-hook.sh`, which is also the live inter-agent ping pipe — severs comms for the running team. Needs explicit go + timing.
+**Phase 2 shipped (2026-07-03) — comms preserved, empire cut:**
+- Zach's correction: **do NOT retire `inbox-hook.sh` — keep the ping pipe.** Instead, slimmed it to comms-only.
+- The DB query + message-delivery path are untouched. Two neuters: node-side (`data.team_status/tasks/urgent_events = []`) and bash-side (`EVOLUTION_DATA=SPRINT_SUMMARY=AGENT_MEMORY=""`). The `if`-guards then skip every empire section.
+- Verified live: hook emits valid JSON with **IDENTITY + AIOS INBOX** (adam's 14 pending messages deliver) and **zero** TEAM STATUS / EVOLUTION / SPRINT / TASKS / AGENT MEMORY. Agents can still ping each other any time.
+- Purged the **706 stale `ezra` rows** from `aios_agent_inbox` (Zach typed-authorized); live inboxes untouched.
+- **Not deleted:** the already-paused Haiku files (`synthesize-step-log.mjs` etc.) — they're no-ops (`CLAUDE_PROGRESS_LLM=0`), cost zero context, and deleting them means touching their callers for no cache benefit. Left as tombstones.
+
+**Camp David scrapers — unaffected (verified):** `self-healing-daemon` only restarts crashed *agent tmux sessions* (its Camp David touch is a read-only SSH health probe) and isn't even running; `inbox-hook` only reads the DB. Nothing here manages the David-owned pm2/cron scrapers, and no daemon was killed or restarted.
 
 ## Checkpoint & restore (the undo)
 
