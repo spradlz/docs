@@ -1,0 +1,46 @@
+---
+title: "System Notifications"
+description: "Agent/user alerts — the ~30 internal notifications (email + text) that tell the team what happened. Leads are never 'notified'; leads only get messaged out of Workflows."
+---
+
+<Note>Part of [Messages & Notifications](/platform/message-catalog). **Notifications go to AGENTS/USERS, not
+leads** — leads only receive messages via [Workflows](/guides/workflows). Every notification is a real named
+`hl_templates` row, so "preview = send."</Note>
+
+## What it is
+
+When something happens to a lead (new registration, stage change, inbound text, AI action, …), the CRM raises a
+notification to the right agent(s) over their chosen channels (in-app bell · email · text). ~30 events across
+7 groups: Lifecycle · Communications · Lead Activity · AI Follow-Up · Team · System Alerts · Website Digest.
+
+## How it works (the path)
+
+1. Event fires → `notifyLeadEvent()` / `createNotification()` inserts an `hl_notification` row (bell + real-time push).
+2. `dispatchNotification()` (`lib/notifications/dispatch.ts`) reads the user's prefs + channels, loads the
+   template, merges, and sends.
+3. Template lookup: `lib/notifications/template-registry.ts` (`NOTIFICATION_TEMPLATES`) maps each event →
+   `emailKey` + `smsKey` + group. Email via Resend, text via `sendSms` (Twilio) / BlueBubbles.
+4. Every send logs to `hl_run_log` (visible in **Run Log**) and, for texts, to `hl_messages` (Communications SSOT).
+
+**Templates are complete HTML docs (migration 0300).** No code assembles the email — the `hl_templates` row IS
+the email (chrome baked in). Bodies build on the shells `notify_base` (with contact card) / `notify_base_system`
+(no card). See [Email Templates](/platform/email-templates-system).
+
+## Where to manage it
+
+`/settings/notifications` — every event in 7 sections, per-channel toggles (email/text), a View/Edit modal per
+template, "My Channels" (destination phone/email), and Company Senders (`notifications@houseloop.ai` team ·
+`updates@houseloop.ai` client). Component: `components/settings/notifications/NotificationTemplateModal.tsx`.
+
+## Current state
+
+- ✅ **30 events, all real named templates** (email full-HTML + text). No gaps.
+- ✅ Each notification template shows **USED IN: Agent notification** on the Email/Text template pages (via
+  `resolveTemplateUsage`), deep-linking back to its `/settings/notifications` row.
+- Client-facing acks (tour/contact received, listing alert, new-lead welcome) exist but are **gated by
+  workflows** — see the two-beat standard on the [section landing](/platform/message-catalog).
+
+## Related
+
+[Email Templates](/platform/email-templates-system) · [Text Templates](/platform/text-templates-system) ·
+[Merge Fields](/platform/merge-fields). SSOT: `GT_HOUSELOOP_MESSAGE_CATALOG_PRD.md`.

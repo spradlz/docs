@@ -1,0 +1,41 @@
+---
+title: "Text Templates"
+description: "SMS/iMessage templates — same hl_templates table + merge fields as email, now at full parity: USED IN classification and per-template SENT tracking."
+---
+
+<Note>Part of [Messages & Notifications](/platform/message-catalog). Screen: **Settings → Messaging → Text
+Templates**. Now organized identically to [Email Templates](/platform/email-templates-system).</Note>
+
+## What it is
+
+Plain-text message templates (`hl_templates`, kind `text`) for SMS + iMessage — same table and same
+[merge fields](/platform/merge-fields) / [AI context blocks](/platform/ai-context-blocks) as email, no HTML
+chrome. Every text goes out **AS Myli** on the ONE NUMBER line (iMessage-or-SMS by device capability); segment
+count matters (aim ≤160 GSM-7 chars = one billed segment).
+
+## The page (parity with email, Zach LOCKED 2026-07-03)
+
+Flat group-pill row (**All · Buyer · Seller · Transaction Coordination · Agent Notifications** via
+`groupForTemplate`) + the table `TEMPLATE · USED IN · SEGMENTS · SENT · CREATED · VIEW`:
+
+- **USED IN** — same `/api/template-usage` (`resolveTemplateUsage`) as email: workflow pill(s) / agent
+  notification / **"Not used yet."** Fixed 2026-07-03: the page query now `SELECT`s `t.key` (it was omitted, so
+  every row read "Not used yet"). Verified: ~30 Agent-Notification (`notify_*_sms`), 7 In-Workflow
+  (`tour_confirmation_sms`, `contact_confirmation_sms`, `new_reg_favorite_home_sms`, `new_reg_saved_home_sms`,
+  `new_reg_saved_search_sms`, `new_reg_shared_home_sms`, `new_reg_myli_sms`), ~10 genuinely unused.
+- **SEGMENTS** — GSM-7 segment cost.
+- **SENT** — per-template text-send count (new — see below).
+
+## Text-send tracking (shipped 2026-07-03)
+
+Texts were always logged in `hl_messages` (who/when/body/channel — visible in **Run Log → Communications**), but
+the send never recorded WHICH template produced it. Now the send path stamps `template_key` into
+`hl_messages.metadata` (`logMessage` → `sendSms` / `sendTextAs`; workflow text node passes `cfg.template_key`,
+notification SMS passes the registry `smsKey`; AI-composed clone texts carry no template, correctly unstamped).
+`/api/template-sends` unions email (`hl_email_send_log`) + text (`hl_messages.metadata`). Counts accrue forward
+(texts before the stamp aren't retro-attributable).
+
+## Related
+
+[Email Templates](/platform/email-templates-system) · [Merge Fields](/platform/merge-fields) ·
+[System Notifications](/platform/system-notifications). SSOT: `GT_HOUSELOOP_MESSAGE_CATALOG_PRD.md`.
