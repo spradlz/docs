@@ -530,3 +530,27 @@ the only benchmark.
 - [HouseLoop Home Value Report](/guides/home-value-report) — **THE END STATE**.
 - [Audit Report](/guides/audit-report) — the CRM surface this engine renders to.
 - [Adam — Past Client Address Resolver](/wip/adam-pastclient-address-resolver) — the address/value lane (DONE).
+
+## Canonical data law — the specifics
+
+### Structured-data source for past-client homes = OUR downloaded MLS
+
+The structured fields on a past-client home come from **`hl_srg_mls_deals` (our downloaded Spradling Group MLS), NOT Ninja/Zillow**: `beds`, `full_baths` / `half_baths`, `sqft`, `year_built`, `lot_size`, `property_type`, `subdivision`, schools (elem/middle/high/district), `hoa_fee` / `hoa_freq`, `tax`. Match a past-client `Listing` → its deal row **by `mls_number`** (extract `\d+` from the `hl_heartlandmls_<mls>` hlid), **fallback by ADDRESS** (~95% combined), then **COALESCE-fill** the null `Listing` fields. `bathroomsTotal = full_baths + 0.5 · half_baths`. **This is FREE — never buy from Ninja what our MLS already holds.** Granular interior/exterior/pool **feature lists are NOT in `hl_srg_mls_deals`** → those come from **AI vision (gpt-4o), run on the sold set AFTER the structured fields land.** (Zillow/Ninja remains the source for Zestimate → value, value/tax/price history, GreatSchools, photos.)
+
+### The master table + the backfill SEQUENCE (memorize the order)
+
+`hl_srg_past_client_homes` (the child master, 1 row per past-client home) **HOLDS value columns BY DESIGN**: `current_zestimate` (+low/high), `current_hl_value` (+low/high), `value_history`, `original_zestimate`, `original_hl_value` (+low/high) — alongside the structural data. **The value lives on the CHILD master, not the parent `hl_srg_past_clients`.** The order, which never changes:
+
+1. **Backfill the master FIRST** — each home's current value grounded to TODAY via a fresh OpenWeb Ninja Zestimate (**an old sale price is NOT today's value**); also store original value + history + structural data.
+2. **Seed the website `Listing` from the master** (`hlEstimate` / Low / High / `valueHistory`) so the website value is right.
+3. **Then the website is the read source** (steady state): `/home` renders from `Listing`, the CRM card pulls value by `website_hlid`.
+
+⚠️ **Never strip the master's value columns before the website is seeded.** "CRM never copies values" is the END STATE; during the backfill the master IS the source that makes the website correct — emptying it early makes the website wrong.
+
+### Per-field canonical sources (the remaining field rows)
+
+- **Listing DESCRIPTION ("What's special") = Repliers `details.description` by `mls_number` — NEVER OpenWeb Ninja** (Ninja whiffs on description).
+- **Photos = R2** (`Listing.photosCached` / `primaryPhotoUrl`) → Street View fallback. **NEVER the source CDN URL `cdn.repliers.io`** (unmirrored).
+- **DNC (previous agent/employee) = EXACT full-name match** to SISU `agent` ∪ FUB tags `Agent:` / `Team Exit -` / `Imported Agent:`. **Never a surname-only collision**, never a literal "DNC" FUB tag.
+- **Repliers agent, pick by our role:** client BOUGHT → `raw.BuyerAgentFullName`; client SOLD → `raw.ListAgentFullName`. If Repliers shows **"Spradling Group" (the team name, not a person)** → fall through to SISU for the individual.
+- **Mover's NEW home = County deed by-surname name-search** (gis / AIMS / Wyandotte / Clay / Cass), then **deed-verify** the candidate — never an unverified guess.

@@ -189,3 +189,20 @@ hero shows the value range plus a **HouseLoop Home Value History** section with 
 - [Property data & address identity](/guides/property-data-and-address-identity) — the HLID and how a home is identified.
 - [Home Value Report](/guides/home-value-report) — the seller-facing report that reads this value.
 - [Listing intake pipeline](/guides/listing-intake-pipeline) — the Inngest pipeline + how functions are registered/run.
+
+## Field provenance — the `*_source` columns + the Repliers ↔ Ninja fallback split
+
+Every enriched field carries a `*_source` tag so we always know where a value came from:
+
+- `value_source` = `zestimate | zhvi | algo` · `price_history_source` · `schools_source` · `tax_source`.
+- Distinguish coverage with e.g. `SELECT value_source, count(*) FROM hl_home_value GROUP BY value_source`.
+
+**Repliers gives the CURRENT facts; Zillow / OpenWeb Ninja gives the RICH HISTORY + ratings.** The per-field fallback order:
+
+- base fields (address / beds / baths / current price) + **current tax (single)** = **Repliers**.
+- **tax HISTORY (multi-year)** = **OpenWeb Ninja / Zillow** → fallback Repliers current tax.
+- **GreatSchools** = **OpenWeb Ninja / Zillow** ratings → fallback Repliers schools (only if the listing agent provided them).
+- **price / listing history** = **default OpenWeb Ninja / Zillow** full history → fallback Repliers (partial).
+- **home value** = OpenWeb Ninja Zestimate × 1.005 → fallback ZHVI → fallback the monthly algo.
+
+The `*_source` column records which one ACTUALLY filled each field.

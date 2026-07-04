@@ -77,3 +77,14 @@ The raw capture tables (`hl_pixel_event`, `hl_email_event`) still record provide
 ## History backfill
 
 `leadActivityBackfill` (Inngest function, event `hl/lead-activity.backfill`) replays the existing source tables — `hl_messages`, `hl_pixel_event`, `hl_notes`, `hl_appointments`, `hl_tasks`, `hl_email_event` — into `hl_lead_activity`. It is idempotent (the `(source_table, source_id)` unique index) and re-runnable, and is triggered through Inngest so the run is visible in the [Run Log](/guides/run-log).
+
+## AI action cost lives on the catalog (no separate cost table)
+
+An AI action's token cost is **two columns on its `hl_lead_activity` row — not a second table.** There is exactly ONE per-lead event catalog; the AI's slice is `actor_role = 'ai_agent'`. Every AI action carries `input_tokens` + `output_tokens`, and **cost = tokens × the configured model's $/M, derived at read time** — never stored as a frozen dollar number (pricing changes).
+
+- The old `hl_ai_actions` cost ledger is **merged into the catalog, then dropped.**
+- "What is the AI costing to run" is a **VIEW over the one catalog** — `SUM(input_tokens/output_tokens) WHERE actor_role='ai_agent'`, bucketed by `meta->>'tool'` — surfaced on the AI-models cost dashboard and on AI Follow-Up. Do **not** build, read, or regenerate a separate AI cost/token table.
+
+### The one allowed exception to append-only (cost columns only)
+
+`logActivity()` is append-only (callers INSERT, never UPDATE/DELETE the event). The single exception: **`stampActivityTokens(sourceTable, sourceId, in, out)`** may annotate the two cost columns (`input_tokens`/`output_tokens`) of an already-written row — and only those two — for self-logged AI tools (text/email/note) whose row is written by `logMessage`/`execAddNote` (which don't know the LLM turn's tokens). It is idempotent (sets only when the column is currently 0) and never touches an event-identity field (kind / actor / title / body / occurred_at). Token cost is metadata *about* the event, not the event itself — which is why this narrow stamp is permitted where event mutation is not.
