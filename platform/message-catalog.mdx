@@ -50,13 +50,49 @@ Every lead-facing workflow fires the same shape:
 - **System Text is intentionally omitted** — every text goes out as Myli (ONE NUMBER law).
 - **`{{ai.*}}` / context-block copy is the accepted Myli-voice layer** — real catalog rows, not vibe code.
 
+## The Blocks Engine (Zach doctrine, LOCKED 2026-07-05)
+
+**The law: templates own EVERY pixel of email markup; code supplies ONLY data.** Runtime *data* injection
+(today's 12 matching homes) is normal; runtime *markup* composition in code is banned — it made emails
+invisible and uneditable.
+
+**The honest history (why this section exists):** until 2026-07-05, the listing cards in the saved-search
+digest and welcome emails — photo box, price line, "View Listing" button, the hero card with the Like/Saved
+pill, the "Explore the rest of the market" rows, the "See all N homes" CTA — were **hardcoded HTML inside
+`lib/saved-search/match-cards.ts`**. No template row, no preview, no way for a human to see or edit them.
+Zach was told repeatedly this class of rot was fixed; it was not. It is now.
+
+**How it works now (mig `0319_blocks_engine`):**
+- Repeating/dynamic structures are **BLOCK rows** in `hl_templates` (`kind='block'`, folder **Blocks**),
+  editable in Settings → Templates like anything else:
+  `listing_card` · `listing_hero_card` · `search_other_results_row` · `search_other_results_wrap` ·
+  `search_see_all_button`.
+- The merge engine (`lib/email/template-merge.ts`) gained two primitives:
+  - `{{block:listing_card list=items as=listing limit=12}}` — stamps the block once per item
+    (`renderBlocks` / `renderBlockOnce`).
+  - `{{#ns.field}}…{{/ns.field}}` — conditional section, kept only when the value is non-empty
+    (powers the coming-soon badge, the sqft segment, the Liked-vs-Saved pill).
+- `match-cards.ts` is now a **data-only module**: it fetches listings and hands item objects
+  (`photo/price/beds/baths/sqft/address/url/badge`) to the block engine. Zero HTML in code.
+- `{{search.matches}}` in a parent template = the `listing_card` block stamped over the lead's real
+  matches. **Edit the card once in Blocks → every email that embeds homes changes.**
+- Verified 2026-07-05: the block-engine output is pixel-identical to the old hardcoded render
+  (all 67 email templates re-rendered through the real send path, 0 failures).
+
 ## Current build state (notifications)
 
-**Rendering + tracking — claimed done (VERIFY on prod):**
-- Notifications: **30 events, all real named `hl_templates` rows** (email full-HTML since mig 0300, text plain).
-- **Enriched sub-line shipped (mig 0310):** every notification = HEADING + enriched sub-line (what·when·from
-  where·which property·link), merge-driven, **email == text**. Committed `2754f9186a` + `1a7b2d1b20`, pushed/live.
-  ⚠️ **Not yet verified event-by-event on prod** — the P3-VERIFY sweep is the open step.
+**Rendering + tracking — LIVE-VERIFIED 2026-07-04/05 (the P3-VERIFY sweep ran):**
+- Notifications: **31 events, all real named `hl_templates` rows** (email full-HTML since mig 0300, text plain).
+- **Enriched sub-line VERIFIED live:** 17 events fired through their real prod paths; delivered SMS read
+  verbatim from `hl_messages`, delivered emails screenshotted from the real inbox. **email == text confirmed
+  at the delivery layer.** Live scoreboard: PRD §2b (`GT_HOUSELOOP_ENRICHED_NOTIFICATIONS_PRD.md`) + the
+  Message Audit canvas (artifact e5582966). 10 production bugs found + fixed in the sweep, including:
+  the pixel carried no home URL (blank links), `{{actor.name}}` dead-column (blank in every notification ever),
+  `collaborator_added` had no firing site, saved-search/seller events silent for existing leads.
+- **New classes (Zach 2026-07-04):** `property_viewed` (opt-in, 1/lead/hour flood guard, default OFF) ·
+  `home_value_report` split from `seller_request` (Demand Report modal vs /sell Get-started tiers).
+- **Self-healing call/email enrich:** `phone_call_received` / `email_received` resolve caller · duration ·
+  outcome · scraped transcript (from `fub.calls`/`fub.emails`) at dispatch, whoever fires them.
 - Email + Text template pages show **USED IN** + **SENT** counts (`resolveTemplateUsage`).
 
 **Workflow two-beat — gaps queued** (all 32 template refs resolve — gaps are missing *beats*, not broken copy):
