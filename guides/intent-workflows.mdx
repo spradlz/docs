@@ -1,0 +1,119 @@
+---
+title: "The Intent Strategy Map — one workflow per thing a person did"
+description: "What each trigger is FOR, in plain English: the 13 intent workflows, which integrations feed them, what happens for a brand-new lead vs. someone we already know, and the rule for when Myli speaks vs. stays silent. All 13 are built and OFF until you turn them on."
+---
+
+<Note>
+**Written for Zach — plain English, no code.** Every claim here traces to a real database row or a migration
+file, not to memory. The 13 workflows described below are **live in the database and switched OFF** (`status =
+inactive`) — verified 2026-07-05 against `hl_workflows`. Nothing messages anyone until you flip a switch.
+This is the strategy map; the mechanics of the model live in
+[Pipeline & Workflow — Master Overview](/guides/pipeline-workflow-overview).
+</Note>
+
+## The model in one paragraph
+
+A **workflow is now built around an intent** — a thing a person actually did — instead of being built around
+which system the lead came from. There is **exactly one workflow per intent** (13 of them), and the
+"is this a brand-new lead or someone we already know?" split happens **inside** that one workflow as a visible
+branch on the canvas. Which integrations are allowed to feed each workflow is decided by a **connector gate** —
+a visible checkpoint at the top of the canvas that says "the HouseLoop.ai Website may proceed," "Follow Up Boss
+may proceed," "the tracking pixel may proceed." The *wording* Myli uses changes automatically from the event
+itself (a lead from Zillow hears "on Zillow," a lead from our site hears "on HouseLoop") — so we never build the
+same workflow twice just to change one phrase. In short: **Workflow = f(intent)**. One canvas, one intent, the
+new-vs-known branch inside, the connector gate up top, the voice filled in from the event. This follows
+[the canvas-is-truth law](/guides/pipeline-workflow-overview) — every action below is a drawn step on a drawn
+path, nothing hidden.
+
+## The matrix — all 13 intents
+
+One row per intent. "New lead" = we had never heard of this person before this moment. "Existing lead" = we
+already have them in the CRM and they did the thing again. "May it message?" is the speak/silent policy,
+explained in its own section below.
+
+| Intent (workflow) | What the person DID | Which integrations feed it | New-lead arm | Existing-lead arm | May it message? |
+|---|---|---|---|---|---|
+| **Tour Request** | Asked to tour a home | Website + Follow Up Boss | Text: "when works best to go see it?" → move to **Attempted Contact** (Buyer) | Text: re-engage ("still want to see it?") → log a note | **Yes, both** |
+| **Contact Request** | Reached out about a home | Website + Follow Up Boss | Text: "what would you like to know?" → move to **Attempted Contact** (Buyer) | Text: re-engage → log a note | **Yes, both** |
+| **Property Inquiry** | Asked a question about a listing | Website + Follow Up Boss | Text: "what would you like to know?" → move to **Attempted Contact** (Buyer) | Text: re-engage → log a note | **Yes, both** |
+| **Rental Inquiry** | Asked about renting a place | Website + Follow Up Boss | Text: "what are you looking for?" → move to **Attempted Contact** (Buyer) | Text: re-engage → log a note | **Yes, both** |
+| **Seller Get Started** | Asked to get started selling their home | Website + Follow Up Boss | Text: "what's your timeline?" → move to Seller pipeline **New Lead** | Text: re-engage → log a note | **Yes, both** |
+| **Home Value Report** | Requested what their home is worth | Website + Follow Up Boss | Text: "report's on the way, anything specific?" (no stage move) | Text: re-engage ("thinking of a move?") → log a note | **Yes, both** |
+| **General Registration** | Signed up on our website | Website only | Text: welcome from Myli | Log a note only (already known — no welcome) | **New lead only** |
+| **Liked Home** | Liked a listing | Website + Follow Up Boss | Text: "want details or a showing?" | Log a note only (a single like must not spam) | **New lead only** |
+| **Saved Home** | Saved a listing | Website + Follow Up Boss | Text: "want the full details or a time to see it?" | Log a note only | **New lead only** |
+| **Shared Home** | Shared a listing | Website + Follow Up Boss | Text: "happy to answer questions or line up a showing" | Log a note only | **New lead only** |
+| **Saved Search** | Saved a search on our site | Website only | Text: "your search is saved, I'll send new matches" | Log a note only | **New lead only** |
+| **Virtually Toured** | Took a virtual tour (e.g. a Zillow 3D walk) | Website + Follow Up Boss | Log a note only | Log a note only | **Never** |
+| **Property Viewed** | Looked at a listing | Follow Up Boss + Website + pixel | Log a note only | Log a note only | **Never** |
+
+**Reading the arms:** where the arm says "→ move to Attempted Contact / New Lead," the workflow advances the
+lead's stage so the pipeline stepper on the lead-detail page moves. Where it says "log a note only," the only
+thing that happens is a timestamped note on the lead — no text, no stage move.
+
+**Two footnotes worth knowing (they don't change the strategy, only when a workflow can fire):**
+
+- **Property Inquiry, Rental Inquiry, and Virtually Toured** have their trigger defined but **no live door
+  routing to them yet** — they are forward-looking scaffolding until an integration is wired to send those
+  signals. They still describe the intended behavior; they just can't fire today.
+- **Liked / Saved / Shared Home:** the new-lead ("registration") side and the existing-lead side historically
+  arrived under different internal names. The workflow engine now folds both name families onto the one
+  canonical intent (an alias map, fixed 2026-07-05), so **both arms route to the one workflow**. One token per
+  concept — the same rule the activity-badge catalog follows.
+
+All of the above is captured in the migration comments that seeded these workflows
+(`0324_intent_tour_request_canvas.sql` and `0325_intent_canvases.sql`), flagged there for resolution before you
+turn anything on.
+
+## The speak/silent policy — the strategy you asked for
+
+The core question behind "does this all make sense from a user's perspective?" is: **which signals earn Myli's
+voice, and which just get quietly recorded?** The rule is about how much intent a signal carries. Higher intent =
+Myli speaks. Ambient background behavior = we log it and stay quiet, so we never nag someone for browsing.
+
+There are three tiers:
+
+**1. Speak to everyone (high intent — a direct ask).** These are the moments a person actively asked us for
+something: a tour, contact, an inquiry, a rental question, starting a home sale, a home-value report. Both a
+brand-new lead **and** a returning one get a message, because in every case the person raised their hand and is
+waiting on a human. Not answering an ask is the one thing that reads as broken.
+
+**2. Speak only to a brand-new lead (a warm first touch, but never a repeat nag).** Registering, liking, saving,
+or sharing a home, or saving a search — these are real interest signals, so the **very first time** we meet
+someone through one of them, Myli introduces herself and offers to help. But if we **already know** the person
+and they like another home, we **do not** fire off another text — one like is not a reason to interrupt someone.
+For a known lead these just get logged. This is the anti-spam guard: a single lightweight action never earns a
+repeat message.
+
+**3. Never speak (ambient signal — log only).** Viewing a listing and taking a virtual tour are high-frequency,
+low-intent — people scroll through dozens of homes. A view or a virtual walk-through **never** messages anyone,
+new or known. It's recorded as a note (and feeds counters elsewhere), so the history is complete, but it stays
+silent. A property view that texted someone would be the definition of creepy; that's why the Property Viewed
+gate explicitly lists all three feeds and still only ever writes a note.
+
+That's the whole strategy in one line: **an ask gets answered, a first sign of interest gets a warm hello, and
+background browsing gets logged in silence.**
+
+## Template wiring status
+
+Today each of the 13 workflows carries **its own message copy written directly into the workflow** (a one-off
+text on the canvas step), so the wording is dynamic — it fills in the person's name, the address, and the source
+("on Zillow" / "on HouseLoop") from the event. The **next step** is to point these workflows at Lee's shared
+email/text template catalog instead of carrying their own copy, so all wording lives in one managed place. That
+wiring is **in flight and not yet shipped** — until it lands, the copy you see on each canvas is the copy that
+sends. How every send and note gets recorded on the lead is covered in the
+[Lead Activity Log guide](/guides/lead-activity-log).
+
+## How to activate one
+
+Nothing here is live until you turn it on, one at a time:
+
+1. Open the **Workflows** page. The 13 intent workflows are grouped together under the **Intent Workflows** band.
+2. Pick one and open it. The canvas shows the whole thing end to end: the **connector gate** at the top (which
+   integrations may proceed), the **New / Existing lead branch**, and each arm's steps down to its end. What you
+   see is exactly what will run — [the canvas is the truth](/guides/pipeline-workflow-overview), so trace both
+   arms before flipping it on.
+3. Flip the workflow's status to **active**. It will now fire for real leads the next time its intent comes in.
+
+Because they seed OFF, a database re-run can never silently turn one back on — activation is always your
+deliberate, per-workflow choice.
