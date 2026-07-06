@@ -1,0 +1,100 @@
+---
+title: "Benji (THE 24-HOUR PLAN — Documenso E-Sign MVP · Saved-Search Enterprise · Referral Last (Benji, 2026-07-06))"
+description: "Work-in-progress dossier — Benji · HouseLoop Website. THE 24-HOUR PLAN — Documenso E-Sign MVP · Saved-Search Enterprise · Referral Last (Benji, 2026-07-06)."
+---
+
+<Info>Live dossier — auto-generated from `.claude/state/wip/benji/lead-detail-masters-plan.md` on every push. **Progress: checklist pending.**</Info>
+
+**Owner:** Benji — HouseLoop Website
+
+## Checklist
+
+Synthesized from 5 recon subagents. Scope: session-scope-lead-detail-masters.lock
+### ⚡ ZACH RE-DIRECT (2026-07-06, overrides D1 + phase order):
+- DOCUMENSO IS THE MANDATE — the documents LIVE in Documenso (our e-sign = system of record). NO SignWell.
+  Myli does NOT pull docs from dotloop. She creates a NEW LOOP in HouseLoop (our TC — already built) and
+  pushes a mirror loop into dotloop as BACKUP ONLY. We own the document for real.
+- ORDER: ① Documenso e-sign MVP (send ONE of the 3 documents e2e) → ② saved-search ENTERPRISE-READY →
+  ③ referral engine LAST. Master docs ride along each phase.
+- STATUS: Documenso deployed on Railway (houseloop-esign, SUCCESS 6/23) but esign.houseloop.ai TLS cert
+  never issued + domain↔service binding suspect (railway URL 404s). LEE PINGED to finish infra (his lane).
+  I build the CRM integration in parallel; wire live the moment the instance is healthy.
+
+### ═══ PHASE 1 — AGENCY-AGREEMENT E-SIGN (build FIRST) ═══
+FOUND: the FILL leg is DONE — pdf-lib engine (lib/tc/fill-contract.ts) + field maps (contract-forms.ts)
++ templates in DB (hl_contract_template.pdf_b64, seeded from tools/houseloop-contracts/dotloop-forms/*.pdf)
++ "Add from Form" in TcDocumentsPanel fills from loop/lead data → R2 → hl_contract_fill + hl_tc_loop_document
+(status='filled'). Exclusive Buyer Agency = coords PROVEN. The e-sign DB columns already exist unused
+(status sent/signed, esign_provider, esign_doc_id, signed_at). MISSING = the SEND leg + webhook + UI action.
+
+Steps (order):
+1a. INFRA (Lee, pinged): esign.houseloop.ai cert + domain binding + app boots. Then: admin account,
+    API token minted, webhook secret set — store all in .env + the Sheet per CREDENTIAL_ACCESS.
+1a'. lib/esign/ — provider-agnostic interface + DOCUMENSO adapter (v1 REST: upload/create document,
+    recipients, fields, send; webhooks document.opened/document.completed). Built against the API
+    contract now, pointed at the instance when healthy. (SignWell PoC stays parked in tools/, unused.)
+1a''. Upload the 3 documents INTO Documenso (templates w/ signature fields placed): Exclusive Buyer
+    Agency (primary MVP target — coords proven for prefill), Single-Property/One-Time Showing,
+    Non-Exclusive Buyer-Tenant. Documenso = where the docs LIVE.
+1b. POST /api/tc/loops/[id]/documents/[docId]/send — take the FILLED PDF (our pdf-lib prefill from loop/
+    lead data, already working) → create+send in Documenso → set status='sent', esign_provider='documenso',
+    esign_doc_id → fire trigger event document_sent.
+1c. app/api/esign/webhook — provider events → document_opened / document_signed: update
+    hl_tc_loop_document (+signed_at, sealed file_url) + hl_contract_fill → fire the doors → on SIGNED,
+    cancel pending esign_nudge scheduled actions (interruptFloor pattern).
+1d. Migration (COORDINATE W/ ADAM — his catalog): hl_trigger_events rows document_sent / document_opened /
+    document_signed (+ appointment_created if he blesses it) + DOOR_EVENT_KEYS entries.
+1e. TcDocumentsPanel: "Send for signature" action + live status chips (draft/filled/sent/signed). Minimal
+    additive UI on the existing panel (no new layout invention).
+1f. FOLLOW-UP RULES (zero hardcode): a document_sent door WORKFLOW (canvas-visible) whose action schedules
+    esign_nudge rows via createScheduledAction at datetimes derived from hl_appointments.starts_at
+    (appt-day morning, starts_at−2h etc. — rule params in the workflow config, NOT code). Timer spine =
+    Adam's hl_scheduled_actions + scheduledActionRun (step.sleepUntil absolute + DB-truth bail +
+    reviewBeforeFire fire-time "still unsigned?" check). Signed → cancel. Myli sends via
+    composeAiMessage + sendTextAs / sendViaResend.
+1g. Coordinate pass: single_property_buyer_rep (One-Time Showing) PDF coords (x/yTop all 0 today) —
+    use vision-field-builder.mjs / overlay-fieldmap.mjs tooling.
+1g'. DOTLOOP BACKUP PUSH: on signed → create a mirror loop in dotloop + upload the sealed PDF
+    (lib/dotloop/client.ts + dotloop-upload-signed.mjs pattern; document:* scope pending — NON-BLOCKING,
+    backup only; queue the push and it drains when the scope lands).
+1h. Playwright E2E: fill → send (test mode) → webhook simulate → signed → nudge cancelled. Screenshots.
+NOTE: Myli's verify-with-lead conversation (email/phone/co-buyers before filling) = her composeAiMessage
+brain + funnel fields; capture requirements in the master doc; deep build rides the ai_message step.
+
+### ═══ PHASE 2 — SAVED-SEARCH ENTERPRISE-READY (was Phase 3; Zach re-order) ═══
+(the ranked fixes 3.1-3.7 below, unchanged, now second priority)
+
+### ═══ PHASE 3 — REFERRAL ENGINE (LAST; spec-lock + punch list, build later) ═══
+
+### ═══ THE THREE ⭐ MASTER DOCS (ride along each phase) ═══
+Pattern (cloned from lee-master-notifications.mdx + myli-master.mdx): own front-of-nav ⭐ tab → &lt;Check&gt;
+visual artifact link → &lt;Note&gt; owner/date → What this is → status table (shipped vs planned inline) →
+Reconciliation (🔴 supersedes list) → Grounding.
+2a. ⭐ Lead-Detail TC Master (benji) — band v1→v6 story, intake funnel, loop engine, docket live-vs-stub
+    matrix, e-sign flow (Phase 1), Playwright deal-create/stage-move receipts + screenshots.
+    🔴 RED DOTS: guides/native-transaction-intake.mdx (describes dead TcCreateLoopPrompt as live; lists
+    shipped items as ⛔ build) — fix + mark superseded. wip/benji-native-transaction-intake.mdx (generated).
+2b. ⭐ Referral Engine Master (benji) — band is FULLY LIVE (recon: nothing stubbed; rollup view self-heals
+    from closed hl_transactions). Lock the spec + punch list: lifetime-KPI semantics, A/B/C/D vs A/B/C
+    priority mismatch, missing referral-dashboard endpoint (drift), owner not rendered. Build = later.
+2c. ⭐ Saved Searches Master (benji) — the e2e pipeline map + the fix receipts from Phase 3 + audit trail
+    (send→open→click→lead-detail card→Run Log). Screenshots of each surface.
+
+### ═══ PHASE 3 — SAVED-SEARCH SHORE-UP (ranked fixes from recon) ═══
+3.1 Monthly freq bug: ALLOWED_FREQ missing "monthly" → silently becomes INSTANT (web
+    app/api/saved-searches/route.ts:34) + modal↔API option mismatch. FIX both ends.
+3.2 hl_email_send_log.saved_search_id never populated by workflow send (execute-step.ts:591) → lead-detail
+    per-search Sent/Opened/Clicked all dashes. FIX the INSERT.
+3.3 Frequency copy: live template (hl_templates saved_search_digest_email) has ZERO frequency copy; the
+    copy lives in a DEAD web template. Add &#123;&#123;search.frequency_label&#125;&#125; merge field + per-frequency copy.
+3.4 Retire/quarantine the dead web template + dead web resend webhook (two sources of truth).
+3.5 Run-log registry drift: duplicate saved-search blocks, instant-check described as "hourly poll WRONG
+    MODEL" (it's event-driven now), monthly missing, CRM digest fns unregistered.
+3.6 Verify ?ss= click attribution on the LIVE template's cards (renderListingCard).
+3.7 (defer unless cheap) instant fan-out pre-filter.
+Playwright: create saved search per frequency → verify send/copy/tracking/Run Log. Screenshots.
+
+### DECISIONS FOR ZACH (flag, don't block)
+D1. ✅ DECIDED BY ZACH: Documenso, full stop.
+D2. "Lifetime" referral KPIs: closed-referral-deals only (current) or broader?
+D3. Monthly saved-search cadence: keep + fix (recommended, cron already exists) or drop the option?
