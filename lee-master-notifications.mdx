@@ -1,0 +1,83 @@
+---
+title: "⭐ Lee Master Notifications — how every notification gets sent"
+description: "The one human-eye master for how HouseLoop composes, renders, and delivers every notification. The One-Card System, the Blocks Engine, the template taxonomy (three families that must not collapse), and the delivery plumbing — with a live audit canvas where every notification is signed off plan-vs-actual. Everything else in these docs that conflicts is red-lined and rolled into here."
+---
+
+<Check>
+**▶ Open the full visual master:** [The Gauntlet — every notification, plan-vs-actual, with interactive sign-off](https://claude.ai/code/artifact/e5582966-451a-4744-a717-8f80005b923c)
+
+This is the human-eye developer doc — every notification rendered from live `hl_templates`, each one signed off against what actually fired in prod (named-template / AI-voice / missing status). Start there.
+</Check>
+
+<Note>
+**Lee owns this end-to-end.** Every "verified" here traces to a **live prod fire read back from the delivery logs** — the delivered SMS read verbatim from `hl_messages`, the delivered email screenshotted from the real inbox, the run captured in the Run Log. Nothing is called done off a green DB row alone. Last updated 2026-07-06.
+</Note>
+
+## What this is
+
+One place to audit **how every notification gets sent** — from the event that fires it, through the catalog row and the locked shell that compose it, out over the recipient's channels, and back into the Run Log as proof. The visual master (linked above) is the interactive sign-off surface; this page is the index + the reconciliation map: it names each part of the architecture, summarizes it, links to the deeper working doc, and names which older dev docs it supersedes (those are red-lined in place, not deleted, so the original intent stays as grounding).
+
+The deep working catalog — the per-event tables, the render spec, the honest build history — lives in [Lee Messages & Notifications Catalog](/platform/message-catalog). This master summarizes it and points back; the catalog is not absorbed, it is the next layer down.
+
+## The architecture (four parts)
+
+### a. The One-Card System — ONE shell, payload-driven (LOCKED 2026-07-06)
+
+**Agent notifications are ONE notification shell + a payload catalog — not 80 templates.** Same model as Stripe / Braze: an event envelope + a catalog row + one locked shell. Migrations 0320 / 0321:
+
+- **`hl_notify_classes`** is THE payload matrix — one auditable row per class (**32 rows**), each carrying `heading_tpl`, `subline_tpl`, and `with_message`. Editing a notification's heading is editing **one row**. This is the surface Zach signs off.
+- **Two system-locked shells** — `notify_card` (email) and `notify_card_sms` (text), folder **System** — plus the `notify_contact_card` block. Optional pieces (detail quote, date clause, "via &lt;source&gt;") are conditional sections that vanish when the payload doesn't carry them.
+- **Dispatch** resolves the class row → composes `{{event.heading}}` / `{{event.subline}}` / `{{event.source_phrase}}` → renders through `composeTemplate` (the Blocks Engine). `{{notify.message}}` is gated per-class by `with_message` so lifecycle events never quote the lead's unrelated last text; `{{notify.link}}` falls back to the lead's CRM page.
+- **66 legacy `notify_*` rows are QUARANTINED** (`is_active=false`, receipt: `.claude/reports/notify-zoo-quarantine-2026-07-06.txt`) — reversible, never deleted.
+
+Deeper: [Message Catalog → The One-Card System](/platform/message-catalog#the-one-card-system-zach-doctrine-locked-2026-07-06).
+
+### b. The Blocks Engine — templates own every pixel (LOCKED 2026-07-05)
+
+**The law: templates own EVERY pixel of email markup; code supplies ONLY data.** Runtime *data* injection (today's 12 matching homes) is normal; runtime *markup* composition in code is banned — it made emails invisible and uneditable. Migration `0319_blocks_engine`:
+
+- Repeating / dynamic structures are **BLOCK rows** in `hl_templates` (`kind='block'`, folder **Blocks**), editable in Settings → Templates like anything else: `listing_card`, `listing_hero_card`, `search_other_results_row`, `search_other_results_wrap`, `search_see_all_button`.
+- The merge engine (`lib/email/template-merge.ts`) stamps a block once per item (`{{block:listing_card list=items as=listing limit=12}}`) and supports conditional sections (`{{#ns.field}}…{{/ns.field}}`) kept only when the value is non-empty.
+- `match-cards.ts` is now **data-only** — it fetches listings and hands item objects to the block engine. Zero HTML in code. Edit the card once in Blocks → every email that embeds homes changes.
+
+Deeper: [Message Catalog → The Blocks Engine](/platform/message-catalog#the-blocks-engine-zach-doctrine-locked-2026-07-05).
+
+### c. The template taxonomy — three families that must NOT collapse
+
+This is the reconciliation question, answered plainly: **not everything is a "template," and the three families are deliberately different shapes.** The One-Card collapse (part a) applies to ONE of them. Collapsing the other two into it would be a bug.
+
+| Family | What it is | Where it lives | Who edits it | What Zach signs off |
+|---|---|---|---|---|
+| **1. Agent notifications** | Every alert an **agent / user** receives (stage change, new registration, inbound text, appointment, AI action). **Collapsed + locked** into the One-Card System. | `hl_notify_classes` (32 rows) + the two `notify_card` shells | Edit one payload row (`heading_tpl` / `subline_tpl` / `with_message`) | The 32-row payload matrix |
+| **2. Lead-facing intent templates** | Every message a **lead** receives — and these differ **BY DESIGN**, one per intent: the door welcomes (one per registration door), the saved-search home-search updates (digest / instant / daily / weekly / monthly), the tour + contact confirmations, the Myli-voice `{{ai.*}}` emails. **They stay individual editable templates.** | `hl_templates` (`kind='email'` / `'text'`), per named row | Edit each purposeful template independently in Settings → Templates | Each template's copy, per intent |
+| **3. Shared blocks** | The reusable markup **both** families embed — `listing_card`, `listing_hero_card`, the hero card, the contact card, the CTA button, the "see all N homes" row. | `hl_templates` (`kind='block'`, folder **Blocks**) | Edit the block once → every embedding template changes | The block markup, once |
+
+**The rule:** agent notifications collapse (they were 80 near-identical alerts → one payload-driven shell). Lead-facing intent templates do **not** collapse — a tour confirmation and a monthly home-search digest are supposed to read nothing alike, so each is its own editable row. Shared blocks are the reused pieces both families stamp. Three families, one engine, never merged into one template.
+
+### d. Delivery plumbing — prefs, channels, fan-out, proof
+
+How a composed notification actually reaches a person:
+
+- **Prefs + channels** live on `hl_users.data` — per-user, per-class enable/disable with **per-class defaults**. A class fans out to every recipient whose prefs leave it on, over their enabled channels (in-app / SMS / email).
+- **The two-beat standard (locked)** — every lead-facing workflow fires the same shape: **Beat 1** a branded SYSTEM email, instant (`updates@houseloop.ai`, a real named template — *"Got your request, a HouseLoop agent will reach out shortly."*); **Beat 2** Myli ~2 min later (a Myli personal `{{ai.*}}` email **+** a Myli text), dropping the lead into a Myli workflow she can converse on. System **text** is intentionally omitted — every text goes out as Myli (ONE NUMBER law).
+- **Run Log proof** — every dispatch is captured; "verified" means the run landed in the Run Log AND the delivered message was read back from `hl_messages` / the real inbox, not inferred from a DB write.
+- **FUB self-heal** — `phone_call_received` / `email_received` resolve caller · duration · outcome · scraped transcript from `fub.calls` / `fub.emails` at dispatch, whoever fires them.
+- **Voicemail + forwarding** — the native dialed-line, forwarding rules, and voicemail live under **Settings → Phone** (Phone Numbers registry `hl_phone_numbers`, 41 FUB lines). Never make the native dialed line (Ana 913-954-7123) the forward target.
+
+## Reconciliation — what this master supersedes
+
+These developer docs describe the **retired** notification/template model (code-built email chrome, the pre-One-Card `notify_*` zoo, per-doc catalogs that drift). They carry a red **superseded** banner in place — kept as grounding for the original intent, but **build from THIS master, not from these.** The full roll-up with a one-paragraph summary + link for each is at **[🔴 Legacy Notifications](/legacy-notifications)**.
+
+- **[System Notifications](/platform/system-notifications)** → superseded by **part a (The One-Card System)** + the payload matrix.
+- **[Email Templates](/platform/email-templates-system)** → superseded by **part b (The Blocks Engine)** — templates own the full HTML now.
+- **[Text Templates](/platform/text-templates-system)** → superseded by **part b** + the ONE-NUMBER Myli text rule in **part d**.
+- **[System Display Messages](/platform/system-display-messages)** → still a flagged gap (no unified in-app display system); rolled up for visibility.
+- **[Notifications (guide)](/guides/notifications)** → superseded by **part a** — the code-built centered-email chrome is retired; templates own the email.
+- **[Lead Activity Log](/guides/lead-activity-log)** *(notification parts only)* → the notification-copy mentions defer to this master; the rest of that doc (the canonical run-log) stays live and authoritative.
+
+**Kept separate, NOT absorbed** (a deeper layer / different lane, linked not rolled up):
+[Lee Messages & Notifications Catalog](/platform/message-catalog) (the deep working catalog this master summarizes) · [AI Context Blocks](/platform/ai-context-blocks) + [Merge Fields](/platform/merge-fields) (DATA injected into templates, not templates themselves).
+
+## Grounding vs. now
+
+The red-lined docs are the **original intent** — read them to see what the model was, then this master for what it **is now** and what's being built. That contrast is the reconciliation: the old docs prove the intention; this master is the source of truth going forward. Keep reconciling sections into it as they stabilize.
