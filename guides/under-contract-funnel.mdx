@@ -1,0 +1,91 @@
+---
+title: "The Under Contract Funnel (planned — NOT built)"
+description: "When a lead moves to Under Contract, the native TC intake funnel should fire — auto-filled from the lead AND its loop — to create/link the loop, capture the full transaction intake, and write the two anchor dates that drive the contract stepper. This is the unbuilt trigger + deep-intake half of the Native Transaction Intake plan."
+---
+
+<Warning>
+**Status: NOT BUILT (spec only).** This documents a feature that was designed in the locked wireframe and
+planned across two guides, but never wired. Today, moving a lead to **Under Contract** fires the lightweight
+[DealMilestoneModal](/guides/lead-detail-stages-and-deals) (address · price · commission · closing → one
+`hl_lead_deals` row) — NOT the full loop intake. The native funnel exists
+([AddTransactionFunnel](/guides/native-transaction-intake)) but is only reachable manually via the band's
+**View / Add Transactions** hub, and only Step 1 (Contract & Dates) is wired. This page is the build spec for
+closing that gap.
+</Warning>
+
+## The one idea
+
+**Moving a lead to Under Contract IS the moment a real transaction begins — so that stage move should open the
+full TC intake funnel, not a one-row deal capture.** The funnel auto-fills from the lead AND the selected loop,
+captures the whole transaction (the ~140-field Cognito schema), creates/links the loop, writes the two ★ anchor
+dates, and projects the Chapter-2 contract stepper. One flow, buyer or seller.
+
+This is the "section that's supposed to pop up when you hit Under Contract."
+
+## Where it fits — the two-chapter loop
+
+It's the hinge between the two chapters of the [TC Loop band](/guides/native-transaction-intake):
+
+1. **Chapter 1 — Shopping** (the Agency Loop): agreement prep → sent → signed. No transaction chrome.
+2. **→ Under Contract** — the stage move fires **this funnel**.
+3. **Chapter 2 — Contract** (the Property Loop): the funnel's anchor dates drive Under Contract → EMD → … → Possession.
+
+The Under-Contract gate node in the shopping stepper ("→ Under Contract · starts loop") is the visual promise of
+this trigger.
+
+## The trigger (unbuilt)
+
+| Today | Planned |
+|---|---|
+| Stage → Under Contract → **DealMilestoneModal** (5 fields → `hl_lead_deals` row) | Stage → Under Contract → **the TC intake funnel** (full intake → creates/links the **loop** + records + links the deal) |
+| Fires from `PipelineChipDropdown` / `CenterLane` intercept matrix | Same intercept, but routes Under Contract to the funnel instead of the deal modal |
+| Captures a deal, not a transaction; no loop, no dates, no stepper | Captures the transaction, writes the 2 anchors, projects the dated stepper |
+
+The intercept matrix lives in [Lead Detail — Stages, Deals & Audit Trail](/guides/lead-detail-stages-and-deals)
+(`Anything → Under Contract`). Wiring this feature means that row opens the funnel.
+
+## The pre-fill (the part Zach remembers)
+
+On open, the funnel auto-fills from **two sources**:
+
+- **The lead** (`hl_leads`): name, phone, property address, assigned agent, lead source.
+- **The selected loop** (`hl_transactions` + children): side, agency price, participants, and any agency-chapter
+  data already captured. **This loop-side pre-fill is the piece that is NOT built** — today only the lead
+  address/phone/agent pre-fill (`AddTransactionFunnel` `prefill` prop).
+
+## The intake (the deep capture — unbuilt)
+
+The funnel's Steps 2–6 are the ~140-field intake, rebuilt natively from the
+[Cognito Forms schema](/guides/cognito-forms-api) (TC Intake Form Buyers #103 / Sellers #108). Today they render
+as **structural placeholders** — the deep field capture was deferred to "the Transaction Summary pass" and never
+built. The A-Frame `Collection → Group → Field` map (Property · EMD · HOA · Inspections · Financing · Commission)
+is documented in the Cognito guide.
+
+## On save — what it must do
+
+1. **Create / link the loop** — `createLoop` if none for that side (seeds the side's milestones + tasks), else link.
+2. **Write the two anchor dates** — `EffectiveDate` (Under Contract) + `ClosingDate` → `hl_tc_loop_event.event_date`
+   via `PATCH /api/tc/loops/[id]/dates` (built), so the date engine projects the rest of the stepper.
+3. **Record + link the deal** — the `hl_lead_deals` milestone row is created AND linked to the loop (one
+   transaction, not two orphan rows). **The deal↔loop link is NOT built.**
+4. **Write the audit row** — `deals.under_contract` to `hl_audit_log`, same as today.
+
+## What's built vs not
+
+| Piece | Status |
+|---|---|
+| The funnel shell + Step 1 (Contract & 2 anchor dates) → creates/seeds loop | ✅ built (`AddTransactionFunnel`) |
+| Lead-side pre-fill (address · phone · agent) | ✅ built |
+| `PATCH /api/tc/loops/[id]/dates` (anchor write) | ✅ built |
+| `createLoop` / milestone + task seeding · `computeDue` date math | ✅ built |
+| **Under-Contract stage move OPENS the funnel** (instead of DealMilestoneModal) | ⛔ NOT built |
+| **Loop-side pre-fill** (side · price · participants from the loop) | ⛔ NOT built |
+| **Deep intake capture** (Steps 2–6, ~140 fields from the Cognito schema) | ⛔ NOT built |
+| **Deal ↔ loop link** (one transaction, not two rows) | ⛔ NOT built |
+| **`computeLoopSchedule`** — the loop-aware cascade (Adam's G4) | ⛔ NOT built |
+
+## Related
+
+- [Native Transaction Intake Form](/guides/native-transaction-intake) — the funnel + the Phase-1 build
+- [Cognito Forms API — Reverse Engineering](/guides/cognito-forms-api) — the 140-field schema this rebuilds
+- [Lead Detail — Stages, Deals & the Audit Trail](/guides/lead-detail-stages-and-deals) — the intercept matrix + DealMilestoneModal this upgrades
