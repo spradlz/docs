@@ -5,8 +5,6 @@ description: "Work-in-progress dossier — Adam · HouseLoop CRM · Developer Do
 
 <Info>Live dossier — auto-generated from `.claude/state/wip/adam/trigger-events.md` on every push. **Progress: 3/8 done (38%).** _Updated 2026-07-04 PM (Fable 5) · Adam owns END-TO-END incl. the model (Zach 2026-07-04; pipeline-workflow-overview absorbs into THIS doc — Lee keeps only the message/notification catalog)._</Info>
 
-<Warning>⚠ **Possibly stale:** this work-stream file was last written 71h ago. If Adam has shipped since, this dossier under-reports — refresh `.claude/state/wip/adam/trigger-events.md`.</Warning>
-
 **Owner:** Adam — HouseLoop CRM · Developer Docs
 
 ## Checklist
@@ -14,6 +12,41 @@ description: "Work-in-progress dossier — Adam · HouseLoop CRM · Developer Do
 _This dossier is the ONE home for all HouseLoop CRM **workflow / registration-events / platform-scoping / notification**
 work (Zach directive 2026-07-04 — transferred to Adam from Benji). It auto-publishes to
 houseloop.mintlify.io/wip/adam-trigger-events. ALL documentation for this buildout lives HERE._
+
+---
+
+### ✅ SHIPPED 2026-07-08 — THE TRIGGER-FIRE LEDGER (Zach: "the trigger events are messed up, fix it at the codebase")
+
+**The bug Zach hit live:** the Trigger Events board (`/settings/trigger-events`) lied two ways at once —
+- the **TRIGGERED number** read lead-less `hl_run_log` `door-*` dispatch rows, while
+- the **"which leads fired this" drill-down** read the activity FEED `hl_lead_activity` by `kind` with **NO
+  source filter**.
+
+Two different sources → they could never agree, and the drill-down scooped up things that were never a
+houseloop.ai trigger fire: **FUB/Zillow imported history** (James Ross's 2024 Zillow save showed as a native
+saved-search fire), **system-seeded starter searches** (the registration auto-search looked like the LEAD saved
+one), and **replayed pre-registration browsing**. General Registration showed **27** with an **empty list**
+(`nativeKindsFor('general_registration')` → kind `'general'`, which no row has).
+
+**The fix (commit `32090c2147`, docs `7e98b31b8b`):** the canonical per-lead fire ledger **`hl_trigger_fire`**
+(mig 0355). `dispatchDoor` (`lib/workflows/runtime.ts` — the ONE place every `houseloop/door.<key>` flows
+through) writes EXACTLY ONE row per dispatch (`lead_id`, `event_key`, `platform`, `matched`, `routed_by`). BOTH
+the board count (`page.tsx` firedFor) AND the drill-down (`/api/trigger-events/fires`) read this ONE table,
+scoped `platform <> 'follow_up_boss'` for native → they agree by construction, and only genuine dispatches can
+appear. FK `ON DELETE CASCADE` (no orphaned telemetry — caught by the lead-purge guard). The board passes each
+row's `fireKeys[]` to the modal so count + list query identical keys. **Counts reset on ship** (backfill only
+covers workflow-matched fires from `hl_workflow_runs`); every native number now climbs from real, clickable,
+per-lead fires. **Verified:** count === list on a synthetic native fire; the 3 FUB-origin backfill rows are
+correctly excluded from native; `tsc` clean; purge guard green (44/44 lead tables covered).
+
+**Also shipped this pass — the test-identity purge (Zach: "purge my test identity, it brought all my old shit
+back — no hard delete").** Root cause: a HouseLoop person lives in TWO DBs. Deleting the CRM lead leaves the
+WEB-side identity — `"SavedSearch"` / `"SavedListing"` in **`HL_WEB_DATABASE_URL`** (centerbeam), keyed by
+`"User".id` resolved by EMAIL, not lead_id — so re-registration re-attaches it (the 8426 Green Road saved home +
+the saved search that looked self-fired). Purged both DBs for `zach@spradlingrealtygroup.com` with reversal
+snapshots (`.claude/reports/zach-test-identity-purge-reversal-2026-07-08.json` +
+`...-WEB-purge-reversal-2026-07-08.json`). The registration door layer itself was FINE — a real registration
+fires ONE clean `door-general-registration` (verified in run-log); it never fired a saved-search door.
 
 ---
 

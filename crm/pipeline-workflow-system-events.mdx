@@ -67,6 +67,16 @@ Everything is read/written live from the CRM Postgres — no separate config sto
 Toggle/attach: `PATCH /api/lead-flow`. Create/clone workflow: `POST /api/workflows` / `.../duplicate`. Fire-count
 drill-through: `/api/trigger-events/fires`.
 
+**The fire truth = `hl_trigger_fire` (mig 0355, Adam 2026-07-08).** `dispatchDoor` (`lib/workflows/runtime.ts`,
+the ONE place every `houseloop/door.<key>` flows through) writes EXACTLY ONE per-lead row per dispatch
+(`lead_id`, `event_key`, `platform`, `matched`, `routed_by`). The board count AND the drill-down both read this
+one table, so "TRIGGERED = 27 but the list is empty" is structurally impossible now. **Only a genuine door
+dispatch is a fire** — the lead activity feed (`hl_lead_activity`) is NOT a fire source, so FUB-imported history,
+system-seeded starter searches, and replayed pre-registration browsing can never masquerade as a native trigger
+fire again. *(The old bug: the count read lead-less `hl_run_log` door-\* rows while the list read the feed by
+`kind` with no source filter — two different sources that could never agree, and the feed pulled in cross-platform
+noise. Counts reset on ship; every native number now climbs from real, clickable, per-lead fires.)*
+
 ## How it fits
 
 Trigger Events is the middle of the pipeline: **[Lead Sources](/guides/lead-sources) → Trigger Events →
