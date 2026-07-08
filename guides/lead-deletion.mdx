@@ -29,6 +29,17 @@ This is deliberate. The purge used to be hand-copied into both routes, and the
 two copies drifted (and both carried the same pixel bug). **There is now exactly
 one nuke button**; the routes are thin wrappers around it.
 
+<Warning>
+**NEVER hand-roll a lead purge with raw SQL.** Deleting a lead means calling `purgeLead()` — via
+`DELETE /api/leads/[id]`, the bulk-delete route, or the test harness (`hl_reg_purge_lead`, which calls the real
+DELETE cascade). A hand-written `DELETE FROM hl_leads …` (or any subset of these steps) **skips the parts that
+have no lead FK** — the anonymous pixel purge (step 2), phone-keyed inbound (step 4), and **the cross-DB website
+`User` delete (step 6)** — which is exactly how a "deleted" lead leaves an orphaned website identity that
+resurfaces on re-registration. If you need to purge a test identity, call the endpoint / harness. Do not
+reinvent this function. *(This warning exists because a raw-SQL "purge" on 2026-07-08 skipped step 6 and
+stranded a website `User` + its saved searches — the whole point of the one-button rule.)*
+</Warning>
+
 Purge is built from two layers:
 
 1. **Structural (automatic) — `ON DELETE CASCADE` foreign keys.** Every table
@@ -113,8 +124,9 @@ DELETE FROM hl_leads WHERE id = $1
 ```
 
 Every FK that references `hl_leads.id` is `ON DELETE CASCADE`. As of the current
-schema that is **36 of the 38** tables holding a `lead_id` (the other two are the
-pixel tables in step 2). One `DELETE` wipes all 36 dependent tables automatically —
+schema that is **42 of the 44** tables holding a `lead_id` (the other two are the
+pixel tables in step 2; the newest cascade table is `hl_trigger_fire`, the trigger-fire
+ledger, mig 0355). One `DELETE` wipes all dependent tables automatically —
 `hl_messages`, `hl_notification`, `hl_tasks`, `hl_appointments`, `hl_calls`,
 `hl_lead_tags`, `hl_lead_collaborators`, `hl_stage_transitions`,
 `hl_saved_search_match`, `hl_bb_events`, `hl_lead_addresses`, and more. No

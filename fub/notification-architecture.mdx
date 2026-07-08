@@ -77,6 +77,25 @@ stays as a fast safety net; the differential is the source of truth.
 - **Notify-on-first-capture.** Notify the first time a signal is captured regardless of age — replaces the brittle
   `< 2h old` gate (`fub-scraper-lib.mjs`) that silently dropped alerts whenever the scraper ran behind.
 
+## The card is integration-aware + dual-link (Zach 2026-07-08)
+
+A notification for an integration lead must **carry the integration it lives in** and link to **both** homes for
+that lead — the integration's and (if it exists) HouseLoop's:
+
+- **Copy** names the actor + action + property + source + integration:
+  **"James Ross saved a home — 2645 SE 29th St — via Zillow.com on Follow Up Boss."**
+- **Follow Up Boss link** — **always** (the lead lives in the FUB integration) → the FUB person page
+  (`https://spradlinggroup.followupboss.com/2/people/view/{fub_person_id}`).
+- **HouseLoop link** — **only if a HouseLoop lead exists** → the CRM lead page
+  (`https://crm.houseloop.ai/leads/{leadId}`). **If no HouseLoop lead was created** (Notify on, Creates-Lead off,
+  brand-new person) → render **"HouseLoop — no lead created"** with **no link** (blank).
+
+So the same card serves both worlds: an **existing** HL lead shows **both** links (native + integration); a
+**lead-less** FUB signal shows the **FUB link only** plus the "no lead created" note. Implementation: extend the
+one-card enrich payload with `integration = { name, link }` and `native = { link | null }`; `dispatch.ts` already
+appends "from {source} via {integration}" — this adds the two resolved links + the null-safe HouseLoop line. This
+is the content contract for the **lead-less notify** path (the Phase 2 fast-follow).
+
 ## RealLoop is the proven base — what we port
 
 RealLoop's webhook receiver + inline handlers already implement the reliability tricks; the port to HouseLoop
