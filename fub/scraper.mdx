@@ -157,6 +157,18 @@ is **not** automatically bad (UI-hidden emails). A pending backlog in the tens o
 
 ## Incidents
 
+- **2026-07-08 07:41 UTC (Caleb / Opus 4.8)** — Chrome A (18800) kept getting kicked out and **couldn't log itself
+  back in** (Zach report). Diagnosis: **the login-bot was crying wolf on 2FA.** `driveGoogle()` tested a broad regex
+  (`2-Step Verification | verify it's you | passkey | try another way | authenticator`) **before** it ever filled the
+  password — but Google renders "Try another way" and a passkey hint as *options* on the ordinary password screen, so
+  the bot bailed `exit 3 "2FA — human required"` while a usable password field sat right there. Proven false: a manual
+  email+password drive landed straight in `/2/people`, zero 2FA. **Fix (`fub-login-bot.mjs`, commit `8f8e01cb65`):**
+  exhaust every action the bot CAN take — email → password → chooser → consent — FIRST; declare `2fa` only as a last
+  resort when a REAL challenge is present (a visible code input `input[type=tel]` / `one-time-code`, or a "Google sent
+  a notification" push) AND nothing else is actionable. **Verified end-to-end:** cleared ALL cookies (true cold state —
+  Google + FUB sessions dead) → the fixed bot re-logged in via Google SSO **autonomously in 11 seconds** (`Login
+  required → Starting Google SSO → Logged in via Google.`). Chrome A authed, backfill-a resumed (heartbeat live,
+  ~185/hr, no error). Deployed to `/Users/lee/fub-login-bot.mjs`.
 - **2026-07-03** — BOTH Chromes logged out, workers crash-looping (*"hit expired FUB session mid-scrape"*), and the
   watchdog **sat there spinning** — it only ran the in-session login-bot and, on a real logout, gave up + alerted a
   human (it never did a hard relaunch). Fixed live with `fub_chrome_restart`, then **made the fix persistent**: the
