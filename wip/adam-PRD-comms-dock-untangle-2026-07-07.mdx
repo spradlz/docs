@@ -1,0 +1,72 @@
+---
+title: "Adam (PRD — The Comms Dock, Untangled (two-tier + true dual lane))"
+description: "Work-in-progress dossier — Adam · HouseLoop CRM · Developer Docs. PRD — The Comms Dock, Untangled (two-tier + true dual lane)."
+---
+
+<Info>Live dossier — auto-generated from `.claude/state/wip/adam/PRD-comms-dock-untangle-2026-07-07.md` on every push. **Progress: checklist pending.**</Info>
+
+**Owner:** Adam — HouseLoop CRM · Developer Docs
+
+## Checklist
+
+- **Owner:** Adam · **Date:** 2026-07-07 21:10 EDT · **Status:** design LOCKED by Zach → porting
+- **Locked wireframe (source of truth):** `docs/wireframes/comms-dock-untangle-2026-07-07.html`
+  · interactive: https://claude.ai/code/artifact/7cad6413-8902-4501-8d00-ffb7c50d1569
+- **Law:** `UI_ITERATION_HTML_FIRST` (port node-by-node from the locked HTML) · `REUSE_NOT_RECREATE` · `CRM_PIXEL_LOCK`
+- **Section:** #6 on the Lead Engine (Zach handoff — Adam owns; Lee owns 1–5)
+
+### Problem
+The lead-detail **Texts** dock used three flat pills — `Lead · Msale | Agent · Myli | Both` — which tangle two
+different questions: *who the conversation is with* and *which slice of it you're watching*. Zach: "these buttons
+don't make sense." And `Both` rendered one interleaved column, not a real dual lane.
+
+### The locked model — TWO tiers
+
+### Tier 1 — who you're talking to (top split)
+| Tab | Is | Composer | Never-seen-by-lead |
+|---|---|---|---|
+| **Lead** | the buyer conversation (one phone thread; Myli + agent both text the same number) | To × Send-as | no |
+| **Collaborators + Myli** | internal: you + any teammate on the lead ↔ Myli, ONE running list; she reports to everyone assigned. Agent-facing **"System alert"** rows live here. | "Message Myli about this lead…" | yes |
+
+### Tier 2 — under **Lead**, 3 views of the one buyer thread
+| View | Layout | Lanes | Composer(s) |
+|---|---|---|---|
+| **Both · dual lane** | TWO columns | LEFT = human agent → Msale · RIGHT = Myli → Msale | two: `Send as Zach · SMS` (left) + `Send as Myli · SMS` (right) |
+| **Agent → Lead** | one column | agent's lane only | `Send as Zach` |
+| **Myli → Lead** | one column | Myli's lane only | `Send as Myli` |
+
+**Lane order is fixed: agent LEFT, AI RIGHT** (Zach 2026-07-07).
+
+### From-pill on EVERY bubble (locked)
+- 👤 person avatar = human agent (`Zach Spradling · Agent`)
+- 🤖 **robot head = Myli / an AI clone** — a clone also gets a `Clone` tag (`Zach Spradling · AI Clone`)
+- initials avatar = the lead (`Msale Olongo · (816) 756-9634`)
+- each pill = *from name · number · channel*. Bubble color still = the wire (green SMS / blue iMessage).
+- **Myli defaults to SMS** (send-identities SMS-first — already shipped).
+
+### Port map (node-by-node → existing components; REUSE, don't recreate)
+| Wireframe node | React target | Notes |
+|---|---|---|
+| Tier-1 split (`Lead` / `Collaborators + Myli`) | `CenterLane.tsx` Texts case — replace the 3-pill row | new 2-tab control; drives `scope` state |
+| Tier-2 pills (`Both`/`Agent→Lead`/`Myli→Lead`) | `CenterLane.tsx` — shown only when scope=Lead | drives `view` state |
+| Dual-lane grid (2 col) | reuse the EXISTING `Both` lockstep-scroll layout in `CenterLane` (`TextThreadStream` + `AgentThreadStream`) | repurpose: LEFT = agent-outbound-filtered lead thread, RIGHT = Myli-outbound-filtered lead thread — NOT the internal Agent↔Myli lane |
+| Single-lane views | `TextThreadStream` filtered by sender | agent-only / myli-only |
+| Internal running list | `AgentThreadStream` + `/api/leads/[id]/myli-chat` (already built) | this is where the old "Agent · Myli" content moves |
+| From-pill | extend the existing actor-pill in `TextThreadStream` | add robot-head SVG for AI/clone + `Clone` tag; lead name from contact |
+| Dual composers | two `TextComposerPanel` with `lockTo` per lane | left `lockTo` agent identity, right `lockTo` myli identity |
+
+### Data
+- Lead thread already carries actor (`actor_role`, `actor_name`, sender identity) — the filter for Agent-lane vs
+  Myli-lane keys off the outbound sender's identity (Myli's assigned_ai_agent vs the human agent user).
+- Internal lane = the myli-chat thread (already exists).
+- Lead name for the from-pill = the lead contact (`first_name last_name`), not the raw number.
+
+### Verification (per the law)
+1. Freeze/pin the HTML (done: `docs/wireframes/comms-dock-untangle-2026-07-07.html`).
+2. Port node-by-node; reuse the existing lockstep-scroll dual lane.
+3. Overlay-diff the built React at the dock viewport against the wireframe — element by element.
+4. LOCKDOWN holds: no proactive sends; the internal lane stays the read-only `myli-chat` compose path.
+
+### Out of scope (this pass)
+Emails dock (same pattern later) · adding a real collaborator's own lane (design accommodates it — a collaborator's
+messages fold into the internal list) · SSE for the internal lane.
