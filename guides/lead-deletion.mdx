@@ -136,9 +136,19 @@ everything (including the likes/saves that back the `/favorites` page).
 
 <Note>
 The cross-DB delete is **best-effort with error logging**. If the website DB is
-unreachable, the CRM lead is still deleted and the failure is logged. The website
-`User` row becomes orphaned but harmless.
+unreachable, the CRM lead is still deleted and the failure is logged.
 </Note>
+
+<Warning>
+**An orphaned website `User` row is NOT harmless — it silently blocks re-registration** (learned the hard way,
+2026-07-08). The website's complete-profile step calls `GET /api/auth/complete-profile`, which returns
+`complete = !!(name && phone)`. If a leftover `User` row still carries a name + phone, the site treats the next
+sign-in with that email as a **returning, already-complete user**, **skips the complete-profile POST, and never
+calls the CRM lead-intake** — so the person gets a website account but **no CRM lead and no General Registration
+door fires**. The website `User` delete in step 6 is therefore **not optional cleanup; it is what makes
+re-registration work.** If step 6 ever fails (web DB down), the delete is *incomplete* — re-run it, don't leave
+the orphan.
+</Warning>
 
 ## The guard — why you never have to remember
 
