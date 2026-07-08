@@ -1,17 +1,57 @@
 ---
 title: "Home Page"
-description: "How the houseloop.ai home page is composed — hero search, featured content, and entry points into the app."
+description: "How houseloop.ai's home page is composed — DB-driven shelves (hl_home_shelf), the cookie-aware hero carousel, Inspiration links, and the drift defenses that keep product decisions in the database."
 ---
 
-<Note>🚧 Work in progress — this page is being written. See the live scoreboard under **CRM → Team → Work In Progress**.</Note>
+<Note>Rewritten 2026-07-06 (Fable-5 audit shelves web-4) from the shipped architecture — every claim below
+verified against live code/DB. The constitutional law lives in `GT/GT - ACTIVE/GT_HOUSELOOP_INFRASTRUCTURE.md §9–§12`;
+this page is the working guide.</Note>
 
-The HouseLoop home page (`houseloop.ai`) is the consumer entry point. This section will document how it's
-built: the hero search bar, featured/coming-soon listings, market content, and the registration entry points
-that create leads in the CRM.
+## The one idea: shelves are DATA, not code
 
-For now, related shipped docs:
+The home page is a stack of **shelves** — each a row of listing cards ("Homes in Overland Park", "Homes on
+land"). Every shelf is a **row in `hl_home_shelf`** (web DB), not a component: its query (`queryEnvelope`),
+its display knobs (`displayOptions`), its order (`sortOrder`), and its on/off (`isActive`) all live in the
+row. **Adding a shelf = INSERT a row** (edit `prisma/seed/home-shelves.ts`, `npm run db:seed`) — you never
+edit `HomeRows.tsx`.
 
-- [Home Search](/guides/listings-search-and-map) — the search + map experience
-- [AI Smart Home Search](/guides/ai-smart-home-search) — natural-language search
-- [Website Integration](/guides/website-integration) — how the site connects to the IDX feed + CRM
-- [Registration](/guides/registration) — how a visitor becomes a lead
+Current live set (13 rows, all active): `hero` · `all-kc-metro` · 10 city shelves (Overland Park, Leawood,
+Olathe, Lenexa, Shawnee, Kansas City, Lee's Summit, Liberty, Independence, Blue Springs) · `acreage`.
+(The old `featured` shelf is retired.)
+
+## Composition pipeline
+
+| Piece | File | What it does |
+|---|---|---|
+| Shelf composer | `lib/home/composer.ts` | Reads active `hl_home_shelf` rows (sorted), runs each `queryEnvelope` through the ONE search engine (`searchListings`), slices to the card count. Newest-first, no shuffle (Zach 2026-05-21: "the N newest — that's how they filter in and out"). |
+| Card count | `displayOptions.maxCards` → `queryEnvelope.limit` → 15 | `maxCards` is honored as the per-shelf cap (wired 2026-07-06 — it was decorative before). |
+| Hero composer | `lib/home/hero-composer.ts` | Its own path because the hero has 3 extra concerns: curated `FeaturedListing` admin overrides lead the rotation · cookie-aware rotation (`hl_seen_hero` — returning visitors see fresh slides) · a stricter photo bar (`photos.min` ≥ 25 in the hero row's envelope). |
+| Hero slide count | `displayOptions.slideCount` on the `hero` row | DB-first (wired 2026-07-06): explicit caller override (mobile passes 1) > the hero row's `slideCount` > 5. No more hardcoded constant. |
+| Inspiration links | `components/communities/InspirationLinks.tsx` ← `hl_inspiration_city` (24 rows) + `hl_inspiration_category` (5 rows), seed `prisma/seed/inspiration.ts` | City + category tabs. Category hrefs MUST use real `url-to-query` params — an unknown param silently drops and the tab renders the whole grid (fixed 2026-07-06: `minYearBuilt`, `oh=1`, `sort=viewsDesc`). |
+| Market band | `components/market/LiveHousingDataSection.tsx` ← `MarketSnapshot` | County market snapshots. |
+| Header / Footer | `components/site/Header.tsx` / `Footer.tsx` | 3-region desktop header + mobile variants; footer carries the MLS GRID / Heartland IDX disclosure + DMCA. |
+
+## Global constants — `hl_app_config`
+
+Product constants a non-engineer might change live in `hl_app_config` via `lib/config/config-service.ts`
+(typed accessors, 5-min cache). **Every key has a real consumer** (dead keys purged 2026-07-06):
+
+| Key | Consumer |
+|---|---|
+| `lot.sqft_per_acre` / `lot.max_sane_acres` | acreage math + outlier defense |
+| `cache.active_ttl_seconds` (6h) | `getListing` freshness for active listings |
+| `cache.pending_ttl_seconds` (1h) | per-status TTL — pending/under-contract refreshes faster (about to close) |
+| `sync.*` | runtime watermarks (not user-facing) |
+
+## Drift defense (why this stays clean)
+
+- ESLint `no-magic-numbers` + `no-restricted-imports` (provider wire types die in `lib/listings/providers/`).
+- `npm run drift-check` full-tree grep audit + `tools/houseloop-prisma-check.sh` — both run on pre-commit for HouseLoop files.
+- The 5-question decision tree in `apps/houseloop-web/AGENTS.md` — read it before adding anything here.
+
+## Known absent (flagged, not built)
+
+- **Geo personalization** — every visitor sees the identical shelf order; `sortOrder` was built to support
+  per-visitor ordering when we want it.
+
+Related: [Home Search](/guides/home-search) · [Website Integration](/guides/website-integration) · [Registration](/guides/registration)

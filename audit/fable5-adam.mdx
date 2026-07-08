@@ -1,0 +1,175 @@
+---
+title: "⭐ Fable 5 Master Audit — Adam"
+description: "Adam's remediation lane: 6 subsystems, worked top to bottom with the resolve protocol (🟢 + timestamp + model + notes)."
+---
+
+<Warning>**⛔ HANDOFF FIRST (Zach 2026-07-06):** before touching ANY audit row, update your ⭐ master
+work-in-progress doc with a formal handoff: a checkbox list of everything you completed (verified, with dates),
+exactly where everything stands right now, and the future work still ahead on that work-stream. Only then pivot
+to this sheet. Your current master is the record — the next model picks it up cold.</Warning>
+
+<Info>**THE REMEDIATION PROTOCOL (Zach 2026-07-06):** work ONLY from this sheet, top to bottom. For each item:
+(1) **deep-verify** the current functionality actually works — run it, click it, query it; never trust the doc or the code comment;
+(2) fix per the prescription (full detail in the repo: `.claude/reports/audit/<key>.md`);
+(3) flip the row to **🟢 RESOLVED** with the **date+time**, the **model you were running**, and **notes on what you did**.
+Many tables are near-empty — only ~15 leads exist (a few real Zillow leads + test leads); most machinery has never seen real volume.
+When a feature is spec-built-but-empty, say so explicitly and add a **visual of what the spec calls for** (screenshot or mock) so
+Zach can see intended vs actual. An unverifiable claim stays ⬜ — never green a row you didn't prove.</Info>
+
+> Master: [⭐ Fable 5 Master Audit (All)](/audit/fable5-all) · Full artifact: [the State of the Union](https://claude.ai/code/artifact/d5f808e0-3ab8-4fd3-a6b2-5a615d6b82a0)
+
+
+## Myli AI Layer — YELLOW (21/30 good · 11 gaps)
+
+Full report: `.claude/reports/audit/crm-myli-ai.md`
+
+
+**Headline gaps found by the audit:**
+
+- myli-access.mdx documents HL_MYLI_TOKEN bearer auth that exists nowhere in code (lib/session.ts has no Bearer support) — anyone following the guide gets 401s
+- Ana clone safety KB is not a live safety layer: no ana-knowledge-base.jsonl on disk, nothing in the CRM reads it, and no Ana clone user exists despite myli-master naming one
+- build_context capability (capabilities.ts:77, built:true) grants a tool that is NOT in ALL_TOOLS — an orphan toggle, the exact drift the file's FAILS_IF warns about
+- Broker AI role has an EMPTY persona; dispatchInboundToAi:162 silently returns on empty persona, so a lead on that role gets silence with no error
+- Conversation audit trail is console-only: header claims hl_run_log category='ai-zach' but that column/rows don't exist and audit() was gutted to console.log
+- rollups.ts reads its Anthropic key from hl_settings('ai_keys') instead of ANTHROPIC_API_KEY_HOUSELOOP, bypassing workspace cost attribution
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| crm--1 | Implement HL_MYLI_TOKEN bearer auth in lib/session.ts or red-line the myli-access.mdx auth section as planned-not-live | 🟢 | 2026-07-06 ~18:15 · Fable 5 | Deep-verified: HL_MYLI_TOKEN in ZERO code/env — only the doc. Nothing in prod breaks (Myli's live paths are in-process, no HTTP auth); the doc just lied. Decision = RED-LINE (a static all-access bearer needs scoping/rotation design + Zach sign-off, not an audit bolt-on): myli-access.mdx auth section now carries a PLANNED — NOT LIVE Warning, cookie = the only live credential, curl example marked as 401s-today target shape. Detail: .claude/reports/audit/crm--1-myli-token.md |
+| crm--2 | Wire build_context into ALL_TOOLS (buildLeadContext already exists) or mark the capability built:false | 🟢 | 2026-07-06 ~13:40 · Opus 4.8 | Wired. Added `build_context` tool def + dispatch `case` + `execBuildContext` in lib/ai/lead-conversation.ts (calls `buildLeadContext` via dynamic import to avoid the extract-context↔lead-conversation require cycle). capability `built:true` now backed by a real tool. tsc 0 errors. Detail: .claude/reports/audit/crm--2-build-context.md |
+| crm--3 | Fill or delete the Broker role persona AND make empty-persona dispatch emit a visible skipped-activity row instead of silent return | 🟢 | 2026-07-06 ~14:05 · Opus 4.8 | Root cause: mig 0344 seeded Broker with no `kind` → defaulted to `'ai'` (mig 0056). But Broker is a **signer role** (broker of record on the e-sign docs — Zach confirmed), NOT AI. Fix = set `kind='human'` (mig 0346, **applied to prod**, verified) → filtered out of every AI-role picker, can't be assigned as a lead's AI role, empty persona now correct. Patched 0344 seed too. Part 2: empty-persona dispatch now logs a visible `ai_skipped_no_persona` activity row (new badge, red BellOff, category system) instead of silent return. tsc 0. Detail: .claude/reports/audit/crm--3-broker-empty-persona.md |
+| crm--4 | Re-point audit() at hl_run_log (source='ai-dispatch', schema-valid columns) so conversation steps are queryable again; fix the stale header | 🟢 | 2026-07-06 ~14:40 · Opus 4.8 | audit() was console-only + header lied (`category='ai-zach'` — no such column; table is NOT Inngest-only, live sources incl ai-block/ai-search/handoff). Fixed: header now says source='ai-dispatch'; audit() best-effort INSERTs into hl_run_log (app/source/fn/status/trigger/payload, level→status, level kept in payload, try/catch so it can't break dispatch). Proven: live INSERT selftest queryable by source='ai-dispatch', test row cleaned up. tsc 0. Detail: .claude/reports/audit/crm--4-audit-runlog.md |
+| crm--5 | Decide the Ana-clone KB: create the clone user + wire clone_grounding into the dispatch context brief, or strike Ana's clone from shipped docs | 🟢 | 2026-07-06 ~18:05 · Opus 4.8→Fable 5 | Deep-verified: NO Ana clone user, no ana-knowledge-base.jsonl on disk, zero clone_grounding readers — only myli-master.mdx over-claimed it. Decision = STRIKE from docs (honest branch): myli-master now says Zach's clone is the only provisioned clone; an Ana clone resolves the same way once provisioned. Bonus: the two-layer model (P3, shipped today) now defines the provisioning path (clone user + AI Clone role + hl_agent_clone_config). KB stays future work, not faked. Detail: .claude/reports/audit/crm--5-ana-clone-kb.md |
+
+
+## Workflows Engine — YELLOW (17/24 good · 12 gaps)
+
+Full report: `.claude/reports/audit/crm-workflows.md`
+
+
+**Headline gaps found by the audit:**
+
+- DOC-vs-DB: intent-workflows.mdx says all 13 intent workflows are OFF ('nothing messages anyone until you flip a switch') — live DB shows ALL 15 ACTIVE; next real website registration fires Myli texts + brand emails at a real person
+- Existing leads get a brand-ack email on EVERY like/save/share: beat-1 brand email sits BEFORE the New/Existing branch and no dedupe covers *_brand_email keys — contradicts the doc's 'log a note only' policy
+- Takeover/release rebinding silently no-ops for intent trigger keys: event-trigger-map.ts never got the base-intent keys, so two active customs on one intent raise no conflict
+- ~25 of 57 catalog triggers have no emitting door — the builder lets you save+activate workflows that can never fire, with no warning
+- The 'Active' runs tab is a Phase 6 Coming-Soon stub — in-flight runs (multi-day waits) are invisible outside Inngest
+- Two engine-side behaviors run off-canvas (standby-floor handoff after every run + e-sign nudge queued by the door) — a WORKFLOW_CANVAS_IS_TRUTH tension needing a ruling
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| crm--1 | Get Zach's typed yes/no on whether intent workflows may fire on real leads TODAY, then make hl_workflows status and intent-workflows.mdx agree (deactivate the 13 or rewrite the doc) | 🟢 | 2026-07-06 ~18:55 · Fable 5 | The typed yes exists in the 2026-07-06 session record ("green light… build the beat one canvas step across all intent doors") — the Beat-1 rollout activated the doors deliberately; the doc was stale (its OFF claim was verified 07-05, pre-activation). Rewrote intent-workflows.mdx to the live truth: ACTIVE since 07-06, deeper engines still gated, master AI switch = the one kill, workflows-off never silences Myli. Veto lever documented (one status flip to deactivate). Detail: .claude/reports/audit/wf-crm--1-doc-db-reconcile.md |
+| crm--2 | Move the brand-ack email inside the new-lead branch on the 5 behavior-signal canvases (liked/saved/shared/saved-search/general-reg) or extend the 24h email guard to *_brand_email — verify with a double-fire on a test lead | 🟢 | 2026-07-06 ~19:40 · Fable 5 | BOTH options shipped, per Zach's live ruling ("existing lead likes a home — no branded email; high-intent only"). A: all 5 LIVE canvases surgically rewired — gate→branch FIRST, brand email moved INSIDE the new-lead arm (beat1→text, self-contained), existing arm = note only, ZERO messages (structurally unreachable now, not just deduped); pattern-guarded, odd 6th saved_search skipped; before/after receipts JSON saved. B: 24h guard extended to *_brand_email (fe717768bb) as belt-and-suspenders. Proven by full canvas-connection trace on all 5 (canvas-is-truth). Double-fire e2e queued with the gauntlet. Detail: .claude/reports/audit/wf-crm--2-brand-ack-placement.md |
+| crm--3 | Add the canonical intent keys to event-trigger-map.ts (share dispatchDoor's alias logic) so PATCH takeover/409/system-resume works for intent workflows again | 🟢 | 2026-07-06 ~18:45 · Fable 5 | Deep-verified: map pointed at the DEAD -ed legacy names (live census: all -ed workflows inactive, all active canvases canonical) → `TRIGGER_EVENTS[trigger]` resolved undefined for every intent canvas → PATCH takeover/409 silently no-oped (route.ts:97). Repointed the 4 intent keys to canonical (mirrors runtime.ts INTENT_ALIASES; matches Benji's web-4 drift flag); home_value_report + seller_get_started now first-class. tsc 0. Detail: .claude/reports/audit/wf-crm--3-event-trigger-map.md |
+| crm--4 | Badge unfireable triggers in the builder palette by exporting DOOR_EVENT_KEYS and flagging catalog rows with no live door | 🟢 | 2026-07-06 ~19:20 · Fable 5 | door-keys.ts (pure module) now carries INTENT_ALIASES + reachableTriggerTypes() — dispatchDoor's exact candidate expansion, ONE source shared by runtime (local copy deleted) + the palette API. /api/workflows/triggers stamps `fireable` per row; the builder shows a red "NO LIVE DOOR" pill on unfireable triggers (non-blocking, hover explains). Deeper fix (doors for the ~25 orphans or catalog prune) = tier-collapse scope. tsc 0. Visual spot-check queued behind the deploy. Detail: .claude/reports/audit/wf-crm--4-unfireable-triggers.md |
+| crm--5 | Build the real Active-runs tab from hl_workflow_runs (reuse HlDataTable) and close the small API holes (duplicate drops sender_default/platform; DELETE has no is_system guard) | 🟢 | 2026-07-06 ~19:55 · Fable 5 | Built: GET /api/workflows/runs (in-flight first, history after) + ActiveRunsTable (canonical DataTable — workflow/lead-link/status pill/current step/outcome/error/times) replacing the Phase-6 stub in WorkflowsShell (dead stub + orphaned import removed). Holes: duplicate now clones platform + quiet_hours/preconditions/tool_access/completion/schedule_config (sender_default was already half-patched; is_locked deliberately NOT inherited); DELETE refuses is_system AND is_locked (409). Query proven live (real rows, 74 runs, 0 in-flight at proof — stated honestly). tsc 0. Detail: .claude/reports/audit/wf-crm--5-active-runs-tab.md |
+
+
+## Dashboard/Tasks/Calendar — YELLOW (22/31 good · 10 gaps)
+
+Full report: `.claude/reports/audit/crm-dashboard-tasks-cal.md`
+
+
+**Headline gaps found by the audit:**
+
+- Task status vocabulary forked: Tasks-page modal writes 'pending' while every filter (Active tab, calendar, gcal de-dup) expects 'open' — 1 live hl_tasks row already invisible everywhere but the All tab
+- Single Mark Complete sends 'done' but PATCH only stamps completed_at WHEN status='completed' — completing a task actively NULLs completed_at
+- Topbar global search is a permanently disabled decoy input (Topbar.tsx:45); no command bar exists anywhere
+- Dashboard defaults to HouseLoop brand (brokerage 2) which has ZERO transactions — every fresh load shows an empty scoreboard; year hardcoded to 2026
+- Conversations inbox and Analytics are ComingSoon stubs while hl_messages already holds 1,663 rows
+- Brand-law NO GREEN violated across taskMeta, TasksPage, EventCard, Google-event color, and the dashboard SRG-Net chart segment (raw hex, not tokens)
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| crm--1 | Normalize task statuses at the API boundary (pending->open, completed->done), fix TaskModal/taskMeta defaults, and migrate the stray hl_tasks rows | ⬜ | — | — |
+| crm--2 | Fix completed_at CASE in app/api/tasks/[id]/route.ts to stamp now() for 'done' as well as 'completed' | ⬜ | — | — |
+| crm--3 | Wire the topbar search to the existing /api/leads/search with a debounced dropdown (reuse SearchInput) instead of the disabled input | ⬜ | — | — |
+| crm--4 | Dashboard: render an explicit empty-state for zero-row HouseLoop brokerage and derive default year from availableYears instead of hardcoded 2026 | ⬜ | — | — |
+| crm--5 | Return type/is_tc from /api/options and rebuild TaskModal on TaskFields so the grouped Agents/AI/TC picker works from /tasks (also kills the duplicate-editor REUSE violation) | ⬜ | — | — |
+
+
+## Settings Surfaces — YELLOW (26/33 good · 10 gaps)
+
+Full report: `.claude/reports/audit/crm-settings.md`
+
+
+**Headline gaps found by the audit:**
+
+- Seller Report dashboard still hardcodes PROOF MODE (proof_client=true) — shows 15 of 1,779 past clients on the surface the data doctrine calls canonical (page.tsx:199, set 2026-06-20, never reverted)
+- Lead source DELETE is a hard delete that nulls source_id on all its leads and CASCADE-deletes its registration-door wiring (api/lead-sources/[id]/route.ts:95); only a client-side warning guards it
+- Role protection contradicts docs: AI Clone + AI ISA have is_system=false in hl_role so Myli's role is deletable; undocumented 'Broker' role exists
+- Pixel Tracking admin's 4 settings toggles are UI-only — Save button disabled 'Phase 2', nothing persists
+- Website cockpit counts 'today' in America/New_York while the business SSOT timezone is America/Chicago
+- Brand/token violations on google-ads + seo settings pages (raw hex incl. green #059669) vs BRAND_COLOR_SCHEMA law
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| crm--1 | Ask Zach then remove the PROOF_FILTER from seller-report/page.tsx (3 queries) so /settings/seller-report shows all 1,779 clients; accept when header total matches SELECT count(*) FROM hl_srg_past_clients | ⬜ | — | — |
+| crm--2 | Convert lead-source DELETE to soft-deactivate (is_active=false) in api/lead-sources/[id]/route.ts; leads keep attribution, door wiring survives; update the delete modal copy | ⬜ | — | — |
+| crm--3 | Migration: set is_system=true on AI Clone + AI ISA in hl_role (per team doc) and document the Broker role; accept when DELETE on AI ISA returns the is_system refusal | ⬜ | — | — |
+| crm--4 | Persist pixel-tracking toggles via a hl_settings('pixel_tracking') singleton (copy the business-profile route pattern) and have the pixel honor them — or delete the dead toggles | ⬜ | — | — |
+| crm--5 | One-commit sweep: cockpit timezone NY→Chicago (integrations/website/page.tsx:66), add ls.platform to lead-sources/[id] SELECT, replace raw hex with var(--hl-*) tokens on google-ads + seo pages, fill blank sender_name/sender_email in business profile | ⬜ | — | — |
+
+
+## Mobile CRM (/m) — YELLOW (8/16 good · 8 gaps)
+
+Full report: `.claude/reports/audit/crm-mobile-pwa.md`
+
+
+**Headline gaps found by the audit:**
+
+- PWA in name only: no manifest, no service worker, no icons - not installable to a home screen
+- Calls filter permanently empty: 85 rows in hl_calls but 0 call_logged rows in hl_lead_activity (catalog write-gap)
+- Phone deep links destroyed: middleware redirects any desktop path to bare /m, dropping path+query (email link to /leads/&lt;id&gt; lands on the feed)
+- Zero docs: no docs-site guide, not in GT_HOUSELOOP_MASTER - only Adam's private auto-memory (docs-first law violation)
+- Leads search caps at 500 rows client-side; the ?limit=200 param is ignored by GET /api/leads
+- Brand-law violation: raw green #059669 live-dot (activity page) plus raw #DC2626 hexes - NO GREEN / tokens-only rule
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| crm--1 | Close the calls write-gap: logActivity('call_logged') alongside every hl_calls insert + Inngest backfill of the 85 existing calls | ⬜ | — | — |
+| crm--2 | Map phone deep links in middleware: /leads/&lt;id&gt; -> /m/leads/&lt;id&gt; preserving query, instead of nuking to /m | ⬜ | — | — |
+| crm--3 | Add a real app/manifest.ts (start_url /m, standalone, icons) + appleWebApp metadata; allowlist it in middleware; defer service worker until push ships | ⬜ | — | — |
+| crm--4 | Write docs-site/guides/crm-mobile.mdx (IA, redirect+hl_force_desktop cookie contract, API surface, deferred scope) + GT master section 6 row | ⬜ | — | — |
+| crm--5 | Brand/scale pass: replace green dot and raw hexes with tokens; make GET /api/leads honor q+limit server-side to remove the 500-row search ceiling | ⬜ | — | — |
+
+
+## FUB Integration — YELLOW (20/28 good · 8 gaps)
+
+Full report: `.claude/reports/audit/crm-fub-integration.md`
+
+
+**Headline gaps found by the audit:**
+
+- BROKEN: FUB email bridge inserts ZERO rows — status values (Received/Sent/Queued) violate hl_email_send_log's CHECK constraint and the error is swallowed by .catch(()=>[]); 70 fub.emails exist for linked leads, 0 bridged (backfill-fub-comms.ts:153)
+- The mirror source fold has silently reverted: docs claim 47,867 rows folded to exactly 6 bucket values (2026-07-04), but the live mirror is back to raw strings (Zillow Preferred 12,966, &lt;unspecified&gt; 16,237) — derived state written into a raw landing table gets clobbered by scraper/relay
+- PCSOI reconciled import (the flagship): built and gated but 0 of 1,671 verified past clients imported
+- fub/home-photos.resync and fub/high-intent.sweep are registered but have ZERO Inngest runs ever — per INNGEST_OR_IT_DOESNT_EXIST those heal/pull-in paths don't exist yet
+- FUB master doc (fub/lead-import.mdx) lies: step 2.8 Myli-context still documented as running on import (removed 2026-06-29), issue I2 listed open (fixed 06-27), source='Zillow.com' (superseded by six buckets); everything from 07-02..07-06 undocumented
+- Native notification cutover 0% flipped (all 23 rows notify_owner='realloop') and the CRM-side gate ignores the _global master switch
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| crm--1 | Fix the email bridge: map/lowercase FUB status into the CHECK-allowed set (or add 'received' via migration) at backfill-fub-comms.ts:153 and make the insert failure loud; accept when hl_email_send_log has fub_email:% rows after a re-import | ⬜ | — | — |
+| crm--2 | Declare fub.people.source raw-only: drop the sweep's updateMirror branch and fold to buckets at READ time everywhere (the pure resolver already exists), or make the relay/scraper fold on write; update the WIP dossier claim | ⬜ | — | — |
+| crm--3 | Run the PCSOI reconciled import: dry run + &lt;=100 test from the panel, verify a sample lead (source=PCSOI, origin tag, recon note, relationship_bucket), then the Zach-typed full run to ~1,671 | ⬜ | — | — |
+| crm--4 | Invoke fub/home-photos.resync and fub/high-intent.sweep (dryRun first) once each through Inngest to prove them, or delete them and their doc references | ⬜ | — | — |
+| crm--5 | Update docs-site/fub/lead-import.mdx to current law: no facts on import, I2 resolved, six-bucket sources, add wizard/PCSOI/canonicalization sections from the WIP dossier | ⬜ | — | — |

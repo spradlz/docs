@@ -1,0 +1,44 @@
+---
+title: "External Services & Topology"
+description: "Every external dependency HouseLoop leans on — hosts, keys, scrapers, and the single points of failure."
+---
+
+<Info>Written in the Fable 5 audit (Lee, 2026-07-06). Before this, the only inventory of our external
+topology was the audit itself. The Systems Health Cockpit (`/systems-health`) now probes the live ones.</Info>
+
+## Hosts
+
+| Host | What runs there | Notes |
+|---|---|---|
+| **Railway — houseloop project** | `houseloop-web` (houseloop.ai), `houseloop-crm` (crm.houseloop.ai), Postgres (centerbeam WEB DB), Postgres (autorack CRM DB) | Auto-deploys on push to `houseloop-app` |
+| **Railway — houseloop-esign** | Documenso (esign.houseloop.ai) + its Postgres | Custom-domain binding needs a `TXT _railway-verify` record — see the eSignature guide |
+| **Camp David** (Mac mini, 192.168.1.211) | FUB scrapers (pm2: fub-backfill-a/b), the photo/zestimate enrichment, the master `fub.*` Postgres | SPOF — see below |
+| **Cloudflare** | DNS for houseloop.ai (zone a57be8b09…), R2 buckets (listing photos, SEO) | grey-cloud (DNS-only) for the app domains |
+
+## API keys (the ones that silently break things)
+
+| Key | Used for | Status (audit 2026-07-06) |
+|---|---|---|
+| `OPENAI_API_KEY_HOUSELOOP` | gpt-4o vision catalog tagging | LIVE — cockpit probes billing |
+| `ANTHROPIC_API_KEY_HOUSELOOP` | Myli + all CRM AI | LIVE — cockpit probes billing |
+| `OPENWEB_NINJA_API_KEY` | Zillow photo enrichment | Was Railway-only → **copied to `.env`** (exte-2) so local runs don't throw |
+| `GOOGLE_GEO_SERVER_KEY` | Address Validation (project houseloop-496200) | LIVE |
+| `GOOGLE_MAPS_API_KEY` | (was a fallback) | **DEAD** — expired/AV-blocked; the fallback was **removed** (exte-2) |
+| `TWILIO_AARON_*` | (legacy 2nd Twilio account) | DEAD (401) — flagged for retirement; not on the live send path |
+
+<Warning>**Credential law:** every credential lives in `.env` (mirror of the Master Login Credentials
+Sheet). The sheet is the SSOT; `sync-creds.mjs` reads it (now A1:G500 — it used to truncate at row 200 and
+silently drop keys). Keys with non-derivable env names (DB URLs, tokens) are **aliased** in the sync so they
+survive. Never hand-edit a password into `.env` — put it in the Sheet.</Warning>
+
+## Single points of failure
+
+- **Camp David is a SPOF.** The master `fub.*` DB AND its backups live on the same Mac mini's disk — one
+  hardware failure loses both. The audit prescribes an off-box (R2) backup sync + retention (exte-3, open).
+- **The FUB scrapers** (pm2 fub-backfill-a/b) run only on Camp David; if the box is down, FUB import stalls
+  — the cockpit's **FUB Import** probe catches this (red after 24h silent).
+
+## Monitoring
+The **Systems Health Cockpit** (`/systems-health`) live-probes OpenAI, Anthropic, the vision catalog, SEO
+writing, the FUB scraper, and failed Inngest runs — and texts Zach's cell from a dedicated number when one
+goes down. See `platform/systems-health-cockpit`.

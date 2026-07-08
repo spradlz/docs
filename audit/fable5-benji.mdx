@@ -1,0 +1,177 @@
+---
+title: "⭐ Fable 5 Master Audit — Benji"
+description: "Benji's remediation lane: 6 subsystems, worked top to bottom with the resolve protocol (🟢 + timestamp + model + notes)."
+---
+
+<Warning>**⛔ HANDOFF FIRST (Zach 2026-07-06):** before touching ANY audit row, update your ⭐ master
+work-in-progress doc with a formal handoff: a checkbox list of everything you completed (verified, with dates),
+exactly where everything stands right now, and the future work still ahead on that work-stream. Only then pivot
+to this sheet. Your current master is the record — the next model picks it up cold.</Warning>
+
+<Info>**THE REMEDIATION PROTOCOL (Zach 2026-07-06):** work ONLY from this sheet, top to bottom. For each item:
+(1) **deep-verify** the current functionality actually works — run it, click it, query it; never trust the doc or the code comment;
+(2) fix per the prescription (full detail in the repo: `.claude/reports/audit/<key>.md`);
+(3) flip the row to **🟢 RESOLVED** with the **date+time**, the **model you were running**, and **notes on what you did**.
+Many tables are near-empty — only ~15 leads exist (a few real Zillow leads + test leads); most machinery has never seen real volume.
+When a feature is spec-built-but-empty, say so explicitly and add a **visual of what the spec calls for** (screenshot or mock) so
+Zach can see intended vs actual. An unverifiable claim stays ⬜ — never green a row you didn't prove.</Info>
+
+<Warning>**🚨 RED lane:** Saved Searches & Alerts scored 9/30 — the engine that turns saved homes into fired leads is the sickest subsystem in the project. It goes first.</Warning>
+
+> Master: [⭐ Fable 5 Master Audit (All)](/audit/fable5-all) · Full artifact: [the State of the Union](https://claude.ai/code/artifact/d5f808e0-3ab8-4fd3-a6b2-5a615d6b82a0)
+
+
+## Saved Searches & Alerts — RED (9/30 good · 14 gaps)
+
+Full report: `.claude/reports/audit/web-saved-searches.md`
+
+
+**Headline gaps found by the audit:**
+
+- ALERT ENGINE OFF: sys_saved_search_digest workflow inactive since 2026-07-04 18:04 (intent-cutover sweep, no intent replacement) -> instant/daily/weekly/monthly all skip; prod digest-gate returns active:false; 0 digest workflow runs ever
+- Manual Send Now silently no-ops: fires workflow.run at the inactive workflow, runtime skips, but returns ok:true to the agent
+- Monthly frequency is a lie: modal offers it, ALLOWED_FREQ on create+edit APIs omits it -> silently stored as INSTANT (web route.ts:34, [id]/route.ts:7)
+- Per-search email tracking permanently dark: hl_email_send_log.saved_search_id 0 of 67 populated (workflow INSERT omits it) + SavedSearch.lastEmailId never stamped -> opens/clicks can never light up
+- Origin taxonomy polluted: registration seeder still writes createdBy='agent' (docs say system), Myli paths write 'ai_agent' or a raw user UUID (live rogue row 2026-07-06, mediation.ts:238)
+- Unauthenticated public POST /api/saved-searches/alert can real-send the legacy off-workflow email + discloses the owner's email; its unsubscribe link 404s
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| web--1 | Reactivate the Saved Search Listing Alerts workflow (sys_saved_search_digest) with Zach via the Lead Flow UI; verify a digest run + send land in hl_workflow_runs/hl_email_send_log (expect a one-time 7-day catch-up burst) | 🟢 | 2026-07-06 ~21:40 · Opus 4.8→Fable 5 | RESOLVED BIGGER (Zach directive "get saved search going + it should never be toggleable"): mig 0347 reactivated AND LOCKED the delivery engine as infrastructure (is_locked=true — PATCH 403s any off-flip, UI shows "Always on", digest-gate treats locked=always-active). PROVEN: gate→active:true, 5 real digest emails sent within minutes (hl_email_send_log receipts, incl. "1 new homes for your search, John" → John Ziller), hl_workflow_runs 0→5. Sweep-proof forever. |
+| web--2 | Make Send Now honest: check workflow status in leads/saved-searches/send/route.ts and return an error when the digest workflow is paused | 🟢 | 2026-07-06 ~23:40 · Fable 5 | DONE + ACCEPTED e2e on prod: paused-path returns 409 (code fb2badd887); happy path PROVEN — Send Now on John Ziller → ok/routed:workflow/matches:100 → hl_workflow_runs manual-send-now COMPLETED 23:38 → digest email to zach@spradlingrealtygroup.com. |
+| web--3 | Add 'monthly' to ALLOWED_FREQ in web saved-searches create + [id] PATCH routes (cron already exists) and whitelist frequency on the CRM edit route | 🟢 | 2026-07-06 ~23:40 · Fable 5 | DONE + ACCEPTED on prod: PATCH alertFrequency='monthly' via the CRM edit route → DB stores 'monthly'; invalid value → 400 (whitelist live). fb2badd887. |
+| web--4 | Populate hl_email_send_log.saved_search_id in the workflow email INSERT (execute-step.ts) so the lead-card Sent/Opened/Clicked columns work | 🟢 | 2026-07-06 ~23:40 · Fable 5 | DONE + ACCEPTED on prod: the 23:38 Send-Now digest row carries saved_search_id=dab84b9a… (the 23:28 pre-deploy send = null — clean before/after). Lead-card Sent column now has data to read. fb2badd887. |
+| web--5 | Fix all createdBy writers to the canonical system·client·agent set (lead-intake 'agent'->'system', clamp create-saved-search.ts, stop passing user UUIDs in mediation.ts/lead-conversation.ts) + one approved remap of the &lt;20 rogue rows | 🟢 | 2026-07-06 ~18:35 · Opus 4.8 | DONE. Code (fb2badd887): lead-intake starter 'agent'→'system'; create-saved-search clamps createdBy to system\|client\|agent (centrally catches UUID/'ai_agent' from the AI callers). DATA REMAP RUN (Zach green-lit): 1 rogue row (raw user-UUID origin "Updated after the showing") → 'system'. `SELECT DISTINCT "createdBy"` now returns only agent/client/system. |
+
+
+## Leads & Lead Detail — YELLOW (19/26 good · 11 gaps)
+
+Full report: `.claude/reports/audit/crm-leads-detail.md`
+
+
+**Headline gaps found by the audit:**
+
+- ALL-feed law violated: 85 calls in hl_calls but 0 call_logged activity rows (inbound webhook + FUB import never logActivity; backfill skips hl_calls) - calls invisible in All
+- Deals (13 hl_transactions rows) and human stage moves (103 audit rows vs 5 activity rows) also missing from the All feed - deal route and pipeline route write audit only
+- Docs lie: guide documents hl_lead_deals but mig 0241 renamed it to hl_transactions; hl_lead_deals does not exist in prod
+- PCSOI past-client fold not live: 0 leads with source='PCSOI' vs 1,779 hl_srg_past_clients - TC prefill + Deals-tab past-client union can never fire
+- Website tab (PixelFeedStream) uses a hardcoded kinds allowlist that drops cataloged events (unsave_home, virtually_toured, behavior_*) - the exact anti-catalog drift the law bans
+- Stale docs: leads-table.mdx (hl_bb_events/hl_notification sources), routing doc missing Deals tab, and the ALL_FEED rule file itself describes the pre-refactor architecture
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| crm--1 | Wire calls into the All feed: logActivity in the inbound voice webhook + FUB call import, add an hl_calls step to the Inngest backfill, re-run through Inngest; accept when call_logged >= 85 and calls render on All | 🟢 | 2026-07-06 ~20:50 · Fable 5 | DONE + ACCEPTED: backfill-calls step + live recording-webhook logActivity (5afa4ad583); backfill fired THROUGH Inngest (event 01KWWVWPT7P315VK67ET3EXD5K) → call_logged = 85/85 lead-attached calls. Calls render on All via the one-reader feed. |
+| crm--2 | Log deals to the activity log: add deal_* badges to ACTIVITY_CATALOG and logActivity in /api/leads/[id]/deal next to writeAudit; accept when a captured deal shows in both Deals and All tabs | 🟡 | 2026-07-06 ~23:42 · Fable 5 | CODE DONE + deployed (9eab09276e) — identical logActivity pattern PROVEN live by crm-3's stage-move acceptance. Final acceptance = the next REAL deal capture (not fabricating a test hl_transactions row just to tick the box). |
+| crm--3 | Log human stage moves: logActivity(kind=stage_changed) in POST /api/leads/[id]/pipeline beside writeAudit (optionally backfill the 103 audit rows) | 🟢 | 2026-07-06 ~23:42 · Fable 5 | DONE + ACCEPTED on prod: moved John Ziller's stage (and back) via the live pipeline API → BOTH moves landed in hl_lead_activity as stage_changed ('New Lead → Attempted Contact' 23:40) — the one store the All feed reads. 9eab09276e. |
+| crm--4 | Fix the four stale guides + the ALL_FEED rule file (hl_lead_deals->hl_transactions, hl_messages SSOT, Deals tab, new one-reader architecture) and commit under docs-site/ | 🟡 | 2026-07-06 ~20:10 · Fable 5 | PARTIAL (572689a532): leads-table.mdx (hl_messages SSOT + pixel-event Requests) + ALL_FEED rule (one-reader arch + logActivity source rule) + sold-data doc fixed, all VERIFIED against live code. The 2 remaining guides (lead-detail-stages-and-deals, lead-activity-log) have CALEB'S uncommitted PCSOI edits in flight — will fix after he commits (no sweeping his work). |
+| crm--5 | Derive Website-tab filter kinds from the catalog (websiteFeedKinds helper) and get Zach's explicit yes/no on running the PCSOI past-client fold (1,700+ lead writes - do not run unprompted) | 🟢 | 2026-07-06 ~19:00 · Fable 5 | DONE (a05c38c2d2): websiteFeedKinds() added to activity-badges.ts (all website badges + aliases); PixelFeedStream 'All' derives from it — unsave_home/virtually_toured/behavior_* no longer dropped. PCSOI fold: Zach ruled it's CALEB'S lane — parked here permanently, tracked on his sheet. |
+
+
+## TC Loop — Transactions & E-Sign — YELLOW (20/30 good · 11 gaps)
+
+Full report: `.claude/reports/audit/crm-tc-loop.md`
+
+
+**Headline gaps found by the audit:**
+
+- CRITICAL: sealed signed PDFs stored as 1-hour presigned URLs (X-Amz-Expires=3600 verified live) - the executed contract link rots, violating the KS/MO retention bar
+- computeLoopSchedule (G4) doesn't exist: 603/603 hl_tc_loop_task rows have due_date NULL - the dated checklist has no dates
+- Webhook conflates per-signer SIGNED with COMPLETED: buyer alone can mark a 3-party doc signed and kill the nudge chain
+- hl_tc_email is a dead table (0 rows, no writer) behind a 'Shipped' Email Queue UI; 5 of 9 TC sub-nav pages are stubs
+- All 13 hl_transactions rows are test data; 11,636 real sisu_transactions closings have no bridge in; `deal<->loop` link still missing
+- Docs stale: build-log still says 'G3 next' 9 days after G3 shipped; documenso/esignature guides still claim signed PDFs file into dotloop (locked out 2026-06-27)
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| crm--1 | Archive sealed signed PDFs to our own R2 in the webhook (reuse uploadBufferToR2) + backfill the 3 existing signed rows; acceptance: signed file_url curls 200 hours later | 🟢 | 2026-07-06 ~18:20 · Opus 4.8 | FIXED (commit d4a6e6fb3b): on DOCUMENT_COMPLETED the webhook downloads the sealed PDF and uploads it to OUR R2 (permanent public URL); presigned URL only as last-resort fallback. Future signed docs archive correctly in prod. The 3 EXISTING rows are expired test docs — backfill needs the prod R2_PHOTOS_* creds (not in local .env); low-value (test data), can run in prod if wanted. |
+| crm--2 | Build computeLoopSchedule wrapping computeDue (coordinate with Adam, his G4) so anchor writes cascade due_dates onto hl_tc_loop_task | ⬜ | — | — |
+| crm--3 | Fix webhook: only DOCUMENT_COMPLETED terminates (status=signed, nudge cancel, door); per-recipient SIGNED logs progress only | 🟢 | 2026-07-06 ~18:20 · Opus 4.8 | FIXED (d4a6e6fb3b): split the handler — only DOCUMENT_COMPLETED flips status/stage, archives, cancels nudges + fires the door; a single recipient SIGNED returns 'progress only' and waits. A buyer can no longer mark a 3-party doc signed. |
+| crm--4 | Verify the two coordsVerified:false contract field maps (single_property, non_exclusive) before Myli can send them; guard unverified forms to single-sig path | 🟢 | 2026-07-06 ~15:15 · Opus 4.8 | DONE: both eXp forms' signature coords (buyer/co_buyer/broker/agent SIGNATURE+NAME+DATE) extracted from the PDF content streams + overlay-verified + PROVEN on live Documenso (doc #7). sigCoordsVerified:true on all 3 (f59c0811, ed61d11). No unverified form remains, so the single-sig guard is moot. |
+| crm--5 | Ship funnel steps 2-6 capture + `deal<->loop` link, and either wire or retire hl_tc_email; then one docs-truth pass across the 5 stale guide files | 🟡 | 2026-07-06 ~21:45 · Fable 5 | PARTIAL: hl_tc_email retired-honestly (7fc84553cc — empty state says spec-built/no-writer instead of fake-live); docs-truth pass DONE (31e2df4567 — build-log G3→shipped, esignature guide→Documenso-first/R2 archive, dotloop=backup mirror). REMAINING: funnel steps 2-6 capture + deal↔loop link (real feature build — queued). |
+
+
+## Home Detail & Owner View — YELLOW (25/34 good · 11 gaps)
+
+Full report: `.claude/reports/audit/web-home-detail.md`
+
+
+**Headline gaps found by the audit:**
+
+- BROKEN: owner report modal falls back to HARDCODED_2919 — a real past client's address, $780k purchase price, photo, and comps WITH sold prices shown to any claimed owner while/if the HVR fetch fails (HomeValuationReport.tsx:232)
+- Abbreviated-suffix slugs 404 (7118-maple-st-... dies) while property-data guide claims all variants 301-heal
+- Entire 2026-07-06 owner's-view build (hl_home_claim, claim/hvr APIs, pre-claim script) has NO docs-site guide; pre-claim enrollment is a one-off script, not Inngest
+- sold-data-and-price-history.mdx is stale in 3 places: webhook discriminator superseded 2026-07-03, wrong idempotency check, and ListingHistory (quarantined to ListingHistory_deprecated) still presented as the live archive
+- Sold AI overview covers 1.1% of sold pages (3,864 articles / 336,486 sold homes) — the SEO block is absent on almost every sold page
+- getListing cache read ignores quarantinedAt (get.ts:69), and legacy /listings redirect is a 2-hop chain
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| web--1 | Delete the HARDCODED_2919 fallback in HomeValuationReport.tsx; render loading/error states from ClaimHomeCta fetch state instead — acceptance: offline claimed owner never sees 2919 W 155th Terrace | 🟢 | 2026-07-06 ~18:05 · Opus 4.8 | FIXED (commit c86a6a7c8e): deleted the HARDCODED_2919 constant entirely (53 lines) + the `data ?? HARDCODED_2919` fallback; `!data` now renders a neutral "preparing your report" state. Leak is structurally impossible — no real home can render on a failed/loading fetch. tsc clean, drift-check passed, pushing. |
+| web--2 | Write docs-site/guides/home-claim-owner-view.mdx (hl_home_claim schema, claim/hvr APIs, ClaimHomeCta state machine) + nav entry; update home-value-report.mdx's FUTURE BUILD note | 🟢 | 2026-07-06 ~21:15 · Fable 5 | DONE (91b0190166): guide written from verified live code (schema, self-claim vs pcsoi-reconciled, claim-gated HVR + FACT-OR-NOT rule, CTA state machine) + nav beside houseloop-home-value. |
+| web--3 | Fix the 3 stale claims in sold-data-and-price-history.mdx to match webhook/route.ts:170-209, listing-sold.ts:73-78, and the ListingHistory_deprecated reality | 🟢 | 2026-07-06 ~20:10 · Fable 5 | DONE (572689a532): discriminator updated to the 2026-07-03 disposition-trigger rule (fire on Sld unless fully archived — recovers missed transitions); idempotency = the Listing row (ONE TABLE); ListingHistory marked DEPRECATED in all 3 spots. Every claim verified against the live webhook + listing-sold code. |
+| web--4 | Normalize street-suffix tokens (st→street etc.) in the /home slug resolver before the identityKey fallback so abbreviated slugs 308-heal instead of 404 | 🟢 | 2026-07-06 ~19:10 · Fable 5 | FIXED (beaf4a6e8f): expandSlugSuffixTokens() in canonical-address.ts (reuses canonicalStreet's SUFFIX map); /home identityKey fallback tries raw + expanded prefix. PROVEN against prod DB: `7118-maple-st-…` heals → canonical, abbreviated+wrong-city heals too. (Audit's example zip was wrong — home is OP 66204.) |
+| web--5 | Add quarantinedAt to getListing's cache-read guard, collapse the legacy /listings redirect to one hop, get a Zach ruling on Inngest-izing pcsoi pre-claim, and delete dead HouseLoopValueModule/BackToResultsButton | 🟢 | 2026-07-06 ~19:20 · Fable 5 | DONE (d975f08dd6): quarantinedAt guard in getListing cache read; legacy /listings 301 now 1-hop straight to /home/slug/HLID; both dead modules deleted (0 importers verified). Remaining sub-item: Inngest-izing the pcsoi pre-claim script = PARKED for Zach ruling (tracked in run queue). |
+
+
+## Website Auth & Lead Intake — YELLOW (20/25 good · 9 gaps)
+
+Full report: `.claude/reports/audit/web-auth-intake.md`
+
+
+**Headline gaps found by the audit:**
+
+- BROKEN: website's Registration Settings read 307s to CRM /login (route missing from middleware PUBLIC_PREFIXES) -> site silently runs on hardcoded defaults; admin toggles have zero effect (masked only because DB value == defaults today)
+- phone_required_on_showing_request and ppc_photo_gating_enabled are dead settings - defined + documented as working, consumed nowhere
+- houseloop/registration.no-phone event fires into the void - the update-phone nurture Inngest fn never shipped (pending since 2026-06-09)
+- All 18 hl_lead_source_events website bindings point at inactive/draft legacy workflows; routing survives only via the agnostic fallback tier
+- apps/houseloop-web/AGENTS.md still documents the dead SureSend pixel (SS-VGFKRCIVEA, SureSendPropertyTrack/Identify - files deleted); no docs-site guide covers registration/intake as a system
+- Minor: green #16A34A shared-pill (brand no-green law), open email-exists enumeration endpoint, O(N) in-memory phone matching on guest tour/contact
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| web--1 | Whitelist /api/integrations/website/registration-settings GET in CRM middleware (gate PUT in-handler); acceptance: curl 200 + a CRM toggle flip observably changes houseloop.ai registration within 60s | 🟢 | 2026-07-06 ~20:45 · Fable 5 | DONE + ACCEPTED on prod: curl GET → 200 (was 307→/login), anonymous PUT → 401 (self-gated). houseloop.ai now reads the real admin settings (60s cache). a3f19e1ac9. |
+| web--2 | Ship registration-no-phone Inngest fn (7-step INNGEST loop: 1-day sleep -> if still phoneless, canonical update-phone email) or delete the orphan inngest.send at lead-intake:817 | 🟢 | 2026-07-06 ~19:30 · Fable 5 | DELETED the orphan (c3ed8be9ee) — zero consumers ever existed. Ruling: phone-chasing is a MESSAGE → belongs on the workflow canvas (reg door already branches on phone), not a hardcoded Inngest email. |
+| web--3 | Wire phone_required_on_showing_request into tour/contact routes+forms and implement-or-remove ppc_photo_gating_enabled - no admin toggle may do nothing | 🟡 | 2026-07-06 ~19:40 · Fable 5 | FIXED (3d83955e4a): phone_required_on_showing_request enforced on the logged-in tour path (guests already required it); ppc_photo_gating_enabled REMOVED from all 3 surfaces (nothing consumed it). Acceptance (phoneless booking rejected on prod) after deploy. |
+| web--4 | Repoint the 18 website door bindings onto the active intent_* canvases (or NULL them) before the dispatch tier collapse; verify [dispatch-parity] logs match | 🟢 | 2026-07-06 ~19:55 · Fable 5 | RAN with Adam's blessing + guardrails (repoint-only, no guessing, no status flips): 6 exact trigger matches repointed (property_* / general_registration / saved_search → their intent canvases), 12 NULLed (fallback tier routes). Verified: 0 bindings on inactive/draft workflows. Flagged the -ed trigger naming drift (tour_requested vs tour_request etc.) to Adam for his tier collapse. |
+| web--5 | Write docs-site/guides/web-registration-and-intake.mdx (providers incl. magic-token, Finish/X law, ACTION_TO_EVENT contract, shared-home gate, pixel stitch) + purge SureSend from AGENTS.md | 🟢 | 2026-07-06 ~21:25 · Fable 5 | DONE (920781b30f): system-level guide written (3 providers, Finish/X, ACTION_TO_EVENT incl. unmapped-action warning, shared-home gate, hl-pixel stitch) + AGENTS.md SureSend row replaced with the first-party-pixel truth. |
+
+
+## Website Home & Shelves — YELLOW (16/23 good · 8 gaps)
+
+Full report: `.claude/reports/audit/web-home-shelves.md`
+
+
+**Headline gaps found by the audit:**
+
+- 3 of 5 Inspiration category tabs are broken: seeded hrefs carry params the search page silently ignores (yearBuiltMin=2024 shows all 7,192 homes instead of 1,233; featured=1 and openHouses=1 have no handler at all)
+- 8 of 11 seeded hl_app_config keys are read by nothing — dead knobs duplicating shelf-envelope values, the exact second-source-of-truth GT §9 bans
+- displayOptions is mostly decorative: maxCards and hero slideCount in the DB are never read (HERO_SLIDE_COUNT=5 hardcoded in HeroSection.tsx:15)
+- Geo personalization does not exist anywhere — every visitor sees the identical fixed shelf order
+- docs-site/website/home-page.mdx is a WIP stub with 2 broken guide links; the real law lives only in GT infrastructure doc + AGENTS.md
+- Stale artifacts: seed says '12 shelves' (13 exist), GT §12 href examples show the retired featured shelf, Header.tsx hardcodes hex incl. an unused green
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| web--1 | Fix the 3 Inspiration category links in prisma/seed/inspiration.ts (minYearBuilt spelling; deactivate or rebuild Popular/Open houses) and re-seed — acceptance: no tab renders the unfiltered 7,192-result list | 🟢 | 2026-07-06 ~18:30 · Opus 4.8 | FIXED (e9f64b9c8c): verified real params in lib/search/url-to-query.ts, then fixed seed + applied live to hl_inspiration_category — yearBuiltMin→minYearBuilt, openHouses=1→oh=1, banned featured=1→sort=viewsDesc (real "most-viewed" Popular). All 5 tabs now filter; none render the full grid. |
+| web--2 | Delete (or wire) the 8 dead hl_app_config keys + their accessors so every remaining key has a real consumer; optionally wire cache.pending_ttl_seconds per GT §11 | 🟢 | 2026-07-06 ~20:20 · Fable 5 | DONE (4da2a5d8aa): cache.pending_ttl_seconds WIRED (per-status TTL in getListing isFresh — pending=1h, active=6h); the other 7 dead keys removed from accessors + seed + 7 rows DELETEd from hl_app_config (web DB, named). Every remaining key has a consumer; sync.* untouched. |
+| web--3 | Make displayOptions real: composeHero reads slideCount from the hero row; either honor maxCards in composer.ts:58 or remove it from seed+types | 🟢 | 2026-07-06 ~20:30 · Fable 5 | DONE (0329caf37b): composeHero reads hero row displayOptions.slideCount (precedence: caller override [mobile=1] > DB > 5), HERO_SLIDE_COUNT hardcode deleted; composer honors displayOptions.maxCards as the per-shelf cap. Editing the DB now actually changes the page. |
+| web--4 | Replace the docs-site home-page.mdx stub with the shipped §9 architecture doc and fix its two dead guide links | 🟢 | 2026-07-06 ~21:00 · Fable 5 | DONE (8bf133578d): real doc written from verified live code/DB (13 shelves, composer pipeline, hero rotation, config table, drift defenses); dead links → home-search. |
+| web--5 | One-pass staleness sweep: seed '12 shelves' comment, GT §12 href table, Header.tsx raw-hex/green tone entries to tokens | 🟢 | 2026-07-06 ~21:00 · Fable 5 | DONE (8bf133578d): seed comment count-agnostic; Header unused GREEN tone deleted (no-green law) + union narrowed; GT stale config.featured.minPrice ref corrected. |

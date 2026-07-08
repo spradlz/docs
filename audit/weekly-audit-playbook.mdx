@@ -1,0 +1,88 @@
+---
+title: "🗓️ The Weekly Master Audit — the playbook (run every Sunday)"
+description: "How Opus 4.8 re-runs the Fable 5 Master Audit weekly: catch drift, audit the week's new work, regenerate the artifact, refresh the four remediation lanes, and surface issues to the Systems Health cockpit."
+---
+
+<Info>**The institution (Zach, 2026-07-06):** the full-project audit is not a one-off — it runs **every Sunday**.
+It scans everything (the standing 25 subsystems) **plus everything added that week**, catches drift between docs
+and reality, produces the master artifact, divides the findings into the four agent lanes, and prescribes the
+work. The first run was executed by Fable 5 on 2026-07-06 ("the flashlight in the cave"); this page is the
+coaching doc so any model — Opus 4.8 first — runs it identically.</Info>
+
+## What one run produces
+
+1. **25+ full subsystem reports** → `.claude/reports/audit/<key>.md` (feature inventory · how-you-use-it ·
+   verified-good · gaps with evidence · docs reconciliation · numbered prescriptions with acceptance tests)
+2. **The scoreboard** → `.claude/reports/audit/scorecards.json` (verdict + counts per subsystem)
+3. **The master artifact** — one published page: exec scoreboard, the REDs, screenshots of every surface,
+   all sections, the master prescription list. (First run: the [🔦 State of the Union](https://claude.ai/code/artifact/d5f808e0-3ab8-4fd3-a6b2-5a615d6b82a0).)
+4. **The four remediation lanes refreshed** → `docs-site/audit/fable5-{benji,lee,adam,caleb}.mdx`
+5. **Issues surfaced to the Systems Health cockpit** (once Lee ships it) — every RED/broken finding becomes a ticket.
+
+## The run, step by step (Opus 4.8: execute in order)
+
+<Steps>
+<Step title="0 · Preconditions">
+Both dev servers up (`localhost:3020` CRM, `localhost:3001` web — `tools/houseloop-crm/restart-dev.sh` if the
+CRM white-screens). Archive last week's reports: `mv .claude/reports/audit .claude/reports/audit-$(date +%F)`
+then `mkdir -p .claude/reports/audit/html`. Last week's `scorecards.json` is your DRIFT BASELINE — keep it handy.
+</Step>
+<Step title="1 · The auditor fleet">
+Launch the Workflow using the versioned script **`tools/audit/master-audit-workflow.js`** (pass it via
+`Workflow({scriptPath})`). It fans out one auditor per subsystem (schema-forced scorecards + full reports) then
+one composer per report (fixed-format HTML fragments). **Before launching, update the `S` subsystem array**:
+add an entry for anything NEW this week (a new app area, a new engine, a new integration) — the git log since
+last Sunday tells you what appeared: `git log --since="7 days ago" --stat | grep -oE "apps/[a-z-]+/[a-z/-]+" | sort -u`.
+Never delete a subsystem that still exists.
+</Step>
+<Step title="2 · The screenshot walk">
+Playwright (real Chrome) across the standing surfaces: CRM dashboard/leads/lead-detail/workflows/conversations/
+tasks/calendar/run-log/settings/ai-follow-up/transactions + web home/search + anything new. Compress:
+`sips -s format jpeg -s formatOptions 52 --resampleWidth 640` into `.claude/reports/audit/html/`.
+</Step>
+<Step title="3 · Assemble + publish">
+`python3 tools/audit/assemble-master-artifact.py` builds the single HTML from the scorecards + fragments +
+screenshots. Publish with the Artifact tool (favicon 🔦, same-session redeploys reuse the URL; a new week may
+mint a new artifact — link BOTH the new one and last week's in the (All) page). **Add a DRIFT section**: diff
+this week's scorecards against last week's baseline — verdicts that moved, gaps closed vs opened, new features.
+</Step>
+<Step title="4 · Refresh the remediation lanes">
+`python3 tools/audit/build-remediation-sheets.py` regenerates `docs-site/audit/fable5-*.mdx`. ⚠ **PRESERVE
+RESOLUTIONS**: before regenerating, harvest every row already flipped 🟢 (status/date/model/notes) from the
+current sheets and re-apply them to matching prescriptions — a resolved row must never reset to ⬜. New gaps
+append; closed gaps move to a "Resolved this cycle" block. Then `node tools/docs/wip-sync.mjs`, commit under
+`docs-site/` (auto-mirrors to Mintlify — verify rendered at **houseloop.mintlify.io**, the .app domain is dead).
+</Step>
+<Step title="5 · Surface + notify">
+Every RED and every newly-broken item → the Systems Health cockpit (Lee's build) as a ticket; until the cockpit
+exists, the (All) page's "loud items" list is the ticket queue. Ping each agent with their lane deltas
+(`node tools/discord/cipher.mjs msg send <agent> "..."`) and notify Zach (`tools/notify/notify.sh`) with the
+artifact link + the drift headline (X closed · Y new · verdicts moved).
+</Step>
+</Steps>
+
+## The laws of the audit
+
+- **Diagnose only** — the Sunday run changes nothing but docs/reports. Fixes happen in the lanes, on weekdays.
+- **Evidence or UNVERIFIED** — every claim carries file:line, a live count, or a curl; counts come from live
+  queries, never memory. Deep-verify means running the thing.
+- **Docs-vs-reality is half the point** — every guide that lies gets named; the weekly build-out reconciliation
+  of the Mintlify docs IS this step.
+- **The empty-table reality** — ~15 leads exist; where machinery is spec-built-but-never-run, say so and show
+  the spec visually instead of pretending it works.
+- **Resolution protocol** (the lanes): deep-verify → fix → flip 🟢 with date+time, model, notes. Handoff on your
+  current master BEFORE pivoting to audit work.
+
+## The standing subsystem list (25 — extend, never shrink)
+
+CRM: leads-detail · tc-loop · workflows · comms · email · notifications · myli-ai · fub-integration · settings ·
+inngest-runlog · auth-security · dashboard-tasks-cal · seller-report-srg · mobile-pwa.
+Website: home-shelves · search · home-detail · saved-searches · auth-intake · value-engine · seo-content · auth-security.
+Cross-cutting: data-two-db-tables · external-services · team-wip-reconciliation.
+
+## Cost + duration (first-run actuals)
+
+25 auditors + 25 composers = 50 agents · ~6.0M subagent tokens · 28 minutes wall-clock · zero failures.
+Schedule note: this runs as an agent session (Workflow tool), not an Inngest cron — a human (or the Sunday
+standing order) kicks it off. When an automated trigger is wanted, that is a CronCreate on the agent side,
+not app code.

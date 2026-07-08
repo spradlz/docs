@@ -1,0 +1,73 @@
+---
+title: "Benji (PRD — TC Loop MVP (Benji) · 2026-07-07)"
+description: "Work-in-progress dossier — Benji · HouseLoop Website. PRD — TC Loop MVP (Benji) · 2026-07-07."
+---
+
+<Info>Live dossier — auto-generated from `.claude/state/wip/benji/PRD-tc-loop-mvp.md` on every push. **Progress: checklist pending.**</Info>
+
+**Owner:** Benji — HouseLoop Website
+
+## Checklist
+
+**Status:** design LOCKED (Zach "that's the spec!"). Build authorized end-to-end incl. destructive cleanup.
+**Master design:** `Docs/wireframes/tc-loop-mvp-MASTER-2026-07-07.html` · **Band:** `Docs/wireframes/tc-loop-bands-LOCKED-2026-07-07.html`
+**Artifact:** https://claude.ai/code/artifact/470d7820-80cf-4bfb-af0a-fbd91dda435a
+**Scope-lock:** `.claude/state/session-scope-tc-loop-mvp.lock`
+
+### 1. THE PROBLEM (from the audit)
+- The TC "loop" model assumes ONE loop per client and that they're under contract. A buyer chases many houses;
+  some fall out; some are just showing agreements. Agency paperwork (prep/sent/signed) is a DIFFERENT lifecycle
+  than contract-to-close, but the band smashes them into one 14-step stepper.
+- No way to CREATE a loop from the hub. Myli sent Masalo a real agreement that touched ZERO TC surfaces
+  (not in Loops, not in Email Queue, not in a loop's Docs) — only the lead feed. The Email Queue is an unwired stub.
+- Chris Cribb was wrongly a team MEMBER (+ a "Broker" member-role) when he should be a TC-loop signer config only.
+
+### 2. THE LOCKED MODEL
+- **LOOP = container for a pursuit.** TWO kinds per client:
+  - **🗂 Agency Loop** — ONE per client, always. Holds ALL agency docs (buyer-broker / showing / non-exclusive).
+    The whole SHOPPING phase. No TC / status / prices / dates.
+  - **🏠 Property Loop** — one per house UNDER CONTRACT. Full transaction (TC, status, side, prices, dates, tabs).
+    Many allowed; each independent (one can be Fell Through).
+- **STAGE RULE:** stage below Under Contract → default Agency Loop (shopping). Stage = Under Contract → property loop, full chrome lit.
+- **ONE BAND, TWO STATES** (reuse the LOCKED `MilestoneBand` shell verbatim — navy header · Buyer/Seller txnseg ·
+  6 fact cards · stepper · tcdock). ADD: a persistent **loop selector row** (🗂 Agency + 🏠 each property + ＋ Create Loop)
+  + a **dimmed** state.
+  - Shopping (Agency Loop): fields/TC/dock DIMMED; Buyer reads "Shopping"; stepper = AGENCY chapter
+    (New Lead → Appt Set → Agency Prep → Agr Sent → Agr Signed → Offer Out → →Under Contract gate).
+  - Under Contract (property loop): everything LIT; stepper = CONTRACT chapter (UC → EMD → … → Possession).
+  - `‹ 1 of 2 ›` property-loop pager chevron = LATER (parked).
+
+### 3. ⚠️ COORDINATION — SHARED LANE WITH ADAM
+The TC loop engine (`lib/tc/loop-engine.ts`, `hl_transactions`, milestone/status model) is SHARED — the band comment
+says "the same data model Adam's global TC view uses." The agency-loop-per-client change is a real re-architecture of
+that shared model. **Do NOT rewrite the engine unilaterally.** Ping Adam, agree the schema (loop_type + auto-agency-loop)
+before touching `loop-engine.ts` / migrations that change loop semantics. The BAND UI (`MilestoneBand.tsx`,
+`components/leads/detail/*`) + the Loops hub route + Transaction Team surface + Email Queue writer are mine.
+
+### 4. BUILD PLAN (phased)
+1. **Band — loop selector + two states** (Benji · `MilestoneBand.tsx` + `CenterLane.tsx`). Loop selector row;
+   dimmed shopping state; agency vs contract stepper driven by selected loop. Port node-by-node from locked wireframe.
+2. **Agency-loop model** (Benji + ADAM · additive migration). `hl_transactions.loop_type = 'agency'|'property'`
+   (default existing rows sensibly). Auto-create ONE agency loop per client (born at lead creation / appt set).
+   Property loops per house at Under Contract. ADDITIVE columns only — no drops.
+3. **Loops hub — show all + ＋ Create Loop** (Benji · `app/api/tc/transactions/route.ts` + the Loops page).
+   List every non-voided loop; add create entry point (pick client + side → createLoop → open band).
+4. **Transaction Team surface** (Benji · new `app/(tc)/tc/transaction-team` + nav entry). Reads `tc_broker_of_record`
+   (Chris = Managing Broker) + the Transaction Coordinator role. Signer identities, not team members.
+5. **Auditability wiring** (Benji + ADAM where send originates from Myli). Every agreement send (`createFillSend`)
+   → files into the loop's Docs + advances Chapter-1 status ('agreement_sent') + writes the Email Queue (hl_tc_email
+   gets a writer — it's an unwired stub today). Verify: send shows in lead feed AND loop Docs AND Email Queue.
+6. **My Team polish** (Benji). Human role cards stop showing AI-model/persona config (leak on 'Real Estate Agent').
+
+### 5. ✅ DONE (2026-07-07)
+- Destructive cleanup (Zach typed OK): voided 5 junk loops (Jessica Moore ×2, Lee Cardtest ×3) → 0 non-voided remain.
+  Chris Cribb removed as member (deactivated + Broker member-role link deleted). tc_broker_of_record config intact.
+  REVERSE: `UPDATE hl_transactions SET voided_at=NULL WHERE id IN (…5 ids…)` · re-activate Chris + re-insert member_role.
+- Masalo real-agreement loop c913bf5e was ALREADY voided pre-cleanup; doc f66dafe6 + run-log entries persist (audit
+  trail intact). New model will give Masalo a fresh Agency Loop. (Not un-voided — flag to Zach if he wants it back.)
+
+### 6. LAWS
+- UI_ITERATION_HTML_FIRST (build from pinned locked HTML, verify by overlay) · REUSE_NOT_RECREATE (reuse the band/
+  stepper/dock/pills — no Tc* lookalikes) · Rule #0 (no destructive SQL w/o Zach typed OK, table named) ·
+  Brand (violet=agency/ch1, blue=contract/ch2, navy shell; no green accent; tokens only) ·
+  Deploy = git push houseloop-app · verify tsc+eslint before push · batch CRM edits (shared :3020 dev server).

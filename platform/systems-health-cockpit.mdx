@@ -1,0 +1,46 @@
+---
+title: "Systems Health Cockpit"
+description: "The maintainer's GREEN/RED board — every pipeline, scraper, and billing dependency, with a dedicated line that texts Zach when one dies."
+---
+
+<Info>Built in the Fable 5 Master Audit (Lee, 2026-07-06). Zach's directive: "nothing tells me today when
+the vision catalog, scrapers, or billing silently die — it's brittle as crap." This is the fix.</Info>
+
+## What it is
+
+A first-class maintainer page at **`/systems-health`** (CRM sidebar, live status dot next to Run Log). ONE
+big **GREEN** banner when everything runs; a big **RED** banner + **ticket-style issue cards** when anything
+is down. A newly-down system **texts Zach's cell from a DEDICATED systems-health number** (+1 913-298-8778,
+saved as the "Systems Health" contact) — deliberately **separate** from lead notifications, not Telegram,
+not the normal channel.
+
+## The probes (`lib/health/probes.ts`)
+
+Each probe answers one question about a live dependency and returns green / yellow / red / unknown. A probe
+that *crashes* becomes its own RED — a board that silently loses a probe is exactly the failure we're killing.
+
+| Probe | Category | Red when |
+|---|---|---|
+| **Inngest Runs** | pipeline | any `status='failed'` in `hl_run_log` in 24h (uses the RED-row capture fix) |
+| **OpenAI (Vision)** | billing | `/v1/models` 401 (dead key) or 429/insufficient_quota (billing decline) — gpt-4o vision runs on OpenAI |
+| **Anthropic (Myli/AI)** | billing | minimal `/v1/messages` probe 401 or credit/billing error |
+| **Vision Catalog** | pipeline | >5 vision/catalog failures in 24h; yellow if no success in 24h |
+| **SEO / Geo Content** | pipeline | no geo/seo/content success in 72h (yellow at 36h) |
+| **FUB Import** | scraper | no FUB import success in 24h (yellow at 12h) |
+
+## The engine (`system-health-scan` Inngest fn)
+
+Runs every probe → upserts `hl_system_health` (latest verdict/probe) → opens a ticket in
+`hl_system_health_issue` when a probe goes red, resolves it when it recovers → on a **newly-opened** red,
+sends **ONE consolidated SMS** (never per-probe spam) from the dedicated number to Zach's cell. Event
+`hl/system-health.scan`; `{ drill: true }` fires a test alert to prove the channel. **INNGEST_OR_IT_DOESNT_EXIST:**
+the "Run scan now" button dispatches the registered event — the scan only ever runs through Inngest, landing
+in the Run Log. Cron (`*/10 * * * *`) is added after Zach signs off the first real runs.
+
+## Data model (migration 0349)
+- `hl_system_health` — one row per probe key, upserted each scan (status, detail, meta, checked_at).
+- `hl_system_health_issue` — ticket log; one OPEN row per probe while red (unique partial index), closed on recovery, `notified_at` dedupes the SMS.
+
+## First live verdicts (2026-07-06, proven against prod data + live APIs)
+🔴 Inngest Runs (16 failed/24h — real) · 🟢 OpenAI + Anthropic billing (live-probed) · 🟢 Vision catalog ·
+🟢 SEO/geo · 🟡 FUB import (stale). The dedicated-number channel was verified end-to-end to Zach's cell.

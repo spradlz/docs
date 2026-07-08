@@ -1,7 +1,16 @@
 ---
 title: "Authentication"
-description: "How to authenticate with the HouseLoop CRM API."
+description: "How the HouseLoop CRM and website APIs authenticate — two DIFFERENT models."
 ---
+
+<Warning>**Two apps, two auth models (clarified Fable 5 audit 2026-07-06).** Everything below the
+"Session Cookie" heading describes the **CRM** (`crm.houseloop.ai`) — a login cookie + the
+`x-hl-internal-secret` machine gate. The **website** (`houseloop.ai`, our public home-search portal) does
+NOT use any of it: it authenticates end-users with **NextAuth** (credentials / Google / forever
+magic-token), gates user-owned surfaces per-route with `auth()`, and — as of the Fable 5 audit — adds an
+edge **rate-limiter** (`apps/houseloop-web/middleware.ts`) plus a shared **admin/internal bearer gate**
+(`apps/houseloop-web/lib/admin-auth.ts`, env `HL_ADMIN_PASSWORD` / `HL_INTERNAL_SECRET`, fail-closed, no
+hardcoded fallback). See the **Website API security** section at the bottom.</Warning>
 
 ## Session Cookie (Browser / CRM Users)
 
@@ -61,3 +70,39 @@ All 401 responses follow this format:
 ```json
 { "ok": false, "error": "unauthorized" }
 ```
+
+---
+
+## Website API security (`houseloop.ai`) — the threat model
+
+The public portal is **open-by-design** for read/search (a real-estate site must be crawlable), with a
+smaller gated set. This section is the security contract; it is CI-checkable against the route list.
+
+### The gates
+| Tier | Mechanism | Routes |
+|---|---|---|
+| PUBLIC | none (by design) | search, map, listing detail, geo/schools, blog, health |
+| SESSION | NextAuth `auth()` per-route (401 on miss) | saved-searches CRUD, home claim, owner HVR (claim-gated 403), saves/reactions/comments POST, user activity |
+| INTERNAL | `x-hl-internal-secret` (`lib/admin-auth.ts`, fail-closed) | `saved-searches/alert` (email SEND), `admin/saved-searches/preview` |
+| ADMIN | `Authorization: Bearer $HL_ADMIN_PASSWORD` (env-only, fail-closed) | `admin/waitlist`, `admin/market-data` |
+| WEBHOOK | signature verify | Resend (svix `svix-signature`), Repliers (`x-hook-secret` shared secret) |
+| SIGNED | Inngest SDK signing key | `/api/inngest` |
+
+### The Fable 5 remediations (2026-07-06)
+- **No hardcoded credentials.** `admin/waitlist` no longer ships `spradling2026`; both admin routes use
+  `lib/admin-auth.ts` reading `HL_ADMIN_PASSWORD` with **no fallback** → unset = 401. Secret rotated in Railway.
+- **`saved-searches/alert` email SEND requires `x-hl-internal-secret`** (403 without it). `skipSend:true`
+  (compute-only, no email — the CRM's context fetch) stays open. In-process Inngest senders are unaffected.
+- **Webhooks verify signatures.** Resend uses svix HMAC (401 on tamper); Repliers checks a shared
+  `REPLIERS_WEBHOOK_SECRET` (403 on mismatch) — both fail *when the secret is configured* so a deploy never
+  breaks the pipeline; set the secret in Railway to enforce.
+- **Per-IP rate limiting** at the edge (`middleware.ts`) on the LLM-cost (`search/nlp`, `search/classify`),
+  Google-billed (`places-*`, `street-view`), email-send, admin, and auth routes → 429 on burst. Public
+  read/search stays unthrottled.
+
+### Accepted risk (Zach directive, re-affirmed)
+The **forever magic-token** (`lib/auth/magic-token.ts`): HMAC-signed email, no expiry, single-use, or
+revocation; the `magic-token` provider find-or-creates the user. This is the explicit "convenience over
+security — no money/card/sensitive data" tradeoff. Its ONLY guardrail is `MAGIC_LINK_SECRET` staying
+secret; if it leaks, any email can be forged into a login. Documented, not a bug — but the single largest
+structural risk, so rotate `MAGIC_LINK_SECRET` if it is ever exposed.

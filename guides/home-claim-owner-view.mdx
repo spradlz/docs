@@ -1,0 +1,61 @@
+---
+title: "Home Claim & Owner's View"
+description: "How a visitor claims their home on houseloop.ai (hl_home_claim), what the claimed owner's view shows, and the claim-gated Home Value Report API — the owner's-view spine shipped 2026-07-06."
+---
+
+<Note>Written 2026-07-06 (Fable-5 audit home web-2) — this build shipped 2026-07-06 with no guide.
+Every claim below verified against the live code.</Note>
+
+## The one idea
+
+**"When they type in their address, that home is claimed."** (Zach 2026-07-06.) A claim = one `User`
+owning one rooftop (`hlPropertyId`, the permanent HLID), persisted in **`hl_home_claim`** (web DB) — the
+source of truth (it replaced the old localStorage-only badge). The claimed home becomes the owner's view:
+their home's profile card with the real Home Value Report inside it.
+
+## The table — `hl_home_claim`
+
+Created idempotently by `lib/home-claim.ts` (`ensureClaimTable`, same plain-SQL precedent as `hl_value_history`):
+
+| Column | Meaning |
+|---|---|
+| `user_id` + `hl_property_id` | UNIQUE — one claim per user per rooftop |
+| `email` | indexed (`lower(email)`) — the CRM↔web join key |
+| `status` | `claimed` \| `released` — releasing is a status flip + `released_at`, **never DELETE** (reversible) |
+| `source` | `self-claim` \| `pcsoi-reconciled` |
+| `pc_id` | the `hl_srg_past_clients` id when the CRM pre-claimed it |
+
+## Two ways a claim is born
+
+1. **Self-claim** — a logged-in visitor completes the Get Report flow on their home → `POST /api/home/claim`.
+2. **PCSOI pre-claim** — the CRM pre-claims a verified past client's ledger-owned home (the reconciliation
+   engine knows email ↔ home; same CRM→web write precedent as silent accounts). `source='pcsoi-reconciled'`
+   + `pc_id` stamped. ⚠️ Today this runs as a one-off script — Inngest-izing it is an open Zach ruling
+   (Fable-5 audit home web-5 parked item).
+
+## The APIs
+
+| Route | Contract |
+|---|---|
+| `GET /api/home/claim?hlid=…` | Is this rooftop claimed by the session user? (drives the CTA state) |
+| `POST /api/home/claim` | Create the claim for the session user (self-claim path) |
+| `GET /api/home/hvr?hlid=…` | **Claim-gated**: only the session user holding a live claim gets the data. Builds `HvrData` from the LIVE read paths — `getListing()` value tiers + `hl_value_history` + the home's own `priceHistory` (latest Sold event = the owner's purchase anchor). |
+
+**FACT-OR-NOT rule (constitutional for this surface):** HVR fields with no wired source (comps, market
+temp, zip/metro appreciation) ship as `0`/empty and the report **hides those sections** — nothing is
+invented. And since the 2026-07-06 audit fix, the report component has **no sample-home fallback**: no
+data → a neutral "preparing your report" state (a claimed owner can never see someone else's home).
+
+## The front end — `ClaimHomeCta` state machine
+
+`components/listing/ClaimHomeCta.tsx` on the home detail page:
+
+```
+unclaimed → (Get Report flow: modal `open`, steps "report" → "profile") → claimed
+claimed   → CTA renders the owner badge → "View report" → fetch /api/home/hvr → HomeValuationReportModal
+```
+
+State: `claimed` (from `GET /api/home/claim` on mount) · `open`/`initialStep` (the claim modal) ·
+`hvrOpen`/`hvrData` (the report modal — data comes ONLY from the claim-gated fetch).
+
+Related: [HouseLoop Home Value](/guides/houseloop-home-value) · [Property Data & Address Identity](/guides/property-data-and-address-identity) · [SRG Reconciliation Engine](/guides/srg-reconciliation-engine)

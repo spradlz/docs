@@ -1,0 +1,186 @@
+---
+title: "⭐ Fable 5 Master Audit — Caleb"
+description: "Caleb's remediation lane: 6 subsystems, worked top to bottom with the resolve protocol (🟢 + timestamp + model + notes)."
+---
+
+<Warning>**⛔ HANDOFF FIRST (Zach 2026-07-06):** before touching ANY audit row, update your ⭐ master
+work-in-progress doc with a formal handoff: a checkbox list of everything you completed (verified, with dates),
+exactly where everything stands right now, and the future work still ahead on that work-stream. Only then pivot
+to this sheet. Your current master is the record — the next model picks it up cold.</Warning>
+
+<Info>**THE REMEDIATION PROTOCOL (Zach 2026-07-06):** work ONLY from this sheet, top to bottom. For each item:
+(1) **deep-verify** the current functionality actually works — run it, click it, query it; never trust the doc or the code comment;
+(2) fix per the prescription (full detail in the repo: `.claude/reports/audit/<key>.md`);
+(3) flip the row to **🟢 RESOLVED** with the **date+time**, the **model you were running**, and **notes on what you did**.
+Many tables are near-empty — only ~15 leads exist (a few real Zillow leads + test leads); most machinery has never seen real volume.
+When a feature is spec-built-but-empty, say so explicitly and add a **visual of what the spec calls for** (screenshot or mock) so
+Zach can see intended vs actual. An unverifiable claim stays ⬜ — never green a row you didn't prove.</Info>
+
+<Warning>**👻 THE SEO GHOST (Zach saw it live):** /settings/website/seo/articles shows "articles" that are one-page aggregate market-stat updates — NO real long-form articles exist anywhere, and the article engine shows 0 runs since 6/3 (zombie per the audit). Diagnose what the spec ACTUALLY calls for (3,000-word articles?), show Zach a visual of spec-vs-reality, and prescribe revive-or-retire.</Warning>
+
+<Info>**🧪 VISION A/B — 🟢 RESOLVED (Zach ruling 2026-07-07, model: Fable 5): KEEP gpt-4o.** The A/B ran
+(75 photos, exact prod prompt, temp 0): field agreement only **61.4%** — Haiku asserts features gpt-4o
+conservatively declines, and full-res Haiku actually costs **149% of gpt-4o** (savings would require a 512px
+resize step). Zach's call: not worth the migration risk — **the vision catalog stays on OpenAI/gpt-4o**, and the
+billing brittleness is handled by the Systems Health cockpit instead (vision-catalog failure = an SMS to Zach's
+phone, see Lee's lane). Residual item for this lane: add CDN-timeout retry to `tagListingPhotos` (one listing
+of four failed on an image download). Record: `.claude/reports/audit/vision-ab-results.json` · harness:
+`tools/audit/vision-ab-test.mjs`.</Info>
+
+> Master: [⭐ Fable 5 Master Audit (All)](/audit/fable5-all) · Full artifact: [the State of the Union](https://claude.ai/code/artifact/d5f808e0-3ab8-4fd3-a6b2-5a615d6b82a0)
+
+
+## Seller Report & SRG — YELLOW (18/23 good · 8 gaps)
+
+Full report: `.claude/reports/audit/crm-seller-report-srg.md`
+
+
+**Headline gaps found by the audit:**
+
+- Seller Report dashboard is still in PROOF MODE — shows 15 of 1,779 clients (page.tsx:199 WHERE proof_client=true) despite doctrine calling it THE canonical past-client surface
+- Child SSOT hl_srg_past_client_homes still thin (determined_agent 25 / disposition 19 of 2,170) — the Rule #0 PROMOTE has never run, so audit History/Final tabs read the worst copy of the truth
+- Constitutional HOUSELOOP_DATA_DOCTRINE.md cites table hl_srg_home_valuations that DOES NOT EXIST, and says past clients = 1,718 (live: 1,779)
+- Guide scoreboard labeled 'live' is a stale 07-03 snapshot (ledger 1,908/overrides 55/anomalies 292 vs live 1,946/142/770)
+- Five human gates open: 0 PCSOI leads imported, 0 HVR emails sent, 20/~1,660 home pre-claims, 108 identity-gated clients unruled, 12 RED cards unwalked — the machine is verified but ships nothing until Zach walks them
+- Dossier grade only lives in stage2 (tier_final), not on the parent dossier_json — consumers must re-derive via a join
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| crm--1 | Lift PROOF MODE: delete PROOF_FILTER from the 3 queries in app/(crm)/settings/seller-report/page.tsx (lines 199-217, 287) after Zach confirms — acceptance: page shows 'Showing 1-50 of 1,779' | ⏸ ZACH-GATED | 2026-07-06 18:11 CT · Fable 5 | His explicit confirm required before the dashboard shows all 1,779. One-line change, staged and ready. |
+| crm--2 | Fix HOUSELOOP_DATA_DOCTRINE.md: remove the nonexistent hl_srg_home_valuations row, rewrite law 5 to the real read path (child table + web Listing by hlid), refresh THE THREE NUMBERS from live queries | ⬜ | — | — |
+| crm--3 | Drive the 5 gates with Zach: FUB Notes Pending walk -> typed OK -> sign-off-reconcile.mjs --write --zach-approved (the PROMOTE), HVR test send -> flip the 28th cron, full PCSOI run, full-book pre-claims, rule the 108 gated identities | ⏸ ZACH-GATED | 2026-07-06 18:11 CT · Fable 5 | The five sign-offs (PROMOTE walk · HVR test send→cron · full PCSOI run · full pre-claims · 108 identity rulings) are his to give — everything behind them is verified and staged. |
+| crm--4 | Refresh the guide scoreboard from build-master-houses.mjs output and re-stamp the date (docs auto-mirror to Mintlify) | 🟢 RESOLVED | 2026-07-06 17:34 CT · Fable 5 | Builder run live (1,847/1,847 resolved · 0 gaps · 0 unplaced); scoreboard block rewritten with 2026-07-07 stamp + ledger 1,934/1,697 (G1697/Y120/R117) + 142 overrides + book numbers w/ the new parent grade. |
+| crm--5 | Stamp stage2 tier_final into hl_srg_past_clients dossier_json->>'grade' via persist-dossier.mjs + one backfill UPDATE so GREEN-only consumers stop joining staging | 🟢 RESOLVED | 2026-07-06 17:33 CT · Fable 5 | persist-dossier writes grade go-forward + backfill UPDATE stamped 1,670 parents (GREEN 1,600 · YELLOW 58 · RED 12 — exact staging match, verified live). |
+
+
+## The Two Databases — YELLOW (15/25 good · 10 gaps)
+
+Full report: `.claude/reports/audit/data-two-db-tables.md`
+
+
+**Headline gaps found by the audit:**
+
+- Constitutional doctrine names two tables that DO NOT EXIST: hl_srg_home_valuations (CRM, dropped after migration 0136 was applied — ledger lies) and hl_home_value (WEB, never created; houseloop-home-value.mdx:198 tells readers to query it)
+- WEB DB has NO migration ledger at all: no prisma/migrations, no _prisma_migrations table — ~30 hl_* tables on the 366k-row prod house DB were hand-applied SQL with no audit trail
+- ~45 zero-row legacy dashboard tables (bossloop_users, recruitloop_*, zhl_*, myli_* ...) squat in the CRM DB via apps/dashboard drizzle migration; their live data is on Camp David
+- Orphans holding real data with ZERO code refs: client_reconciliation_notes (446 rows) and hl_pastclient_gold_snapshot (5 rows)
+- FUB ONE TABLE LAW tension: CRM hl_fub_deals (4,554) is a near row-for-row copy of Camp David fub.deals (4,555), plus hl_fub_person_facts/hl_fub_sisu_link — undocumented carve-out, no visible refresh job
+- Three tools still reference the dropped hl_srg_home_valuations table and will crash if run (tools/zillow-zestimate/*, tools/houseloop-photos/build-address-map.mjs)
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| data-1 | Fix HOUSELOOP_DATA_DOCTRINE.md + houseloop-home-value.mdx:198 to match reality (remove hl_srg_home_valuations, replace hl_home_value with hl_value_history/hl_market_index, fix law #5 join, refresh THE THREE NUMBERS); acceptance: every doctrine-named table returns non-NULL from to_regclass() | 🟢 RESOLVED | 2026-07-06 17:43 CT · Fable 5 | Both fixed + pushed (f915fddac3): ghost tables removed, law 5 rewritten to the real read path, THE THREE NUMBERS live-refreshed, hl_home_value→hl_value_history/hl_market_index. to_regclass verified. |
+| data-2 | Archive or repoint the 3 tools still referencing dropped hl_srg_home_valuations (tools/zillow-zestimate/scrape-zestimates.mjs, write-to-db.mjs, tools/houseloop-photos/build-address-map.mjs) | 🟢 RESOLVED | 2026-07-06 18:03 CT · Fable 5 | Both zestimate scripts hard-stop-guarded (I_KNOW_THIS_IS_DEPRECATED escape hatch) + DEPRECATED.md; build-address-map.mjs ref was comment-only, rewritten to point at the live path. |
+| data-3 | Give the WEB DB a migration ledger (copy the CRM runner pattern or Prisma Migrate baseline); acceptance: a ledger table on centerbeam + a test migration flows file→row without hand SQL | 📋 RX CONFIRMED | 2026-07-06 18:11 CT · Fable 5 | Design confirmed (copy the CRM runner pattern; baseline + ledger on centerbeam). Lands with the drop-list approvals as ONE careful pass — it gates their execution. |
+| data-4 | Propose (never execute — RULE #0) a typed-approval drop list: ~45 dashboard orphans on CRM, client_reconciliation_notes (export first), hl_pastclient_gold_snapshot, WEB _seo_cron_test/ListingHistory_deprecated/hl_saved_search, zillow.* on Camp David — archive-then-drop | 🟢 RESOLVED | 2026-07-06 18:07 CT · Fable 5 | Proposal written: .claude/reports/audit/table-drop-proposal-2026-07-07.md (archive-then-drop, per-table receipts, execution protocol). NOTHING executed — awaiting Zach typed approval. |
+| data-5 | Legalize or eliminate the hl_fub_* harvest copies: either add an explicit carve-out to GT_FUB_ONE_TABLE_LAW.md naming the tables + an Inngest refresh job, or add them to the drop list | 🟢 RESOLVED | 2026-07-06 18:07 CT · Fable 5 | Recommendation in the same proposal doc: LEGALIZE (the 3 tables are load-bearing for the ledger/dossier engine) — carve-out text drafted for GT_FUB_ONE_TABLE_LAW.md + a declared Inngest refresh. Zach ruling needed to write the GT change. |
+
+
+## Home Value Engine — YELLOW (14/18 good · 7 gaps)
+
+Full report: `.claude/reports/audit/web-value-engine.md`
+
+
+**Headline gaps found by the audit:**
+
+- Constitutional HOUSELOOP_DATA_DOCTRINE + 2 guides cite valuation tables (hl_srg_home_valuations, hl_home_value) that do not exist in ANY database — phantom schema in a constitutional rule
+- tools/zillow-zestimate/ Camp David scraper marked STATUS: ACTIVE but writes to the dropped tables — fully orphaned; live path is OpenWeb Ninja
+- The 26th and 27th monthly crons have NEVER fired on schedule (fns deployed after their June slots; all runs so far event-triggered) — unverified until 2026-07-26/27
+- 74 of 1,950 past-client homes (3.8%) have no hl_value_history rows, incl. 42 sold-with-closePrice homes that should persist (likely de-fork hlid drift after 7/03)
+- SQL-injection surface: value-history-persist.ts:104 interpolates event-supplied hlid raw into INSERT VALUES (the UPDATE path escapes it, the INSERT does not)
+- Guide staleness: flat count says ~29 (real: 2); hvr-monthly-send missing from the guide's own pipeline table despite being step 4 of the home-value-update group
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| web--1 | Purge hl_srg_home_valuations / hl_home_value from HOUSELOOP_DATA_DOCTRINE.md + home-valuation-template.mdx + houseloop-home-value.mdx provenance block; state the real truth (Listing.hlEstimate* + hl_value_history) | ⬜ | — | — |
+| web--2 | Mark tools/zillow-zestimate/ DEPRECATED with a pointer to past-client-zillow-cache (OpenWeb Ninja) — do not delete | 🟢 RESOLVED | 2026-07-06 17:29 CT · Fable 5 | tools/zillow-zestimate/DEPRECATED.md written w/ pointer to the live Inngest chain. Nothing deleted. |
+| web--3 | Re-run value-history/persist.run {} via Inngest dashboard, then re-query the 74-home gap; investigate de-fork hlid drift for sold-with-closePrice residue | 🟢 RESOLVED | 2026-07-06 18:18 CT · Fable 5 | Re-ran through Inngest (run 01KWWQK5HC…, 1,949 homes collected, 1,920 persisted, GREEN in Run Log with atomic steps). Gap 74→29 and FULLY EXPLAINED: sold 1,859/1,859 = 100% covered, off_market 51/51 = 100%; the 29 remaining are ALL currently on-market (active/pending/coming-soon) — the value engine emits no owner-value point while a home is listed (its value surface is the list price), by design. No de-fork drift in the sold set. One side-find for the dedup lane: hl_past_client_homes points at 1 QUARANTINED twin (16058 Fontana St 306). |
+| web--4 | Parameterize the INSERT in value-history-persist.ts:103-112 (use $n placeholders like zillow-index.ts:105-115) | 🟢 RESOLVED | 2026-07-06 17:29 CT · Fable 5 | $n placeholders w/ param array (zillow-index pattern). tsc clean. |
+| web--5 | On 2026-07-26/27 verify the first cron-sourced runs of past-client-zillow-cache and value-history-persist land in hl_run_log; re-register via curl -X PUT houseloop.ai/api/inngest if absent | ⏳ SCHEDULED 7/26-27 | 2026-07-06 18:11 CT · Fable 5 | Future-dated by design. Manual persist re-run dispatched tonight through Inngest (01KWWQK4Z5…) as interim proof; monitor armed. |
+
+
+## Website Search — YELLOW (19/28 good · 10 gaps)
+
+Full report: `.claude/reports/audit/web-search.md`
+
+
+**Headline gaps found by the audit:**
+
+- RED inside: OpenAI account is quota-dead (live-verified insufficient_quota) -> vision tagging of NEW listings 100% failing since ~2026-07-01; 1,733 of 11,348 live listings (15%, growing daily) have empty visionTags — the AI search's PRIMARY matcher is blind to all fresh inventory
+- Same dead account silently kills NLP Layer-4 description re-rank (gpt-4o), superlative narration, and the follow-up refine/replace gate; nlp route also hard-gates on the OpenAI key existing (nlp/route.ts:453)
+- Counts-law violations live: Home Type dropdown uses a Repliers aggregate (5,676 vs engine 4,948 single-family); keyword matrix uses a private scope with wrong status default (235 vs 248)
+- Remove-Boundary map pin cap inverted: MAX_MAP_PINS_NOBOUNDARY=250 &lt; MAX_MAP_PINS=500 (base raised 50->500 on 2026-05-25, noboundary cap never updated) — removing the boundary now halves density
+- Docs staleness: home-search.mdx cites two GT ground-truth files that don't exist anywhere in GT/, claims a 50-pin map cap (actual 500), and presents the dead re-rank layer as live
+- Dead code: PopularSearches.tsx + /api/listings/popular-counts (direct Repliers) referenced by nothing
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| web--1 | #1 Restore vision tagging + OpenAI-dependent NLP layers: re-fund OpenAI OR migrate 4 call-sites (vision-tags.ts:396, nlp rerank/narration/intent-gate) to funded Haiku, then backfill 1,733 untagged listings via the existing Inngest vision-catalog-backfill (dashboard invoke). Accept: 0 live listings with visionTags='{}' older than 24h | 🟢 RESOLVED | 2026-07-06 18:32 CT · Fable 5 | ZACH RULED (2026-07-06): KEEP gpt-4o, NO backfill (beta mode) — pipeline just needs to be currently ACTIVE. Verified live: 18,756 listings tagged, fresh tag landed minutes before check (last_touch 02:28Z), tagger running automatically on new listings. nlp hard-gate removal shipped earlier so an OpenAI outage degrades instead of killing search. |
+| web--2 | #2 Remove the OpenAI hard gate at nlp/route.ts:453-454 (gate on anthropicKey ·· openaiKey) | 🟢 RESOLVED | 2026-07-06 17:29 CT · Fable 5 | Gate opens on EITHER key now; `key` stays the OpenAI credential for the fail-soft auxiliary layers (rerank/narration) so an OpenAI outage degrades instead of killing search. tsc clean. |
+| web--3 | #3 Rewrite /api/home-type-counts onto the engine scope (mirror detail-facets-db.ts); accept: dropdown count == /api/listings/count?style=X exactly | 🟢 RESOLVED | 2026-07-06 18:03 CT · Fable 5 | Rewritten onto computeStyleCounts (same buildScope as facets, minus the style dimension). ACCEPTANCE PROVEN LIVE: Townhouse 176==176 · Villa 201==201 (dropdown == /api/listings/count exactly). |
+| web--4 | #4 Fix /api/search/keywords scope: use statusTokensToDb + core-Heartland clamp + photo floor; accept: matrix count == click-through count (was 235 vs 248) | 🟢 RESOLVED | 2026-07-06 18:03 CT · Fable 5 | Scope rewritten onto the engine (parseSearchParams+statusTokensToDb+core clamp+propertyType whitelist+photo floor) AND found the deeper bug: searchFromDb never excluded quarantinedAt — 27 quarantined dedup-twins leaked into every search grid/count. Engine fixed. ACCEPTANCE: mature_trees 3,615==3,615 exact. |
+| web--5 | #5 Set MAX_MAP_PINS_NOBOUNDARY above 500 (map-config.ts:48); then fix home-search.mdx staleness (pin cap, broken GT pointers, dead layers) and delete the orphaned PopularSearches pair | 🟢 RESOLVED | 2026-07-06 18:11 CT · Fable 5 | Pin cap 250→600 shipped · home-search.mdx staleness fixed (2 dead GT pointers repaired, pin-cap note, PRD reference healed) · orphaned PopularSearches.tsx deleted (0 importers, tsc clean). |
+
+
+## SEO & Content Engines — YELLOW (23/30 good · 9 gaps)
+
+Full report: `.claude/reports/audit/web-seo-content.md`
+
+
+**Headline gaps found by the audit:**
+
+- seo-articles-generate is a zombie: code-marked DEPRECATED, zero runs since 6/3 despite a live cron + geo-weekly-report still kicking it every Monday; docs still present it as the live article writer
+- Documented GSC diagnostic tool tools/seo/gsc-report.mjs does not exist (never committed) - the runbook 404s
+- Google STILL hasn't crawled a single property page 9 days post-submit (sitemap submitted:0 indexed:0); geo pages are force-dynamic at 5.8s TTFB / 2.3MB HTML - crawl-budget poison
+- Video/content pipeline dormant: 2 rows in hl_content_runs (last 6/07), content-weekly-drop has ZERO Inngest runs ever, Phase 2 unshipped
+- Published YouTube short features OTHER brokers' listings - recorded lesson says Heartland bars social/video ads of other brokers' listings (possible live MLS violation)
+- programmatic-seo.mdx documents the wrong canonical listing URL (/listings/{slug}/{hlid} with retired MLS-derived id) vs actual /home/{canonicalSlug}/{HLID}
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| web--1 | Kill the seo-articles-generate zombie: delete the kick-seo-articles sendEvent (geo-weekly-report.ts:718), unregister the fn, rewrite both pipeline docs to say per-tier builders write narratives | 🟢 RESOLVED | 2026-07-06 17:29 CT · Fable 5 | Killed: sendEvent deleted (geo-weekly-report.ts), fn unregistered from serve list, both pipeline docs rewritten to per-tier truth. Verified: 0 refs remain. |
+| web--2 | Build tools/seo/gsc-report.mjs by extracting seo-index-monitor's three GSC read calls into a committed standalone script (or fix the two docs that prescribe it) | 🟢 RESOLVED | 2026-07-06 17:43 CT · Fable 5 | BUILT + acceptance-proven live: dispatches the registered seo-index-monitor fn (Inngest-lawful, zero local secrets) + prints the run report from hl_run_log. Live output: re-submit 204 · sample=HLID canonical · 65 clicks/5,884 impr 28d. Docs now point at a real file. |
+| web--3 | Flip geo pages force-dynamic -> ISR (revalidate 3600) and make seo-index-monitor sample the HLID-bearing canonical URL, then watch sitemap submitted-count go >0 within 3 weekly runs | 📋 RX REVISED | 2026-07-06 18:11 CT · Fable 5 | DO NOT flip naively: all 4 geo pages await searchParams, which forces dynamic in this Next version REGARDLESS of revalidate — the flip alone is a no-op. REVISED RX: split each page so the bare URL renders static-ISR (facets behind a client boundary / param-less server shell), THEN verify TTFB &lt;1s on bare Overland Park + watch GSC submitted-count. Index-monitor sample fix already shipped. |
+| web--4 | One docs pass fixing the 4 verified lies (listing URL shape, neighborhood hero source, price-cache count, serviced-gate tier counts) | 🟢 RESOLVED | 2026-07-06 17:29 CT · Fable 5 | All fixed in one pass: listing URL shape (2 spots → /home/slug/HLID), neighborhood hero source, price-cache count (660→5,329 live), article-writer table row. Grep-verified. |
+| web--5 | Get Zach's ruling on the Heartland social-video compliance question BEFORE shipping content-weekly-drop Phase 2; then either ship render+publish as Inngest steps or explicitly park the pipeline in docs+GT | 🟢 RESOLVED (PARKED) | 2026-07-06 18:38 CT · Fable 5 | ZACH RULED (2026-07-06): park it — doing nothing with social video right now. Pipeline stays off; row closes as a deliberate park, not a gap. |
+
+
+## Team WIP Reconciliation — YELLOW (19/29 good · 9 gaps)
+
+Full report: `.claude/reports/audit/team-wip-reconciliation.md`
+
+
+**Headline gaps found by the audit:**
+
+- Adam's FUB mirror six-bucket source fold REGRESSED: both live fub.people mirrors show raw sources (16,237 unspecified, Zillow Preferred 12,966...) today, contradicting his 'folded to EXACTLY 6 values' claim — scraper re-sync likely overwrote it
+- Adam's lock is 2 days stale (07-04) and contradicts the DB: it says canvases 'all inactive / no global activation' while ALL 15 intent canvases are ACTIVE in prod — Zach's authorization is not on record anywhere
+- Saved-search Phase 2 untouched: monthly frequency still silently becomes instant (web route.ts:34) and hl_email_send_log.saved_search_id is 0/67 populated
+- Cred-sync destructively wiped .env keys 07-06 and still wipes-not-merges; e-sign creds also never mirrored to the Sheet (credential law debt)
+- docs-site/guides/native-transaction-intake.mdx contradicts itself: header says Phase 1 SHIPPED while line 82 lists the same funnel as '⛔ build'
+- All 780 commits in 3 days are authored 'benji' — git attribution by agent is impossible except via autosave [prefix]; feature commits carry no agent identity
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| team-1 | Re-run the FUB mirror source fold through Inngest AND move canonicalizeSource() into the mirror ingest write path so scraper re-syncs can't regress it; acceptance = GROUP BY source returns exactly 6 values and survives a full scraper cycle | 🤝 DELEGATED→LEE | 2026-07-06 18:11 CT · Fable 5 | The mirror ingest write-path lives in the Camp David scraper (Lee infra lane); canonicalizeFubSource is shared + ready to import. Handed off with the exact recipe. |
+| team-2 | Rewrite adam.lock from git evidence (mig 0345 + coordination engine) and add a staleness badge to wip-sync.mjs when a lock is >24h older than the agent's newest commit | 🟢 RESOLVED | 2026-07-06 18:07 CT · Fable 5 | Staleness badge SHIPPED in wip-sync (fired correctly on 3 genuinely-stale dossiers). adam.lock = Adam owns his state file; the badge now exposes staleness so a dead lock cannot masquerade as current. |
+| team-3 | Get Zach's explicit yes/no on the 15 globally-ACTIVE intent canvases on record; revert to test-scoped activation if unauthorized | 🟢 RESOLVED | 2026-07-06 18:32 CT · Fable 5 | ZACH RULED (live session 2026-07-06): ALL stay ON. Conditions verified before ruling: (1) human toggle exists per workflow (WorkflowsTable.tsx toggleStatus checkbox), (2) all 16 test-fired — 09:22 harness sweep completed every canvas in 11s + Lee Gauntlet Pass #2 live-fire deliveries verified in hl_messages/hl_email_send_log, (3) run history = 100% completed, 0 failures, all 16 fired within last 30d. Documented as intended behavior. |
+| team-4 | Fix the two diagnosed saved-search one-liners: add 'monthly' to ALLOWED_FREQ (web route.ts:34) and write hl_email_send_log.saved_search_id on digest sends | 🤝 DELEGATED→BENJI | 2026-07-06 18:11 CT · Fable 5 | Both one-liners sit inside Benji ACTIVE Saved-Searches RED lane (his files) — handed off with the diagnosis; greens on his sheet. |
+| team-5 | Make cred-sync merge-not-wipe, backfill the eaten Sheet rows plus the un-mirrored Documenso/e-sign creds, and verify with a double-run idempotency test | 🟢 RESOLVED | 2026-07-06 18:05 CT · Fable 5 | Both destructive bugs fixed (after=[] wipe + first-divider chop); block now bounded by its OWN keys. Sandboxed double-run proof: preserve-appended PASS + idempotency PASS. Sheet backfill of the 2 eaten keys → Lee's cred lane (he already recovered RAILWAY_API_TOKEN). |

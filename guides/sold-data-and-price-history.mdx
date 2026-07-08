@@ -15,13 +15,11 @@ data:     { status: "U", lastStatus: "Sld" }   ← now SOLD
 ```
 
 - `lastStatus === "Sld"` is the canonical sold marker across the whole codebase (`lib/listings/providers/repliers.ts`, `market-report.ts`).
-- **The discriminator** (proven live via `hl_webhook_inbound_log`): Repliers' `previous` object is the *changed-fields diff*. It carries `lastStatus` **only when lastStatus actually changed**. A metadata **re-sync** of an already-sold record sends `previous.lastStatus = null` — same `data.lastStatus="Sld"`, but no real sale. We fire **only** when `previous.lastStatus` is present and `!= "Sld"`.
+- **The discriminator** (SUPERSEDED 2026-07-03, the disposition-trigger fix; doc corrected 2026-07-06 audit): the old rule fired only on a real *transition* (`previous.lastStatus` present and `!= "Sld"`). That skipped a re-sync of an already-sold record — but if the webhook MISSED the original transition, the home's value/AI-overview chain never ran and it rendered flat forever (the 1011 Fontana bug). **New rule: whenever `data.lastStatus === "Sld"`, fire `listing.sold` UNLESS the row is already fully archived** (`Listing.status='sold'` AND `soldDate` AND `enrichmentSource='repliers_webhook'`). A genuinely-archived re-emit is skipped (`sold_resync_skipped`); a missed transition is recovered (`sold_resync_recovered`).
 
 ```
 app/api/repliers/webhook/route.ts
-  becameSold = data.lastStatus === "Sld"
-            && previous.lastStatus != null
-            && previous.lastStatus !== "Sld"
+  if (data.lastStatus === "Sld" && !alreadyArchived)   // alreadyArchived = sold + soldDate + enrichmentSource='repliers_webhook'
   → inngest.send("houseloop/listing.sold", { hlid, mls, source: "webhook" })
 ```
 
@@ -33,10 +31,10 @@ app/api/repliers/webhook/route.ts
 
 The `houseloop/listing.sold` event runs a single Inngest function (`lib/inngest/functions/listing-sold.ts`) that does the whole sequence as one job, idempotently:
 
-1. **idempotency-check** — if `ListingHistory` already has `arc_<hlid>`, stop (cheap no-op; a stray re-emit never re-runs R2 + LLM).
+1. **idempotency-check** — if the `Listing` row is already fully archived (`status='sold'` AND `soldDate` AND `enrichmentSource='repliers_webhook'`), stop (ONE-TABLE law — the archive lands on the Listing row itself; a stray re-emit never re-runs R2 + LLM).
 2. **load** — the live Repliers record (`fields=*,raw.CloseDate` → the real close date).
 3. **mark-sold** — `Listing.status='sold'` + `soldDate = raw.CloseDate` + stamp `lastStatusChangeAt`.
-4. **archive** — `archiveListingToHistory` → a `ListingHistory` row + photos copied to Cloudflare R2 (so the page survives after Repliers drops the listing).
+4. **archive** — `archiveListingToHistory` → the archive is written ONTO the `Listing` row (photos copied to Cloudflare R2 as `photosCached`, `enrichmentSource='repliers_webhook'`) so the page survives after Repliers drops the listing. (`ListingHistory` is DEPRECATED — quarantined to `ListingHistory_deprecated`; no new rows.)
 5. **ai-overview** — invokes `house-blurb-generate` per-hlid for the Sold House AI overview (Haiku).
 
 `house-blurb-generate` has **no cron** — it runs only when `listing-sold` invokes it (or a manual per-hlid invoke). No backfill, ever.
@@ -54,9 +52,9 @@ Independent of the sold pipeline: every Repliers single-listing GET returns a `h
 - Floored at 2016-01-01, sale records only. Renders in `components/listing/PriceHistory.tsx`.
 - **Sold prices are never displayed** (Heartland IDX rule) — the UI shows the publicly-listed asking price only.
 
-## The sold-comps archive — `ListingHistory`
+## The sold-comps archive — the `Listing` table (ListingHistory DEPRECATED)
 
-The full sold universe (one row per sold transaction, ~426K Heartland sales back to 2016) lives in `ListingHistory`, the foundation for the sold map / sold search / permanent `/home/{addressSlug}` SEO pages.
+The full sold universe (~426K Heartland sales back to 2016) lives on the ONE `Listing` table (sold rows are first-class Listing rows) — the foundation for the sold map / sold search / permanent `/home/{addressSlug}` SEO pages. The old `ListingHistory` table was quarantined to `ListingHistory_deprecated` (doc corrected 2026-07-06 audit — it is NOT the live archive).
 
 - One-time seed: `scripts/backfill-listing-history.ts` (resumable, idempotent, INSERT-only). Source `GET /listings?status=U&lastStatus=Sld&minSoldDate=2016-01-01&boardId=157`.
 - Ongoing: `listing-sold` adds a fresh, R2-backed row for each newly-sold home in real time.

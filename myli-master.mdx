@@ -1,6 +1,6 @@
 ---
-title: "⭐ Myli Master — Lead to Appointment (Adam)"
-description: "How a lead becomes a booked appointment, and how Myli owns the relationship. The one human-eye master doc — the visual, tabbed source of truth for the whole lead → Myli → appointment build. Everything else in these dev docs that conflicts is red-lined and rolled into here."
+title: "⭐ Adam · Myli Master (WIP) — the Myli Follow-Up Engine & Comms Infrastructure"
+description: "Adam's living work-in-progress master. Myli owns the lead relationship end-to-end — and the comms infrastructure underneath her (phone numbers, the dual-lane dock, notification identities, who-sends-as-what) is what we're actively building. Booking a tour is one outcome, not the whole story. The one human-eye source of truth; conflicting dev docs are red-lined and rolled in here."
 ---
 
 <Check>
@@ -12,8 +12,114 @@ This is the human-eye developer doc — a tabbed, screenshotted, receipts-first 
 **Companion receipts:** [Master Architecture (deep)](https://claude.ai/code/artifact/d16fa7a3-2706-4d14-8469-8a5045096f14) · [Capstone receipts (Myli books a tour end-to-end)](https://claude.ai/code/artifact/8f09d777-08ce-4cd4-b427-b5915e8eb5bd)
 
 <Note>
-**Adam owns this end-to-end.** Every "proven / verified" traces to a live check on a **single controlled test lead** — nothing is turned on for real leads. Last updated 2026-07-06.
+**Adam owns this end-to-end.** Every "proven / verified" traces to a live check on a **single controlled test lead** — nothing is turned on for real leads. Last updated 2026-07-07.
 </Note>
+
+## 🔧 CURRENTLY BUILDING & INVESTIGATING (Adam, 2026-07-07 night — LIVE)
+
+Two active work-streams tonight. This is the top-of-mind "what I'm on right now."
+
+### A) The dual-lane Comms Dock — instrumentation (BUILDING)
+
+The lead-detail **Texts** surface is now a **three-view dock**: `Lead · <name>` | `Agent · Myli` | `Both`.
+The **Agent · Myli** lane is an *internal* channel the lead never sees — it carries the agent-facing
+alerts (labeled **"System alert"**, not "Myli →") and a chat-with-Myli-about-this-lead composer. The
+**Lead** lane is the real conversation with the buyer. The send bar resolves **To × Send-as (IDENTITY × LINE)**
+— Myli or the human agent, on their assigned SMS / iMessage line — and **Myli defaults to SMS**.
+
+<Info>
+**Dual-lane dock — Agent · Myli lane (screenshot pending a fresh prod capture).** What it shows: the three
+view pills `Lead · <name> | Agent · Myli | Both` at the top; on the **Agent · Myli** lane, the tour-request
+alerts render as grey system bubbles tagged **"System alert"** (never seen by the lead), and the composer
+reads **"🤖 Message Myli about this lead…"** with an **"Internal — the lead never sees this"** hint. On the
+**Lead** lane the composer flips to the buyer with the **To × Send-as** bar (Myli/agent × SMS/iMessage line,
+SMS-default). Capturing the labeled screenshot on the next prod deploy.
+</Info>
+
+**Still instrumenting:** enlarge/finalize the To + Send-as pills; the `Both` split-view polish; wiring the
+per-Myli default-channel choice (below) into what the bar pre-selects.
+
+### B) Phone-number connections — the mess we're figuring out (INVESTIGATING)
+
+Zach caught this on **My Team → member → Connections → Phone/iMessage** (Myli's + every user's profile).
+Three real problems, root-caused:
+
+1. **The member's Phone panel lists EVERY unassigned account number, not just the member's own.**
+   Root cause: `MemberConnections` mounts the shared `DialerNumbersTable` in `filterToUserId` mode, which
+   shows `this user's numbers + ALL unassigned` ("5 of 7 available"). A member profile should show **only
+   the number(s) assigned to that member**, with a **"Assign an existing number" picker + "Get a new number"**
+   to add — never a wall of available lines defaulting toward the user. (There's already a leaner
+   `InlineDialer` that shows just the one row — the parity-with-Phone-Provider decision from 2026-05-28 is
+   what regressed this; it needs revisiting so the member view ≠ the admin account view.)
+
+2. **TWO places set "default for text" and they fight.** The Twilio number row has a `is_text_default`
+   (DEFAULT column) AND the BlueBubbles iMessage config has "Set as default for text messages"
+   (`hl_imessage_assignments.is_default`). Both can be ON at once → ambiguous. **The fix:** ONE **master
+   "Default text channel" toggle** above both blocks — **iMessage (BlueBubbles) ⟷ SMS (Twilio)** — where
+   picking one **clears the other**. Per-number voice/text defaults + call-forwarding stay on the number
+   config; only the *text-channel arbitration* moves up to the master toggle.
+
+3. **Naming drift:** the Twilio table calls it **"Friendly name"**, the dialer config calls it **"nickname."**
+   Pick ONE term everywhere (proposed: **Friendly name**).
+
+**Also confirmed working correctly** (don't touch): capabilities/voice are per-number on the Twilio line;
+provisioning a number points its **SMS + Voice** webhooks at HouseLoop + registers A2P — so a number can do
+calls too. That lives under **Phone Provider** (the account) and is surfaced read-only per member.
+
+**Design is drafted; awaiting Zach's sign-off on the master-toggle before the build** (member-profile UI is
+pixel-lock territory — [`REUSE_NOT_RECREATE`] + [`CRM_PIXEL_LOCK`]).
+
+## ⭐ HANDOFF — Comms & Notifications Infrastructure (Adam, 2026-07-07, model Opus 4.8)
+
+The night's work: make *who a message comes from* — number, email, identity — correct and configurable everywhere. Triggered by Zach catching system notifications shipping **from Myli's own dialer line** to a real Zillow lead's thread. All committed on `houseloop-app`, verified on localhost (= prod DB); code reaches prod on push.
+
+**DONE + verified (2026-07-07):**
+- ☑ **Notifications ship from a dedicated System line, NEVER Myli.** `hl_settings.notification_sender.sms_from_number` flipped off Myli's `+19133556809` → the dedicated **`+19132988778` ("HouseLoop SYSTEMS HEALTH alerts")** line. `dispatch.ts` reads this FIRST; the plural `notification_senders` registry stays in sync. Email side already dedicated (`notifications@houseloop.ai`).
+- ☑ **Notifications "sent from" config UI** (`/settings/notifications` COMPANY card):
+  - **SMS-from dropdown** sources the live **Twilio account numbers** (`lib/phone/twilio-account-numbers.ts` → `listTwilioAccountNumbers()`), each labeled by owner/purpose with test-harness lines hidden — so a personal line is never picked. Jump link → Phone Provider.
+  - **Email-from dropdown** sources the verified houseloop.ai system addresses + connected team inboxes (`getAvailableEmails()`). Jump link → Email Settings.
+  - Both save to `notification_sender` (the one `dispatch.ts` reads). Verified against live data.
+- ☑ **Phone Provider = the Twilio integration** (`/settings/phone-provider`, `DialerNumbersTable` admin view). The Twilio Account Numbers table: **editable FRIENDLY NAME** (⋮ → Rename line → modal → writes back to Twilio via `POST /api/phone/numbers/friendly-name`, so the name flows everywhere), clean columns (NUMBER · FRIENDLY NAME · ASSIGNED TO · CAPABILITIES pill cell · DEFAULT badge cell · ACTIONS — killed the confusing double-VOICE), full browser width, assign-to-agent + provision. **FUB numbers are separate** (Phone Numbers page, labeled "Follow Up Boss").
+- ☑ **The dual-lane Comms Dock** (lead-detail Texts surface, `CenterLane` + `TextComposerPanel` + `TextThreadStream`): **Lead · &lt;name&gt; | Agent · Myli | Both** views. Agent lane = the internal agent↔Myli chat + the agent-facing alerts, correctly badged **"System alert"** (not "Myli →"), never seen by the lead. Send bar = **To × Send-as (IDENTITY × LINE)**: Myli/agent × their assigned SMS/iMessage lines, `recipient_role='lead'`. **Myli defaults to SMS** (`send-identities` default flipped iMessage-first → SMS-first, Zach 2026-07-07). To/Send-as pills enlarged.
+- ☑ **Comms audience truth** — agent-facing sends log `actor='system'` + carry `recipient_role='agent'` through `hl_messages.metadata` → `hl_lead_activity.meta`; Run Log renders "→ Agent 🔔 (re: lead)". A notification filed under a lead but SENT to the agent no longer reads as "Myli → the lead."
+- ☑ **access_level = the permission tier** (owner/admin/member), authoritative; **role = the JOB** (Real Estate Agent, Broker…) in `hl_member_role`. One resolver `lib/auth/access-tier.ts`; the 3 login paths are the choke point (session role derived from `access_level`); Members table + `/api/me` + raw-role gates migrated. Mig `0352` normalized all users. Fixed the Phone Provider page flipping from the Twilio view to "My Phone" because `access_level` said 'agent'.
+
+**OPEN / owed:**
+- Per-Myli **default-channel setting** (currently SMS-first is hardcoded in `send-identities`) — surface as a toggle if Zach wants per-lead/per-agent control.
+- Wireframe sync: the enlarged dock pills deviate from `docs/wireframes/lead-engine-master-2026-07-07.html §6` — fold the new sizing back into the wireframe.
+- Full `role`→`access_level` cutover so `role` is a pure job title (low-risk; gates already read `session.role`).
+
+## ⭐ HANDOFF — Myli work-stream (Adam, 2026-07-06, model Opus 4.8)
+
+Formal handoff for the next model to pick up cold. Everything below shipped this session. **Gating law:** the
+closed-loop engines are OFF for real leads (`hl_settings.ai_closed_loop.enabled=false`, `daily_home.enabled=false`);
+the registration acks (Beat-1/Beat-2) are LIVE; the e-sign + coordination loops are scoped to leads with an
+active row (test-only). Test lead = John Ziller `11737b1e` on Twilio `+19133652648`; test agent user `762c6b5a`
+on `+19139379359` (both Lee-provisioned).
+
+**DONE + verified (dated 2026-07-06):**
+- ☑ **THE TWO-LAYER AI MODEL (Zach's spec, built full-bore P1→P3 same day, models Opus 4.8→Fable 5):**
+  - ☑ **P1 — Myli always watches.** Her inbound reply is gated ONLY by the master switch (`hl_settings.ai_conversations.enabled`, Benji's AI Follow-Up toggle) + assigned AI + role/persona — **NOT** `ai_mode_enabled`. Kills the "workflows off → Myli silent" bug. Myli's lane always resolves MYLI (the escalation clone slot can no longer hijack her line — `loadLeadContext` de-COALESCEd, blast radius verified 0).
+  - ☑ **P2 — destination-identity routing.** `resolveInboundOwner(channel, toAddress)` (lib/comms/) routes by WHICH owned identity was contacted — phone/email/BB, channel-agnostic. Myli's identity → her watch lane; an agent's identity → the agent lane (`lib/coordination/agent-lane.ts`). Verified live against real numbers/emails.
+  - ☑ **P3 — agent AI-Clone lanes.** Per-lead **AI Clone** toggle (the old "AI Mode" switch, relabeled — `ai_mode_enabled` now MEANS "clone active for this lead") → clone replies as the agent instantly + pings the human. Per-agent defaults (`hl_agent_clone_config`, mig 0350, applied): auto-takeover toggle + window (default 5 min) on My Team → member → AI Clone tab (+ `/api/team/clone-config`). Durable takeover via the Inngest scheduled-action executor (`kind='clone_takeover'`): review gate cancels if a human outbound landed in the window; master switch re-checked at fire.
+  - ☑ **Email reply path (ships DARK).** Inbound email dispatches to the AI (subject + inbox routing); replies go out as email "Re: &lt;subject&gt;" via `execSendEmail`. Gated `ai_conversations.email_enabled` (explicit true) — OFF until the e2e proves it.
+  - 🟡 **Clone-lane live-fire gauntlet** — staged + pre-flighted (John Ziller → Zach's line, Phase A instant-cover + Phase B 1-min takeover); BLOCKED on the Railway deploy queue as of ~18:10 CDT. Fire on deploy-live.
+  - Canonical spec: `.claude/reports/myli-two-layer-ai-model.md` (Benji). Known gaps flagged to Zach: off-system human replies can't cancel a takeover; iMessage has no per-agent lines yet.
+- ☑ **Two-beat registration (LAW 1)** — Beat-1 brand ack → Beat-2 personal on **all 11** registration/inquiry doors. Proven live (tour + general_registration real runs). Migs 0336/0338.
+- ☑ **No-response cascade** folded into the stage-driven floor — daily chase → auto-disposition to Nurture Warm after 4 unanswered, reprices cadence. Tested (3 cases). Mig 0334. Gated.
+- ☑ **Daily hand-curated home** — 1/day for active shoppers, deduped, pause-respecting, no-surveillance. Tested (7 gates). Mig 0335. Gated.
+- ☑ **Objection → FORD → saved-search funnel** — `create_saved_search` tool + persona. Tested e2e (real web-DB search).
+- ☑ **Registration → auto-saved-search** — `seedStarterSavedSearch` (verified wired on intake).
+- ☑ **Identity/handoff config** — who-reaches-out (Myli / agent clone, verified wired) × who-gets-appointment (agent / **external Trisha**, mig 0340).
+- ☑ **Full FUB payload matrix** — 13/13 doors verified live; found + fixed 3 unreachable doors (added to `DOOR_EVENT_KEYS`). Report `.claude/reports/fub-payload-matrix-2026-07-06.md`.
+- ☑ **E-sign nudge loop** — `document_sent`/`document_signed` canvases + `esign_nudge` (reviewBeforeFire gate) + `scheduleEsignNudge`. **Proven e2e on a real doc** (sent → texted link → signed → confirmed → nudge cancelled). Mig 0342 + the raw-payload event-token fix in `buildEventScope`.
+- ☑ **Showing-coordination loop (all 6 phases)** — Myli mediates buyer↔agent, **masks it as the sellers**, doc-send via Benji's `createFillSend`, group text, post-showing feedback → saved search. `hl_showing_coordination` (mig 0345). **Proven live e2e via the Twilio sim** (negotiation, masking, confirm, feedback all verified). Harness `tools/houseloop-crm/twilio-sim.mjs`.
+- ☑ **Myli reply-channel fix** — BlueBubbles now sends **green SMS** for non-iMessage numbers (was forcing iMessage → silent failure on every SMS-only lead); Twilio is last-resort only. Real prod impact.
+
+**FUTURE WORK (open):**
+- **The fable5-adam audit remediation** — 30 prescriptions across 6 subsystems (`docs-site/audit/fable5-adam.mdx`). Real Myli-AI-layer gaps to fix: `build_context` orphan capability, Broker empty-persona silent-return, `audit()` console-only (re-point at `hl_run_log`), `HL_MYLI_TOKEN` documented-not-implemented, Ana-clone KB decision.
+- **Coordination:** wire `schedule_appointment` on time-confirm (currently sets `confirmed_time`); verify the group-text + doc-send legs on prod BlueBubbles (green SMS).
+- **Flip the closed-loop flags ON** for real leads once Zach signs off.
 
 ## What this is
 
@@ -80,7 +186,7 @@ Everything below shipped in one pass. All of it is **gated OFF for real leads** 
 
 When Myli sends an agreement for e-signature (Benji's e-sign plumbing), the conversational loop is now hers end to end:
 
-1. **She texts the link.** The `document_sent` door runs a visible one-step canvas — Myli texts the lead "here's the {agreement} to sign so we can get you in to see the home, sign here: {link}." The send resolves AS the acting agent (Myli / Zach's clone / Ana's clone), never hardcoded.
+1. **She texts the link.** The `document_sent` door runs a visible one-step canvas — Myli texts the lead "here's the {agreement} to sign so we can get you in to see the home, sign here: {link}." The send resolves AS the acting agent, never hardcoded — today that's Myli or **Zach's clone** (`Zach Spradling (AI)`, the only clone user provisioned). Any agent clone (e.g. an Ana clone) resolves the same way *once provisioned*; there is no Ana clone user or clone-KB grounding wired yet (see audit crm--5).
 2. **She chases if it goes unsigned.** A scheduled nudge is queued, timed to the showing (the day before). At fire time it re-reads the document — it only nudges if the doc is still out and unsigned, and cancels itself the moment they sign (belt-and-suspenders with Benji's webhook).
 3. **She confirms on signature.** The `document_signed` door runs a second canvas — "got your signature, you're all set!"
 

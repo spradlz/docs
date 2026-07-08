@@ -1,0 +1,70 @@
+---
+title: "Website Registration & Lead Intake"
+description: "How a houseloop.ai visitor becomes a CRM lead — the auth providers (Google, email+password, magic-token), the Finish/X phone law, the ACTION_TO_EVENT contract into lead-intake, the shared-home gate, and the pixel identity stitch."
+---
+
+<Note>Written 2026-07-06 (Fable-5 audit auth web-5) — registration/intake had no system-level guide.
+Every claim verified against the live code (`apps/houseloop-web/auth.ts`, the CRM `lead-intake` route).</Note>
+
+## The three ways in (auth — `apps/houseloop-web/auth.ts`)
+
+1. **"Continue with Google"** — `GoogleProvider` via PrismaAdapter.
+2. **Email + password** — `CredentialsProvider` (bcrypt vs `User.passwordHash`; `/api/auth/register` creates the user + hash first).
+3. **Magic token** — `verifyMagicToken` (`lib/auth/magic-token`): signed per-lead links in emails/agent
+   flows auto-log the lead in (also how "Create Saved Search as Agent" opens the site AS the lead).
+
+Account linking: `allowDangerousEmailAccountLinking = true` — email+password first, Google later (same
+email) lands on the SAME User row, no duplicates. Sessions are JWT (hydrated with `id` + `phone`).
+
+## The Finish/X phone law
+
+A lead is created at **registration completion**, never at login, in exactly two shapes
+(the phone-capture step after account creation, governed by the `social_phone_requirement` admin setting):
+
+- **Finish** — the visitor completes the phone step → lead created WITH phone.
+- **X (skip)** — the visitor closes the phone step → lead created with **no phone + a "no phone" note**
+  (`phoneSkipped`). No hidden nurture fires (the old orphan `registration.no-phone` event was deleted
+  2026-07-06 — a phone-chase belongs on the workflow canvas).
+
+Registration UX toggles (phone required/optional/hidden, international, required-field asterisks, and
+`phone_required_on_showing_request` — enforced on the tour route since 2026-07-06) live in the CRM at
+**Settings → Website → Registration Settings**, read by the site via
+`GET /api/integrations/website/registration-settings` (public read-only, 60s cache; PUT self-gates).
+
+## The intake contract — `ACTION_TO_EVENT`
+
+Every site action that should touch the CRM POSTs to **`/api/integrations/website/lead-intake`** (CRM),
+authenticated by the per-source `x-houseloop-intake-secret` header. The payload's `action` maps through
+the **`ACTION_TO_EVENT`** table to ONE event key — the event fires the door workflow, stamps the tag,
+and drives everything downstream. Highlights (full map in the route):
+
+| `action` | event |
+|---|---|
+| `showing_request` / `contact_agent` | `tour_request` / `contact_request` |
+| `seller_request` / `claim` / `seller_inquiry` | `home_value_report` (merged — /sell Get Report AND the listing "Is this your home?") |
+| `seller_get_started` | `seller_get_started` |
+| `saved_search` / `_agent` / `_system` | three FIRST-CLASS triggers by ORIGIN (client vs agent-for-lead vs system-seed) |
+| `google_signin` | `general_registration` |
+| `liked/saved/shared_home_registration` | per-entry-point registration doors |
+
+**An unmapped action creates the lead with NO event** (warn-logged: "add it to ACTION_TO_EVENT or fix
+the caller") — no tag, no workflow. The `REG_VARIANT` map splits new-lead registration doors from
+existing-lead acks by the `created` flag.
+
+## The shared-home gate
+
+Sharing a home is a **login-gated registration event** (Zach 2026-07-01): the share modal opens for
+everyone, the gate fires at SEND — a signed-out sharer registers first (`shared_home_registration`
+door), and the recipient flows through lead-intake too.
+
+## The pixel identity stitch
+
+The first-party pixel (`lib/pixel/hl-pixel.ts` → CRM `/api/pixel/track`) tracks anonymous browsing;
+at registration/login the visitor's anonymous events are stitched to the lead so pre-registration
+views/likes appear on their CRM timeline (and power the pixel-derived starter saved search, seeded
+`createdBy='system'`).
+
+<Warning>The old third-party SureSend pixel (SS-VGFKRCIVEA, `SureSendPropertyTrack`/`SureSendIdentify`)
+is DEAD — files deleted; the first-party `hl-pixel` is the only tracker. (AGENTS.md purged 2026-07-06.)</Warning>
+
+Related: [Registration](/guides/registration) · [Lead Activity Log](/guides/lead-activity-log) · [Saved-Search Alerts](/guides/saved-search-alerts)

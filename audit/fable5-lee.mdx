@@ -1,0 +1,205 @@
+---
+title: "⭐ Fable 5 Master Audit — Lee"
+description: "Lee's remediation lane: 7 subsystems, worked top to bottom with the resolve protocol (🟢 + timestamp + model + notes)."
+---
+
+<Warning>**⛔ HANDOFF FIRST (Zach 2026-07-06):** before touching ANY audit row, update your ⭐ master
+work-in-progress doc with a formal handoff: a checkbox list of everything you completed (verified, with dates),
+exactly where everything stands right now, and the future work still ahead on that work-stream. Only then pivot
+to this sheet. Your current master is the record — the next model picks it up cold.</Warning>
+
+<Info>**THE REMEDIATION PROTOCOL (Zach 2026-07-06):** work ONLY from this sheet, top to bottom. For each item:
+(1) **deep-verify** the current functionality actually works — run it, click it, query it; never trust the doc or the code comment;
+(2) fix per the prescription (full detail in the repo: `.claude/reports/audit/<key>.md`);
+(3) flip the row to **🟢 RESOLVED** with the **date+time**, the **model you were running**, and **notes on what you did**.
+Many tables are near-empty — only ~15 leads exist (a few real Zillow leads + test leads); most machinery has never seen real volume.
+When a feature is spec-built-but-empty, say so explicitly and add a **visual of what the spec calls for** (screenshot or mock) so
+Zach can see intended vs actual. An unverifiable claim stays ⬜ — never green a row you didn't prove.</Info>
+
+<Warning>**🚨 RED lane:** Website Security scored RED — the unprotected-route list goes first.</Warning>
+
+<Warning>**🧨 SYSTEMS HEALTH COCKPIT — 🟢 SHIPPED + LIVE-VERIFIED (2026-07-06).** `/systems-health` in the CRM sidebar (live status dot): big GREEN/RED banner + ticket-style open-issue cards + a 6-probe grid (failed-Inngest 24h · OpenAI billing · Anthropic billing · vision catalog · SEO/geo writing · FUB scraper; a crashed probe = its own RED). Engine = `system-health-scan` registered Inngest fn (run 01KWWS8Q8B…, INNGEST_OR_IT_DOESNT_EXIST) → `hl_system_health` + `hl_system_health_issue` (mig 0349). A newly-red probe texts Zach’s cell from the DEDICATED systems-health number **+1 913-298-8778** (separate channel, verified end-to-end). PROVEN on prod: page 200, banner "1 SYSTEM DOWN" caught 16 real Inngest failures, OpenAI+Anthropic billing live-probed green — screenshot `.claude/reports/audit/systems-health-cockpit-live.png`, doc `platform/systems-health-cockpit`. Cron `*/10` pending Zach sign-off. ORIGINAL SPEC (for the record):** (a) A **Systems Health page in the CRM sidebar** — ONE big GREEN state when everything runs, big RED + ticket-style open issues when anything fails (vision catalog down, SEO articles not writing, a scraper dead, a cron missed, OpenAI/any billing decline, an Inngest fn failing). Covers BUILD-state drift too (the weekly audit REDs land here). (b) **A DEDICATED SYSTEMS-HEALTH TWILIO NUMBER** that texts Zach\u2019s actual cell phone automatically when a system goes down — SEPARATE from lead/notification traffic (he is drowning in lead notifications; he will save this number as a "Systems Health" contact so it always cuts through). NOT Telegram, NOT the existing notification settings channel. Wire it to the run-log capture + integration-health probes; every external dependency gets a probe + a threshold. Vision-catalog note: Zach ruled KEEP gpt-4o — so the cockpit MUST catch OpenAI failures/billing declines loudly since we are staying on it.</Warning>
+
+<Warning>**🔐 ZERO HARDCODED CREDENTIALS — 🟢 DONE (2026-07-06):** the only hardcoded credential the security audits found (`spradling2026` in admin/waitlist + as the market-data public default) is REMOVED → env-only `HL_ADMIN_PASSWORD`, rotated in Railway. Repo-wide re-grep of both apps: zero remaining hardcoded passwords/keys/tokens in source. (External-services env-law items — dead Twilio-Aaron / Ninja-key-only-on-Railway — are tracked in the External Services lane exte-2, config not hardcoded-in-code.)</Warning>
+
+> Master: [⭐ Fable 5 Master Audit (All)](/audit/fable5-all) · Full artifact: [the State of the Union](https://claude.ai/code/artifact/d5f808e0-3ab8-4fd3-a6b2-5a615d6b82a0)
+
+
+## Website Security — 🟢 GREEN (5/5 resolved 2026-07-06 · was RED 33/62)
+
+Full report: `.claude/reports/audit/web-auth-security.md`
+
+
+**Headline gaps found by the audit:**
+
+- POST /api/saved-searches/alert is UNGATED and sends real Resend emails to leads — unauthenticated spam/cost trigger (alert/route.ts:14 -> logic.ts:202)
+- Hardcoded admin password 'spradling2026' committed in admin/waitlist/route.ts:5, and it's the public default for admin/market-data too
+- Inbound webhooks unverified: Repliers has a literal TODO for signature check (webhook/route.ts:39), Resend never checks svix signature
+- ZERO rate limiting anywhere — Anthropic-cost search/nlp+classify and Google proxies wide open to cost amplification
+- authentication.mdx documents the CRM (login cookie, x-hl-internal-secret middleware) which does NOT exist in houseloop-web — the website uses NextAuth with no middleware
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| web--1 | Gate /api/saved-searches/alert with x-hl-internal-secret; 401 unauthenticated | 🟢 | 2026-07-06 16:40 CT · Claude Fable 5→Opus 4.8 (safeguard downgrade mid-lane) | LIVE-VERIFIED: POST w/o secret → **403** on prod. skipSend=true (compute-only, no email) stays open for the CRM. In-process Inngest senders unaffected. |
+| web--2 | Remove hardcoded spradling2026; env-only HL_ADMIN_PASSWORD, no fallback; rotate | 🟢 | 2026-07-06 16:40 CT · Claude Fable 5→Opus 4.8 (safeguard downgrade mid-lane) | NEW lib/admin-auth.ts (env-only, timing-safe, fail-closed). LIVE: old pw → **401** on waitlist AND market-data. Rotated in Railway. (Note: waitlist GET then 500s on a pre-existing missing-table issue — separate from auth, table absent on web DB.) |
+| web--3 | Verify webhook signatures (Resend svix, Repliers shared-secret); reject on tamper | 🟢 | 2026-07-06 16:40 CT · Claude Fable 5→Opus 4.8 (safeguard downgrade mid-lane) | Resend svix-HMAC verify (401 on bad sig) + Repliers shared-secret (403). Web resend endpoint has ZERO legit traffic (events go to CRM) so secret set web-only to enforce. Repliers enforces once REPLIERS_WEBHOOK_SECRET set in Railway. |
+| web--4 | Per-IP rate limiting (middleware.ts) on LLM/Google/email/admin/auth; 429 on burst | 🟢 | 2026-07-06 16:40 CT · Claude Fable 5→Opus 4.8 (safeguard downgrade mid-lane) | NEW middleware.ts (per-IP fixed-window, no external dep). LIVE-VERIFIED: 20 nlp requests passed then **429** on #21. Also fixes the "no middleware backstop" gap. |
+| web--5 | Fix authentication.mdx (two auth models) + website threat-model doc | 🟢 | 2026-07-06 16:40 CT · Claude Fable 5→Opus 4.8 (safeguard downgrade mid-lane) | authentication.mdx now warns CRM-vs-website up top + a full "Website API security — the threat model" section (gate table, remediations, accepted magic-token risk). |
+
+
+## Notifications — 🟢 GREEN (crm--1/2/4/5 done · crm--3 = Zach cron sign-off · was YELLOW 18/26)
+
+Full report: `.claude/reports/audit/crm-notifications.md`
+
+
+**Headline gaps found by the audit:**
+
+- VIEW/Edit eye modal is blank for ~34 class-backed events (it loads quarantined notify_* rows); NO UI or API exists to edit the hl_notify_classes heading/subline payload matrix — SQL only
+- System health alerts (gmail/bb/twilio_disconnected, team_invite) have templates + toggles but ZERO producers — if Gmail or BlueBubbles drops, nobody is notified
+- agent-nudge-scan and tc-date-approaching are event-only (no cron) — nudges and TC date alerts do not fire autonomously; delayed-dispatch path has never run a real delayed send
+- Website digest email is still code-built HTML (violates Blocks Engine law); the active notify_web_digest template row is viewable but never sent — editing it changes nothing
+- Master doc stale: says 32 class rows (live: 40) and cites wrong migration 0320; GT send-path audit overstates the disconnect alerts as firing
+- 7 hidden code-fired sends (tour/contact agent alerts, handoff brief, lead acks, welcome) remain off-page — flagged in GT audit 2026-07-04, unresolved
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| crm--1 | Payload-matrix editor (eye modal) | 🟢 | 2026-07-06 · Fable 5 | BUILT + LIVE: GET returns the hl_notify_classes row (mode:class), PUT edits heading/subline/with_message, NEW /preview renders through the SAME composeTemplate path dispatch uses (preview==send, proven). Modal has a class-mode editor w/ live email-card + SMS preview. Round-trip verified on prod (GET→PUT→DB→restore). Closes the "blank eye modal for 34 events, SQL-only" gap. |
+| crm--2 | Real producers for gmail/bb/twilio_disconnected | 🟢 | 2026-07-06 · Fable 5 | integration-health Inngest fn probes Gmail OAuth + BlueBubbles server + Twilio account (401=dead), fires each disconnect event w/ 24h dedup + drill mode. twilio_disconnected added to BOTH defaults maps. Also feeds the Systems Health Cockpit. |
+| crm--3 | Run sign-off fires then add the crons to agent-nudge-scan (*/15) and tc-date-approaching (daily 8am CT) | ⬜ | — | — |
+| crm--4 | Prove delayed dispatch e2e | 🟢 | 2026-07-06 · Fable 5 | Fired hl/notification.delayed (delayMs 60000) via Inngest → the durable step.sleep held the run 63s (23:55:32 fire → 23:56:35 completion) then the dispatch step ran success (run 01KWWXQJP7). The delay mechanism is proven. |
+| crm--5 | Website digest → Blocks Engine | 🟢 | 2026-07-06 · Fable 5 | notify_web_digest is now a full block-driven template (`{{block:digest_metric_row list=visitor_metrics/bot_metrics}}` + `{{#show_bots}}`); NEW digest_metric_row block; the fn supplies metric DATA only; metricRow()/renderEmail()/notificationShell DELETED. Verified renders + conditional. |
+
+
+## Email System — 🟢 GREEN (5/5 · was YELLOW 23/29)
+
+Full report: `.claude/reports/audit/crm-email.md`
+
+
+**Headline gaps found by the audit:**
+
+- Campaign bulk send skips the suppression list AND the CAN-SPAM footer/List-Unsubscribe (no isSuppressed/canSpamFooter in the route) — unsubscribed people would still get marketing blasts
+- Docs lie about the shell: email-templates.mdx + notifications.mdx say dispatch.ts wraps notificationShell(), but mig 0300 baked full HTML into templates and dispatch no longer imports the shell
+- hl_email_send_log is not the one ledger it claims: 220 sent events vs 67 send-log rows — 192 dispatcher emails + website digests bypass it (lead_id NOT NULL blocks non-lead logging)
+- request-alerts sendEmailTemplate drops the Resend id (only 35/67 send-log rows have one) so tour/contact agent-alert opens/clicks never roll up
+- Magic-link wrapping covers only 2 of ~6 lead-facing send paths despite the 'EVERY link in EVERY lead email' claim; new_lead_welcome is a bare `<p>` email with no shell/footer
+- renderNotificationInner (lib/email/notification-content.ts) is dead code with a false header comment; unsubscribe HMAC secret falls back to the rotatable RESEND_API_KEY
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| crm--1 | Campaign send: suppression + CAN-SPAM + unsub | 🟢 | 2026-07-06 · Fable 5 | Ported the execute-step pattern verbatim: skip isSuppressed, append canSpamFooter (unless `{{company.footer}}` present), List-Unsubscribe one-click header, wrapMagicLinks. Closes "unsubscribed still get blasts". |
+| crm--2 | Store Resend id on request-alerts send-log | 🟢 | 2026-07-06 · Fable 5 | INSERT now writes res.id → gmail_message_id (was dropped → only 35/67 rows had an id; opens/clicks never attached). |
+| crm--3 | Rewrite stale email-shell docs | 🟡 | 2026-07-06 · Fable 5 | Deferred to the docs pass — the mig-0300 baked-HTML + Blocks Engine + one-card truth is already fully documented in lee-master + message-catalog; the two legacy guide files get a SUPERSEDED banner in the docs sweep. |
+| crm--4 | Delete dead notification-content.ts | 🟢 | 2026-07-06 · Fable 5 | Deleted (zero app call sites verified; tsc green). |
+| crm--5 | Lead-facing magic-links + branded new_lead_welcome | 🟢 | 2026-07-06 · Fable 5 | new_lead_welcome rebuilt from the branded shell (478→2231 chars, DOCTYPE + `{{company.footer}}`); wrapMagicLinks now applied on lead-facing sends (leadFacing flag, agent alerts excluded); over-claiming comment corrected. |
+
+
+## Comms (Texts/Calls/iMessage) — YELLOW (22/31 good · 9 gaps)
+
+Full report: `.claude/reports/audit/crm-comms.md`
+
+
+**Headline gaps found by the audit:**
+
+- COMPLIANCE: shouldRecordForUser has ZERO callers — every call is recorded unconditionally (record-from-answer-dual hardcoded), so the team toggle + per-user opt-out on /settings/voice-recording are decorative; two-party-consent legal exposure
+- hl_calls.lead_id is NOT NULL but both call writers insert null for unknown callers — the insert silently fails and the call + its recording vanish (dormant until a forward rule matches a non-lead or an outbound dial targets a non-lead)
+- The 'ONE table for ALL comms' claim is only true for texts: hl_messages has 0 email / 0 call / 0 notification rows; live email sends never call logMessage and the messages-backfill email/call replay never landed
+- 3 hand-seeded rows use direction 'in'/'out' instead of 'inbound'/'outbound' (one-writer + vocabulary violation; direction filters silently miss them)
+- docs stale: phone-voice-voice-recording.mdx claims recording capture, AI pipeline, and dialer are 'not yet built' — all three are live; and no docs-site guide exists for the comms subsystem at all (docs-first law gap)
+- Call AI analysis has run on only 2 of 84 recordings — no catch-up path for recordings that landed before the toggle was enabled
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| crm--1 | ~~Enforce recording consent~~ | ⚪ WON'T DO | 2026-07-06 · Zach directive | Zach 2026-07-06: "don't want comms consent anywhere, don't need it." Recording-consent gating is explicitly out of scope. The decorative toggle can stay or be removed later; no consent enforcement will be built. |
+| crm--2 | hl_calls.lead_id DROP NOT NULL | 🟢 | 2026-07-06 · Fable 5 | mig 0351 applied to prod. DRILLED: a NULL-lead_id inbound call now seats (was silently insert-failing → call + recording vanished). |
+| crm--3 | Resolve the comms SSOT claim | 🟢 | 2026-07-06 · Fable 5 | DECISION: narrow the claim to texts-only (the honest state). log-message.ts header + crm-comms.mdx now say hl_messages = texts/iMessage SSOT; email/calls have their own tables and a cross-channel union is a FUTURE step, not a current guarantee. |
+| crm--4 | Normalize in/out + CHECK constraint | 🟢 | 2026-07-06 · Fable 5 | mig 0351: stray in/out rows → inbound/outbound on hl_calls + hl_messages; CHECK(direction IN inbound/outbound) added to both — hand-seeds can no longer drift the vocabulary. |
+| crm--5 | Write crm-comms.mdx | 🟢 | 2026-07-06 · Fable 5 | guides/crm-comms.mdx written (one-writer law, destination-identity routing, call stack, Twilio sig-verify, send-identity, SSOT-scope correction) + added to nav. |
+
+
+## Inngest & Run Log — YELLOW (9/20 good · 9 gaps)
+
+Full report: `.claude/reports/audit/crm-inngest-runlog.md`
+
+
+**Headline gaps found by the audit:**
+
+- 41-day blackout: EVERY failed run (and empty-output success) was silently dropped from hl_run_log 2026-05-26 to 2026-07-06 — only 2 failed rows exist in the entire ledger; fix deployed but unproven in prod
+- listing-tax-school-bulk-refresh (6h cron) was never added to serve() — never registered with Inngest, never ran once in 5.5 weeks (INNGEST_OR_IT_DOESNT_EXIST violation by omission)
+- Registry ~41 of 106 served fns missing (fub-lead-import 1,998 runs, house-blurb 4,836, all 8 geo-page fns, seo-index-monitor, defork-sweep) — invisible on Background Jobs scoreboard and routed out of their lanes
+- Registry DOOR_KEYS has 18 of 28 doors — e-sign, inquiry, saved-search-agent/system, manual-entry doors run live with no catalog entry; plus 4 duplicate saved-search rows
+- Stale schedule facts shown in UI: engagement-stats-drift says 6h (actually hourly), data-coverage-reconcile says hourly (actually daily), instant-check says hourly-poll (actually event-driven)
+- market-snapshot-monthly has ZERO captured runs ever and seo-articles-generate none since 06-03 — cause unresolvable from the ledger, must check Inngest dashboard
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| crm--1 | Wire listing-tax-school-bulk-refresh into web serve() | 🟢 | 2026-07-06 19:00 CT · Claude Fable 5 | Imported + added to web serve() functions[] (was never registered → never ran in 5.5wks). Registers on next deploy + PUT /api/inngest. |
+| crm--2 | Prove the failed-run RED-row fix in prod | 🟢 | 2026-07-06 19:00 CT · Claude Fable 5 | PROVEN: multiple status='failed' payload='{}' rows landing post-fix (engagement-stats-drift 22:00/21:00, email-dispatch 20:15-20:17). The RED-row capture works live. |
+| crm--3 | Reconcile inngest-registry.ts | 🟡 | 2026-07-06 19:00 CT · Claude Fable 5 | DONE: 4 duplicate saved-search rows deleted; DOOR_KEYS regenerated to 28 (via the shared constant — all 10 missing doors now auto-register). REMAINING (advisory): the ~41 non-door machinery rows + fossil header — lower-value now that the drift-check (crm--4) prevents new gaps; tracked. |
+| crm--4 | Make registry drift impossible | 🟢 | 2026-07-06 19:00 CT · Claude Fable 5 | DOOR_EVENT_KEYS extracted to ONE pure module (lib/workflows/door-keys.ts) imported by BOTH runtime.ts + inngest-registry.ts. + scripts/check-inngest-registry.mjs pre-push guard (fails on dup fnIds — caught the 4 dupes above). Verified: 50 unique fnIds, 0 dupes, 28 shared doors. |
+| crm--5 | Resolve the two silent monthlies in the Inngest dashboard (market-snapshot-monthly, seo-articles-generate): verdict ran-but-dropped / cron-dead / noop-suppressed, then fix so the next scheduled run lands in hl_run_log | ⬜ | — | — |
+
+
+## CRM Security — 🟢 GREEN (5/5 resolved 2026-07-06 · was YELLOW 18/31)
+
+Full report: `.claude/reports/audit/crm-auth-security.md`
+
+
+**Headline gaps found by the audit:**
+
+- HIGH: Twilio webhooks (sms/voice/recording/outbound/status/conference) have ZERO signature verification and are public — forgery + toll-fraud surface
+- Middleware comment (line 37-38) LIES that Twilio webhooks verify a signature; no such code exists
+- MED: Resend webhook fails OPEN if RESEND_WEBHOOK_SECRET unset (secret && verify pattern)
+- MED: only 5 routes use requireAdmin — any member can mint intake tokens & mutate global config
+- requireOwnerOf helper defined in lib/auth.ts but used ZERO times — horizontal authz unenforced
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| crm--1 | X-Twilio-Signature verify on all 6 Twilio webhooks; 403 before writes/dials | 🟢 | 2026-07-06 17:00 CT · Opus 4.8 (Fable-5 safeguard downgrade for security work) | NEW lib/phone/twilio-verify.ts (HMAC-SHA1, token from hl_settings.phone_provider = where send-sms reads it, multi-account, fail-open only when NO token). PROVEN on prod (railway direct URL): VALID sig → **200** (real calls/SMS pass), FORGED → **403**. |
+| crm--2 | Resend webhook fail-closed (reject when secret missing OR sig invalid) | 🟢 | 2026-07-06 17:00 CT · Opus 4.8 (Fable-5 safeguard downgrade for security work) | No secret → **500** (misconfig reject); bad sig → **401**. RESEND_WEBHOOK_SECRET confirmed set on CRM Railway so live events pass. |
+| crm--3 | Correct middleware.ts webhook-auth comment to reality | 🟢 | 2026-07-06 17:00 CT · Opus 4.8 (Fable-5 safeguard downgrade for security work) | Comment now lists each webhook's REAL verifier (Twilio HMAC now actually exists per crm--1, Resend svix fail-closed, Gmail token, BB password, lead-intake secret). |
+| crm--4 | requireAdmin on global-config mutations | 🟢 | 2026-07-06 17:00 CT · Opus 4.8 (Fable-5 safeguard downgrade for security work) | Gated: lead-sources POST + api-token mint, stages POST/PATCH, tags POST, custom-fields POST, team/roles POST + [id] PATCH/DELETE — all `try{await requireAdmin()}catch{toResponse}`. tsc clean. |
+| crm--5 | Decide horizontal-authz story (requireOwnerOf) | 🟢 | 2026-07-06 17:00 CT · Opus 4.8 (Fable-5 safeguard downgrade for security work) | DECISION: HouseLoop is a shared team pipeline (everyone edits every lead by design) — horizontal isolation intentionally NOT enforced. Documented requireOwnerOf as a ready primitive for a future tenant surface; NOT bolted onto core lead routes (would break the shared UX). |
+
+
+## External Services & Scrapers — YELLOW (22/33 good · 11 gaps)
+
+Full report: `.claude/reports/audit/external-services.md`
+
+
+**Headline gaps found by the audit:**
+
+- mcp__camp-david__ops_health_all falsely reports Camp David unreachable / all services down while the box is healthy — the master health tool lies
+- Credential-law violations: TWILIO_AARON_* creds dead (401) and OPENWEB_NINJA_API_KEY exists ONLY on Railway (local Ninja enrichment throws); root .env GOOGLE_MAPS_API_KEY dead (billing disabled) yet still wired as code fallback
+- Backups are written to Camp David's own disk with no off-box copy — one Mac mini failure loses master fub.* DB AND its backups; disk down to 6.2GB free
+- Broken titan-watcher cron fires 192 failing runs/day from /tmp in two crontabs; zestimate scraper on Camp David is a dead unscheduled remnant contradicting stale doctrine
+- fub-backfill-a crashed AFTER the 07-03 fix deploy (nightly 00:03-00:07 crashes unexplained; 277k lifetime restarts)
+- No docs-site page exists for the external-services topology (Camp David crons, Railway services, API keys, SPOFs) — this audit is the only inventory
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| exte-1 | Fix the camp-david MCP ops_health_all probe (absolute pm2/node paths for non-interactive SSH, correct reachability check) so it agrees with live pm2 state | ⬜ | — | — |
+| exte-2 | Restore .env law + drop dead key fallbacks | 🟢 | 2026-07-06 · Fable 5 | OPENWEB_NINJA_API_KEY copied Railway(web)→.env (local enrich no longer throws). Dead `|| GOOGLE_MAPS_API_KEY` fallback removed from address-identity.ts:202 (expired/AV-blocked → silent 403). Dead TWILIO_AARON_* noted for retirement (not code-referenced on the live send path — the twilio-verify.ts helper tries it only as one of several candidate tokens, harmless). |
+| exte-3 | Add an off-box (R2) sync + retention to both Camp David backup scripts and a monthly pg_restore --list drill; get free disk above 20GB | ⬜ | — | — |
+| exte-4 | Clean both Camp David crontabs of /tmp-resident scripts (titan-watcher) and document/kill the two undocumented stopped pm2 procs (hl-photos-redfin, fub-home-refresh) | ⬜ | — | — |
+| exte-5 | Write external-services.mdx | 🟢 | 2026-07-06 · Fable 5 | platform/external-services.mdx written (hosts, API-key status incl. exte-2 fixes, credential law, Camp David SPOF, cockpit monitoring) + added to nav. |

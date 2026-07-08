@@ -13,6 +13,30 @@ harvesting is hardened** — see [Operational hardening](#operational-hardening-
 
 
 <Warning>
+**🔑 TOKEN DEAD? THE RE-AUTH RUNBOOK — front and center (Zach directive 2026-07-06).** Symptom:
+every dotloop call fails **401**, including the refresh itself (`dotloop refresh failed 401`). Cause:
+dotloop **rotates the refresh_token on every refresh** — one lost race (two processes refreshing at
+once) and the whole chain is dead forever. `expires_at` in `hl_dotloop_connection` in the past with
+no newer unrevoked row = confirmed dead. **What the API can do:** detection and normal renewal only —
+`getToken()` (`tools/houseloop-cards/dotloop-auth.mjs`) self-heals any *live* connection automatically;
+you never manually re-auth a working token. **What it can't:** a dead grant needs ONE OAuth consent
+click — no API shortcut exists (that's OAuth by design). The fastest path, proven end-to-end
+2026-07-06 (~3 min, any agent can run it with the MCP browser):
+
+1. **Remove the dead grant:** browse to `dotloop.com/my/account#applications` signed in as the
+   brokerage data account (**Ana** — creds in `.env` under `CRED_DOTLOOP_ANA_DATA_ACCOUNT_*`; login
+   goes through Zillow Pro and the browser profile usually has it saved) → **Remove App** on
+   **"Zach Spradling"** ONLY (leave Zapier / KW Command / Open To Close / Apination alone). dotloop
+   refuses a fresh grant while the dead one exists ("has already been connected"). A press-and-hold
+   human check may appear — ask Zach to clear it if it blocks.
+2. **Re-grant:** browse to `https://crm.houseloop.ai/api/dotloop/oauth/start` → **Approve**. The
+   callback writes a new row to `hl_dotloop_connection` and lands on `/integrations?dotloop=connected`.
+3. **Verify (don't trust the redirect):** `getToken()` then `GET /public/v2/profile` must return
+   HTTP 200 with the 10 SRG profiles. The new row's `expires_at` sits ~12h out; self-heal owns it
+   from there.
+</Warning>
+
+<Warning>
 **LESSON LEARNED — read this before you debug a dotloop 403 (so we never lose an hour again).** If
 a document download returns **403 "Access is denied"**, it is **NOT** a platform limitation and the
 fix is **NOT** a cookie/session workaround. It means the **OAuth token lacks the `document:*` scope**.
