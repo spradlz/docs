@@ -1,0 +1,111 @@
+---
+title: "Follow Up Boss Trigger Events"
+description: "The ONE canonical catalog of every Follow Up Boss trigger event — the doors a FUB/Zillow signal can open — each with its four independent toggles (Sync · Creates Lead · Workflow / Workflow Active · Notify), its notification class, the FUB webhook/API signal it maps from, and how reliably we capture it. Managed at Settings → Trigger Events → Follow Up Boss. The table hl_fub_webhook_settings is the source of truth."
+---
+
+<Info>
+**This is the first-class catalog of the Follow Up Boss trigger events.** It is the FUB half of the Trigger Events
+board — the HouseLoop.ai website half lives in [Trigger Events](/crm/pipeline-workflow-system-events) (being
+brought current) and the workflow side in [Intent Workflows](/guides/intent-workflows). For how a FUB signal
+becomes a HouseLoop lead see [FUB → HouseLoop Lead Import](/fub/lead-import); for why some signals arrive
+unreliably see [Zillow Signal Capture — Gaps & Recon](/fub/zillow-signal-gaps); for the target capture design see
+[FUB Notification Architecture](/fub/notification-architecture). Owner: **Lee**. SSOT: `hl_fub_webhook_settings`.
+</Info>
+
+## Vocabulary (LOCKED 2026-07-07)
+
+- **Integration** = the *pipe* a lead flows through — **HouseLoop.ai** (our website pixel) or **Follow Up Boss**
+  (the Zillow-connected CRM). Managed at **Settings → Lead Integrations** (`/settings/lead-platform`).
+- **Lead Source** = the *brand* on the lead — Zillow, Referral, etc. A source lives *under* an integration.
+- **Trigger Event** = a *door* — a thing that can happen (a tour request, an inbound text, a property save) that
+  can start a lead, run a workflow, and/or fire a notification.
+
+A **Follow Up Boss trigger event** is a door on the Follow Up Boss integration. It is defined by one row in
+**`hl_fub_webhook_settings`** and configured on the Trigger Events board's Follow Up Boss section
+(`https://crm.houseloop.ai/settings/trigger-events`).
+
+## The four independent toggles (this is the model)
+
+Each FUB trigger event carries **four independent switches** — none implies another:
+
+| Toggle | Column | What it controls |
+|---|---|---|
+| **Sync** | `enabled` | Do we ingest/process this FUB signal at all. Off = we don't even mirror it. |
+| **Creates Lead** | `creates_lead` | Does firing this door mint (or match) a HouseLoop lead. |
+| **Workflow / Workflow Active** | `workflow_id` + `workflow_active` | Which workflow the door runs, and whether it runs. |
+| **Notify** | `notify` | Fire an owner-only HouseLoop notification when this door fires — **independent of Creates Lead.** |
+
+<Note>
+**Notify is decoupled from Creates Lead (Zach 2026-07-08).** You can turn ON a notification for a specific FUB
+trigger event **even if you do not create a lead from it** — a "heads-up, this happened" ping with no lead minted.
+This restores the per-trigger `notify` flag (which already existed in `hl_fub_webhook_settings` since mig 0267 and
+in RealLoop's `fubGate`) onto the HouseLoop-native path. `notify_class` (a separate, read-only column) is only the
+LINK to which notification class/channel this rolls up to under `/settings/notifications`; the **Notify toggle** is
+the per-integration on/off for the trigger event itself.
+</Note>
+
+## The catalog
+
+Signals split by **category**: `registration`-family events (a *first-touch* — can mint a new lead) and
+`system`-family events (activity on a lead that already exists). Rows and defaults below are the seeded truth from
+`hl_fub_webhook_settings` (migrations `0267`, `0285` atomic split, `0290` category, `0293` new-lead rollup) — the
+live table is the SSOT; confirm current toggles there.
+
+### Inquiry / request doors (registration-family)
+
+| Trigger event | `webhook_type` | Maps from (FUB signal) | Creates Lead (default) | Notify (default) |
+|---|---|---|---|---|
+| **Tour Request** | `tour_request` | Zillow "interested in touring/seeing X" (Property Inquiry event) | ✅ | ✅ |
+| **Contact Request** | `contact_request` | "have an agent reach out / call me" | ✅ | ✅ |
+| **Rental Inquiry** | `rental_inquiry` | Zillow Rentals inquiry | ✅ | ✅ |
+| **Seller Inquiry** | `seller_inquiry` | "I want to sell my home" (Seller Inquiry event) | ✅ | ✅ |
+| **Virtually Toured** | `virtually_toured` | Passive 3D tour (Virtually Toured Property) | ⬜ off | ✅ |
+
+### Activity doors (system-family — existing leads)
+
+| Trigger event | `webhook_type` | Maps from (FUB signal) | Creates Lead (default) | Notify (default) |
+|---|---|---|---|---|
+| **Text Messages** | `text_message` | `textMessagesCreated` (real SMS) | ⬜ off | ⬜ off |
+| **In-App Messages (Zillow)** | `in_app_message` | Zillow in-app message (`textMessagesCreated:zillow_inapp`) | ⬜ off | ⬜ off |
+| **Phone Calls** | `phone_call` | `callsCreated` (foundation for the voice agent) | ⬜ off | ⬜ off (Sync off by default) |
+| **Notifications (notes)** | `notification` | `notesCreated` (notes, assignments, generic) | ⬜ off | ⬜ off |
+
+<Warning>
+`property_inquiry` (the old single lumped inquiry row) was **split** into the atomic `tour_request` /
+`contact_request` / `rental_inquiry` / `seller_inquiry` / `virtually_toured` events by mig `0285`. Any doc or code
+still treating "Property Inquiry" as one door is stale.
+</Warning>
+
+## Capture reliability per door (why some are missed)
+
+Not every door arrives the same way — this is the crux of the [signal-gap recon](/fub/zillow-signal-gaps):
+
+| Door | Capture path | Reliable? |
+|---|---|---|
+| Tour / Contact / Rental / Seller inquiries | FUB **webhook** `eventsCreated` (+ `/v1/events` poller backstop) | ✅ mostly (webhook drops ~5% — the poller catches those; **poller re-enable is the NEXT-pass fix**) |
+| Property viewed / saved, insights | FUB **webhook** `notesCreated` | ✅ |
+| Text / phone / email | FUB **webhook** (`textMessagesCreated` / `callsCreated` / `emailsCreated`); bodies **masked** in the API → scraper recovers | ✅ arrival, ⚠️ body needs scraper |
+| **In-App Messages (Zillow)** | **Scraper only** — FUB never webhooks free-form in-app messages; they live only in the FUB inbox UI + `fub.zillow_inapp_ghost_quarantine` | ⚠️ **fragile** — dies when the scraper lags/crashes (this is the one gap that keeps biting) |
+
+## How a FUB trigger event fires end-to-end
+
+```
+FUB signal → POST /api/fub/webhook (dashboard receiver) → mirror to fub.*
+          → fubGate(webhook_type) reads hl_fub_webhook_settings {enabled, creates_lead, notify, workflow}
+          → if creates_lead: POST /api/fub/import → fub-lead-import (mint/match HL lead)
+          → if notify:       notifyLeadEvent(...) → owner-only one-card (dispatch.ts adds "via Follow Up Boss")
+          → if workflow_active: run the bound workflow
+```
+
+The gate is a two-tier switch: the per-event row toggles over the `_global` master row (`webhook_type='_global'`).
+
+## Reference (data source)
+
+- **Table (SSOT):** `hl_fub_webhook_settings` — one row per FUB trigger event; columns `enabled` (Sync),
+  `creates_lead`, `workflow_id` + `workflow_active`, `notify`, `notify_class`, `category`, `fub_event`.
+- **Migrations:** `0267` (base rows + `notify`), `0285` (atomic inquiry split), `0289` (`workflow_active`),
+  `0290` (`category`), `0292` (`notify_class`), `0293` (registration → `lead_created` rollup).
+- **UI:** `components/settings/fub/FubChannelRows.tsx` (Trigger Events board) + `FubChannelBoard.tsx` (FUB cockpit).
+- **API:** `PATCH/PUT /api/fub/webhook-settings`.
+- **Gate + capture:** `apps/dashboard/server/fub-webhooks.ts` (`fubGate`, the webhook receiver).
+- **Fire path:** `lib/inngest/functions/fub-lead-import.ts` (lead mint + native notify).
