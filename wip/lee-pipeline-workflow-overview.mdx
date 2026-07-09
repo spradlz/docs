@@ -1,0 +1,384 @@
+---
+title: "Lee (Pipeline and Workflow Master Overview)"
+description: "Work-in-progress dossier — Lee · Infra · Pipeline & Workflow · FUB · Notifications. Pipeline and Workflow Master Overview."
+---
+
+<Info>Live dossier — auto-generated from `.claude/state/wip/lee/pipeline-workflow-overview.md` on every push. **Progress: 9/21 done (43%).** _Updated 2026-07-01._</Info>
+
+<Warning>⚠ **Possibly stale:** this work-stream file was last written 146h ago. If Lee has shipped since, this dossier under-reports — refresh `.claude/state/wip/lee/pipeline-workflow-overview.md`.</Warning>
+
+**Owner:** Lee — Infra · Pipeline & Workflow · FUB · Notifications · **Canonical doc:** [`guides/pipeline-workflow-overview`](/guides/pipeline-workflow-overview)
+
+## Checklist
+
+**North star:** HouseLoop's lead engine to MVP. ONE platform (HouseLoop, never named); everything is a Lead
+Source with events; `Workflow = f(source × event)`. HouseLoop becomes the first-class notifier, retiring
+Realloop event-by-event. The living scoreboard is the doc `guides/pipeline-workflow-overview` (keep it current).
+
+### 🆕 ACTIVE WORKSTREAM (2026-07-03) — Lead-Detail Parity Lanes + Polymorphic Assignment
+**PRD/SSOT:** `GT/GT - ACTIVE/GT_HOUSELOOP_LEAD_DETAIL_PARITY_AND_ASSIGNMENT_PRD.md` · **scope:** `session-scope-parity-lanes.lock` · **handoff:** `.claude/state/lee-handoff.md` · **prod baseline:** `98650ba504`
+Both lead-detail lanes (LEFT = human + AI clone · RIGHT = Myli) share ONE skeleton: `📋 Tasks & Appointments`
+(ALWAYS on) + `🤖 AI Workflow` (gated). Grouped polymorphic `Assign to` (Agents · AI Agents · TCs). Clone
+task-level override (clone-assigned task fires without global AI mode).
+
+**SHIPPED (pushed, deploying):** Phase 0 docs/PRD (3 new + fixes) · Phase 2 mig 0306 (clone actor_type) ·
+Phase 3 grouped assignee picker · Phase 4 parity lanes (fixed the `aiActive` gate that hid human
+tasks/appointments — T&A now always-on both lanes; per-lane scoping + faint/mirror; bold toggle) · v2 Tags
+under T&A · Myli 4-row Contact. Awaiting Zach's final live sign-off.
+
+**🎯 THE GOAL — NEXT: Phase 5 (Zach-directed 2026-07-03), build end-to-end THEN test.**
+(1) **Clone config UI** — surface `POST /api/team/clone` + `hl_member_role` persona/tools override in Team
+settings so a member creates + configures their AI Clone. (2) **Task-level override DISPATCH** — a task
+assigned to a clone actually FIRES the clone (eligible types only) without the global AI toggle, via
+`hl_scheduled_actions.actor_type='clone'`, clone acting AS its human. (3) Model-row real value + Myli
+iMessage-reassign → Team settings. (4) Live end-to-end test → Zach sign-off.
+
+### 🧪 SIGN-OFF MATRIX — every webhook, top to bottom (Zach + Lee, iterate live)
+**How we run it:** go row by row. Lee hands the **test-lead payload** for `localhost:3020`, Zach fires it, we **log
+every gate**. A row **signs off (✅)** only when: (1) the webhook lands + the lead/activity card renders correctly,
+(2) Creates-Lead behaves as set, (3) it's **wired to the CORRECT notification** (notify_class / notify_owner — this is
+also checking **Benji's** notification work), and (4) its workflow (if any) fires. `⬜` = not yet verified.
+_Source of truth: `hl_fub_webhook_settings` (FUB) · `hl_trigger_events` (HouseLoop, notify_class) — pulled 2026-07-02._
+
+### A. Follow Up Boss webhooks (`hl_fub_webhook_settings`)  — all `notify_owner=realloop`, no workflow bound yet
+| # | Webhook | Creates Lead | Notify → | Workflow | Result |
+|---|---|---|---|---|---|
+| A1 | `property_inquiry` | ✅ | realloop | — | ⬜ |
+| A2 | `tour_request` | ✅ | realloop | — | ⬜ |
+| A3 | `contact_request` | ✅ | realloop | — | ⬜ |
+| A4 | `rental_inquiry` | ✅ | realloop | — | ⬜ |
+| A5 | `seller_inquiry` | ✅ | realloop | — | ⬜ |
+| A6 | `virtually_toured` | ✗ | realloop | — | ⬜ |
+| A7 | `text_message` | ✗ | realloop | — | ⬜ |
+| A8 | `in_app_message` | ✗ | off | — | ⬜ |
+| A9 | `notification` | ✗ | off | — | ⬜ |
+| A10 | `email_received` | ✗ | off | — | ⬜ |
+| A11 | `property_viewed` | ✗ (counted signal) | off | — | ⬜ |
+| A12 | `property_saved` | ✗ | off | — | ⬜ |
+| A13 | `property_shared` | ✗ | off | — | ⬜ |
+| A14 | `insight_high_intent_buyer` | ✗ | off | — | ⬜ |
+| A15 | `insight_high_intent_seller` | ✗ | off | — | ⬜ |
+| A16 | `insight_viewed_10x_7d` | ✗ | off | — | ⬜ |
+| A17 | `insight_new_area` | ✗ | off | — | ⬜ |
+| — | `_global` (master switch) | n/a | n/a | — | n/a |
+
+### B. Phone-call webhooks (FUB → the Phone Numbers section)
+| # | Webhook | Creates Lead | Notify → | Workflow | Result |
+|---|---|---|---|---|---|
+| B1 | `phone_call` (generic) | ✗ | realloop | — | ⬜ |
+| B2 | `phone_call_company` | ✗ | realloop | — | ⬜ |
+| B3 | `phone_call_sign` (sign/listing line) | ✗ | realloop | — | ⬜ |
+| B4 | `phone_call_past_agent` | ✗ | realloop | — | ⬜ |
+| B5 | `phone_call_ana` (Ana's old cell) | ✗ | realloop | — | ⬜ |
+
+### C. HouseLoop webhooks (`hl_trigger_events`, platform `houseloop`)
+| # | Webhook / event | Creates Lead | Notify class | Workflow | Result |
+|---|---|---|---|---|---|
+| C1 | New Lead — General Registration | ✅ | `lead_created` | ✅ | ⬜ |
+| C2 | New Lead — Liked Home | ✅ | `home_liked` | ✅ | ⬜ |
+| C3 | New Lead — Saved Home | ✅ | `home_saved` | ✅ | ⬜ |
+| C4 | New Lead — Saved Search | ✅ | `saved_search` | ✅ | ⬜ |
+| C5 | New Lead — Tour Request | ✅ | `tour_request` | ✅ | ⬜ |
+| C6 | New Lead — Contact Request | ✅ | `contact_request` | ✅ | ⬜ |
+| C7 | New Lead — Seller Get Report | ✅ | `home_value_report` | ✅ | ⬜ |
+| C8 | New Lead — Seller Get Started | ✅ | `seller_request` | ✅ | ⬜ |
+| C9 | New Lead — Shared Home | ✅ | `home_shared` | ✅ | ⬜ (now in `hl_trigger_events`, mig 0287) |
+| C10 | System — Property Viewed | ✗ (counted signal) | `property_viewed` | — | ⬜ |
+| C11 | System — Property Liked | ✗ | `home_liked` | — | ⬜ |
+| C12 | System — Property Saved | ✗ | `home_saved` | — | ⬜ |
+| C13 | System — Property Shared | ✗ | `home_shared` | — | ⬜ |
+| C14 | System — Saved Search (client) | ✗ | `saved_search` | — | ⬜ |
+| C15 | System — Saved Search · Agent | ✗ | `saved_search` | — | ⬜ |
+| C16 | System — Saved Search · System | ✗ | `saved_search` | — | ⬜ |
+| C17 | System — Tour Request (existing lead) | ✗ | `tour_request` | — | ⬜ |
+| C18 | System — Contact Request (existing lead) | ✗ | `contact_request` | — | ⬜ |
+| C19 | System — Seller Get Report (existing lead) | ✗ | `seller_request` | — | ⬜ |
+
+**Gaps flagged from the pull (2026-07-02):** (1) C9 Shared Home missing from `hl_trigger_events`. (2) Every FUB row is
+still `notify_owner=realloop` — the HouseLoop-notifier migration (per-row flip) hasn't started; each becomes a matrix
+sign-off as it moves to `houseloop`. (3) No FUB row has a `workflow_id` bound yet.
+
+---
+
+### SHIPPED (Phase 0 — foundation)
+- [x] Lead Sources = ONE page (`/settings/lead-platform`): source block = header + KPI funnel + events + Configure
+- [x] Collapsed Registration Events + Lead Sources + FUB Settings into the one page
+- [x] Workflows grouped BY lead source; `Workflow = f(source × event)` (reversed the old "agnostic" model)
+- [x] Dynamic Back → "Back to Lead Sources"; canonical `HlBackLink`
+- [x] FUB webhook config (per-type toggles: Process / Creates-Lead / Notify / Notify-Via) + 17-event matrix (migs 0274/0275)
+- [x] Phone Numbers registry `hl_phone_numbers` (41 FUB lines) + `/settings/phone-numbers`
+- [x] Notifications = Everything Phase 1 (catalog-derived notification list from the same event tree)
+- [x] R2/R3/R4 shipped (mig 0270 `notify_owner`): HouseLoop native notifier + notify-toggle repoint + per-event Realloop kill-switch
+
+### ARCHITECTURE RAILS (must be green before matrix rows pass)
+- [ ] R1 Native FUB ingestion (Realloop mirrors `fub.*` data only, stops being the notifier)
+- [ ] R8 Webhook test harness (fire/replay a real FUB webhook + verify every gate)
+- [ ] R9 Native dialed-line preserved (Ana 913-954-7123 — never the forward target)
+
+### OPEN BUILDS (the keystones)
+- [ ] 1d. FUB SUB-SOURCE dimension — split FUB events by portal so `(FUB × sub-source × event)` binds its own workflow (the keystone for source-specific FUB copy)
+- [ ] 1e. Email received (`emailsCreated`) — settings row + native HL notify + matrix row
+- [ ] 2. A workflow (text + email + nurture) for EVERY event (add missing text steps; DRAFT→ACTIVE the existing-lead doors)
+- [ ] 3. Zillow-inbound render MVP (Zillow logo, "Find on HouseLoop", iMessage-bubble restyle)
+- [ ] 4. FUB Phone Call Activity engine — ONE `(FUB · Phone Call)` workflow, Myli reads the dialed line → category → copy; text-back from BlueBubbles 913-208-1633; Ana email bridge; then the Twilio port
+- [ ] 5. Past-client reconciliation (single canonical table → listing page → seller report → Ana campaign)
+- [ ] 6. Go-live — quarantine legacy FUB Zillow doors, E2E-verify each real inquiry in the Run Log
+
+### SIGN-OFF MATRIX — recent edits
+- [x] **Viewed home** added to the HOUSELOOP → Existing-lead matrix as a **COUNTED signal** (Zach 2026-07-01):
+  no workflow — increments the lead's Visits/Properties counter + "viewed N×"; can gate a workflow with a count
+  condition. Backed by `hl_trigger_events.property_viewed` (system, houseloop, mig 0276).
+
+### NEXT CONCRETE ACTION (Lee)
+- [ ] KEEP THE OVERVIEW DOC CURRENT — reconcile it against today's changes: Benji's saved-search 3-trigger split (saved_search=client · saved_search_agent · system) is not reflected in the HouseLoop registration/existing-lead matrix; update it.
+- [ ] Then resume the Sign-Off Matrix one row at a time (Zach coming back with direction on lead sources + event triggers).
+
+---
+
+## PRD · `GT/GT - ACTIVE/GT_HOUSELOOP_LEAD_PLATFORM_PRD.md`
+
+#### GT — HOUSELOOP LEAD PLATFORM PRD (Zach + Lee, 2026-06-26) — ✅ SIGNED, BUILD
+
+**Owner:** Lee (end-to-end). **Status:** model locked + signed by Zach; building now.
+**Design SSOT:** `.claude/checkpoints/lead-system-MAP-2026-06-26.md`. **Scope lock:**
+`.claude/state/session-scope-platform-source.lock`. Supersedes the platform/source UI direction in
+`GT_HOUSELOOP_LEAD_FLOW_UI_PRD.md §12` (that doc's attribution columns ship as-is; the NAV/screens here win).
+
+---
+
+##### 1. THE PROBLEM
+HouseLoop is the website AND the CRM in one product — and Follow Up Boss is a legacy CRM piping in leads with
+history. "Lead source" alone can't express that. We spent a day circling because two things were tangled:
+**where a lead came from** vs **what it does on our site**. This PRD untangles it.
+
+##### 2. WHAT THE RESEARCH SAID (5 CRMs — HubSpot, Salesforce, UTM/GA4, FUB/kvCORE/Sierra, Pipedrive/GHL/AC)
+Unanimous findings (full briefs in session history):
+- **Two fields, never one:** a TRUE ORIGIN (Zillow) kept separate from the CONNECTOR (Follow Up Boss). Origin
+  is first-touch + immutable. (HubSpot Original vs Record Source; Salesforce LeadSource vs Source System.)
+- **Events ≠ source.** Activity is a separate growing stream; source is a stamp set once. (We already do this:
+  `hl_lead_activity`.)
+- **Trigger on the EVENT, filter on SOURCE/PLATFORM.** Never one workflow per source. Merge fields fill the
+  words. (Every CRM. Sierra/GHL/AC explicit.)
+- **No "type" field** for origin — "type" = the event (already our catalog) or the pipeline role (already our
+  Buyer/Seller pipelines). Don't add it.
+- **Don't prefix `fub-zillow.com`** — keep source = the real origin (Zillow), connector separate (live FUB data
+  with 48k people confirmed this). Platform = the connector/world.
+
+##### 3. THE MODEL (LOCKED)
+
+###### 3.1 The keystone — TWO buckets, TWO routing keys
+| Bucket | Keyed on | Meaning |
+|---|---|---|
+| **New Lead Registration** | the lead's **ORIGIN** (source + platform) | "how they came in." realtor.com/Zillow via Follow Up Boss → that source's registration (the reactivation). Origin is **set once, permanent** — a merge field forever, but stops STEERING after registration. |
+| **(HouseLoop) System Events** | the **SURFACE** (where the action fired) | "what they do on HouseLoop." ANY lead — regardless of origin — who likes a home / requests a tour on HouseLoop.ai fires the **HouseLoop** workflow. |
+| **Follow-Up** | schedule | the nurtures |
+
+**Proof (Zach's, universal):** lead acquired platform=Follow Up Boss, source=Zillow.com → registration runs
+**Reactivation** ("you worked with Alicia… homes on HouseLoop.ai"). Origin stays Zillow forever. They then like
+a home **on HouseLoop.ai** → SURFACE = HouseLoop → runs the **HouseLoop liked-home workflow**, not the FUB one.
+
+###### 3.2 The cascade (first match wins)
+```
+A lead's event fires →
+  1. SPECIFIC workflow for (this source + this event)?    → run it
+  2. else a workflow for (this platform)?                 → run it   (e.g. FUB → Reactivation)
+  3. else GENERAL REGISTRATION (the catch-all floor)      → always runs ({{lead_source}} fills the words)
+```
+Already engine-true: `dispatchDoor` routes existing-lead events by event SURFACE and keeps registration
+ORIGIN-scoped (built P3). New sources work instantly off the floor; specials are opt-in.
+
+###### 3.3 Scale = MERGE FIELDS
+One event → one workflow → `{{first_name}}` `{{home_address}}` `{{lead_source}}` `{{platform}}` fill the rest.
+Never a workflow per source. Adding a source = a new ROW, not a rebuild.
+
+##### 4. NAV (LOCKED) — 3 items (Lead Flow folded away)
+```
+Pipeline & Workflow
+  ├─ Lead Platform     ← master: Platform → Source → registration doors + system events
+  ├─ Lead Sources      ← thin list: the 3 sources
+  └─ Workflows         ← the categorized workflow library
+```
+
+##### 5. LEAD SOURCES — EXACTLY 3 (all else killed)
+| Source | Platform | Type | Default Stage |
+|---|---|---|---|
+| HouseLoop.ai | HouseLoop | web | New Lead |
+| Zillow.com | Follow Up Boss | portal (fix from `manual`) | New Lead |
+| Manual entry | HouseLoop | manual | New Lead |
+KILL (deactivate, reversible): Referral · SRG-Follow Up Boss (`fub_import`) · `__platform_houseloop__` ·
+`__platform_fub__` · IDX Sign-up. **Build-order care:** `fub_import` holds 6 FUB leads + their reg doors →
+REASSIGN leads + doors onto Zillow.com FIRST, then retire it. Nothing lost.
+
+##### 6. EVENT NAMING — the "New Lead –" prefix IS the registration-vs-system tell
+- **Registration doors** (origin): prefixed **"New Lead – …"**. HouseLoop.ai = 8: New Lead – General
+  Registration · Liked Home · Saved Home · Saved Search · Tour Request · Contact Request · Seller Get Report ·
+  Seller Get Started. (3 need relabel today: liked_home/saved_home/general_registration; other 5 already correct.)
+  Zillow.com = 2: New Lead – Tour Request · New Lead – Contact Request (= "property inquiry"). (Move from
+  fub_import; rename "FUB Property Tour"→"New Lead – Tour Request"; drop FUB's general/seller/saved-search regs.)
+- **System events** (surface): UNPREFIXED: Tour Request · Contact Request · Saved Search · Seller Get Report ·
+  Seller Get Started · Property Viewed · Property Liked · Property Saved · Property Shared.
+
+##### 7. THE SCREENS (wireframes — final, real names)
+
+###### 7.1 LEAD PLATFORM  → cascades into Workflows (click an event row → its workflow)
+```
+╔═ HouseLoop ════════════════════════════════════════════ platform ═╗
+  ─ SOURCES (origin → New Lead Registration) ──────────────────────
+   🌐 HouseLoop.ai — Organic ················· 1 lead · 8 doors
+        New Lead – General Registration  → General Welcome
+        New Lead – Liked Home            → Liked Home
+        New Lead – Saved Home            → General
+        New Lead – Saved Search          → General
+        New Lead – Tour Request          → General
+        New Lead – Contact Request       → General
+        New Lead – Seller Get Report     → General
+        New Lead – Seller Get Started    → General
+  ─ HOUSELOOP SYSTEM EVENTS (surface → regardless of source) ──────
+        Tour Request · Contact Request · Saved Search · Seller Get Report ·
+        Seller Get Started · Property Viewed · Property Liked · Property Saved · Property Shared
+  ─ FOLLOW-UP ──  (none yet)
+╔═ Follow Up Boss ═══════════════════════════════════════ platform ═╗
+  ─ SOURCES (origin → New Lead Registration) ──────────────────────
+   🌐 Zillow.com ····························· 6 leads · 2 doors
+        New Lead – Tour Request          → Reactivation Campaign
+        New Lead – Contact Request       → Reactivation Campaign
+  ─ SYSTEM EVENTS ──  (none — activity happens on HouseLoop)
+```
+Layout: blue platform header → source sub-section → bucket sub-headers → event rows (Event · Workflow ·
+Active). Brand: white-on-blue header. Tables, not chevron trees.
+
+###### 7.2 LEAD SOURCES  → cascades into Lead Platform (click a source → its block)
+```
+ SOURCE          PLATFORM          TYPE      DEFAULT STAGE   LEADS   REG DOORS
+ HouseLoop.ai    HouseLoop         web       New Lead          1        8
+ Zillow.com      Follow Up Boss    portal    New Lead          6        2
+ Manual entry    HouseLoop         manual    New Lead          0        0
+```
+
+###### 7.3 WORKFLOWS  → cascades into the canvas. The automation LIBRARY (grain = one row per WORKFLOW)
+Categorized Registration / System / Follow-Up (NOT "Other"). Columns: Workflow · Trigger · Steps · Completed ·
+Status (+ Platform · Source as light context). Steps = counted from the canvas; Completed = `hl_workflow_runs`.
+```
+═ REGISTRATION ═══════════════════════════════════════════════════════════
+ WORKFLOW                         TRIGGER                STEPS  COMPLETED  STATUS
+ New Lead – General Registration   New Lead – Gen. Reg.    4    138/142    active
+ Reactivation Campaign             New Lead – Tour Req.    6      6/7      active
+═ SYSTEM ═════════════════════════════════════════════════════════════════
+ Liked Home                        Liked Home             3     12/12     active
+═ FOLLOW-UP ══════════════════════════════════════════════════════════════
+ 90-Day Nurture                    schedule               8      4/20     active
+```
+NOT a clone of Lead Platform: Lead Platform rows = DOORS (by source); Workflows rows = WORKFLOWS (the canvas +
+its health). One workflow can serve many doors.
+
+###### 7.4 LEAD DETAIL (already shipped — confirm labels)
+`Source: Zillow` + `Platform: Follow Up Boss` in the Contact card.
+
+###### 7.5 WORKFLOW TRIGGER (the one engine add)
+Open a workflow → trigger node: `Event [▾] · Platform [▾ any/HouseLoop/FUB] · Source [▾ any/Zillow/…]`.
+This is what makes "Registration WHERE platform = Follow Up Boss → Reactivation" buildable.
+
+##### 8. BUILD PHASES (Lee, all reversible/additive where possible)
+- **P1 — Data cleanup migration:** reassign FUB leads+doors → Zillow.com; retire junk sources (deactivate);
+  fix Zillow type→portal; relabel the 3 HouseLoop doors + the Zillow doors with "New Lead –".
+- **P2 — Lead Platform page:** Platform → Source → (New Lead Registration · System Events · Follow-Up), real
+  data, tables, blue headers, workflow-per-row. (Replaces the scrapped tree.)
+- **P3 — Lead Sources page:** the thin 3-row table (Source · Platform · Type · Default Stage · Leads · Reg Doors).
+- **P4 — Workflows page:** categorize Registration/System/Follow-Up + Steps/Completed columns.
+- **P5 — Workflow trigger:** Platform + Source filter dropdowns on the trigger node.
+- **P6 — Nav:** Lead Platform · Lead Sources · Workflows (remove Lead Flow).
+- **P7 — Verify on prod (Playwright) + handoff/docs.**
+
+##### 9. WHAT'S ALREADY BUILT (don't redo)
+Lead `platform`/`channel` cols + backfill (mig 0247) · lead-detail Platform/Source rows · dispatchDoor
+origin-vs-surface routing (P3) · `hl_lead_activity` event stream · the workflow canvas · the 3-bucket Lead Flow
+grouping (becomes the System Events section). The work is the SCREENS + the data cleanup + the trigger filter.
+
+##### 10. NON-GOALS
+No `fub-` prefix. No "type" field. No per-source events (merge fields handle words). No Lead Flow nav page.
+No inventing sources beyond the real 3. Grows by ROWS.
+
+---
+
+## Scope lock · `.claude/state/lee.lock`
+
+AGENT: Lee
+ROLE: Chief of Staff / Systems Architect (orchestrator)
+LAST_UPDATED: 2026-07-06 evening (Fable 5 — audit lanes: Web Sec 5/5, CRM Sec 5/5, 🔐 creds DONE, 🧨 COCKPIT SHIPPED)
+MODEL: claude-fable-5
+BRANCH: houseloop-app
+
+CURRENT FOCUS: NOTIFICATIONS ENDGAME close-out + Gauntlet regen (plan ~/.claude/plans/greedy-sprouting-falcon.md)
+
+SHIPPED_2026-07-06 (all live-verified on prod):
+  ✅ E-SIGN DOMAIN — FULLY RESOLVED THE RIGHT WAY. esign.houseloop.ai serves 200 directly from Railway's edge,
+     real LE cert, zero proxies. TRUE root cause: Railway requires TXT _railway-verify.&lt;domain&gt; =
+     status.verificationToken and the API NEVER surfaces it (13-day wedge). Confirmed by Railway moderator on
+     the support thread I filed FROM ZACH'S ACCOUNT via browser (station.railway.com/questions/
+     custom-domains-never-bind-at-edge-404-a-6b4b3cea — resolved + solution accepted). Interim CF Worker
+     front-door carried the domain ~1hr, then removed. Vars handback done, Benji pointed CRM signing links at
+     the branded domain. Playbook: memory reference_railway_custom_domain_playbook + esignature.mdx +
+     .claude/reports/esign-cert-root-cause-2026-07-06.md. Diagnostic domains (esign2/esigntest) cleaned up.
+  ✅ PHASE C TC NOTIFICATIONS — shipped + live-fire verified. 8 tc_* one-card classes (mig 0339,
+     grp='transaction' — NOT per-event templates), 4 loop-engine hooks, targeted delivery (deal's agent + TC
+     only, _fanned). Live-fire: tc_status_changed on Lee Cardtest loop → SMS delivered verbatim;
+     tc-date-approaching ran through Inngest cloud (run 01KWVW6SPCK...) → Run Log row. Cron stays commented
+     pending Zach sign-off (INNGEST law step 6). Docs: message-catalog.mdx + system-notifications.mdx SHIPPED
+     sections pushed.
+  ✅ Task #12 caller-matching fix deployed (c7142eee55) — own dialer numbers excluded from caller→lead match.
+  ✅ Adam shipped two-beat on all 11 doors (Beat-1 brand acks reused) — closes the LAW-1 headline gap.
+
+GAUNTLET PASS #2 (2026-07-06 eve — task #11 IN PROGRESS): 10 events live-fire VERIFIED (scoreboard:
+  .claude/reports/gauntlet2-livefire-scoreboard-2026-07-06.md · work order: zach-gauntlet-pass-2-2026-07-06.md).
+  7 REAL bugs found+fixed+deployed incl. HISTORIC sla-sweep stage-2 never-ran crash. REMAINING: ai_messages/
+  ai_stages/ai_appointments (Adam pinged #11511 re Myli debounce, lead 1825b25c… line +19137333704) ·
+  email_received (FUB chain) · REGEN artifact e5582966 w/ delivery status per block (gen-audit-sheet.py) ·
+  present property_viewed daily roll-up proposal (§A). Test kit line +19137333704 (Lee).
+
+FABLE 5 MASTER AUDIT — LANE PROGRESS (docs-site/audit/fable5-lee.mdx):
+  ✅ Website Security 5/5 🟢 (killed hardcoded spradling2026, gated email-send, webhook sig verify, rate limiter — LIVE-verified 401/403/429 on prod)
+  ✅ CRM Security 5/5 🟢 (Twilio sig verify on 6 webhooks PROVEN 200/403, Resend fail-closed, requireAdmin on config, requireOwnerOf doc)
+  ✅ 🔐 zero hardcoded creds DONE (repo re-grep clean)
+  ✅ 🧨 SYSTEMS HEALTH COCKPIT SHIPPED + LIVE (/systems-health, 6 probes, mig 0349, dedicated Twilio +19132988778 → Zach cell, run 01KWWS8Q8B, screenshot proof)
+  ✅ cred-sync lane: sheet is SSOT (A1:G500 fix + aliases), Caleb's merge-not-wipe + my rows
+  ➡ REMAINING LANES (mostly NON-security, safe on Fable 5): Notifications 5, Email 5, Inngest&RunLog 5,
+     Comms 5 (ONE spicy: recording-consent), External Services 5 (creds config). + cockpit cron sign-off.
+  NOTE: security-shaped work keeps tripping Fable 5 safeguard → auto-downgrade to Opus 4.8; Zach flips back.
+
+ZACH DIRECTIVE 2026-07-06 night — THE FABLE 5 MASTER AUDIT (via Caleb #11514):
+  ✅ (1) FORMAL HANDOFF written into ⭐ lee-master-notifications.mdx (b2f6f9ae69) — dated checkbox ledger.
+  ➡ (2) MY AUDIT LANE = docs-site/audit/fable5-lee.mdx (7 subsystems, 35 prescriptions). Priority:
+     Website Security (RED, 11 gaps) FIRST → 🧨 BUILD THE SYSTEMS HEALTH COCKPIT (GREEN/RED maintainer
+     page + ticket-style issues; wire run-log capture + integration-health probes; first-class deliverable)
+     → 🔐 zero hardcoded creds. Protocol: deep-verify → fix → flip 🟢 w/ date+time+model+notes; full
+     reports .claude/reports/audit/&lt;key&gt;.md.
+
+OPEN (in priority order):
+  1. GAUNTLET REGEN (task #11): fire ALL 9 doors + remaining events (ai_* CRM actions, property_viewed toggled,
+     team_invite, gmail/bb_disconnected) → regen artifact e5582966 with delivery status on EVERY block +
+     one-card proposals in §A. Re-scored quarantine list (superseded standalone sys_reg_* + true dupes;
+     reused brand templates STAY) → present kill-list for Zach's typed sign-off. Generator:
+     scratchpad/gen-audit-sheet.py + truerender harness scripts/render-audit-templates.ts.
+  2. Phase B close (task #4): re-score PRD §2b + purge test leads + Zach per-event sign-off.
+  3. CRED-SYNC INCIDENT (real infra bug): 09:33 sync destructively rewrote .env — ate RAILWAY_API_TOKEN,
+     CLOUDFLARE_API_TOKEN (mangled to CRED_*_EMAIL), HL_CRM_DATABASE_URL. All restored locally; STILL NEEDED:
+     real Sheet rows for those keys + make sync MERGE-not-wipe. Caleb flagged it too (#11462).
+  4. Phase D remainder: AI-context rollup (Layer 2 blocks) — beat gaps largely covered by Adam's 11-door ship.
+  5. tc_date_approaching cron uncomment after Zach signs off the Inngest runs.
+
+STANDING: ONE TREE ONE BRANCH · Inngest-or-it-doesn't-exist · the wireframe is the truth · no destructive SQL.
+
+## Related documentation
+
+Doc sections this work creates or updates:
+
+- [`guides/pipeline-workflow-overview`](/guides/pipeline-workflow-overview)
+- [`guides/lead-sources`](/guides/lead-sources)
+- [`guides/lead-flow`](/guides/lead-flow)
+- [`guides/workflows`](/guides/workflows)
+- [`guides/notifications`](/guides/notifications)
+- [`guides/registration`](/guides/registration)
+- [`guides/tour-and-contact-requests`](/guides/tour-and-contact-requests)
+- [`guides/phone-numbers-and-call-routing`](/guides/phone-numbers-and-call-routing)
+- [`fub/lead-import`](/fub/lead-import)
+- [`fub/scraper`](/fub/scraper)
