@@ -23,12 +23,39 @@ not a bug** (see [Hidden emails](#what-it-can-t-recover)).
 |---|---|---|
 | Property inquiries, viewed/saved (single events), notes, stage, tags, deals | ✅ clean, real-time | ❌ |
 | Text / email **that one happened** | ✅ (to/from/time) | — |
-| Text / email / call **body** | ❌ masked "hidden for privacy" | ✅ recovers it |
-| Call AI summary / transcript | ❌ not in API | ✅ |
+| Text / email **body** (masked ~7% SMS · most email) + masked **call note** (5,690) | ❌ masked "hidden for privacy" | ✅ recovers it (Lane 2) |
+| Call **transcript** | ❌ doesn't exist anywhere (0 rows; FUB has none) | ❌ would need our own transcription of `recording_url` |
 | **Deep historical Zillow browse list** (every home ever touched + photo) | ❌ not in the API at all | ✅ scrape-only |
 
 The webhooks (covered in [Lead Import §2](/fub/lead-import)) carry the real-time signals; the scraper fills the
 two gaps the API can't: **masked bodies** and the **full browse history**.
+
+## Role in the notification architecture (LOCKED 2026-07-09 — the scraper is a dumb Lane-2 grabber)
+
+Under the 3-lane model (full detail: [Follow Up Boss Trigger Events](/fub/trigger-events)), **notifications are
+the source of truth and the scraper is a dumb, on-demand grabber of HIDDEN content only.** It does not decide
+what's new, does not crawl, and **never re-scrapes on a record edit.**
+
+- **The only thing that wakes it is Lane 2** — a masked body. The native webhook writes a targeted job to
+  **`fub.body_recovery_queue` (Camp David)** `{ person_id, resource_type:'text'|'email', resource_id }`; the
+  scraper reads **that one body**, writes it back, and flips `content_status` hidden→visible (which fires
+  `trg_fub_new_message` → the notification, now with the body). A surgical fetch, not a re-walk.
+- **Masked = exactly three things:** SMS bodies (~7%), most email bodies, and 5,690 call notes. In-app messages,
+  saves/views, inquiries, and call metadata are **exposed** and never touch the scraper (Lane 1).
+- **The lock (precise mechanism):** the one-time 49K backfill is done — **49,059 people carry
+  `fub.rehydration_log.status = 'rehydrated'`** (the terminal "done" state; there is **no** separate
+  `fully_scraped` flag/status), **0 pending**, forward-only. The 2026-07-09 fix corrected **25,626** people that
+  a `peopleUpdated` bug had wrongly reset to `pending` (flipped them back to `rehydrated`). A record edit
+  (`peopleUpdated`/stage/tag) **never** re-queues a scrape.
+
+<Warning>
+**The flood loop is killed, but the strict Lane-2-only consumer is still in build (honest status 2026-07-09).**
+The scraper is **idle** (0 pending, all locked) and record-edits no longer re-scrape — the `peopleUpdated`
+re-scrape loop that caused the 2026-07-09 flood is retired. It does **not yet** run as a pure "Lane-2-only"
+consumer: it still carries the old full-person claim path. Caleb's next build drains `fub.body_recovery_queue`
+(targeted body reads only) and retires the full-scrape path in the same pass. This doc + the FUB master will be
+flipped to "Lane-2-only" once that ships.
+</Warning>
 
 ## Architecture
 
@@ -56,8 +83,13 @@ Camp David Postgres  fub.*   ── MASTER (host 192.168.1.211, db bossloop)
   reaches the CRM **only when the scraper runs for that person**. Blank photo in the CRM → check the **mirror**,
   then re-run the scraper for that lead.
 
-**Two Chromes (parallel workers):** Chrome **A** on CDP port **18800** (`~/.chrome-fub-profile`) + Chrome **B** on
-**18802** (`~/.chrome-fub-profile-2`). Each is a persistent profile holding a live Google session.
+**ONE Chrome (Zach LOCKED 2026-07-08 — "go down to one chrome, harden it up").** A single persistent Chrome —
+**Chrome A** on CDP port **18800** (`~/.chrome-fub-profile`), holding a live Google session — runs the scrape.
+`fub-parallel-scraper.mjs` fans out `FUB_WORKERS` (default 3) worker *pages* inside that one Chrome. The old
+second Chrome (B, `:18802`) + its `fub-backfill-b` worker are **retired**: two Chromes plus a watchdog meant
+multiple processes reaching into shared browsers over CDP and closing each other's pages — the exact contention
+that crash-looped the scraper. One browser, one boss. (The watchdog runs with `FUB_SINGLE_CHROME=1`, which skips
+all Chrome-B logic.)
 
 ## The login (this is what "stuck / can't log in" means)
 
@@ -69,17 +101,31 @@ account-chooser → consent**, in that order, using `FUB_WEB_GOOGLE_PASSWORD` (�
 `notify.sh`. **Option text alone ("Try another way", "use a passkey", "verify it's you") is NOT a 2FA wall** — those
 appear next to the normal password field and the bot must ignore them (see the 2026-07-08 incident below).
 
-When the session expires and auto-login can't re-establish it, the scraper sits **stuck on the FUB login page** and
-the workers crash-loop (heartbeat error: *"…hit expired FUB session mid-scrape"* / *"auto-login failed"*).
+When the session expires, the scraper's **startup session-check** navigates fresh to `/2/people`; if it lands on
+the login page it **delegates to `fub-login-bot.mjs` (Google SSO)** and re-verifies. (Before 2026-07-08 it clicked
+a `input[type=submit].u-bigBlueButton` — the DEAD legacy FUB email/password form button. FUB is Google SSO now, so
+that click always failed → an instant 10-minute cooldown → the "scraper down / won't log back in" symptom. The
+delegation to the real login bot fixed it.)
 
-**The `fub-watchdog` now self-heals this AUTONOMOUSLY (Zach LOCKED 2026-07-03) — a human should almost never touch
-it.** Every 60s it checks Chrome A (18800) and B (18802). If a login tab is up, it first runs the in-session
-login-bot; **if that fails on ≥ `LOGIN_THRESHOLD` (2) consecutive checks — i.e. a REAL logout, not a transient
-redirect — it does a HARD relaunch: kill the Chrome process + relaunch it fresh on the saved profile (which
-re-establishes the Google SSO session) + re-run the login-bot.** This is the same thing `fub_chrome_restart` does,
-now done automatically for BOTH Chromes. It only escalates to a `notify.sh` alert if even a hard relaunch can't
-re-auth — i.e. a genuine 2FA/password wall a human must clear. Code: `runLoginBot` → hard-relaunch branch in
-`fub-backfill-watchdog.mjs` STEP 2 (Chrome A) + STEP 4 (Chrome B).
+**The `fub-watchdog` self-heals a real logout AUTONOMOUSLY — a human should almost never touch it.** Every 60s it
+checks Chrome A (18800). If a login tab is up, it runs the login-bot; on a persistent real logout it does a HARD
+relaunch (kill + fresh-profile launch + re-login), same as `fub_chrome_restart`. It only alerts a human via
+`notify.sh` if even that can't re-auth (a genuine 2FA/password wall).
+
+<Warning>
+**The watchdog must WATCH, never HARM (Caleb 2026-07-08 — the "watchdog was the killer" fix).** Its health probe
+`isCdpConnectable()` used to `connectOverCDP()` then `browser.close()` — and on this Chrome build that close
+**tore down the browser's live pages.** So every 60s the watchdog killed the actively-scraping worker, mis-read
+the wreckage as "WEDGED," and hard-relaunched Chrome — **568 relaunches**, an endless self-inflicted crash loop
+that looked exactly like "the scraper won't stay logged in." Two guards now prevent it, permanently:
+1. **Passive probe** — a raw DevTools websocket open/close (Node global `WebSocket`) that never calls
+   `browser.close()`, so probing a healthy Chrome is harmless.
+2. **Fresh-log guard** — if the `fub-backfill-a` log is fresh (the worker wrote scrape output seconds ago), the
+   watchdog **never probes or relaunches**: an actively-producing worker is definitive proof CDP is healthy.
+
+Rule for anyone touching the watchdog: a monitor may **look** but must never **close/relaunch a browser that has a
+live worker.** Code: `fub-backfill-watchdog.mjs` — `isCdpConnectable` + the `workerFresh` guard in `check()`.
+</Warning>
 
 **Manual override (rarely needed):**
 ```
@@ -94,10 +140,10 @@ could sit spinning until someone ran this tool by hand. That gap is now closed.*
 
 | pm2 name | script | role | live? |
 |---|---|---|---|
-| **fub-backfill-a** | `fub-parallel-scraper.mjs` | master scraper — pending-first from `fub.rehydration_log` (Chrome A `:18800`) | ✅ |
-| **fub-backfill-b** | `fub-parallel-scraper.mjs` | 2nd parallel worker, row-locked (Chrome B `:18802`) | ✅ |
-| **fub-webhook-scraper** | `fub-webhook-scraper.mjs` | real-time — polls `fub.rehydration_queue` (`FOR UPDATE SKIP LOCKED`) | ✅ |
-| **fub-watchdog** | `fub-backfill-watchdog.mjs` | self-healing — relaunches a dead/wedged Chrome (A **and** B), auto-logs-in, restarts a stalled worker | ✅ |
+| **fub-backfill-a** | `fub-parallel-scraper.mjs` | THE scraper — `FUB_WORKERS` (3) pages inside the one Chrome A `:18800`, pending-first from `fub.rehydration_log` (`FOR UPDATE SKIP LOCKED`) | ✅ |
+| **fub-webhook-scraper** | `fub-webhook-scraper.mjs` | real-time — polls `fub.rehydration_queue` | ✅ |
+| **fub-watchdog** | `fub-backfill-watchdog.mjs` | self-healing (`FUB_SINGLE_CHROME=1`) — relaunches a dead Chrome A, auto-logs-in, restarts a stalled worker. **Watches passively; never closes/relaunches a Chrome with a live worker** (see the login §). | ✅ |
+| ~~fub-backfill-b~~ | ~~`fub-parallel-scraper.mjs`~~ | **RETIRED 2026-07-08** — the 2nd Chrome (B `:18802`) was removed; one browser, one boss | ⛔ |
 | **fub-relay** | `tools/fub-sync/fub-relay.mjs` | Camp David `fub.*` → Railway `fub.*` mirror | ✅ |
 | ~~fub-webhook-sink~~ | `fub-webhook-scraper.mjs` | **deliberately stopped** — redundant duplicate, no mem cap → OOM crash-loop. Reading its "down" as a failure is a known trap. | 🛑 stopped on purpose |
 | ~~fub-sync~~ | `fub-complete-sync.mjs` | manual full sync — normally stopped | 🛑 |
@@ -149,7 +195,7 @@ public-API fetch returns `401`).
   Read `health` and compare `last_crash_at` vs `last_deploy_at` — a crash older than the last deploy means the fix is holding.
 - `mcp__camp-david__fub_chrome_restart` — the session-expired fix (relaunch + re-login).
 
-**Healthy =** `fub-backfill-a/b` + `fub-webhook-scraper` + `fub-relay` + `fub-watchdog` all `online`; the webhook log
+**Healthy =** `fub-backfill-a` + `fub-webhook-scraper` + `fub-relay` + `fub-watchdog` all `online`; the webhook log
 shows `email:N` recoveries on leads that have visible emails; the pending backlog trends down. A big `hidden` count
 is **not** automatically bad (UI-hidden emails). A pending backlog in the tens of thousands is **throughput, not a bug**.
 
@@ -157,6 +203,25 @@ is **not** automatically bad (UI-hidden emails). A pending backlog in the tens o
 
 ## Incidents
 
+- **2026-07-08 PM (Caleb / Opus 4.8) — THE WATCHDOG WAS THE KILLER + consolidation to one Chrome.** "FUB scraper
+  down, won't stay logged in" (Zach), recurring all day. It was **never a login problem** — it was the watchdog
+  destroying its own scraper. Root cause chain, each fixed:
+  1. **The health probe was destructive.** `isCdpConnectable()` did `connectOverCDP()` + `browser.close()`; on this
+     Chrome build that close tears down the browser's live pages. So every 60s the watchdog killed the
+     actively-scraping worker mid-lead, mis-read the aftermath as "WEDGED," and hard-relaunched Chrome —
+     **chrome-restart #568**, an endless self-inflicted crash loop. → **Fix:** passive raw-websocket probe (never
+     `browser.close()`) + a **fresh-log guard** (a worker that wrote output seconds ago proves CDP is healthy — the
+     watchdog never probes/relaunches a Chrome with a live worker).
+  2. **The scraper's startup re-login was dead code.** It clicked `input[type=submit].u-bigBlueButton` — the legacy
+     FUB email/password form button. FUB is Google SSO now, so it always failed → instant 10-min cooldown. → **Fix:**
+     delegate to `fub-login-bot.mjs` (Google SSO) and re-verify.
+  3. **A stray-tab auto-closer** (`ctx.on('page')`) closed any non-FUB page — including the Zillow pages a worker
+     legitimately opens mid-scrape. → **Fix:** made it **log-only** (never closes a page out from under a worker).
+  Then per Zach ("go down to one chrome, harden it up"): **retired Chrome B (18802) + `fub-backfill-b`**, ran the
+  watchdog with `FUB_SINGLE_CHROME=1` (one browser, one boss), and set `FUB_WORKERS=3` on the single Chrome.
+  Result: `restarts:0`, throughput **65/hr → ~236/hr**, stable through a hands-off window. Commits `62b28ef234`,
+  `83b02ff6d8`, `8f8e01cb65`; `pm2 save`d so it survives reboot. Next hardening (not yet done): shrink the scraper
+  to ONLY the API-masked data (text/call bodies + deep Zillow browse) and let FUB webhooks carry the rest.
 - **2026-07-08 07:41 UTC (Caleb / Opus 4.8)** — Chrome A (18800) kept getting kicked out and **couldn't log itself
   back in** (Zach report). Diagnosis: **the login-bot was crying wolf on 2FA.** `driveGoogle()` tested a broad regex
   (`2-Step Verification | verify it's you | passkey | try another way | authenticator`) **before** it ever filled the

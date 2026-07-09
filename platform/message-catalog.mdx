@@ -4,12 +4,23 @@ description: "The one map of everything HouseLoop composes, renders, and sends �
 ---
 
 <Note>
-**This is the section landing for Messages & Notifications** — the umbrella over every message the CRM sends,
+**This is THE single master for Messages & Notifications** — the umbrella over every message the CRM sends,
 every notification an agent receives, and every activity card a lead's timeline renders. It answers what
 HouseLoop *sends* AND what a lead's activity *looks like*, because both flow from the SAME engine (merge-fields
 + `hl_trigger_events` catalog + AI context blocks). The **Activity Card Catalog** (formerly its own page) was
 **collapsed into this document** so there is one map, not two that drift.
 </Note>
+
+<Info>
+**Consolidated 2026-07-09 (Zach directive — "one master notification document, period").** Two overlapping
+notification catalogs — **`platform/system-notifications`** and **`guides/notifications`** — were **folded into
+this page** and retired from the nav (kept on disk as superseded stubs). Their still-true content lives below:
+the `hl_notification` bell spine, the delivery path, the full notification catalog, and — new here — **the
+Notification Contract** (owner-only · one-card · deduped · dual-link · recency-gated). The atomic building-block
+docs (Email/Text Templates, Merge Fields, AI Context Blocks, Display Messages) remain their own reference pages —
+they're the composition system, not notification catalogs. For how a **Follow Up Boss** signal is captured and
+becomes a notification, see the one FUB master: [Follow Up Boss Trigger Events](/fub/trigger-events).
+</Info>
 
 > **📅 Reconciled with the live build: 2026-07-04.** The Activity Card Catalog was collapsed into this page on
 > this date. Status legend used throughout: **✅ live / verified** · **🟡 claimed live, needs prod verification**
@@ -24,7 +35,7 @@ named-template / AI-voice / missing status): [claude.ai/code/artifact/e5582966](
 
 | Guide | What it is | State |
 |---|---|---|
-| [System Notifications](/platform/system-notifications) | **THE notification catalog** (email + text) — spec, chrome, per-event table, prefs. *(absorbed `notification-templates` 2026-07-04)* | ✅ live |
+| **The Notification System** (below, on this page) | **THE notification catalog** (email + text) — the contract, the bell spine, delivery, the full event matrix, prefs. *(absorbed `system-notifications` + `guides/notifications` 2026-07-09)* | ✅ live |
 | **Activity Card Catalog** (below, on this page) | The **render** spec — what a lead's activity *looks like* on the card (same events, visual spec) | 🎨 WIP |
 | [System Display Messages](/platform/system-display-messages) | On-screen messaging (toasts / banners / empty-states) | ⚠️ ad-hoc (no unified system) |
 | [Email Templates](/platform/email-templates-system) | The email template system — shells, full-HTML, USED IN, SENT | ✅ live |
@@ -96,6 +107,119 @@ Zach was told repeatedly this class of rot was fixed; it was not. It is now.
   `.claude/reports/notify-zoo-quarantine-2026-07-06.txt`) — reversible, never deleted.
 - Same model as Stripe/Braze: event envelope + catalog row + one locked shell. Door welcomes, digests,
   and Myli-voice sends remain separate purposeful templates by design.
+
+## The Notification Contract (LOCKED 2026-07-09 — the law every notification obeys)
+
+Every HouseLoop notification — no matter what fires it (a website pixel, a CRM action, a Myli send, or a Follow
+Up Boss signal) — obeys ONE contract:
+
+- **Owner-only.** `createNotification()` fans a lead notification to the lead's **owner** (`assigned_user_id`) —
+  never collaborators, never AI agents. A user with `notif_scope='all'` (Zach) additionally receives the
+  team-wide fan-out. There is no blanket team broadcast. *(This corrects the older "team fan-out" framing.)*
+- **One card.** Renders through the **One-Card System** — the `notify_card` (email) / `notify_card_sms` (text)
+  shells + the `hl_notify_classes` payload row. Never a hand-rolled `<div>` email, never a per-event chrome.
+- **Deduped by signal-id.** A notification is keyed on its signal (recipient + event_key + entity), so if two
+  paths capture the same event you are notified **exactly once**. This structurally kills the old "double
+  message" fan-out.
+- **Notify-on-first-capture.** Notify the first time a signal is captured, regardless of when it's processed —
+  **not** a brittle "< 2h old" gate. Paired with the recency gate below for connector leads.
+- **Integration-aware dual-link.** A notification for an integration lead carries the integration it lives in and
+  links to **both** homes where they exist:
+  - **Follow Up Boss link — always** for a FUB lead → the FUB person page.
+  - **HouseLoop link — only if a HouseLoop lead exists** → the CRM lead page. If **no** HouseLoop lead was created
+    (Notify on, Creates-Lead off) → render **"HouseLoop — no lead created"** with no link.
+- **Recency-gated (connector leads).** A `fub_created` recency gate on the FUB path guarantees **old activity
+  never notifies**, even during a one-off catch-up. Details in the FUB master.
+
+The FUB-specific half of this contract — the four toggles, the recency gate, and the 3-lane capture that feeds
+it — lives in the one FUB master: [Follow Up Boss Trigger Events](/fub/trigger-events).
+
+## The bell spine + delivery (how a notification flows)
+
+Every notification writes one row to **`hl_notification`**, the topbar **bell** reads it, and the **dispatcher**
+delivers it over the recipient's enabled channels (in-app / SMS / email) per their prefs.
+
+```
+event source                     spine                          surfaces
+website pixel / CRM action  ─▶ createNotification() ─▶ hl_notification row  (owner-only)
+FUB signal (via the router)                              │
+Myli sends a text / logs a call                          ├─▶ bell (unread count + dropdown)
+                                                         ├─▶ lead-detail dock badges
+                                                         └─▶ dispatchNotification() → One-Card email + SMS (per prefs)
+```
+
+| Concern | File |
+|---|---|
+| Write a notification (owner-only fan-out) | `lib/notifications/create.ts` → `createNotification()` |
+| Deliver (prefs → SMS + One-Card email) | `lib/notifications/dispatch.ts` → `dispatchNotification()` |
+| The rendered shells | `notify_card` / `notify_card_sms` (folder System) via `composeTemplate` (Blocks Engine) |
+| Payload matrix (the class per event) | **`hl_notify_classes`** (`heading_tpl` · `subline_tpl` · `with_message`) |
+| Prefs + channels | `hl_users.data.notification_prefs` + `notification_channels` (JSONB) |
+| Settings UI | **Settings → Notifications** (`app/(crm)/settings/notifications/page.tsx`) |
+| Website Activity digest | `lib/inngest/functions/website-activity-digest.ts` (Inngest cron, daily 7am CT) |
+| Sign-off harness | `scripts/notification-matrix.ts` |
+
+<Warning>
+**Retired 2026-07-06 (do not reintroduce):** the per-event `notify_<event>` / `notify_<event>_sms` template
+model + code-built email chrome (`notification-shell.ts` / `notification-content.ts` / `template-registry.ts`).
+The One-Card System replaced 80 templates with ONE shell pair + the `hl_notify_classes` matrix; the 66 old
+`notify_*` rows are quarantined (`is_active=false`, reversible). Never hand-roll a notification email.
+</Warning>
+
+## The notification catalog (every event that notifies)
+
+Every notification event, now expressed as a **`hl_notify_classes`** row (One-Card), not a per-event template.
+`LS` = lead-scoped (carries the contact card). Emoji is the branded heading marker.
+
+### Lead Activity
+| Notification | event key | emoji | LS | fires from |
+|---|---|---|---|---|
+| New lead | `lead_created` | 🏠 | ✅ | registration / **FUB capture** |
+| Home liked | `home_liked` | ❤️ | ✅ | pixel / **FUB (Lane 1)** |
+| Home saved | `home_saved` | 🔖 | ✅ | pixel / **FUB (Lane 1)** |
+| Home shared | `home_shared` | 📤 | ✅ | pixel / FUB |
+| Property viewed | `property_viewed` | 👀 | ✅ | pixel / FUB (opt-in, 1/lead/hr flood guard, default OFF) |
+| Saved search | `saved_search` | 🔍 | ✅ | pixel / saved-search |
+| Tour request | `tour_request` | 📅 | ✅ | pixel / **FUB inquiry (Lane 1)** |
+| Contact request | `contact_request` | 📨 | ✅ | website contact form / FUB inquiry |
+| Seller request | `seller_request` | 🏡 | ✅ | seller flow / FUB inquiry |
+| Home value report | `home_value_report` | 📊 | ✅ | HVR request |
+| Email received | `email_received` | 📧 | ✅ | inbound email / **FUB (Lane 2 — body recovered)** |
+| Phone call received | `phone_call_received` | 📞 | ✅ | inbound call / FUB |
+
+### Communications + Lifecycle
+| Notification | event key | emoji | LS |
+|---|---|---|---|
+| New message | `new_message` | 💬 | ✅ |
+| Lead assigned | `lead_assigned` | 🎯 | ✅ |
+| Stage changed | `stage_changed` | 🔀 | ✅ |
+| Collaborator added | `collaborator_added` | 👥 | ✅ |
+| Acknowledge lead | `agent_ack_request` | 🔔 | ✅ |
+| AI clone stepped in | `clone_activated` | ✨ | ✅ |
+| Lead reassigned | `lead_reassigned` | 🔄 | ✅ |
+| Appointment scheduled | `appointment_set` | 📅 | ✅ |
+| Appointment completed | `appointment_completed` | ✅ | ✅ |
+
+### AI Follow-Up (✨ Myli)
+`ai_calls` · `ai_messages` · `ai_facts` · `ai_homes` · `ai_stages` · `ai_appointments` — each a Myli-voice card
+(✨, not 🤖) carrying the real action payload (sent text / call + transcript link / facts / homes / stage).
+
+### Transaction Deals (the TC loop — 8 classes, `grp='transaction'`, mig 0339)
+`tc_loop_created` · `tc_under_contract` · `tc_milestone_reached` · `tc_closed` · `tc_lost` · `tc_status_changed` ·
+`tc_assigned` · `tc_date_approaching` — targeted to the deal's assigned agent + TC (never a team broadcast).
+
+### Team + System
+`team_invite` 🤝 · `gmail_disconnected` ⚠️ · `bb_disconnected` ⚠️ — not lead-scoped.
+
+### Website Activity (digest — separate Inngest engine)
+`web_digest` (daily 7am CT, email + text: 👤 Visitors vs 🤖 Crawlers from `hl_pixel_event` + `hl_pixel_visitor.is_bot`)
+· `web_digest_bots` (bot breakdown, appended when on). Manual run: fire `houseloop/website-activity.digest.run`.
+
+**Data model:** `hl_notification` (append log — `recipient_user_id`, `event_key`, `title`, `body`, `lead_id`,
+`payload`, `channels_sent`, `seen_at`, `read_at`; mig 0045) · prefs in `hl_users.data.notification_prefs` (keep
+`notification-preferences/route.ts` + `dispatch.ts` `PREF_DEFAULTS` in sync) · classes in `hl_notify_classes`.
+Sign-off harness: `scripts/notification-matrix.ts` renders every notification's email + text through the real
+`dispatch.ts` primitives.
 
 ## Current build state (notifications)
 
@@ -288,11 +412,14 @@ source variants render. The **calendar chip is dynamic**: shows only when there'
 />
 ```
 
-**What fires it & where the data comes from:** `tour_request` (website) · `fub_tour_request` (FUB import).
+**What fires it & where the data comes from:** `tour_request` (website) · `fub_tour_request` (FUB capture).
 HouseLoop.ai → Request-a-Tour form → `/api/pixel/track` → `hl_lead_activity` (`native=true`, real photo). FUB →
-webhook → Camp David scraper backfills house history into `hl_lead_activity` at import (`native=false`; lead
-source paints the tile + "via" badge + portal link). Renders via `components/leads/detail/ActivityHeroCard.tsx`;
-picture/link logic in `lib/leads/card-source.ts`; tokens in `lib/leads/card-tokens.ts`.
+the native webhook `crm.houseloop.ai/api/fub/webhook` → `fubWebhookRouter` classifies it as a **Lane 1** visible
+inquiry → notifies + mints the card in `hl_lead_activity` (`native=false`; lead source paints the tile + "via"
+badge + portal link). The scraper is **not** in this path — it only recovers masked text/email bodies (Lane 2).
+Full capture model: [Follow Up Boss Trigger Events](/fub/trigger-events). Renders via
+`components/leads/detail/ActivityHeroCard.tsx`; picture/link logic in `lib/leads/card-source.ts`; tokens in
+`lib/leads/card-tokens.ts`.
 
 *Cards 2–20 fill in this same format as each is designed, verified live, and locked. The live design canvas
 iterates faster than a docs deploy; the locked version mirrors here.*

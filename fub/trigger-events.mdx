@@ -1,16 +1,28 @@
 ---
 title: "Follow Up Boss Trigger Events"
-description: "The ONE canonical catalog of every Follow Up Boss trigger event — the doors a FUB/Zillow signal can open — each with its four independent toggles (Sync · Creates Lead · Workflow / Workflow Active · Notify), its notification class, the FUB webhook/API signal it maps from, and how reliably we capture it. Managed at Settings → Trigger Events → Follow Up Boss. The table hl_fub_webhook_settings is the source of truth."
+description: "The ONE master for Follow Up Boss / Zillow capture: every FUB trigger event, its four toggles (Sync · Creates Lead · Workflow · Notify), the exposed-vs-masked CAPTURE MATRIX (from live data), the locked 3-lane architecture (notifications are the source of truth; the scraper is a dumb on-demand grabber of hidden content only), the native webhook that severs realloop.co, the recency gate, and the known signal gaps. Managed at Settings → Trigger Events → Follow Up Boss. hl_fub_webhook_settings is the source of truth."
 ---
 
 <Info>
-**This is the first-class catalog of the Follow Up Boss trigger events.** It is the FUB half of the Trigger Events
-board — the HouseLoop.ai website half lives in [Trigger Events](/crm/pipeline-workflow-system-events) (being
-brought current) and the workflow side in [Intent Workflows](/guides/intent-workflows). For how a FUB signal
-becomes a HouseLoop lead see [FUB → HouseLoop Lead Import](/fub/lead-import); for why some signals arrive
-unreliably see [Zillow Signal Capture — Gaps & Recon](/fub/zillow-signal-gaps); for the target capture design see
-[FUB Notification Architecture](/fub/notification-architecture). Owner: **Lee**. SSOT: `hl_fub_webhook_settings`.
+**This is THE single master for Follow Up Boss capture + notifications.** Consolidated **2026-07-09** (Zach
+directive — "one FUB trigger events doc, period"): it absorbed the retired `fub/notification-architecture` (the
+dead "5-layer differential reconciler" design), `fub/native-capture-prd`, and `fub/zillow-signal-gaps` (kept on
+disk as superseded stubs). It answers **what** FUB signals exist, **how each is exposed or masked**, **how we
+capture them natively**, and **how each fires a HouseLoop notification.** Companion masters: the notification
+system → [Messages & Notifications](/platform/message-catalog); how a FUB signal becomes a lead →
+[FUB → HouseLoop Lead Import](/fub/lead-import); the scraper internals → [FUB Scraper](/fub/scraper). Owner:
+**Lee** · scraper owner: **Caleb**. SSOT table: `hl_fub_webhook_settings`.
 </Info>
+
+## The principle (LOCKED 2026-07-09 by Zach)
+
+**Notifications are the source of truth. The scraper is a dumb, on-demand grabber of HIDDEN content only.**
+
+The native HouseLoop webhook is what decides *what happened*; when the thing that happened has content FUB hides
+(a masked message body), the notification layer *tells the scraper* to go recover exactly that one body — nothing
+else. The scraper never decides what's new, never crawls, never re-scrapes on a record edit. This replaces the
+old "push for speed, pull for truth" dual-path / differential-reconciler design, which is **dead** (it read the
+lagging mirror and flooded Zach with 2022-era activity — see the post-mortem below).
 
 ## Vocabulary (LOCKED 2026-07-07)
 
@@ -18,11 +30,8 @@ unreliably see [Zillow Signal Capture — Gaps & Recon](/fub/zillow-signal-gaps)
   (the Zillow-connected CRM). Managed at **Settings → Lead Integrations** (`/settings/lead-platform`).
 - **Lead Source** = the *brand* on the lead — Zillow, Referral, etc. A source lives *under* an integration.
 - **Trigger Event** = a *door* — a thing that can happen (a tour request, an inbound text, a property save) that
-  can start a lead, run a workflow, and/or fire a notification.
-
-A **Follow Up Boss trigger event** is a door on the Follow Up Boss integration. It is defined by one row in
-**`hl_fub_webhook_settings`** and configured on the Trigger Events board's Follow Up Boss section
-(`https://crm.houseloop.ai/settings/trigger-events`).
+  can start a lead, run a workflow, and/or fire a notification. One row in **`hl_fub_webhook_settings`**,
+  configured at `crm.houseloop.ai/settings/trigger-events`.
 
 ## The four independent toggles (this is the model)
 
@@ -32,30 +41,27 @@ Each FUB trigger event carries **four independent switches** — none implies an
 |---|---|---|
 | **Sync** | `enabled` | Do we ingest/process this FUB signal at all. Off = we don't even mirror it. |
 | **Creates Lead** | `creates_lead` | Does firing this door mint (or match) a HouseLoop lead. |
-| **Workflow / Workflow Active** | `workflow_id` + `workflow_active` | Which workflow the door runs, and whether it runs. |
+| **Workflow** | `workflow_id` + `workflow_active` | Which workflow the door runs, and whether it runs. |
 | **Notify** | `notify` | Fire an owner-only HouseLoop notification when this door fires — **independent of Creates Lead.** |
 
 <Note>
-**Notify is decoupled from Creates Lead (Zach 2026-07-08).** You can turn ON a notification for a specific FUB
-trigger event **even if you do not create a lead from it** — a "heads-up, this happened" ping with no lead minted.
-This restores the per-trigger `notify` flag (which already existed in `hl_fub_webhook_settings` since mig 0267 and
-in RealLoop's `fubGate`) onto the HouseLoop-native path. `notify_class` (a separate, read-only column) is only the
-LINK to which notification class/channel this rolls up to under `/settings/notifications`; the **Notify toggle** is
-the per-integration on/off for the trigger event itself.
+**Notify is decoupled from Creates Lead (Zach 2026-07-08).** You can turn ON a notification for a FUB trigger
+event **even if you do not create a lead** — a "heads-up, this happened" ping with no lead minted. The card then
+renders "**HouseLoop — no lead created**" (no HouseLoop link) alongside the always-present FUB person link. The
+gate is two-tier: the per-event row toggles over a `_global` master row (`webhook_type='_global'`).
 </Note>
 
-## The catalog
+## The catalog (the doors)
 
-Signals split by **category**: `registration`-family events (a *first-touch* — can mint a new lead) and
-`system`-family events (activity on a lead that already exists). Rows and defaults below are the seeded truth from
-`hl_fub_webhook_settings` (migrations `0267`, `0285` atomic split, `0290` category, `0293` new-lead rollup) — the
-live table is the SSOT; confirm current toggles there.
+Signals split by **category**: `registration`-family (a *first-touch* — can mint a new lead) and `system`-family
+(activity on a lead that already exists). Defaults are the seeded truth from `hl_fub_webhook_settings` (migs
+`0267`, `0285` atomic split, `0290` category, `0293` rollup) — the live table is the SSOT.
 
 ### Inquiry / request doors (registration-family)
 
-| Trigger event | `webhook_type` | Maps from (FUB signal) | Creates Lead (default) | Notify (default) |
+| Trigger event | `webhook_type` | Maps from (FUB signal) | Creates Lead | Notify |
 |---|---|---|---|---|
-| **Tour Request** | `tour_request` | Zillow "interested in touring/seeing X" (Property Inquiry event) | ✅ | ✅ |
+| **Tour Request** | `tour_request` | Zillow "interested in touring/seeing X" (`eventsCreated`, Property Inquiry) | ✅ | ✅ |
 | **Contact Request** | `contact_request` | "have an agent reach out / call me" | ✅ | ✅ |
 | **Rental Inquiry** | `rental_inquiry` | Zillow Rentals inquiry | ✅ | ✅ |
 | **Seller Inquiry** | `seller_inquiry` | "I want to sell my home" (Seller Inquiry event) | ✅ | ✅ |
@@ -63,49 +69,175 @@ live table is the SSOT; confirm current toggles there.
 
 ### Activity doors (system-family — existing leads)
 
-| Trigger event | `webhook_type` | Maps from (FUB signal) | Creates Lead (default) | Notify (default) |
+| Trigger event | `webhook_type` | Maps from (FUB signal) | Creates Lead | Notify |
 |---|---|---|---|---|
+| **Property Saved / Viewed** | `notification` | `notesCreated` (FUB logs each save/view as a note) | ⬜ off | ⬜ off |
 | **Text Messages** | `text_message` | `textMessagesCreated` (real SMS) | ⬜ off | ⬜ off |
-| **In-App Messages (Zillow)** | `in_app_message` | Zillow in-app message (`textMessagesCreated:zillow_inapp`) | ⬜ off | ⬜ off |
-| **Phone Calls** | `phone_call` | `callsCreated` (foundation for the voice agent) | ⬜ off | ⬜ off (Sync off by default) |
-| **Notifications (notes)** | `notification` | `notesCreated` (notes, assignments, generic) | ⬜ off | ⬜ off |
+| **In-App Messages (Zillow)** | `in_app_message` | `textMessagesCreated` subtype `zillow_inapp` | ⬜ off | ⬜ off |
+| **Phone Calls** | `phone_call` | `callsCreated` | ⬜ off | ⬜ off |
+| **Emails** | `email` | `emailsCreated` | ⬜ off | ⬜ off |
 
 <Warning>
-`property_inquiry` (the old single lumped inquiry row) was **split** into the atomic `tour_request` /
-`contact_request` / `rental_inquiry` / `seller_inquiry` / `virtually_toured` events by mig `0285`. Any doc or code
-still treating "Property Inquiry" as one door is stale.
+`property_inquiry` (the old lumped inquiry row) was **split** into the atomic `tour_request` / `contact_request` /
+`rental_inquiry` / `seller_inquiry` / `virtually_toured` events by mig `0285`. Any doc/code still treating
+"Property Inquiry" as one door is stale.
 </Warning>
 
-## Capture reliability per door (why some are missed)
+## ⭐ The Capture Matrix — exposed vs masked, per event (ground truth from the live mirror, 2026-07-09)
 
-Not every door arrives the same way — this is the crux of the [signal-gap recon](/fub/zillow-signal-gaps):
+**The one question that was never written down: for each FUB webhook, is the content exposed in the API, or does
+FUB hide it (needing the scraper)?** Verified against the live Railway mirror by Caleb — not from memory.
 
-| Door | Capture path | Reliable? |
-|---|---|---|
-| Tour / Contact / Rental / Seller inquiries | FUB **webhook** `eventsCreated` (+ `/v1/events` poller backstop) | ✅ mostly (webhook drops ~5% — the poller catches those; **poller re-enable is the NEXT-pass fix**) |
-| Property viewed / saved, insights | FUB **webhook** `notesCreated` | ✅ |
-| Text / phone / email | FUB **webhook** (`textMessagesCreated` / `callsCreated` / `emailsCreated`); bodies **masked** in the API → scraper recovers | ✅ arrival, ⚠️ body needs scraper |
-| **In-App Messages (Zillow)** | **Scraper only** — FUB never webhooks free-form in-app messages; they live only in the FUB inbox UI + `fub.zillow_inapp_ghost_quarantine` | ⚠️ **fragile** — dies when the scraper lags/crashes (this is the one gap that keeps biting) |
+| FUB webhook event | Content it carries | Exposed or masked? | Lane | Scraper needed? | HouseLoop notification |
+|---|---|---|---|---|---|
+| `peopleCreated` | new person | **Exposed** | 1 | No | New lead |
+| `peopleUpdated` | field/stage/tag edit | n/a (metadata) | **3** | **No** | none by default (update person only) |
+| `peopleStageUpdated` | stage change | **Exposed** | 3 | No | `stage_changed` if Notify on |
+| `peopleTagsCreated` | tag added | **Exposed** | 3 | No | none by default |
+| `peopleDeleted` | person removed | **Exposed** | 3 | No | none (mark/remove) |
+| `notesCreated` | **Property Saved / Viewed** + insights (address in body) | **Exposed** | **1** | No | Home saved / viewed |
+| `notesUpdated` | note edit | Exposed | 1/3 | No | rare |
+| `eventsCreated` | inquiries: tour / contact / seller / rental / virtually-toured (message + source) | **Exposed** | **1** | No | the matching request card |
+| `textMessagesCreated` — `zillow_inapp` | in-app message body | **Exposed — ALWAYS born-visible** (0 of 12,655 ever masked) | **1** | No | In-app message **with body** |
+| `textMessagesCreated` — `sms` | SMS body | **~7% masked** (21,288 of 288k = "Body is hidden for privacy reasons") | 1 visible · **2 masked** | only the masked ~7% | Text **with body** |
+| `emailsCreated` | email body | **Mostly masked** (173,824 hidden vs 28,870 visible) | **2** (metadata Lane 1) | Yes (body) | Email **with body** once recovered |
+| `callsCreated` | duration · direction · outcome · `recording_url` | **Exposed** | **1** | No | Call received |
+| `callsCreated` — call note | the call's masked note/body (5,690 rows) | **Masked** | 2 | Yes (note only) | note filled once recovered |
+| `appointmentsCreated/Updated` | appointment | **Exposed** | 1 | No | Appointment set |
+| `tasksCreated/Updated` | task | **Exposed** | 1/3 | No | task (optional) |
+| `dealsCreated/Updated` | deal | **Exposed** | 1 | No | TC loop notifications |
+
+**FUB masks exactly THREE things** — SMS bodies (~7%), **most** email bodies, and 5,690 call notes. Everything
+else (people, notes/saves/views, inquiries, in-app messages, call metadata + `recording_url`, appointments,
+tasks, deals) is **exposed**. **Transcripts do not exist anywhere** (0 rows — FUB doesn't expose them; a real
+transcript would require us to transcribe `recording_url` ourselves, a separate future build).
+
+<Note>
+**Two things that surprised us (and correct older docs):**
+1. **Property saves/views are Lane 1, live.** The standalone view/save webhooks *did* die 2026-05-21 — but FUB
+   now logs each save/view as a **note** (`notesCreated`, exposed body with the address). That is the live
+   per-event source `classifyFubEvent`/the note parser reads. The scraper's `/v1/events?hasProperty=true`
+   intercept is a *different* thing — the one-time deep historical browse-list backfill, **not** the live source.
+2. **In-app is never masked.** Zillow `zillow_inapp` messages are always born-visible in the mirror — they notify
+   directly on INSERT (Lane 1), never need recovery. Only **SMS** ever masks a body.
+</Note>
+
+## The 3-lane architecture
+
+Every FUB event enters the native webhook and `fubWebhookRouter` sorts it into exactly one lane:
+
+### Lane 1 — Visible activity (~95%): router notifies directly, scraper never touches
+Home saved/viewed (`notesCreated`), inquiries (`eventsCreated`), in-app messages (`zillow_inapp`), visible SMS,
+call metadata, appointments, tasks, deals. The API hands us clean content → the router classifies it and fires
+the owner-only notification immediately.
+
+### Lane 2 — Masked comms: the ONLY thing that wakes the scraper
+The three masked cases — masked SMS bodies, email bodies, and call notes. The flow is a **surgical body-fetch**,
+never a re-scrape:
+
+```
+masked textMessagesCreated / emailsCreated  →  fubWebhookRouter writes metadata + enqueues ONE job
+      ↓ fub.body_recovery_queue (on Camp David — the relay is CD→Railway one-way, so the job lives CD-side)
+      { person_id, resource_type: 'text' | 'email', resource_id, requested_at }
+      ↓ the scraper drains the queue — reads THAT ONE body from the FUB UI
+      ↓ writes the recovered body → flips content_status  hidden → visible
+      ↓ trg_fub_new_message fires  (now AFTER INSERT OR UPDATE, transition-guarded, text + email)
+      ↓ pg_notify('fub_new_message') → the native notify path
+   →  HouseLoop notification fires WITH the body
+```
+
+**No metadata-only notify for a masked body** — a card with no message is useless, so we hold the notify until
+the body is recovered. Born-visible content (in-app, visible SMS) is Lane 1 and notifies on the INSERT.
+
+### Lane 3 — Record edits: update the person, never scrape
+`peopleUpdated` / `peopleStageUpdated` / `peopleTagsCreated` / `peopleDeleted`. These update the person record
+only. **They never enqueue a scrape.** (A stage change may fire `stage_changed` if the Notify toggle is on; that
+is a notification, not a scrape.)
+
+## Native capture — the webhook that severs realloop.co
+
+**The native CRM webhook `crm.houseloop.ai/api/fub/webhook` is the SOLE real-time trigger.** FUB posts
+`{ event, resourceIds[] }`; the receiver responds 2xx immediately (FUB's 10s SLA), then fans out one
+`fub/webhook.received` Inngest event per resource → `fubWebhookRouter` fetches the record (native `lib/fub/fub-api.ts`,
+Basic-auth `FUB_API_KEY`), classifies it into a lane, reads `hl_fub_webhook_settings` directly, and dispatches the
+existing `fub/lead.import` → `fubLeadImport` → `createNotification` chain. Reuse targets (no re-invention):
+`fubWebhookRouter`, `classifyFubEvent`, `SERVICED_FUB_EVENT_TYPES`, `hl_fub_webhook_settings`, `createNotification`.
+
+**Zero realloop.co in the path.** The old realloop.co dashboard receiver + `dispatchFubImport` forwarder is the
+contamination this severs — realloop.co could be deleted tomorrow and notifications would not flinch. There is no
+mirror-reading poller and no differential reconciler; those are dead.
+
+<Warning>
+**Repoint pending.** FUB's 20 webhooks currently still point at `camp-zach.taila5bfe9.ts.net/api/fub/webhook`.
+The cutover (FUB API `PUT /v1/webhooks` → `crm.houseloop.ai/api/fub/webhook`) happens **after** the recency gate
+is verified and the Notify toggles are re-enabled — everything is intentionally OFF until then (see below).
+</Warning>
+
+## The recency gate + the flood post-mortem
+
+**Recency gate:** a `fub_created` gate on the notify path — **old activity never notifies**, even during a
+one-off catch-up. A signal whose FUB activity date is old is captured/stored but does not fire a card.
+
+**Why (2026-07-09 flood):** the retired realloop.co handler re-queued a person for a **full re-scrape on every
+`peopleUpdated`** — and FUB fires that on any tag/stage/field edit. It reset already-captured people to "pending,"
+so the scraper re-walked the entire 49K book, re-inserting **old** activity with a **fresh** `synced_at` + new
+ids. The mirror-reading pollers then treated those old rows as new and flooded Zach with 2022–2023 activity as if
+it were live (e.g. Lucy Hartman "viewed" from 2026-07-03 written to the mirror on 2026-07-09; Jessica Marroquin
+in-app from 2023-12-09). **Root cause: record edits re-scraping (Lane 3 violation) + the mirror deciding what's
+"new."** Fix: retire the re-scrape loop, correct the **25,626** people the bug had wrongly reset to `pending`
+(flipped back to done), rip the mirror-reading pollers, and make the webhook the sole trigger + the recency gate
+the backstop. The backfill is done — **49,059** people carry `fub.rehydration_log.status = 'rehydrated'` (the
+terminal "done" state; there is no separate `fully_scraped` flag), 0 pending, forward-only.
+
+## Known gaps / recon (harvested from the retired signal-gap doc — still true)
+
+Not every signal is purely a webhook problem; these are the non-architecture breaks worth watching:
+
+- **`sales@spradlingrealtygroup.com` mailbox deleted** → Zillow emails to it are black-holed. Recreate + parse.
+- **Lead-merge contamination** — merges left people with multiple `isPrimary` emails, cross-wiring identity.
+  Audit for multiple-primary-email people.
+- **Masked in-app was the historical pain** — that is exactly what Lane 2 solves now (for SMS/email; in-app
+  itself is exposed).
 
 ## How a FUB trigger event fires end-to-end
 
 ```
-FUB signal → POST /api/fub/webhook (dashboard receiver) → mirror to fub.*
-          → fubGate(webhook_type) reads hl_fub_webhook_settings {enabled, creates_lead, notify, workflow}
-          → if creates_lead: POST /api/fub/import → fub-lead-import (mint/match HL lead)
-          → if notify:       notifyLeadEvent(...) → owner-only one-card (dispatch.ts adds "via Follow Up Boss")
-          → if workflow_active: run the bound workflow
+FUB signal → POST crm.houseloop.ai/api/fub/webhook (native receiver, 2xx immediately)
+          → fub/webhook.received (Inngest, per resourceId)
+          → fubWebhookRouter: fetch record → classify → sort into a lane
+              Lane 1 (visible):  read hl_fub_webhook_settings → if notify: createNotification (owner-only, deduped, recency-gated)
+                                                              → if creates_lead: fub/lead.import → mint/match HL lead
+              Lane 2 (masked):   write metadata + enqueue fub.body_recovery_queue → scraper recovers body
+                                                              → content_status flip → trg_fub_new_message → notify WITH body
+              Lane 3 (record):   update the person record only (no scrape)
 ```
 
-The gate is a two-tier switch: the per-event row toggles over the `_global` master row (`webhook_type='_global'`).
+Cross-links: the notification contract (owner-only · one-card · deduped · dual-link) →
+[Messages & Notifications](/platform/message-catalog); the lead-mint mechanics →
+[FUB → HouseLoop Lead Import](/fub/lead-import); the scraper's Lane-2 role →
+[FUB Scraper](/fub/scraper).
 
-## Reference (data source)
+## Current status (honest, 2026-07-09)
 
-- **Table (SSOT):** `hl_fub_webhook_settings` — one row per FUB trigger event; columns `enabled` (Sync),
-  `creates_lead`, `workflow_id` + `workflow_active`, `notify`, `notify_class`, `category`, `fub_event`.
-- **Migrations:** `0267` (base rows + `notify`), `0285` (atomic inquiry split), `0289` (`workflow_active`),
-  `0290` (`category`), `0292` (`notify_class`), `0293` (registration → `lead_created` rollup).
+- **FUB Notify toggles: OFF** (hard-killed to stop the flood). They stay off until the recency gate is verified
+  and the scraper's Lane-2-only consumer is live.
+- **Scraper: idle** (0 pending, 49,059 people at `rehydration_log.status='rehydrated'`; the `peopleUpdated` re-scrape loop is killed). It does
+  **not yet** run as a strict "Lane-2-only" consumer — it still carries the old full-person claim path. Caleb's
+  next build drains `fub.body_recovery_queue` (targeted body reads only) and retires the full-scrape path in the
+  same pass; this doc will be updated to say "Lane-2-only" once that ships.
+- **Native webhook receiver: live** at `crm.houseloop.ai/api/fub/webhook` (returns 2xx); FUB repoint is the
+  pending cutover.
+
+## Reference
+
+- **Table (SSOT):** `hl_fub_webhook_settings` — one row per FUB trigger event (`enabled`, `creates_lead`,
+  `workflow_id` + `workflow_active`, `notify`, `notify_class`, `category`, `fub_event`).
+- **Migrations:** `0267` (base + `notify`), `0285` (atomic inquiry split), `0289` (`workflow_active`), `0290`
+  (`category`), `0292` (`notify_class`), `0293` (registration rollup).
+- **Native capture:** `app/api/fub/webhook/route.ts` (receiver) · `lib/inngest/functions/fub-webhook-router.ts`
+  (`fubWebhookRouter`) · `lib/fub/fub-api.ts` (FUB API client) · `lib/fub/classify-fub-event.ts` (`classifyFubEvent`).
+- **Lane 2:** `fub.body_recovery_queue` (Camp David) · `trg_fub_new_message` (AFTER INSERT OR UPDATE, gated
+  `content_status='visible' AND is_incoming`).
+- **Fire path:** `lib/inngest/functions/fub-lead-import.ts` (mint + native notify).
 - **UI:** `components/settings/fub/FubChannelRows.tsx` (Trigger Events board) + `FubChannelBoard.tsx` (FUB cockpit).
 - **API:** `PATCH/PUT /api/fub/webhook-settings`.
-- **Gate + capture:** `apps/dashboard/server/fub-webhooks.ts` (`fubGate`, the webhook receiver).
-- **Fire path:** `lib/inngest/functions/fub-lead-import.ts` (lead mint + native notify).
