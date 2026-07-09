@@ -157,6 +157,18 @@ full RW row at claim so the relay round-trip never drops metadata, queue CHECK i
     texts: **56**, mostly ancient outbound bulk with empty FUB timelines (unrecoverable by design). The
     real going-forward Lane-2 SMS load is the ~7% masked slice of NEW inbound texts. Lee's A4 storage
     path must guard against writing `person_id=0`.
+  - **F10 outcome (2026-07-09 eve): 9,343 orphans RE-ATTACHED, Zach-approved.** Gold tier 5,676 (phone +
+    exact-name + no-twin) + Tier-2 3,667 (family/co-buyer names + the existed-before-message guard, which
+    excluded exactly 1 number-reassignment case). The twin check killed 7,793 would-be duplicates — those
+    conversations already live on the right person under scraper synthetic ids (future merge pass, own
+    Rule #0 ask). Orphans 21,234 → 11,891. Reversal snapshots:
+    `.claude/reports/personid0-reattach-{gold,tier2}-2026-07-09.csv`.
+  - **F12 🔴 fub-relay cursor strands same-timestamp bulk writes (found during F10 propagation).** The
+    text_messages cursor advances to `max(synced_at)` after its 2,000-row batch cap — when &gt;2,000 rows
+    share one `synced_at` (any bulk UPDATE stamped in one transaction), the tail is **silently skipped
+    forever** (2,669 rows stranded tonight, zero errors). Data side healed with unique per-row re-bumps;
+    the code fix (Lee's lane) is a keyset cursor `(synced_at, id)`. Until then: bulk CD writes must
+    stagger `synced_at` with unique offsets.
   - **F11 🔴→✅ Recovered bodies only reached the mirror via LEGACY realloop (fixed).** The lib's
     recovery fns (`applyApiTexts`/`matchAndUpdateMessages`) set body + `content_status` but **not
     `synced_at`** — so the cursor-driven relay never carried flips; they reached Railway only through the

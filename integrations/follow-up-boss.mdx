@@ -1,0 +1,55 @@
+---
+title: "Follow Up Boss — Lead Integration"
+description: "The FUB pipe: how Zillow/Realtor/PPC signals flow from Follow Up Boss into HouseLoop — the 3-lane capture, the fail-closed creates-lead gate, the _global master switch, and where the 22 FUB trigger events live."
+---
+
+<Info>
+**The connector, not a platform.** Follow Up Boss is where Zillow, Realtor.com, and PPC signals land first; this
+integration mirrors those signals into HouseLoop and — ONLY where a toggle explicitly says so — mints leads and
+fires workflows. The deep reference is the master page:
+**[FUB Trigger Events & Notifications](/fub/trigger-events)** (the 22-event map, four-toggle model, capture
+matrix — owned by Lee). This page is the integration overview; it links, never duplicates.
+</Info>
+
+## The law: FAIL CLOSED
+
+**No FUB signal creates a HouseLoop lead unless its trigger event's `Creates Lead` toggle is explicitly ON —
+and the `_global` master switch is ON.** A signal with no config row does NOTHING (logged skip). This is
+enforced in code with fail-closed defaults (`fub-lead-import.ts`) after the 2026-07-09 incident where fail-open
+defaults minted 422 unauthorized leads with every toggle off — all purged, gate live-fire proven (111 backlog
+imports vs the closed gate → 0 leads).
+
+Three belts keep it that way:
+1. **Import-layer door hygiene** — existing-person re-imports and behavioral/comms webhook types never fire
+   native registration doors.
+2. **Fail-closed config gate** — no row / toggle off / `_global` off → no lead, no workflow, receipt logged.
+3. **Dispatch registration guard** — a `*_registration` door can never route via a fallback tier
+   (`runtime.ts`), so first-touch outreach to imports is structurally impossible.
+
+## How a FUB signal flows
+
+```
+Zillow / Realtor / PPC → Follow Up Boss
+  → native webhook → fub.* mirror (raw truth, always captured)
+  → classification (classifyFubEvent → the atomic trigger event)
+  → hl_fub_webhook_settings row = THE decision:
+       Sync (ingest to history) · Creates Lead · Workflow · Notify — four independent toggles
+  → creates_lead ON → hl_leads (platform='follow_up_boss') → the FUB door fires → hl_trigger_fire ledger
+```
+
+FUB-platform fires show on the **Follow Up Boss** section of [Trigger Events](/guides/trigger-events) — never
+on the native HouseLoop.ai board (ledger scoped by platform).
+
+## Boundaries that never move
+
+- **Deleting a HouseLoop lead NEVER touches Follow Up Boss** — the delete path has zero FUB references
+  ([Lead Deletion](/guides/lead-deletion)); FUB people stay intact no matter what's purged here.
+- **The `fub.*` mirror is read-only truth** — capture everything, act on nothing without a toggle.
+- Notifications ship from the System line/address — never a person's, never Myli's.
+
+## Related
+
+- **[FUB Trigger Events & Notifications](/fub/trigger-events)** — THE master (22 events, toggles, capture matrix)
+- [FUB Lead Import](/fub/lead-import) — the import engine + wizard
+- [FUB Scraper](/fub/scraper) — the on-demand body grabber (Caleb)
+- [Trigger Events](/guides/trigger-events) · [HouseLoop.ai integration](/integrations/houseloop-ai)

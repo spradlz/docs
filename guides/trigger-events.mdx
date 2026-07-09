@@ -1,0 +1,66 @@
+---
+title: "Trigger Events"
+description: "THE trigger events page, mirroring the live board: 9 registration doors + 12 existing-lead events (HouseLoop.ai) + 22 FUB events, the one-switch workflow law, and the hl_trigger_fire ledger that makes the TRIGGERED count and its drill-down one truth."
+---
+
+**In the app:** Settings → **Trigger Events** — [`/settings/trigger-events`](https://crm.houseloop.ai/settings/trigger-events)
+
+<Info>
+**This page mirrors what's in code, live** (2026-07-09). It absorbs the retired Intent Strategy Map page — the
+strategy ("one workflow per thing a person did") is now baked into the board itself.
+</Info>
+
+## What a trigger event is
+
+A thing that happened (someone did something) that can **create a lead** and/or **fire a workflow**. Every
+trigger event is a row on the board with its own switches. The board has three families:
+
+| Family | Count | What fires them |
+|---|---|---|
+| **HouseLoop.ai · New Lead Registration** | **9 doors** | A brand-new visitor registers via an entry point: General · Liked Home · Saved Home · Saved Search · Shared Home · Tour Request · Contact Request · Seller Get Report · Seller Get Started |
+| **HouseLoop.ai · Existing Lead Activity** | **12 events** | A known lead acts on the site: Property Viewed/Liked/Saved/Shared · Property Inquiry · Saved Search (self / agent-created / system-seeded) · Tour Requested · Contact Requested · Seller Inquiry · Seller Get Report |
+| **Follow Up Boss** | **22 events** | FUB webhook signals (Zillow/Realtor/PPC) — see the [FUB master](/fub/trigger-events) |
+
+## THE ONE-SWITCH LAW (workflow on/off lives HERE)
+
+**A workflow is turned on or off in exactly one place: its trigger event's `Workflow Active` toggle on this
+board.** Flipping it drives the workflow's real status (`hl_workflows.status`) — the Workflows page shows a
+**read-only** status badge that mirrors this toggle, never an independent switch. Locked infrastructure
+workflows (e.g. saved-search alert delivery) are always-on and exempt.
+
+Each row's other switches: **Creates Lead** (does this event mint a lead?) and, for FUB rows, **Sync** +
+**Notify** (see the FUB master). The event itself always fires once it exists — toggles gate the lead and the
+workflow, never the firing.
+
+## THE FIRE LEDGER — `hl_trigger_fire` (why the count never lies)
+
+Every genuine door dispatch writes **exactly one row** to `hl_trigger_fire` (`lead_id` · `event_key` ·
+`platform` · `matched` · `routed_by`), written by `dispatchDoor` in `lib/workflows/runtime.ts` — the one place
+every `houseloop/door.<key>` flows through.
+
+- The board's **TRIGGERED count** and its **click-through drill-down** ("which leads fired this") read this
+  SAME table — they agree by construction.
+- The native board is scoped `platform <> 'follow_up_boss'` — a FUB-origin fire can never appear on a
+  HouseLoop.ai row (and vice versa).
+- **Only a dispatch is a fire.** The lead activity feed is history, not a fire source — imported FUB history,
+  system-seeded searches, and replayed pre-registration browsing can never masquerade as trigger fires.
+  (This replaced the old two-source scoreboard that once showed "27 triggered, 0 leads.")
+- `lead_id` is `ON DELETE CASCADE` — deleting a lead removes its fires.
+
+## Routing (what happens when a door fires)
+
+`dispatchDoor` resolves the workflow through strict tiers: the lead's **source × event assignment** first, then
+platform / global fallbacks for system events. **Registration doors route ONLY via their per-source
+assignment** — the fallback tiers carry a `*_registration` guard, so a first-touch outreach workflow can never
+fire from a fallback match (the guard that closed the 1,421-import near-miss, 2026-07-09).
+
+## Where the messaging lives
+
+What each door actually SENDS (the two-beat: brand ack + Myli at 2 minutes) is documented on the
+[HouseLoop.ai Lead Integration](/integrations/houseloop-ai) page, message by message.
+
+## Related
+
+- [HouseLoop.ai integration](/integrations/houseloop-ai) · [Follow Up Boss integration](/integrations/follow-up-boss)
+- [FUB Trigger Events & Notifications](/fub/trigger-events) — the 22-event FUB master
+- [Workflows](/guides/workflows) — the engine · [Website Registration & Lead Intake](/guides/web-registration-and-intake)

@@ -1,70 +1,139 @@
 ---
 title: "Website Registration & Lead Intake"
-description: "How a houseloop.ai visitor becomes a CRM lead — the auth providers (Google, email+password, magic-token), the Finish/X phone law, the ACTION_TO_EVENT contract into lead-intake, the shared-home gate, and the pixel identity stitch."
+description: "THE guide for how a houseloop.ai visitor becomes a CRM lead — the sign-in modal and auth gates, the phone policy and Finish/X law, the ACTION_TO_EVENT intake contract, the 9 registration doors, tour & contact requests, the shared-home gate, and the pixel identity stitch."
 ---
 
-<Note>Written 2026-07-06 (Fable-5 audit auth web-5) — registration/intake had no system-level guide.
-Every claim verified against the live code (`apps/houseloop-web/auth.ts`, the CRM `lead-intake` route).</Note>
+<Note>
+**THE single registration & intake guide (consolidated 2026-07-09, Adam).** Absorbs the former standalone
+*Registration & Sign-in* and *Tour & Contact Requests* pages (their URLs redirect here). The messaging each door
+sends lives on the [HouseLoop.ai Lead Integration](/integrations/houseloop-ai) page; the doors' on/off switches
+live on [Trigger Events](/guides/trigger-events).
+</Note>
+
+## The pipeline in one picture
+
+```
+visitor on houseloop.ai
+  → SignInModal (one unified modal, every entry point)
+  → auth (Google · email+password · magic-token)
+  → the phone step (Finish or X — THIS is when the lead is born)
+  → POST /api/integrations/website/lead-intake   (the ONE intake door, per-source secret)
+  → ACTION_TO_EVENT → the registration door fires (hl_trigger_fire ledger row)
+  → the door's workflow runs (the two-beat messaging)
+```
+
+## The unified sign-in modal
+
+Every auth/registration entry point opens **one** component — `components/site/SignInModal.tsx` — identical
+everywhere (like a home, save a search, the profile "Sign in" button). Single-page join-or-sign-in with an
+optional phone step: `identify` (Google on top, or email) → `details` (password; "Welcome back" for a known
+email, "Create your account" for a new one — decided by a read-only `GET /api/auth/email-exists` lookup) →
+`profile` ("You're almost there" — name + phone).
+
+**The auth gate** (`components/site/auth-gate.tsx`) is the single choke point: a signed-out buyer clicking a
+gated action (like / save / save-search / nav headings) gets the modal with contextual copy, and the pending
+like/save is stashed and **replays after auth**. Sharing a home opens for everyone — the gate fires at SEND
+(see the shared-home gate below).
+
+**Google returns to the modal, not a white page:** `app/auth/complete-profile/page.tsx` is a pure router — the
+return lands back in the modal (`?hlAuthProfile=1`) at the profile step over the blurred original page.
 
 ## The three ways in (auth — `apps/houseloop-web/auth.ts`)
 
 1. **"Continue with Google"** — `GoogleProvider` via PrismaAdapter.
-2. **Email + password** — `CredentialsProvider` (bcrypt vs `User.passwordHash`; `/api/auth/register` creates the user + hash first).
-3. **Magic token** — `verifyMagicToken` (`lib/auth/magic-token`): signed per-lead links in emails/agent
-   flows auto-log the lead in (also how "Create Saved Search as Agent" opens the site AS the lead).
+2. **Email + password** — `CredentialsProvider` (bcrypt vs `User.passwordHash`).
+3. **Magic token** — `verifyMagicToken`: signed per-lead links auto-log the lead in (also how "Create Saved
+   Search as Agent" opens the site AS the lead).
 
-Account linking: `allowDangerousEmailAccountLinking = true` — email+password first, Google later (same
-email) lands on the SAME User row, no duplicates. Sessions are JWT (hydrated with `id` + `phone`).
+Account linking: email+password first, Google later (same email) lands on the SAME `User` row. Sessions are JWT.
 
-## The Finish/X phone law
+## The phone policy + the Finish/X law
 
-A lead is created at **registration completion**, never at login, in exactly two shapes
-(the phone-capture step after account creation, governed by the `social_phone_requirement` admin setting):
+One CRM setting (**Settings → Website → Registration Settings**, `social_phone_requirement`) controls the phone
+step: **Required** (no friendly skip, corner X only) · **Optional** ("Skip for now") · **Hidden** (step not
+shown). There is **always an X** — you can't cage a buyer into a real number.
 
-- **Finish** — the visitor completes the phone step → lead created WITH phone.
-- **X (skip)** — the visitor closes the phone step → lead created with **no phone + a "no phone" note**
-  (`phoneSkipped`). No hidden nurture fires (the old orphan `registration.no-phone` event was deleted
-  2026-07-06 — a phone-chase belongs on the workflow canvas).
+**A lead is created at registration completion, never at login.** Authenticating only makes a website `User`.
+The CRM lead is born when the phone step resolves, exactly two ways:
 
-Registration UX toggles (phone required/optional/hidden, international, required-field asterisks, and
-`phone_required_on_showing_request` — enforced on the tour route since 2026-07-06) live in the CRM at
-**Settings → Website → Registration Settings**, read by the site via
-`GET /api/integrations/website/registration-settings` (public read-only, 60s cache; PUT self-gates).
+```
+auth succeeds → NO CRM lead yet
+   ├─ Finish (enter phone) → lead WITH phone + the stashed like/save REPLAYS → home saved
+   └─ X / Skip             → lead with email+name + "no phone" note (phoneSkipped) → the like/save is CLEARED
+```
+
+Only Finish saves the home — the phone is the carrot. A logged-in, phone-less buyer gets **re-prompted** on
+every subsequent like/save (`needsPhone` in the engagement bar) until they give a number. The phone step carries
+the TCPA consent fine print (`ConsentFinePrint.tsx`); Finish is the consent action. The four **high-intent
+forms** (tour, contact, home-value report, seller get-started) hard-require a phone on the form itself,
+independent of the global policy.
 
 ## The intake contract — `ACTION_TO_EVENT`
 
-Every site action that should touch the CRM POSTs to **`/api/integrations/website/lead-intake`** (CRM),
-authenticated by the per-source `x-houseloop-intake-secret` header. The payload's `action` maps through
-the **`ACTION_TO_EVENT`** table to ONE event key — the event fires the door workflow, stamps the tag,
-and drives everything downstream. Highlights (full map in the route):
+Every site action that should touch the CRM POSTs to **`/api/integrations/website/lead-intake`** (per-source
+`x-houseloop-intake-secret`). The payload's `action` maps through **`ACTION_TO_EVENT`** to ONE event key, and
+the **`REG_VARIANT`** map splits by the `created` flag — a brand-new person fires the `*_registration` door, a
+known lead fires the base door:
 
-| `action` | event |
-|---|---|
-| `showing_request` / `contact_agent` | `tour_request` / `contact_request` |
-| `seller_request` / `claim` / `seller_inquiry` | `home_value_report` (merged — /sell Get Report AND the listing "Is this your home?") |
-| `seller_get_started` | `seller_get_started` |
-| `saved_search` / `_agent` / `_system` | three FIRST-CLASS triggers by ORIGIN (client vs agent-for-lead vs system-seed) |
-| `google_signin` | `general_registration` |
-| `liked/saved/shared_home_registration` | per-entry-point registration doors |
+| `action` | new lead (`created`) fires | existing lead fires |
+|---|---|---|
+| `google_signin` (bare signup) | `general_registration` | — |
+| `liked/saved/shared_home_registration` | that entry-point's door | — |
+| `showing_request` | `tour_request_registration` | `tour_request` |
+| `contact_agent` | `contact_request_registration` | `contact_request` |
+| `saved_search` | `saved_search_registration` | `saved_search` (+ `_agent` / `_system` origin variants) |
+| `seller_request` / `claim` | `home_value_report_registration` | `home_value_report` |
+| `seller_get_started` | `seller_get_started_registration` | `seller_get_started` |
 
-**An unmapped action creates the lead with NO event** (warn-logged: "add it to ACTION_TO_EVENT or fix
-the caller") — no tag, no workflow. The `REG_VARIANT` map splits new-lead registration doors from
-existing-lead acks by the `created` flag.
+**An unmapped action creates the lead with NO event** (warn-logged) — no tag, no workflow. Every genuine door
+dispatch writes ONE row to the **`hl_trigger_fire` ledger** — the same table the
+[Trigger Events](/guides/trigger-events) board's count AND drill-down read.
+
+## The 9 registration doors → the two-beat messaging
+
+Each door binds ONE workflow ("New Lead — X") that sends the **two-beat**: a branded acknowledgment instantly,
+then Myli personally at ~2 minutes referencing exactly what the person did. **The full messaging map — every
+email and text, per door, verbatim — lives on the [HouseLoop.ai Lead Integration](/integrations/houseloop-ai)
+page.**
+
+## Tour & contact requests (absorbed from the former standalone page — Lee's 2026-07-09 rewrite)
+
+The old "agent Accepts/Declines, then an agent reaches out" flow is **retired — Myli books directly and hands
+off**. Mechanics:
+
+- **Templates, nothing hardcoded:** every message is an `hl_templates` row, editable under Settings → Email /
+  Text Templates (Tour Request + Contact Request categories): `tour_request_received(_sms)`,
+  `tour_request_agent_alert(_sms)`, `tour_confirmation(_sms)`, and the contact equivalents.
+- **Merge tokens:** `{{request.address|date|time|message|photo|price|beds|baths|type|url}}` —
+  `{{request.url}}` deep-links to the exact request under the lead's **Homes → Requests**.
+- **Senders are a setting** (`hl_settings.notification_sender`): agent alerts from `notifications@houseloop.ai`,
+  lead acks from `updates@houseloop.ai`, all SMS from the notification number (changeable, no deploy).
+- **Inngest auto-alerts:** `tour-requested-alert` / `contact-requested-alert` fire from
+  `houseloop/tour|contact.requested` (emitted by the pixel ingest when the event stitches to a lead) — each
+  send is a durable `step.run`, logged to `hl_email_send_log`, audited in **Run Log → alerts**.
+- **The request item:** property card + buyer's message + status (**Pending → Confirmed/Declined**) on
+  `hl_pixel_event.event_payload.status`. Myli advancing the status is the primary path; the inline
+  Accept/Decline buttons are the agent's manual override.
 
 ## The shared-home gate
 
-Sharing a home is a **login-gated registration event** (Zach 2026-07-01): the share modal opens for
-everyone, the gate fires at SEND — a signed-out sharer registers first (`shared_home_registration`
-door), and the recipient flows through lead-intake too.
+Sharing is a **login-gated registration event**: the share modal opens for everyone, the gate fires at SEND — a
+signed-out sharer registers first (`shared_home_registration` door) and the RECIPIENT gets the branded
+"`{{contact.first_name}}` shared a home with you" email.
 
 ## The pixel identity stitch
 
-The first-party pixel (`lib/pixel/hl-pixel.ts` → CRM `/api/pixel/track`) tracks anonymous browsing;
-at registration/login the visitor's anonymous events are stitched to the lead so pre-registration
-views/likes appear on their CRM timeline (and power the pixel-derived starter saved search, seeded
-`createdBy='system'`).
+The first-party pixel (`lib/pixel/hl-pixel.ts` → CRM `/api/pixel/track`) tracks anonymous browsing; at
+registration the visitor's anonymous events are stitched to the lead (their pre-registration views appear on
+the timeline and power the system-seeded starter saved search). Feed rows are history — **they are never
+trigger fires** (only a real door dispatch writes the ledger).
 
-<Warning>The old third-party SureSend pixel (SS-VGFKRCIVEA, `SureSendPropertyTrack`/`SureSendIdentify`)
-is DEAD — files deleted; the first-party `hl-pixel` is the only tracker. (AGENTS.md purged 2026-07-06.)</Warning>
+<Warning>The old third-party SureSend pixel is DEAD — the first-party `hl-pixel` is the only tracker.</Warning>
 
-Related: [Registration](/guides/registration) · [Lead Activity Log](/guides/lead-activity-log) · [Saved-Search Alerts](/guides/saved-search-alerts)
+## Reference
+
+- `apps/houseloop-web/components/site/SignInModal.tsx` · `auth-gate.tsx` · `ListingEngagementBar.tsx` (`needsPhone`)
+- `apps/houseloop-web/app/api/auth/complete-profile/route.ts` — the single lead-creation point (`pushLeadToCRM`)
+- `apps/houseloop-crm/app/api/integrations/website/lead-intake/route.ts` — `ACTION_TO_EVENT` / `REG_VARIANT`
+- `apps/houseloop-crm/lib/notifications/request-alerts.ts` — the tour/contact Inngest alerts
+- [HouseLoop.ai Lead Integration](/integrations/houseloop-ai) · [Trigger Events](/guides/trigger-events) · [Workflows](/guides/workflows) · [Lead Activity Log](/guides/lead-activity-log)
