@@ -1,21 +1,27 @@
 ---
-title: "Phone & Voice PRD — Own the Numbers, Myli Answers"
-description: "The product requirements doc for the HouseLoop phone system: port the 3 real assets into our Twilio, forward the legacy pool to one line, unify call capture + the phone_call_received notifications, and put Myli on every line as the inbound voice agent. Decisions, requirements, acceptance criteria, phases, and owners — the single spec the porting + build execute against."
+title: "Phone Porting PRD — Own the Numbers"
+description: "The product requirements doc for the HouseLoop phone PORTING initiative: port the 3 real assets into our Twilio, forward the legacy pool to one line, and unify call capture + the phone_call_received notifications so HouseLoop owns every business number and every call record. Decisions, requirements, acceptance criteria, phases, and owners. (The Myli Voice agent that answers these lines rolls in AFTER porting — see the Myli Voice page.)"
 ---
 
 <Info>
-**This is the PRD — the spec the phone work executes against.** Reference/how-to lives in
-[Phone Numbers, Call Routing & Number Porting](/guides/phone-numbers-and-call-routing); the voice-agent build-out
-lives in [Myli Voice](/guides/myli-voice). This page is the *requirements + decisions + acceptance* that tie them
-together. Owner: **Caleb** (capture + agent) · **Lee** (notifications) · Zach (telephony/porting).
+**This is the porting PRD — the spec the phone-ownership work executes against.** The how-to / reference lives in
+[Phone Numbers, Call Routing & Number Porting](/guides/phone-numbers-and-call-routing). The **voice agent that
+answers these lines is a separate, later phase** — full spec on the [Myli Voice](/guides/myli-voice) page. Owner:
+**Caleb** (capture) · **Lee** (notifications) · Zach (telephony/porting).
 </Info>
+
+<Note>
+**Scope of THIS doc = ownership + capture + notifications.** Porting the numbers and capturing every call natively
+comes first. Putting Myli on the lines as the voice agent is **parked until porting is done** and lives on the
+Myli Voice page — not here.
+</Note>
 
 ## Goal
 
-**Own every business number in our own Twilio, capture every call natively (records + notifications), and put
-Myli on every line as the front door** — greeting, qualifying intent, filtering spam, booking appointments, and
-live-transferring hot leads. Kill the three-source shit-show (FUB / Twilio / Google Voice) and collapse it to one
-pipe: **Twilio captures, FUB mirrors, Myli answers.**
+**Own every business number in our own Twilio, and capture every call natively — records + notifications.** Kill
+the three-source shit-show (FUB / Twilio / Google Voice) and collapse it to one pipe: **Twilio captures, FUB
+mirrors.** (Once we own the lines, the [Myli Voice](/guides/myli-voice) agent becomes the front door — that's the
+next phase, not this one.)
 
 ## The problem (why this exists)
 
@@ -34,8 +40,8 @@ pipe: **Twilio captures, FUB mirrors, Myli answers.**
 | D2 | **Forward the legacy pool** (`913-453-5505`, `913-270-0645`, +37 past-agent) → ONE dedicated "Legacy Agents" Twilio line. Stay in FUB; do NOT port. |
 | D3 | **One notify key `phone_call_received`, 5 subtypes** resolved by dialed-number → `hl_phone_numbers.category` (company/sign/past_agent/ana + generic). Shared resolver used by BOTH the Twilio webhook and the FUB path. |
 | D4 | **Ported numbers mirror back into FUB** via `POST /v1/calls` so the FUB timeline stays intact (they leave FUB on port-out). |
-| D5 | **Myli is the inbound agent** on all lines — the existing LiveKit + Gemini S2S agent (`apps/lee-voice-agent`), re-pointed. One agent, per-line prompt by DID. |
-| D6 | **A2P 10DLC is already registered** under our Twilio account — the ported numbers get **added to the existing campaign**, no new brand/campaign registration needed. |
+| D5 | **A2P 10DLC is already registered** under our Twilio account — the ported numbers get **added to the existing campaign**, no new brand/campaign registration needed. |
+| D6 | **The line owner is the agent (Myli Voice), NOT part of this PRD.** Who *answers* the owned lines is the [Myli Voice](/guides/myli-voice) build — it rolls in after porting. This PRD only gets the numbers owned + captured. |
 
 ## Requirements
 
@@ -59,11 +65,6 @@ pipe: **Twilio captures, FUB mirrors, Myli answers.**
     - Lead-less path for cold callers (no person match required).
     - `fub_created` recency gate so a one-off catch-up never notifies on old activity.
   </Accordion>
-  <Accordion title="R4 — Myli Voice (Caleb)">
-    - One agent, per-line prompt keyed by DID (Company / Sign / Ana / Legacy).
-    - Tools: create_lead · book_showing · book_listing_appt · live_transfer · flag_spam · schedule_callback · mirror_to_fub.
-    - Intent routing: hot buy/sell → live-transfer + HOT lead; appointment → book; spam → filter; other → callback.
-  </Accordion>
 </AccordionGroup>
 
 ## Acceptance criteria
@@ -72,15 +73,15 @@ pipe: **Twilio captures, FUB mirrors, Myli answers.**
 - ☐ The matching typed notification (`phone_call_company/sign/past_agent/ana`) fires — no more 0s.
 - ☐ A cold unknown caller to the company line is captured + notified (lead-less).
 - ☐ A ported-number call also appears on the FUB timeline (mirror).
-- ☐ Myli answers with the right per-line intro, qualifies intent, and live-transfers a hot buyer/seller.
 - ☐ Ana's calls captured (GV bridge now; native after port).
 
 ## Phases & owners
 
 <Steps>
   <Step title="Phase 1 — Legacy line live (same-day, no porting)">
-    Forward the legacy pool → the Twilio "Legacy Agents" line. Stand up Myli there (legacy prompt) + create_lead +
-    notification. Proves the full loop. **Owner: Caleb** (agent + capture), Zach (FUB forward config).
+    Forward the legacy pool → the Twilio "Legacy Agents" line. Capture the call (`create_lead` + recording) +
+    fire the notification. Proves the full capture loop without waiting on carriers. **Owner: Caleb** (capture),
+    Zach (FUB forward config).
   </Step>
   <Step title="Phase 2 — Capture + notify unified (in parallel)">
     Shared subtype resolver · store cold/unmatched calls + recording · `phone_call_received` fires all 5 subtypes ·
@@ -90,10 +91,13 @@ pipe: **Twilio captures, FUB mirrors, Myli answers.**
     Port Company + Sign + Ana into Twilio; add to the existing A2P campaign; retire Google Voice. **Owner: Zach**
     (port requests) + Caleb (webhook wiring on landing).
   </Step>
-  <Step title="Phase 4 — Full autonomous Myli">
-    Intent routing, appointment booking, live-transfer, nurture, callbacks across all four lines. **Owner: Caleb.**
-  </Step>
 </Steps>
+
+## → Next phase (NOT this PRD): Myli Voice
+
+Once the lines are owned + captured, **[Myli Voice](/guides/myli-voice)** becomes the front door — one AI agent
+across all four lines, per-line prompt by dialed number, intent routing, live-transfer, appointment booking. That
+buildout is fully spec'd on its own page and is **parked until this porting PRD is done.**
 
 ## Open items / risks
 
@@ -104,4 +108,4 @@ pipe: **Twilio captures, FUB mirrors, Myli answers.**
 ## Reference
 
 - [Phone Numbers, Call Routing & Number Porting](/guides/phone-numbers-and-call-routing) — the how-to + port-out playbook.
-- [Myli Voice](/guides/myli-voice) — the voice-agent build-out + live run-log.
+- [Myli Voice](/guides/myli-voice) — the voice-agent build-out (the phase after porting).

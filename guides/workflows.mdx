@@ -1,11 +1,15 @@
 ---
 title: "Workflows"
-description: "The HouseLoop CRM workflow engine — one workflow per lead event (system defaults vs custom takeovers), the new-lead vs existing-lead trigger split, the sender chain, Assign Lead routing, branches, and the communication-recency condition matrix. Runs on Inngest."
+description: "The HouseLoop CRM workflow engine — one intent canvas per thing a person did (New/Existing as a visible branch inside), the ONE on/off switch (the Trigger Events toggle), the sender chain, Assign Lead routing, branches, and the communication-recency condition matrix. Runs on Inngest."
 ---
 
-<Warning>
-🔶 **PARTIALLY SUPERSEDED (Adam, 2026-07-06).** The "one workflow per event / new-vs-existing = separate rows" sections are retired — it's now **ONE intent canvas** with the New/Existing split as a **branch inside** it. The canvas-is-truth, sender chain, send-step, and condition mechanics below **remain current.** See the Myli Master.
-</Warning>
+<Note>
+**Brought current 2026-07-09 (Lee).** This page previously described the retired "one workflow per event /
+new-vs-existing = separate rows" model — that's gone. The current model is **one intent canvas** per thing a
+person did, with the New/Existing split as a **visible branch inside** it, and **one on/off switch** (the Trigger
+Events board's Workflow Active toggle). The strategy layer — which intents exist and when Myli speaks — is
+[The Intent Strategy Map](/guides/intent-workflows); this page is the engine.
+</Note>
 
 A **workflow** is a trigger + a sequence of steps (send a text, send an email, assign the lead,
 wait, branch on a condition) laid out on the **workflow canvas**. Workflows are how a lead event —
@@ -39,33 +43,38 @@ After deploying a new or changed workflow function, **re-sync Inngest**:
 dashboard until you do.
 </Note>
 
-## One workflow per event (Lead Flow)
+## One workflow per INTENT (the current model)
 
-**Every lead event is owned by exactly ONE workflow.** The map of event → workflow lives at
-**Settings → Lead Flow** — one row per event (General Registration, Liked Home, Tour Request,
-Contact Request, Saved Search, …) showing the owning workflow, its ACTIVE toggle, last fired,
-and row actions (open in builder / create / delete).
+**A workflow is built around an intent — a thing a person actually did — not around which system the lead came
+from.** There is exactly **one canvas per intent** (13 of them — the full strategy map with the speak/silent
+policy lives in [The Intent Strategy Map](/guides/intent-workflows)), and the "brand-new lead vs. someone we
+already know" split is a **visible branch inside** that one canvas, never two separate workflow rows. Which
+integrations may feed a canvas is a **connector gate** drawn at the top of it. For the **registration family**,
+workflows group **by lead source** on the Workflows page — the same event from a different source is a different
+workflow with different copy (`Workflow = f(source × event)`); the intent canvases handle the rest.
 
-Two kinds of workflow can own an event:
+Two kinds of workflow exist in the builder:
 
 | Kind | Badge | Behavior |
 | --- | --- | --- |
 | **System** | 🔒 system | Ships locked. Read-only in the builder — use **Duplicate as Custom** to change it. |
-| **Custom** | ⚡ custom | Fully editable. Activating it **takes over** the event from the system default. |
+| **Custom** | ⚡ custom | Fully editable — your duplicate to reshape. |
 
-**Takeover and resume rules** (enforced server-side in `PATCH /api/workflows/[id]`):
+### ONE switch — where on/off actually lives (shipped 2026-07-08)
 
-- **Activate a custom workflow** → it takes over its trigger's events. Silent when the event was
-  on a system default; if **another active custom** owns the trigger, the UI asks
-  *"Replace it? (it pauses)"* — confirming pauses the other custom and moves the events over.
-- **Pause / deactivate a custom** → its events rebind to the system default for that trigger
-  automatically. Pausing your copy brings the built-in back.
-- **A bound workflow owns its event at ANY status.** Pausing the workflow means the event sends
-  *nothing* — no legacy fallback wakes up behind it. The Lead Flow ACTIVE toggle is the one and
-  only on/off.
+A workflow used to have TWO on/off gates that could disagree (`hl_workflows.status` — the real gate the
+dispatcher checks — and the Trigger Events board's "Workflow Active" toggle). General Registration once showed
+"active" on the board while never running. Fixed structurally:
 
-The shared event ↔ trigger mapping lives in `lib/workflows/event-trigger-map.ts` (note that
-`seller_requested` owns **two** events: Home Value Report and Seller Get Started).
+- **The Trigger Events board's Workflow Active toggle IS the control** (`/settings/trigger-events`). Flipping it
+  also drives the bound workflow's `hl_workflows.status`, so the two can never diverge.
+- **The Workflows page status is a READ-ONLY mirror** — a colored-dot badge. You turn a workflow on/off at its
+  **trigger event**, not on the Workflows page.
+- **Every real fire is a ledger row:** `dispatchDoor` writes exactly one per-lead row to `hl_trigger_fire`
+  (mig 0355) per dispatch — the board's TRIGGERED count and its drill-down both read that one table, so imported
+  FUB history / system-seeded searches / pixel replays can never masquerade as fires.
+
+The FUB side has its own 22-door catalog + gates — [FUB Trigger Events & Notifications](/fub/trigger-events).
 
 ## The workflow canvas is the truth (constitutional)
 
@@ -171,35 +180,24 @@ maintenance rule) is the private ground-truth doc `GT_HOUSELOOP_WORKFLOW_TRIGGER
 page is the public engine reference.
 </Note>
 
-### New lead vs. existing lead (the atomic split)
+### New lead vs. existing lead (the arm picker)
 
-The same website action fires a **different** workflow depending on whether the person is a
-brand-new lead or a returning one. **The intake's `created` flag is the authority** — it dedupes by
-email, then by the last-10 digits of the phone (the same way Follow Up Boss / SureSend dedupe), so
-it works whether or not the visitor is logged in:
+The same website action lands on a **different arm of the ONE intent canvas** depending on whether the person is
+brand-new or already known. **The intake's `created` flag is the authority** — it dedupes by email, then by the
+last-10 digits of the phone (the same way Follow Up Boss / SureSend dedupe), so it works whether or not the
+visitor is logged in:
 
 - **Logged in** → the Tour / Contact form pre-fills name, email, and phone from the session → on
-  submit the intake matches their existing lead → **existing-lead** workflow.
-- **Logged out, types a known email/phone** → the intake matches it → **existing-lead** workflow.
-- **Logged out, brand-new email/phone** → no match → **new-lead** workflow.
+  submit the intake matches their existing lead → the **existing-lead arm**.
+- **Logged out, types a known email/phone** → the intake matches it → the **existing-lead arm**.
+- **Logged out, brand-new email/phone** → no match → the **new-lead arm**.
 
-When `created` is true the intake remaps the event key to its `*_registration` variant
-(`REG_VARIANT`), which routes through `lead.tag-added` → `REG_SUBEVENTS` → the source-event
-assignment to the **New Lead** door. When `created` is false it fires the first-class event
-(`tour.requested` / `contact.requested` / …) to the **existing-lead** ack. The lead-visible **tag is
-the same** for both — the new/existing distinction is the *workflow*, not the tag.
-
-| Event | New lead (`created=true`) | Existing lead (`created=false`) |
-| --- | --- | --- |
-| Registration | `general_registration` → New Lead — General Registration | — (registration is the new-lead event) |
-| Liked home | `liked_home_registration` → New Lead — Liked Home | `property_liked` → Property Liked signal |
-| Saved home | `saved_home_registration` → New Lead — Saved Home | `property_saved` → Property Saved signal |
-| Saved search | `saved_search_registration` → New Lead — Saved Search | `saved_search` → Saved Search digest |
-| Tour request | `tour_request_registration` → New Lead — Tour Request | `tour_requested` → Tour Request Received |
-| Contact request | `contact_request_registration` → New Lead — Contact Request | `contact_requested` → Contact Request Received |
-
-Each cell is its own `hl_workflows` row, so the copy for "a new lead just asked for a tour" can
-diverge from "a returning lead asked for a tour" — edit each independently in the builder.
+Under the hood the two arms still arrive under different event-key families: `created=true` remaps the key to its
+`*_registration` variant (`REG_VARIANT` → `lead.tag-added` → `REG_SUBEVENTS`); `created=false` fires the
+first-class event (`tour.requested` / `contact.requested` / …). **An alias map (fixed 2026-07-05) folds both name
+families onto the one canonical intent**, so both keys route to the SAME canvas — the New/Existing **branch
+inside it** picks the arm. The lead-visible **tag is the same** for both; the new/existing distinction is the
+*arm*, not the tag, and you edit both arms' copy on the one canvas in the builder.
 
 ### Tag Added (FUB-style)
 

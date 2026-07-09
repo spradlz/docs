@@ -6,98 +6,49 @@ description: "Lee's master work-in-progress. The Pipeline & Workflow spine — L
 <Note>
 **Lee's Master — Work In Progress.** My lane is the **Pipeline & Workflow** spine: **Lead Integrations → Trigger
 Events → Workflows** — how a signal arrives, becomes a lead, and runs its playbook — plus the **notification
-delivery layer** that fires under it. This is where I output everything I finish, section by section, as we move
-along. When Zach says **"lock it in,"** it gets written here. Artifacts + screenshots link in per section. It
-graduates into the Mintlify dev docs. Last updated 2026-07-07.
+delivery layer** that fires under it. This is a RUNNING LOG with pointers — **the architecture itself lives in the
+canonical dev docs (§1–3 below point at them); this page never maintains a parallel copy** (the 07-07 copy that
+used to live here drifted stale in two days — never again). Last updated 2026-07-09.
 </Note>
 
 <Info>
-**How to read this:** the spine top-to-bottom — **1 Lead Integrations · 2 Trigger Events · 3 Workflows · 4
-Notifications (delivery)** — then a running **Locked & Shipped** log (5) and **In Flight / Queued** (6). Every ✅
-traces to a live prod fire read back from the delivery logs / a shipped commit — never a green DB row alone.
+**How to read this:** §1–3 = pointers to the canonical spine docs · §4 = the notification delivery layer ·
+§5 = the running **Locked & Shipped** log · §6 = **In Flight / Queued**. Every ✅ traces to a live prod fire read
+back from the delivery logs / a shipped commit — never a green DB row alone.
 </Info>
 
 ---
 
-## 1 · Lead Integrations
+## 1 · Lead Integrations — → the canonical docs
 
-**An integration is the PIPE a signal arrives through** (HouseLoop.ai · Follow Up Boss). Its settings decide only
-whether HouseLoop acts on an event and whether it mints a lead — **never** notifications (those are source-agnostic,
-§4).
+**An integration is the PIPE a signal arrives through** (HouseLoop.ai · Follow Up Boss). Every lead carries
+`platform` (the integration) + `source` (the brand) as lead attributes.
 
-### 1a · Follow Up Boss (via the FUB mirror) — LOCKED 2026-07-07
+- **Website intake:** [Website Registration & Lead Intake](/guides/web-registration-and-intake) ·
+  [Registration & Sign-in](/guides/registration)
+- **Follow Up Boss:** [FUB → HouseLoop Lead Import](/fub/lead-import) (the mint) ·
+  [FUB Trigger Events & Notifications](/fub/trigger-events) (the capture + the **four toggles** —
+  Sync · Creates Lead · Workflow · **Notify**, decoupled 2026-07-08 — and the 3-lane architecture:
+  notifications are the source of truth, the scraper is a dumb Lane-2-only grabber)
 
-The FUB scraper mirrors a lead's Zillow/FUB activity into `fub.*` — a **Zillow pixel for FUB leads**. The importer
-(`fub-lead-import.ts`) reads the mirror and routes each event. The FUB Settings page (`/settings/fub`) has **two**
-per-event toggles:
+> ⚠️ Superseded here 2026-07-09: the old §1a claimed FUB had only TWO toggles and that the NOTIFY column was
+> gone/source-agnostic — reversed on 07-08. The FUB master is the truth.
 
-| Toggle | Means | DB |
-|---|---|---|
-| **Sync** *(was "Process")* | Does HouseLoop act on this FUB event at all (off = ignore; raw data still mirrors). | `enabled` |
-| **Creates Lead** | When syncing, if the person isn't already a lead, mint one (off = only append to existing). | `creates_lead` |
+## 2 · Trigger Events — → the canonical docs
 
-- **Minting rule:** a brand-new person becomes a lead **only** when Sync ON **and** Creates Lead ON. Existing leads
-  never dupe (matched on `fub_person_id`) and their full history backfills regardless of per-event toggles
-  (step 2.6, catalog-driven from `fub.events`).
-- **The NOTIFY + NOTIFY-VIA columns are GONE** — notifications are source-agnostic (§4), governed only by
-  `/settings/notifications`. Removed end-to-end (UI, API, importer, dashboard `fubGate`); the orphaned
-  `notify` / `notify_owner` DB columns await a typed-approved drop.
-- **RealLoop notifier RETIRED** — the dashboard's `notifyZach*` (Telegram + Twilio SMS) double-fired and its
-  catch-up pollers bypassed the gate. Master-killed at source (`REALLOOP_NOTIFY_ENABLED`, default off). HouseLoop is
-  the **sole** notifier.
-- **MVP flow:** Sync + Creates Lead ON for **Tour Request only** → a tour pulls the person in, backfills their whole
-  FUB history, and every later view/inquiry lands on their timeline labeled *"from Zillow via Follow Up Boss."*
+**A trigger event is a DOOR** — a thing a person did that can mint a lead, run a workflow, and/or notify.
+TWO catalogs: **native website doors** (`hl_trigger_events`, 57) → [The Intent Strategy Map](/guides/intent-workflows);
+**FUB doors** (`hl_fub_webhook_settings`, **22**) → [FUB Trigger Events & Notifications](/fub/trigger-events)
+(the full 22-event → notification map). Every real fire = one `hl_trigger_fire` row (mig 0355) — the board count
+and drill-down read that ONE ledger.
 
-### 1b · Platform / Source model
+## 3 · Workflows — → the canonical docs
 
-Every lead carries `platform` (the integration — `follow_up_boss` / `houseloop`) and `source` (the brand — `Zillow`
-/ `houseloop.ai`). Both are lead attributes, both agnostic — printed into every notification (§4d).
-
----
-
-## 2 · Trigger Events (the doors)
-
-**A trigger event is a DOOR — unique per integration.** "FUB · Property Inquiry" ≠ "HL · Property Inquiry." Every
-door belongs to ONE integration and answers two questions: does it pull the person into HouseLoop, and which
-workflow runs. The vocabulary that unlocked this (LOCKED 2026-07-07):
-
-| Word | Means | Example |
-|---|---|---|
-| **Integration** | The **pipe** a signal arrives through | HouseLoop.ai · Follow Up Boss |
-| **Lead Source** | The **brand** on the lead | Zillow · HouseLoop Organic · Referral |
-| **Trigger Event** | A **door** — unique per integration | FUB · Property Inquiry |
-| **Workflow** | A **playbook** — one per door, 1:1 | HL · Liked Home Registration |
-
-**The Trigger Events screen** groups doors by integration: HouseLoop.ai gets a registration/behavior split
-(21 doors); Follow Up Boss is ONE flat list (23 doors — everyone's already in FUB); TC gets 11.
-
----
-
-## 3 · Workflows — The Lead Engine (LOCKED 2026-07-07)
-
-**One door = one playbook, make.com style.** A workflow is a short, straight top-to-bottom line (2–4 steps) — no
-routers, no shared canvases. ~50 doors, each 1:1 with its playbook.
-
-<Card title="▶ The Lead Engine — Final Architecture (LOCKED 7/7)" href="https://claude.ai/code/artifact/4be284a9-8f42-477b-abce-fb11cc71ed11">
-The signed-off visual master — live door counts, the vocabulary, the Trigger Events + Workflows screens, the
-straight-line Builder, and the dual-lane Comms Dock. **The wireframe is the truth** — the React build ports it.
-</Card>
-
-### 3a · The three laws
-
-1. **Every door runs its own playbook** — one integration, one workflow, a straight line. No routers.
-2. **"Creates a Lead" is its own toggle** — separate from the playbook. Only matters when the person doesn't already
-   exist; if they do, the door matches them (no duplicate, ever) and the playbook still runs.
-3. **Myli always watches** — outside every playbook, anyone texting Myli's line gets Myli; agents' lines get their
-   clones. Killed only by the one master switch.
-
-### 3b · The screens (to build)
-
-- **Workflows** — mirrors Trigger Events exactly, 1:1 playbooks; old consolidated/beta workflows → Archived (reversible).
-- **Builder** — straight lines only, every send wears its sender tag.
-- **Comms Dock** — dual-lane (Lead · Myli · Both), ported from the PlacedAgent tester. **§6 — OWNED BY ADAM**
-  (Zach 2026-07-07): Adam owns the Comms Dock section AND its build (it's a lead-detail surface, not a Lead
-  Engine screen). Lee owns §1–5 (vocab · Trigger Events · Workflows · Builder). No collision.
+**One intent canvas per thing a person did**, New/Existing as a visible branch inside; registration-family groups
+by lead source (`Workflow = f(source × event)`). **ONE switch:** the Trigger Events "Workflow Active" toggle
+drives `hl_workflows.status`; the Workflows page status is read-only. Engine + canvas-is-truth + sender chain +
+conditions → [Workflows](/guides/workflows) · strategy + speak/silent policy → [The Intent Strategy Map](/guides/intent-workflows).
+The Comms Dock is **Adam's** (lead-detail surface — see the Myli Master).
 
 ---
 
@@ -140,6 +91,36 @@ saved-search digests, tour/contact confirms, Myli `{{ai.*}}`) stay individual �
 ---
 
 ## 5 · Locked & Shipped (running log)
+
+### 2026-07-09 — the docs reorg + the FUB 3-lane lock
+- [x] **FUB Trigger Events & Notifications** — the FUB master ([/fub/trigger-events](/fub/trigger-events))
+  retitled + expanded: the **full 22-event table** (each trigger event → the FUB signal that creates it → its
+  `notify_class` → the card), the ⭐ exposed-vs-masked **capture matrix** from Caleb's live ground truth (FUB masks
+  exactly 3 things: ~7% SMS bodies · most email bodies · 5,690 call notes; in-app is NEVER masked; transcripts
+  don't exist), and the **live build-status dashboard** folded in as a displayed section.
+- [x] **The 3-lane architecture LOCKED with Caleb** — notifications are the source of truth; the scraper is a
+  dumb on-demand grabber of hidden content only. Lane 1 visible → notify direct · Lane 2 masked bodies →
+  `fub.body_recovery_queue` (Camp David) → recover → notify WITH body · Lane 3 record edits → never scrape.
+  Flood root-caused (the `peopleUpdated` re-scrape loop) + killed; 49,059 rehydrated, forward-only.
+  ⚠️ All 22 FUB toggles remain OFF until the flip-on sequence in the FUB master completes.
+- [x] **Doc consolidation (Zach: "two docs, period")** — ONE notifications master
+  ([/platform/message-catalog](/platform/message-catalog), absorbed `system-notifications` + `guides/notifications`,
+  gained the **Notification Contract**: owner-only · one-card · deduped-by-signal · dual-link · recency-gated) +
+  ONE FUB master. **9 graveyard pages deleted from the menu** + redirected (incl. `legacy-notifications`,
+  `notification-architecture`, `native-capture-prd`, `zillow-signal-gaps`, the Lee-Master-superseded template docs,
+  and Adam's Myli-superseded pipeline docs — Adam re-homed his live content into the Myli Master).
+- [x] **Pipeline & Workflow section reorganized** — the two duplicate nav groups merged into ONE, ordered
+  **Lead Integration → Trigger Events → Workflows** ([web-registration-and-intake](/guides/web-registration-and-intake)
+  → [intent-workflows](/guides/intent-workflows) → [workflows](/guides/workflows)); cleared the 🔶 stale warnings
+  on `workflows` + `tour-and-contact-requests` (one intent canvas, New/Existing internal branch, Myli books
+  directly, the ONE-switch law, the `hl_trigger_fire` ledger); §1–3 of THIS page slimmed to pointers (the 07-07
+  parallel copy had already drifted — the canonical docs are the truth now).
+- [x] **The docs mirror un-wedged** — publishing had been silently DEAD since 07-08 18:07: the reconcile gate
+  aborts the WHOLE publish on any orphaned page or MDX `{brace}` syntax error (one of each existed). Fixed both;
+  added the **⭐ Mintlify How-To Guide** as the FIRST top-level tab so nobody loses an hour to it again.
+- [x] **Phone-call contract locked with Caleb** — ONE key `phone_call_received`, 5 subtypes resolved by a SHARED
+  `called# → hl_phone_numbers.category → subtype` resolver called by BOTH the Twilio webhook and the FUB router.
+  Zach + Caleb building the capture + Twilio port; the FUB master documents it when live.
 
 ### 2026-07-08
 - [x] **Native door ↔ workflow binding cleanup** (mig `0353_native_door_workflow_binding.sql`) — every native
@@ -201,9 +182,11 @@ event+title+lead) → webhook + poller never double-fire (structural fix for the
 the NOTIFY toggle was **inert** for creates_lead=false events — widened to `(creates_lead || notify)` on events,
 texts, email, calls → the toggle now actually fires. (3) **Events poller RE-ENABLED** (RealLoop's `/v1/events`
 poller, dead since May 31) with the cursor **bootstrapped forward** (1754483→1795454, verified live) → catches the
-~5% of signals webhooks drop, deduped. Dashboard deployed (`e4f83f56fc`, realloop.co healthy). **Still remaining
+~5% of signals webhooks drop, deduped. Dashboard deployed (`e4f83f56fc`, realloop.co healthy). ~~**Still remaining
 (Phase 3 finish, next session):** insights via `handleNote` note-classification + the **differential reconciler**
-(count-compare FUB vs mirror → on-demand scrape for masked in-app messages) + the email (HTML) dual-link card.
+(count-compare FUB vs mirror → on-demand scrape for masked in-app messages) + the email (HTML) dual-link card.~~
+**⚠️ SUPERSEDED 2026-07-09:** the differential reconciler + poller design is DEAD (it caused the flood) —
+replaced by the 3-lane model in [FUB Trigger Events & Notifications](/fub/trigger-events). Do not build Phase 3.
 
 Original plan below for history.
 
@@ -226,10 +209,12 @@ scoped it to Docs + Notify toggle; the native reconciler is the NEXT pass):**
   So Zach can turn on a notification for a specific FUB trigger event regardless of whether it mints a lead. (This
   supersedes the queued "drop the `notify` column" item below — we're USING it, not dropping it; only the vestigial
   `notify_owner` is a retire candidate.)
-- **Phase 3 (NEXT PASS, documented only):** port RealLoop's dead-but-proven pollers (`fubEventsPoll` on `/v1/events`)
+- ~~**Phase 3 (NEXT PASS, documented only):** port RealLoop's dead-but-proven pollers (`fubEventsPoll` on `/v1/events`)
   into HouseLoop-native Inngest + build the **differential reconciler** (count-compare FUB `_metadata.total` vs our
   mirror → fetch delta → command a targeted scrape for API-masked in-app messages) + notify-on-first-capture / dedup
-  by (lead, signal-id). Boundaries: **Adam** owns the trigger-ROUTING classifier bug; **Caleb** owns scraper HEALTH.
+  by (lead, signal-id).~~ **⚠️ SUPERSEDED 2026-07-09 — the pollers + differential reconciler are DEAD** (mirror-reading
+  caused the flood); replaced by the **3-lane** model + recency gate in [FUB Trigger Events & Notifications](/fub/trigger-events).
+  Boundaries: **Adam** owns the trigger-ROUTING classifier; **Caleb** owns scraper HEALTH + the Lane-2 consumer.
 
 Full plan: `.claude/plans/greedy-sprouting-falcon.md`. Verify: flip Notify ON + Creates-Lead OFF on a FUB trigger,
 fire it for a lead-less person → HouseLoop notification lands, no lead created.
