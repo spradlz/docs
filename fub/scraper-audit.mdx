@@ -137,6 +137,35 @@ recency (the F2/F4 lesson), run-log lanes, docs flipped. Interface corrections l
 #11671/#11672): store `content_status` as visible-if-body-present (in-app is born-visible), consumer reads the
 full RW row at claim so the relay round-trip never drops metadata, queue CHECK includes `call_note`.
 
+## Live-fire addendum — what building C1 surfaced (same day)
+
+<Update label="2026-07-09 PM" description="C1 shipped + live-fire findings">
+  **C1 SHIPPED:** `fub-body-recovery-consumer.mjs` live on Camp David (pm2 `fub-body-recovery`), queue +
+  NOTIFY trigger + heartbeat live on the mirror. **Proven on a real masked SMS** (id 296220): 47ms
+  enqueue→claim, 13s scrape via the timeline-API sniff, body visible on both DBs. Unrecoverable rows
+  honest-error after 3 spaced attempts. Three NEW findings from the live fire:
+
+  - **F9 🔴 A wedged Chrome hides behind the fresh-log guard.** Chrome A's DevTools websocket wedged
+    (HTTP alive, ws connections hang forever) — and the backfill's empty-queue exit loop kept writing
+    "Nothing to scrape" to its log, which kept the watchdog's fresh-log guard satisfied. A wedged Chrome
+    can therefore persist indefinitely. Worse: a hung `connectOverCDP` **blocked the consumer's whole
+    event loop** (even its own timeout couldn't fire). Fix directions: the freshness signal must be
+    *scrape output*, not any log write; and CDP connects need an external watchdog, not an in-process
+    race.
+  - **F10 🟠 The masked-SMS backlog is 99.7% fake.** 21,232 of 21,289 hidden texts sit on
+    **`person_id = 0`** — orphans from a webhook attribution bug, tied to no person. Real-person masked
+    texts: **56**, mostly ancient outbound bulk with empty FUB timelines (unrecoverable by design). The
+    real going-forward Lane-2 SMS load is the ~7% masked slice of NEW inbound texts. Lee's A4 storage
+    path must guard against writing `person_id=0`.
+  - **F11 🔴→✅ Recovered bodies only reached the mirror via LEGACY realloop (fixed).** The lib's
+    recovery fns (`applyApiTexts`/`matchAndUpdateMessages`) set body + `content_status` but **not
+    `synced_at`** — so the cursor-driven relay never carried flips; they reached Railway only through the
+    legacy `realloop.co/api/fub/sync-message` POST, which dies at cutover. The consumer now **bumps
+    `synced_at` on every flipped row**; proven live (a CD bump appeared on the mirror verbatim in
+    &lt;40s). Recovery is realloop-independent. The legacy POST inside the lib should be removed with the
+    C2 retirement pass.
+</Update>
+
 ## What stays parked behind this
 
 Number porting ([Phone Porting PRD](/guides/phone-voice-prd)) and the [Myli Voice](/guides/myli-voice) buildout —
