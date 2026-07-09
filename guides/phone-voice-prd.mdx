@@ -1,0 +1,107 @@
+---
+title: "Phone & Voice PRD — Own the Numbers, Myli Answers"
+description: "The product requirements doc for the HouseLoop phone system: port the 3 real assets into our Twilio, forward the legacy pool to one line, unify call capture + the phone_call_received notifications, and put Myli on every line as the inbound voice agent. Decisions, requirements, acceptance criteria, phases, and owners — the single spec the porting + build execute against."
+---
+
+<Info>
+**This is the PRD — the spec the phone work executes against.** Reference/how-to lives in
+[Phone Numbers, Call Routing & Number Porting](/guides/phone-numbers-and-call-routing); the voice-agent build-out
+lives in [Myli Voice](/guides/myli-voice). This page is the *requirements + decisions + acceptance* that tie them
+together. Owner: **Caleb** (capture + agent) · **Lee** (notifications) · Zach (telephony/porting).
+</Info>
+
+## Goal
+
+**Own every business number in our own Twilio, capture every call natively (records + notifications), and put
+Myli on every line as the front door** — greeting, qualifying intent, filtering spam, booking appointments, and
+live-transferring hot leads. Kill the three-source shit-show (FUB / Twilio / Google Voice) and collapse it to one
+pipe: **Twilio captures, FUB mirrors, Myli answers.**
+
+## The problem (why this exists)
+
+- Phone-call notifications (Company / Sign / Past-Agent / Ana) are **documented but fire 0** — the trigger
+  `phone_call_received` is wired to Twilio, but the numbers route through FUB + Google Voice, so nothing reaches it.
+- FUB **call capture broke** at the webhook cutover (stale since ~2026-07-07) and **never captures cold/unknown
+  callers** to the company line.
+- **Ana's calls run through Google Voice** — invisible to both FUB and Twilio.
+- No transcripts exist anywhere (FUB has none).
+
+## The decisions (LOCKED 2026-07-09)
+
+| # | Decision |
+|---|---|
+| D1 | **Port 3 assets → our Twilio:** Company `913-320-0906`, Sign/Listings `913-354-8600`, Ana `913-954-7123` (out of Google Voice). |
+| D2 | **Forward the legacy pool** (`913-453-5505`, `913-270-0645`, +37 past-agent) → ONE dedicated "Legacy Agents" Twilio line. Stay in FUB; do NOT port. |
+| D3 | **One notify key `phone_call_received`, 5 subtypes** resolved by dialed-number → `hl_phone_numbers.category` (company/sign/past_agent/ana + generic). Shared resolver used by BOTH the Twilio webhook and the FUB path. |
+| D4 | **Ported numbers mirror back into FUB** via `POST /v1/calls` so the FUB timeline stays intact (they leave FUB on port-out). |
+| D5 | **Myli is the inbound agent** on all lines — the existing LiveKit + Gemini S2S agent (`apps/lee-voice-agent`), re-pointed. One agent, per-line prompt by DID. |
+| D6 | **A2P 10DLC is already registered** under our Twilio account — the ported numbers get **added to the existing campaign**, no new brand/campaign registration needed. |
+
+## Requirements
+
+<AccordionGroup>
+  <Accordion title="R1 — Ownership & routing">
+    - Port D1's three numbers into our Twilio (own them natively).
+    - Forward D2's legacy pool → the single "Legacy Agents" Twilio line (same-day FUB config).
+    - Caller-ID pass-through on every forward (see who actually called, not the FUB inbox number).
+    - Add the ported numbers to the **existing A2P campaign** in Twilio.
+  </Accordion>
+  <Accordion title="R2 — Capture (Caleb)">
+    - Store every call natively on Twilio inbound (metadata + recording + which line), **including cold/unknown
+      callers** to the company line.
+    - Shared subtype resolver `resolvePhoneCallSubtype(dialedNumber) → hl_phone_numbers.category → subtype`,
+      called by both the Twilio webhook and the FUB path.
+    - `mirror_to_fub` — write each ported-number call back to FUB (`POST /v1/calls`) with attribution + recording.
+    - Google Voice ingest for Ana until her number is ported (then retire GV).
+  </Accordion>
+  <Accordion title="R3 — Notifications (Lee)">
+    - `phone_call_received` fires the correct 1-of-5 typed card by subtype.
+    - Lead-less path for cold callers (no person match required).
+    - `fub_created` recency gate so a one-off catch-up never notifies on old activity.
+  </Accordion>
+  <Accordion title="R4 — Myli Voice (Caleb)">
+    - One agent, per-line prompt keyed by DID (Company / Sign / Ana / Legacy).
+    - Tools: create_lead · book_showing · book_listing_appt · live_transfer · flag_spam · schedule_callback · mirror_to_fub.
+    - Intent routing: hot buy/sell → live-transfer + HOT lead; appointment → book; spam → filter; other → callback.
+  </Accordion>
+</AccordionGroup>
+
+## Acceptance criteria
+
+- ☐ Call any of the 4 lines → a lead appears in HouseLoop CRM with the correct source + recording.
+- ☐ The matching typed notification (`phone_call_company/sign/past_agent/ana`) fires — no more 0s.
+- ☐ A cold unknown caller to the company line is captured + notified (lead-less).
+- ☐ A ported-number call also appears on the FUB timeline (mirror).
+- ☐ Myli answers with the right per-line intro, qualifies intent, and live-transfers a hot buyer/seller.
+- ☐ Ana's calls captured (GV bridge now; native after port).
+
+## Phases & owners
+
+<Steps>
+  <Step title="Phase 1 — Legacy line live (same-day, no porting)">
+    Forward the legacy pool → the Twilio "Legacy Agents" line. Stand up Myli there (legacy prompt) + create_lead +
+    notification. Proves the full loop. **Owner: Caleb** (agent + capture), Zach (FUB forward config).
+  </Step>
+  <Step title="Phase 2 — Capture + notify unified (in parallel)">
+    Shared subtype resolver · store cold/unmatched calls + recording · `phone_call_received` fires all 5 subtypes ·
+    `mirror_to_fub`. **Owner: Caleb** (capture) + **Lee** (notify).
+  </Step>
+  <Step title="Phase 3 — Port the 3 assets (1–2 weeks, carrier-gated)">
+    Port Company + Sign + Ana into Twilio; add to the existing A2P campaign; retire Google Voice. **Owner: Zach**
+    (port requests) + Caleb (webhook wiring on landing).
+  </Step>
+  <Step title="Phase 4 — Full autonomous Myli">
+    Intent routing, appointment booking, live-transfer, nurture, callbacks across all four lines. **Owner: Caleb.**
+  </Step>
+</Steps>
+
+## Open items / risks
+
+- **FUB `POST /v1/calls`** — confirm the API supports logging a call back to a person (for D4/mirror). Caleb to verify.
+- **Google Voice → Twilio port** sometimes rejects direct (VoIP); two-step via a prepaid SIM is the fallback.
+- **Legacy line can't distinguish which original number was dialed** — all resolve to `phone_call_past_agent` (FUB still holds the exact number if needed).
+
+## Reference
+
+- [Phone Numbers, Call Routing & Number Porting](/guides/phone-numbers-and-call-routing) — the how-to + port-out playbook.
+- [Myli Voice](/guides/myli-voice) — the voice-agent build-out + live run-log.
