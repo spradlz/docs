@@ -131,6 +131,50 @@ Amended, timestamped running list of what I'm doing. Newest at the bottom. Model
 - **Memory** — `project_houseloop_notification_sender_config`, `project_houseloop_access_level_permission_model`, `houseloop-comms-audience-truth`
 - **Laws honored** — `UI_ITERATION_HTML_FIRST` (port from locked HTML), `REUSE_NOT_RECREATE`, `CRM_PIXEL_LOCK`, `INNGEST_OR_IT_DOESNT_EXIST` (n/a — no jobs), audience-truth (`actor='system'`).
 
+## ⭐ HANDOFF — Trigger Events truth · one-switch workflows · global notifs (Adam, 2026-07-08, Opus 4.8)
+
+Beta-testing registration surfaced a stack of Trigger Events / workflow bugs. All fixed + live on `houseloop-app`.
+(This section re-homes the trigger-fire ledger doc that lived on the now-retired `crm/pipeline-workflow-system-events`
+page, git-rm'd in the 2026-07-08 Mintlify consolidation — the content is CURRENT, the old page was superseded.)
+
+**DONE + verified (2026-07-08):**
+- ☑ **THE TRIGGER-FIRE LEDGER — `hl_trigger_fire` (mig 0355, commit `32090c2147`).** The Trigger Events board's
+  TRIGGERED **count** read lead-less `hl_run_log` `door-*` rows while its "which leads fired this" **drill-down**
+  read the activity FEED (`hl_lead_activity`) by `kind` with NO source filter — two different sources that could
+  never agree, and the feed pulled in FUB/Zillow IMPORTED history (James Ross's 2024 Zillow save showed as a
+  houseloop.ai saved-search fire), SYSTEM-seeded starter searches, and REPLAYED pre-registration browsing. General
+  Registration showed "27 but 0 leads" (kind `general` matches nothing). **Fix:** `dispatchDoor` (`runtime.ts` — the
+  ONE place every `houseloop/door.<key>` flows through) writes EXACTLY ONE per-lead row per dispatch (`lead_id`,
+  `event_key`, `platform`, `matched`, `routed_by`). Both the count AND the drill-down now read this one table,
+  native-scoped `platform <> 'follow_up_boss'`, so they agree by construction and **only a genuine door dispatch is
+  a fire** — a FUB lead can never appear on a houseloop.ai door. FK `ON DELETE CASCADE`. Memory:
+  `project_houseloop_trigger_fire_ledger`.
+- ☑ **ONE SWITCH for workflows (commit `703efa89f6`).** Workflows had TWO on/off gates (`hl_workflows.status` AND
+  the Trigger Events `workflow_active` toggle) that could disagree — General Registration showed "active" but never
+  ran. Now the Trigger Events "Workflow Active" toggle is THE control: `PATCH /api/lead-flow` drives the bound
+  workflow's `status`. The **Workflows page status is READ-ONLY** (a dot badge, no toggle; Actions still open the
+  Builder). Reconcile "toggle wins" (Zach): all **13 website workflows** showing active were set live (reversal
+  `.claude/reports/workflow-activation-reversal-2026-07-08.json`).
+- ☑ **ONE full-width workflow canvas (commit `dfcd6e5e7a`).** The same `/workflows?wf=` route rendered two widths
+  (linear builder centered vs branched wide, via an async flag) — tight from Trigger Events, wide from the Workflows
+  list. Killed the distinction: `WorkflowsShell` is always wide. Back link is now dynamic (`openWorkflow` carries the
+  CURRENT page as `?from` → "Back to Trigger Events" or "Back to Lead Integrations", not hard-coded).
+- ☑ **Admin GLOBAL notifications (mig 0356 `hl_users.notif_scope`, commit `703efa89f6`).** Lead notifications fan
+  OWNER-ONLY; an admin can now set scope `all` (every lead, any agent) — fans IN ADDITION to the owner, admin-tier
+  only. UI card on `/settings/notifications`; `/api/settings/notification-scope`. Zach (`zach@houseloop.ai`) = global.
+- ☑ **Registration → CRM lead fixed + pixel feed TZ.** A kept WEB `User` row (name+phone) made the site treat
+  re-registration as a returning login → no CRM lead; full WEB-identity purge is the clean-slate fix (see
+  `lead-deletion` guide — NEVER hand-roll a purge, use `purgeLead()`). The HouseLoop.ai pixel feed rendered times in
+  server UTC ("9:43 PM" for a 4:43 PM KC event) → pinned to `BUSINESS_TZ` (America/Chicago).
+
+**Tools vs workflows (Zach's mental model, confirmed 2026-07-09):** Myli's **capabilities = tools** she calls
+(function-calling), catalogued in `lib/agent-runtime/capabilities.ts` (rendered in Settings → Team → Roles + the
+lead-detail Capabilities dropdown), defined in `lib/ai/lead-conversation.ts` `ALL_TOOLS`, logged via
+`ai-action-catalog.ts`. A **workflow = a chain of those tools + templated messages** for a repeatable process.
+`{{merge fields}}` inject DATA into messages — they are NOT how tools are called. `send_document` already discerns
+which of 3 agreements via `form: buyer_agency | showing | non_exclusive`; the first-showing-vs-buyer-agency *rule*
+is a workflow/prompt instruction (owed on New Lead — Tour Request), not a new tool.
+
 ## ⭐ HANDOFF — Comms & Notifications Infrastructure (Adam, 2026-07-07, model Opus 4.8)
 
 The night's work: make *who a message comes from* — number, email, identity — correct and configurable everywhere. Triggered by Zach catching system notifications shipping **from Myli's own dialer line** to a real Zillow lead's thread. All committed on `houseloop-app`, verified on localhost (= prod DB); code reaches prod on push.
