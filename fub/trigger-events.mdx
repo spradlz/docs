@@ -252,9 +252,10 @@ Cross-links: the notification contract (owner-only · one-card · deduped · dua
 
 ## Where the build stands (live status — updated 2026-07-09, verified against code + DB)
 
-**One-line verdict: captured & contained, deliberately dark.** The flood is dead at the root, the architecture is
-locked, the native webhook is live — but **nothing notifies yet**. Three build pieces stand between here and
-turning it back on safely.
+**One-line verdict: captured & contained, deliberately dark — the router side is DONE.** The flood is dead at the
+root, the architecture is locked, the native webhook + recency gate + Lane-2 enqueue are live, the pollers are
+gone (flatline PROVEN: 227 junk ledger rows/30min → **0**). What's left: Caleb's Lane-2 consumer, then the
+repoint + the staged flip-on.
 
 ### At a glance
 
@@ -262,43 +263,47 @@ turning it back on safely.
 |---|---|
 | Native webhook receiver (`crm.houseloop.ai/api/fub/webhook`) | 🟢 **Live** (returns 2xx; FUB repoint pending) |
 | Lane 1 — visible activity (saves/views/inquiries/in-app) | 🟢 **Built** — waiting on the flip-on |
-| Lane 2 — masked bodies (recovery queue + trigger) | 🟡 **Half-built** — queue + trigger live; neither side wired |
+| Lane 2 — masked bodies | 🟡 **Router enqueue LIVE** (masked sms/email → queue, card held for the body); Caleb's queue DDL + consumer in build (C1) |
 | Lane 3 — record edits (the flood loop) | 🟢 **Done** — loop killed, 49,059 rehydrated, forward-only |
-| Recency gate (`fub_created`) | 🔴 **Not built** |
+| Recency gate | 🟢 **LIVE** (2026-07-09 eve) — records older than `FUB_NOTIFY_RECENCY_HOURS` (48h) dispatch `stale` → stored, never notified |
 | The 22 toggles (`hl_fub_webhook_settings`) | ⚫ **All OFF** — the hard-kill; stays off until the sequence below |
-| Mirror-reading pollers (the flood anti-pattern) | 🔴 **Still registered** — must be ripped before any flip-on |
+| Mirror-reading pollers (the flood anti-pattern) | 🟢 **RIPPED + verified** (2026-07-09 eve) — deleted from code, unregistered from Inngest; junk-ledger flatline 227/30min → 0 |
+| Door hygiene | 🟢 **LIVE** — existing-person re-imports + behavioral/comms events never fire native registration doors (closed the 1,421-row + near-miss audit find; verified on live traffic) |
 
 ### What's left, by owner
 
 **Lee (notifications / router):**
-1. **Rip the 4 mirror-reading pollers** (`fubEventsPoll` / `fubNotesPoll` / `fubInappPoll` / `fubCommsPoll`,
-   still in `app/api/inngest/route.ts`) — they let the lagging mirror decide what's "new"; that's exactly how the
-   flood happened. The webhook is the sole trigger now.
-2. **Wire the Lane-2 enqueue** — on a masked text/email, the router writes a recovery job to
-   `fub.body_recovery_queue` (Camp David) instead of dropping it.
-3. **Add the recency gate** — `fub_created` gate on the notify path so old activity can never fire a card, even
-   during a one-off catch-up. The structural backstop against another flood.
+1. ~~Rip the 4 mirror-reading pollers~~ ✅ **DONE + verified 2026-07-09 eve** (deleted, unregistered, flatline
+   proven 227→0 junk rows/30min). The webhook is the sole trigger.
+2. ~~Wire the Lane-2 enqueue~~ ✅ **DONE** — masked sms/email → `fub.body_recovery_queue` (**Railway mirror** —
+   relocated from Camp David: the Railway CRM can't reach LAN postgres; Caleb's consumer polls it from CD),
+   `ON CONFLICT DO NOTHING`, soft-skip until Caleb's C1 DDL lands. The card is HELD (`maskedBody`) until the
+   recovered-body trigger fires it WITH the body.
+3. ~~Add the recency gate~~ ✅ **DONE** — `FUB_NOTIFY_RECENCY_HOURS` (48h default) in the router; stale dispatches
+   store/match but never notify; suppression visible in run outputs (`notifySuppressed`).
 4. **Repoint FUB's 20 webhooks** — `camp-zach.taila5bfe9.ts.net` → `crm.houseloop.ai/api/fub/webhook`. The actual
-   cutover; done AFTER 1–3.
+   cutover; script staged; runs after Caleb's C1 → then the DARK VERIFY (toggles off, watch real traffic flow).
 
 **Caleb (scraper):**
-1. **Build the Lane-2-only consumer** — drain `fub.body_recovery_queue`, targeted body reads only.
-2. **Retire the old full-person claim path** — until this ships the scraper still carries the full-scrape logic;
-   once gone it's honestly "Lane-2-only" and this doc flips to say so.
+1. **Build the Lane-2-only consumer** (C1, in build) — create the Railway queue DDL (`CHECK IN
+   ('text','email','call_note')`) + drain it: claim → read that ONE body in the FUB UI → upsert the COMPLETE
+   row+body on Camp David (lossless relay round-trip) → `content_status` flips → the notify trigger fires.
+2. **Retire the old full-person claim path** (C2) — the old real-time path has been dead fiction since ~May 30
+   (49,231 queued, zero drained; wedged worker). Retiring it loses nothing.
 
-**Zach + Caleb (phones — in progress now):**
-1. Port the numbers to Twilio.
-2. Ship the shared `called# → hl_phone_numbers.category → subtype` resolver + FUB call storage so the 4 typed
-   phone cards (rows 14–17) stop showing 0.
+**Zach + Caleb (phones — porting parked by Zach; resolver in scope):**
+1. Ship the shared `called# → hl_phone_numbers.category → subtype` resolver (Caleb places the CRM lib, the router
+   consumes it) + FUB call storage so the 4 typed phone cards (rows 14–17) stop showing 0.
 
 ### The flip-it-back-on sequence
 
-1. **Lee:** rip pollers + wire Lane-2 enqueue + recency gate → deploy (safe — everything's OFF).
-2. **Caleb:** the Lane-2 consumer goes live → masked bodies recover on demand.
-3. **Lee:** repoint the FUB webhooks → FUB pushes straight to HouseLoop; realloop.co fully out of the path.
+1. ~~**Lee:** rip pollers + Lane-2 enqueue + recency gate → deploy.~~ ✅ **DONE + verified 2026-07-09 eve.**
+2. **Caleb:** the Lane-2 consumer goes live → masked bodies recover on demand. *(in build — C1)*
+3. **Lee:** repoint the FUB webhooks → FUB pushes straight to HouseLoop; then DARK VERIFY (toggles still off:
+   watch real webhooks arrive → classify → store → enqueue → recover, ZERO notifications).
 4. **Gate:** turn ON saves/views/inquiries only → verify on REAL activity (a real save lands with name, address,
    link, right number; old data stays silent behind the recency gate).
-5. **Gate:** expand to texts/emails/calls/deals as each is verified. No blanket flip.
+5. **Gate:** expand to in-app → texts/emails → calls/deals as each is verified. No blanket flip.
 
 ## Reference
 
