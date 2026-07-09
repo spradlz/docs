@@ -1,0 +1,98 @@
+---
+title: "⭐ Mintlify How-To Guide"
+description: "How to update these developer docs and get the change LIVE in ~2 minutes — the one command that publishes, the safety gate that silently blocks it, and how to never lose an hour to a stale doc again."
+---
+
+<Info>
+**Read this first if a doc edit isn't showing up on the live site.** These docs do NOT auto-publish reliably. They
+live in the monorepo at `docs-site/`, get **mirrored** to a deploy repo (`spradlz/docs`), and Mintlify builds
+from that. If the mirror doesn't run — or it hits ONE broken file — **nothing ships and the live site sits stale
+for days** while your local files look perfect. This page is how to publish in one command and how to unstick it.
+</Info>
+
+## The 30-second version
+
+1. Edit any `.mdx` under `docs-site/` (or `docs-site/docs.json` for the nav).
+2. Publish it — **one command**:
+   ```bash
+   DEPLOY_AGENT=<you> node tools/docs/mirror-docs.mjs
+   ```
+3. Look for **`"ok": true, "published": true`** in the output. That means it pushed → Mintlify deploys in ~1-2 min.
+4. On the live site, **hard-refresh: `Cmd+Shift+R`** (a normal refresh serves the cached old page).
+
+That's it. If step 2 says `"ok": false`, read [When the publish is blocked](#when-the-publish-is-blocked) below.
+
+## Why it "takes an hour" (it shouldn't)
+
+The pain is almost always ONE of three things — none of which is Mintlify being slow:
+
+| Symptom | Real cause | Fix |
+|---|---|---|
+| Edited a doc, live site unchanged | The **mirror never ran** (the auto-hook is unreliable) | Run the command above manually |
+| Mirror says `RECONCILE FAILED` | **One broken file** blocks the WHOLE publish | Fix the file it names (below) |
+| Mirror published, still looks old | **Your browser cache** | `Cmd+Shift+R` hard-refresh |
+
+<Warning>
+**The mirror is all-or-nothing.** A single orphaned page or one MDX syntax error **aborts the entire publish** —
+so a broken file in *someone else's* doc silently freezes *everyone's* changes. If the live site is stale across
+the board, it's usually one bad file, not your edit. Run `node tools/docs/mirror-docs.mjs --dry` to see exactly
+which file.
+</Warning>
+
+## How it actually flows
+
+```
+docs-site/           →  mirror-docs.mjs  →  spradlz/docs (deploy repo)  →  Mintlify builds  →  live site
+(you edit here)         (rsync + push)      ~/.bossloop/docs-repo cache      ~1-2 min           (hard-refresh)
+```
+
+- **`docs-site/` is the source of truth.** Edit here. Never edit the deploy repo directly.
+- **`docs.json` is the nav.** New page = add its path to a `pages` array. New top tab = add to `navigation.tabs`.
+- **The mirror is a gate, not just a copy.** It refuses to publish anything broken (see below).
+
+## When the publish is blocked
+
+Run the dry check to see the errors without pushing:
+
+```bash
+node tools/docs/mirror-docs.mjs --dry
+```
+
+It fails for exactly two reasons:
+
+### 1. Orphaned page — a file on disk that's in NO nav group
+Every `.mdx` under `docs-site/` must be listed somewhere in `docs.json`, OR it's an "orphan" that blocks the build.
+**To retire a page, don't just remove it from the nav** — that leaves an orphan. Instead:
+- `git rm docs-site/<path>.mdx` (delete the file), AND
+- add a **redirect** in `docs.json` so old links still work:
+  ```json
+  { "source": "/old/path", "destination": "/new/path" }
+  ```
+
+### 2. MDX syntax error — usually curly braces
+MDX reads `{ ... }` as code. Literal braces in prose break the build, e.g. `HouseLoop: {link|No lead created}`.
+Wrap them in backticks so they're literal: `` `{link | No lead created}` ``. The dry run tells you the file + line.
+
+Fix whatever it names, then run the real publish (`node tools/docs/mirror-docs.mjs`) and confirm `"ok": true`.
+
+## Adding to the nav
+
+- **A new page inside an existing section** → add its path (no extension) to that group's `pages` array in `docs.json`.
+- **A new top-level tab** (like this one) → add an object to `navigation.tabs`, first entry = leftmost:
+  ```json
+  { "tab": "⭐ My Tab", "groups": [ { "group": "My Group", "pages": [ "my-page" ] } ] }
+  ```
+- Always `git rm` a page you remove **and** add a redirect — never leave it out-of-nav on disk.
+
+## The rules that keep it fast
+
+- **Publish is a command, not a wish.** An edit isn't live until `mirror-docs.mjs` prints `"published": true`.
+- **One broken file stops everyone.** If the site is globally stale, `--dry` and fix the file it names.
+- **Retire = delete + redirect.** Never orphan a file.
+- **Always hard-refresh** to confirm — `Cmd+Shift+R`.
+
+## Reference
+
+- Publish command: `tools/docs/mirror-docs.mjs` (`--dry` to preview, `--message "..."` for a custom commit).
+- Source: `docs-site/**` · nav: `docs-site/docs.json` · deploy repo: `spradlz/docs` · cache: `~/.bossloop/docs-repo`.
+- Live site: `houseloop.mintlify.io` (private — requires sign-in).
