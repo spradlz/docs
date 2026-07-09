@@ -1,0 +1,148 @@
+---
+title: "Myli Voice"
+description: "Myli as the inbound-call voice agent on all four phone lines — one AI that greets, reads intent, filters spam, books showings and listing appointments, live-transfers hot leads, and drops every call into HouseLoop CRM. Architecture, per-line behavior, call tools, and the live build run-log. Built on the existing LiveKit + Gemini native speech-to-speech agent."
+---
+
+<Info>
+**The interactive build sheet (full designed view):**
+[▶ Myli Voice — inbound-call agent build-out](https://claude.ai/code/artifact/40f9d7fb-b136-4891-9dff-3b8a53d79db7).
+This page reproduces it natively so it loads for everyone; the link opens the pixel-designed version. The
+telephony half (porting + forwarding) lives in [Phone Numbers, Call Routing & Number Porting](/guides/phone-numbers-and-call-routing).
+</Info>
+
+## The thesis
+
+**Myli answers every line.** One AI voice agent across all four phone lines — a different intro and job per line
+— that greets, reads intent, filters spam, books showings and listing appointments, live-transfers hot leads to
+Zach or Ana, and drops every call into HouseLoop CRM as a lead.
+
+**The big unlock: the voice agent already exists in the repo.** `apps/lee-voice-agent/agent.py` — LiveKit +
+Gemini 2.5 Flash **native speech-to-speech** (sub-500ms, function-tool calling). This is far less "build a voice
+agent" and far more "point Myli at the lines and give her the right tools."
+
+## What's already built vs. what this needs
+
+<CardGroup cols={2}>
+  <Card title="The voice agent — BUILT" icon="microphone">
+    `apps/lee-voice-agent/agent.py` — LiveKit Agents + Gemini 2.5 Flash native speech-to-speech, sub-500ms,
+    function tools. This IS Myli's voice; it gets re-pointed, not rebuilt.
+  </Card>
+  <Card title="The media stack — BUILT" icon="waveform">
+    LiveKit (SIP + realtime), Deepgram, Cartesia, ElevenLabs (agent + a phone number), all in `.env`. Two Twilio
+    accounts (Zach + Aaron) for numbers &amp; SIP.
+  </Card>
+  <Card title="The CRM write path — BUILT" icon="database">
+    Lead intake, appointment booking, notifications (incl. lead-less), and the call-record store already exist —
+    Myli's tools call these, not new endpoints.
+  </Card>
+  <Card title="Telephony routing — TO BUILD" icon="phone-arrow-down-left">
+    Port 3 numbers in, forward the legacy pool to one line, wire all four to a SIP trunk → LiveKit. The gating
+    item (porting takes days). See the [porting playbook](/guides/phone-numbers-and-call-routing).
+  </Card>
+  <Card title="Per-line brain — TO BUILD" icon="brain">
+    One agent that reads the **dialed number (DID)** and loads the matching intro + intent script — 4
+    personalities, one agent.
+  </Card>
+  <Card title="Myli's call tools — TO BUILD" icon="screwdriver-wrench">
+    create_lead · book_showing · book_listing_appt · live_transfer · flag_spam · schedule_callback ·
+    mirror_to_fub — thin wrappers over the CRM APIs above.
+  </Card>
+</CardGroup>
+
+## How a call flows
+
+Every line lands on the same agent; the dialed number picks the personality.
+
+```
+caller dials any of the 4 lines
+   │
+   ▼
+Twilio  (owned numbers + the legacy forward line)
+   │  SIP trunk (caller-ID preserved)
+   ▼
+LiveKit → Myli  (Gemini native speech-to-speech)
+   │  reads the DIALED number → loads that line's prompt + intro
+   ▼
+   greet · qualify intent · buy / sell / spam / other
+   │
+   ├─ HOT (buy or sell) ─▶ live_transfer to Zach/Ana  +  create_lead(hot)  +  notify
+   ├─ wants an appointment ─▶ book_showing / book_listing_appt  +  create_lead
+   ├─ spam ─▶ flag_spam  (no lead, logged)
+   └─ other ─▶ schedule_callback  +  create_lead
+   │
+   ▼
+HouseLoop CRM — lead + call record + recording + notification  (mirrored into FUB via API)
+```
+
+<Tip>
+**This fixes the phone mess too.** Every call now flows through *your* Twilio → the `phone_call_received`
+notifications finally fire, the records are yours, and Myli is the front door instead of a voicemail. The
+three-source problem collapses to one pipe.
+</Tip>
+
+## Per-line behavior — one agent, four jobs
+
+Myli monitors all four lines; the dialed number sets her intro and her goal.
+
+| Line | Role | Subtype | Myli's opener |
+|---|---|---|---|
+| **913-320-0906** | Company (Google My Business / public) | `phone_call_company` | "Thanks for calling the Spradling Group, this is Myli — are you calling about buying, selling, or something else?" |
+| **913-354-8600** | Sign / Listings (high intent) | `phone_call_sign` | "Hi, this is Myli with the Spradling Group — which home are you calling about? I can get you in to see it." |
+| **913-954-7123** | Ana (ported from Google Voice) | `phone_call_ana` | "Hi, you've reached Ana's line — this is Myli, her assistant. How can I help?" |
+| **Legacy line** (453-5505 · 270-0645 · +37) | Departed-agent numbers, forwarded | `phone_call_past_agent` | "Hi, this is Myli with the Spradling Group — the agent you're trying to reach has moved on, but I can absolutely help. Are you looking to buy or sell?" |
+
+## Myli's call-handling tools
+
+Function tools she calls mid-conversation — each a thin wrapper over a CRM API that already exists.
+
+<CardGroup cols={2}>
+  <Card title="live_transfer" icon="fire">Hot buyer/seller → Twilio warm-transfers live to Zach/Ana, and flags the lead HOT so you see "take this now."</Card>
+  <Card title="book_showing / book_listing_appt" icon="calendar-check">Reads intent + address, offers times, books it on the calendar, confirms by text.</Card>
+  <Card title="create_lead" icon="user-plus">Every call = a lead in HouseLoop with source, the line it came in on, and the recording attached.</Card>
+  <Card title="flag_spam" icon="ban">Detects solicitors / robocalls, ends politely, logs it — never a junk lead or a false notification.</Card>
+  <Card title="schedule_callback" icon="phone-arrow-up-right">Not-now callers → captures the ask, books a callback task, notifies the right person.</Card>
+  <Card title="mirror_to_fub" icon="arrows-rotate">Writes the call back to FUB's timeline (attribution + recording) via `POST /v1/calls` so it still lives in FUB.</Card>
+</CardGroup>
+
+## Effort &amp; phasing
+
+The agent is a **re-point, not a rebuild** — roughly a week of focused work to get Myli answering + logging +
+transferring. The calendar gate is the ports (1-2 weeks, mostly waiting on carriers). So start Phase 1 on the
+legacy line now, kick the port requests in parallel.
+
+<Steps>
+  <Step title="Phase 1 · days — Myli picks up + logs">
+    Legacy line live (forward, no porting) · Myli answers with the per-line intro · `create_lead` + recording +
+    notification. Proves the full pipe end-to-end.
+  </Step>
+  <Step title="Phase 2 · 1–2 weeks — intent + transfer + book">
+    Buy/sell/spam/other classification · `live_transfer` on hot · `book_showing` / listing appt · the 3 ported
+    owned lines join as they land.
+  </Step>
+  <Step title="Phase 3 · ongoing — full autonomous Myli">
+    Handles the whole interaction · gathers criteria, qualifies budget/timeline · books callbacks, nurtures ·
+    `mirror_to_fub` for full continuity.
+  </Step>
+</Steps>
+
+## Run Log — what's actually being built
+
+<Info>
+Live status of the Myli Voice build. Updated as work lands. **Owner: Caleb** (capture + agent) with Lee
+(notifications) + telephony (porting).
+</Info>
+
+<Update label="2026-07-09" description="Design locked">
+  - ✅ **Build-out designed** — architecture, per-line prompts, call tools, phasing (this page + the artifact).
+  - ✅ **Voice stack confirmed present** — LiveKit + Gemini S2S agent (`apps/lee-voice-agent`), Deepgram/Cartesia/
+    ElevenLabs, two Twilio accounts.
+  - ✅ **Phone-call notification contract unified with Lee** — one key `phone_call_received`, 5 subtypes resolved
+    by dialed-number → `hl_phone_numbers.category`. Notify side maps all 5.
+  - ✅ **Port-vs-forward decision locked** — port 3 assets (Company / Sign / Ana), forward the legacy pool to one
+    Twilio line. Documented in the [porting playbook](/guides/phone-numbers-and-call-routing).
+  - ⬜ **Phase 1 not started** — stand up Myli on a test Twilio number with the legacy prompt + `create_lead` +
+    notification (call it, watch a lead appear). Next up.
+  - ⬜ Shared subtype resolver (`called# → category → subtype`) for both the Twilio webhook and the FUB path.
+  - ⬜ `mirror_to_fub` (`POST /v1/calls`) — confirm FUB API + wire it.
+  - ⬜ Ana Google Voice ingest / port.
+</Update>
