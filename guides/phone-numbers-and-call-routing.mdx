@@ -144,15 +144,37 @@ the LOA/account match fails). Battle-tested fallback = a **two-step port**: GV �
 Try direct first; fall back to two-step if Twilio rejects.
 </Warning>
 
-## Port the ~35 FUB numbers → Twilio
+## Port-vs-Forward — the LOCKED decision (Zach 2026-07-09)
 
-Same process, sourced from FUB: **request a port-out packet from Follow Up Boss support** (account# + PIN + LOA
-per number) → Twilio port-in.
+We do **not** port all ~35. We port the **3 real assets** and **forward the legacy pool** to one line — far
+less porting, same capture.
+
+| Number | Role | Action | Fires |
+|---|---|---|---|
+| **913-320-0906** | Company (Google My Business) | **PORT** out of FUB → Twilio | `phone_call_company` |
+| **913-354-8600** | Sign / Listings | **PORT** out of FUB → Twilio | `phone_call_sign` |
+| **913-954-7123** | Ana (real) | **PORT** out of Google Voice → Twilio | `phone_call_ana` |
+| 913-453-5505 · 913-270-0645 · +37 past-agent lines | Legacy / departed agents | **STAY in FUB → forward to one "Legacy Agents" Twilio line** | `phone_call_past_agent` |
+
+**Why forward the legacy pool instead of porting it:** those numbers aren't assets worth owning — they just
+need to not fall through. Forwarding is a same-day FUB config change (no port wait), and the numbers **stay in
+FUB so FUB keeps logging them natively**. They forward to a single dedicated Twilio "Legacy Agents" number that
+Myli answers (legacy intro) and that rings your cell.
 
 <Warning>
-**Porting REMOVES the number from FUB** — Twilio/HouseLoop becomes the receiver. Each port is a real **cutover**,
-not a copy. FUB's API does not expose number ownership; confirm each line in **FUB Admin → Phone Numbers** first.
+**Two things this creates:**
+1. **Ported numbers leave FUB.** Once 320-0906 / 354-8600 / 954-7123 are on Twilio, FUB no longer logs them —
+   so each call is **mirrored back into FUB via the API** (`POST /v1/calls`, the `mirror_to_fub` step) to keep
+   the FUB timeline intact.
+2. **The legacy line can't tell which original number was dialed.** 40 numbers forwarding to one Twilio line all
+   read as "someone called the legacy line" — so they resolve to ONE subtype (`phone_call_past_agent`). FUB
+   still holds the exact number if per-number detail is ever needed. **Caller-ID pass-through** must be set on
+   every forward, or you see the FUB inbox number instead of who actually called.
 </Warning>
+
+For the FUB ports: **request a port-out packet from Follow Up Boss support** (account# + PIN + LOA per number) →
+Twilio port-in. Confirm each line in **FUB Admin → Phone Numbers** first; each port is a real **cutover**, not a
+copy. The forwarding pool needs no port — it's a routing change in FUB.
 
 ## The rollout — pilot ONE, then batch
 
