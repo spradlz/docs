@@ -106,11 +106,13 @@ node tools/houseloop-contracts/anchor-sig-fields.mjs <form.pdf>
 2. `pdftotext -bbox` per page → the printed labels, to know **who** signs each box.
 3. Classify: a narrow (`w<70`) bottom pair → **initials** (buyer left, co-buyer right); a wide box with a party label
    under it → that party's **signature**.
-4. It prints a ready-to-paste `signatureFields` block with the **exact** coordinates, one field **per page**.
+4. It writes the field-map (`--write lib/tc/field-maps/<key>.json`) with the **exact** coordinates, one field **per page**.
+   For forms whose text layer is obfuscated (the eXp forms — `pdftotext` reads nothing), pass
+   `--order buyer,co_buyer,broker,agent` to assign the boxes by top-to-bottom order instead of by label.
 
-**The process for a new/changed form:** run the extractor → paste the output into that form's `signatureFields` → if it
-warns `⚠ unassigned sign box`, add **one** rule to `partyForBox()` in the tool (never type a coordinate) → verify the render
-on a page whose box Y differs from page 1.
+**The process for a new/changed form:** run the extractor with `--write` → `contract-forms.ts` already imports
+`field-maps/<key>.json`, so the fill picks it up (no coordinate ever typed) → if it warns `⚠ unassigned sign box`, add
+`--order` or **one** `partyForBox()` rule → verify the render on a page whose box Y differs from page 1.
 
 ### The fill engine
 
@@ -119,29 +121,31 @@ an embedded **Great Vibes** cursive — baked content renders identically in eve
 field gets re-rendered by the viewer in its own font, which is why cursive-in-a-field showed as a block). Initials are
 **vertically centered** in the ~27pt box.
 
-**Verified:** with the extracted coords, the initials land inside the box on page 1 (box at 722) *and* page 3 (box at 695) —
-two different positions, both correct, from the same read-from-the-PDF data.
+**Verified (all 3 forms):** the generated field-maps drive correct placement on **Exclusive Buyer Agency** (initials in-box
+on page 1 @ y=722 *and* page 3 @ y=695 — different positions, both correct; page-6 sig block: buyer / co-buyer / agent /
+broker), **Single Property** and **Non-Exclusive** (buyer / co-buyer / broker / agent sig boxes via `--order`). Then a
+**live in-app fill** on the real Exclusive Buyer Agency (Add Document → Fill & add → executed PDF on R2) confirmed "MO" in
+the page-1 initials box and Msale Olongo / Zach Spradling / Chris Cribb in the page-6 boxes.
 
-**Tools:** extractor `tools/houseloop-contracts/anchor-sig-fields.mjs` · field maps `apps/houseloop-crm/lib/tc/contract-forms.ts`
-· draw engine `apps/houseloop-crm/lib/tc/fill-contract.ts`. Deps: `poppler` (`pdftocairo`, `pdftotext`, `pdfinfo`).
+**Tools:** extractor `tools/houseloop-contracts/anchor-sig-fields.mjs` · generated field maps `apps/houseloop-crm/lib/tc/field-maps/*.json`
+· imported by `apps/houseloop-crm/lib/tc/contract-forms.ts` · draw engine `apps/houseloop-crm/lib/tc/fill-contract.ts`.
+Deps: `poppler` (`pdftocairo`, `pdftotext`, `pdfinfo`).
 
-### Recommended architecture — ONE deterministic mapper, wired into the fill (Benji 2026-07-09)
+### The architecture — ONE deterministic mapper, wired into the fill (IMPLEMENTED 2026-07-09)
 
-The permanent fix is a single, **deterministic-first** field mapper whose output the fill engine **loads directly**, so no
-coordinate is ever hand-authored:
+A single, **deterministic-first** mapper whose output the fill engine **loads directly**, so no signature coordinate is
+hand-authored:
 
-1. **Signatures / initials → vector extraction** (the `anchor-sig-fields.mjs` method). Read the exact e-sign rectangle from
-   the PDF. $0, no model, pixel-exact, reproducible. Strictly better than a vision pixel-box estimate for drawn boxes.
-2. **Data blanks (name / price / term / address) → text-anchor extraction.** Anchor each value to the printed label's bbox
-   (`pdftotext -bbox`). The **coordinate always comes from the PDF layer**, never from a model's guess.
-3. **Vision is an OPTIONAL naming assist only.** Use it once per new form to *classify/name* an ambiguous blank — never to
-   produce a coordinate. This folds the useful half of `vision-field-builder.mjs` in and drops its imprecise pixel-boxes.
-4. **Wire the output into the fill.** The generator writes `field-maps/<form-key>.json`; the fill loads it (retiring the
-   hand-authored arrays in `contract-forms.ts`). Regenerate when a form revises; the fill never changes.
+1. **Signatures / initials → vector extraction** (`anchor-sig-fields.mjs`). Reads the exact e-sign rectangle from the PDF.
+   $0, no model, pixel-exact, reproducible. ✅ Done — generates `field-maps/*.json`, imported by `contract-forms.ts`.
+2. **Wired into the fill.** ✅ Done — the hand-authored signature/initials arrays are gone; the fill loads the generated
+   maps. Regenerate when a form revises; the fill never changes.
+3. **Still authored inline** (not e-sign boxes): the eXp forms' typed print-NAME + DATE underlines merge in per form.
+4. **Data blanks (name / price / term / address)** — still resolved by the vision-assisted `vision-field-builder.mjs`
+   (which blank → which datum is semantic). Migrating data-field coords to deterministic text-anchor extraction is the one
+   remaining piece; the coordinate should always come from the PDF layer, never a model's pixel-box.
 
-Why this over the status quo: two detectors exist and **neither is wired in**, so coordinates get typed by hand and drift.
-One generator, deterministic-first, loaded by the fill = coordinates are *generated, never typed* — the actual lock. This
-supersedes both the never-real "CommonForms" idea and the vision-only `vision-field-builder.mjs` pixel-box approach.
+This supersedes both the never-real "CommonForms" idea and the vision-only pixel-box approach for the signature boxes.
 
 ---
 
@@ -151,11 +155,14 @@ Owners: Benji (CRM integration) · Lee (infra). Current build status:
 
 - **DONE** — Fill engine (pdf-lib); dotloop filing (read + upload); full pipeline proven end-to-end; HouseLoop eSignature
   (Documenso) cloned, rebranded, and running locally with the official HouseLoop brand assets.
-- **DONE (2026-07-09)** — **Deterministic signature/initials mapping** (`anchor-sig-fields.mjs`) + the exact Exclusive
-  Buyer Agency initials coords, verified in the render. Rule: `.claude/rules/SIGNATURE_ANCHORING.md`.
-- **NOT DONE (correcting the record)** — a fully-automatic field detector is **not** built or wired. "CommonForms" was
-  never real code; `vision-field-builder.mjs` (2026-06-23) exists but has never been run to output and is **not wired into
-  the fill**. The fill still reads hand-authored `contract-forms.ts`. Wiring a generator into the fill is the open task.
+- **DONE (2026-07-09)** — **Deterministic signature/initials mapping, generated AND wired for all 3 forms.**
+  `anchor-sig-fields.mjs` extracts every box from the PDF → `lib/tc/field-maps/*.json` → imported by `contract-forms.ts`
+  (the hand-authored signature/initials arrays are gone). Verified with render receipts on all 3 forms **and a live in-app
+  fill** (Exclusive Buyer Agency: "MO" in the page-1 initials box, sigs in the page-6 boxes). Rule:
+  `.claude/rules/SIGNATURE_ANCHORING.md`.
+- **OPEN** — DATA-field coordinates (name/price/term/address) are still authored/`vision-field-builder`-assisted, not yet
+  migrated to deterministic text-anchor extraction. "CommonForms" was never real code (corrected above). The eXp forms'
+  typed print-NAME + DATE underlines remain authored inline (they're not e-sign boxes).
 - **DONE (2026-07-06)** — **`esign.houseloop.ai` is LIVE on Railway** with a real Let's Encrypt cert, served directly
   from Railway's edge (no proxies). `NEXT_PUBLIC_WEBAPP_URL`/`NEXTAUTH_URL` point at the branded domain, so signing
   links carry `esign.houseloop.ai`. The domain was wedged for 13 days: Railway requires a
