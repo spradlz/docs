@@ -200,28 +200,41 @@ James Ross: his in-app messages carry synthetic ids and never appear in `GET /v1
 created by the original account owner's seat). So capture is a scraper reading the inbox — lawfully, gated, and
 Inngest-visible:
 
-1. **Detect (account-wide, no per-lead walk):** the registered Inngest cron **`fub-inapp-sweep-tick`** (Run Log
-   `comms` lane; event-only until sign-off, then cron `*/3`) enqueues one sentinel `inbox_sweep` job into the
-   Railway FUB mirror queue. `UNIQUE(resource_type,resource_id)` means at most one sweep is ever pending — no
-   pile-up.
-2. **Read + extract (reuse, never reinvent):** the Camp David `fub-body-recovery` consumer claims the job and
-   runs **`tools/fub-scraper/fub-inapp-sweep.mjs`**, which lists in-app conversations via FUB's internal inbox
-   endpoint `GET /api/v1/inbox/0/conversations?types=…,InboxAppConversations&publishedInboxApps=2` (the app's
-   exact params — a bare fetch hangs), then reuses the proven extractor in `fub-scraper-lib.mjs`
-   (`scrapeTextContainers` classifies a timeline row `zillow_inapp` by its **`zillow.png`** circle-icon;
-   `matchAndUpdateMessages` mints the synthetic id **`900000000 + personId*1000 + seq`**, dedupes,
-   `ON CONFLICT (id) DO NOTHING`). The relay carries the new born-visible rows Camp David → Railway.
+1. **Detect — the REST API, not the inbox SPA (proven 2026-07-09):** message BODIES aren't in the API, but WHO
+   has in-app activity IS: **`GET /v1/people?sort=-lastInboxAppMessage&fields=id,lastInboxAppMessage`** returns
+   every person ordered by their last in-app message, with the timestamp. Reliable, no browser, cursor-pageable.
+   (The FUB inbox web endpoint `/api/v1/inbox/…/conversations` **hangs** on any direct/replay fetch and its
+   virtualized list won't page on scroll — only the app's own live XHR ever fires; the people-sort is the robust
+   surface.) Incremental takes only people newer than our mirror's newest `zillow_inapp`; backfill takes all.
+   The registered Inngest cron **`fub-inapp-sweep-tick`** (Run Log `comms` lane; event-only until sign-off, then
+   cron `*/3`) enqueues one sentinel `inbox_sweep` job into the Railway FUB mirror queue —
+   `UNIQUE(resource_type,resource_id)` = at most one sweep pending (no pile-up).
+2. **Extract (reuse, never reinvent):** the Camp David `fub-body-recovery` consumer claims the job and runs
+   **`tools/fub-scraper/fub-inapp-sweep.mjs`**, which — for each discovered person — reuses the proven extractor
+   in `fub-scraper-lib.mjs` (`scrapePersonFull` + `matchAndUpdateMessages`: `scrapeTextContainers` classifies a
+   timeline row `zillow_inapp` by its **`zillow.png`** circle-icon; the synthetic id
+   **`900000000 + personId*1000 + seq`** dedupes against the existing rows, `ON CONFLICT (id) DO NOTHING`). The
+   relay carries the new born-visible rows Camp David → Railway.
 3. **Notify (native, gated — one notifier):** for each NEW inbound in-app message the sweep POSTs
    `/api/fub/body-recovered`; **`fub-body-recovered`** maps `message_type='zillow_inapp'` → `in_app_message` →
    a card, through the gate stack: **existing-lead gate** (no HouseLoop lead ⇒ store-only, NO card, NO mint) +
    `_global` on + `in_app_message` Notify on + recency. The legacy realloop `notify-scraper` Twilio path is
    retired (behind `REALLOOP_SCRAPER_NOTIFY`, off) so there is exactly ONE notification per message.
 4. **Backfill is silent:** `fub-inapp-sweep.mjs --backfill` pulls every in-app message into the mirror + All
-   feed with **zero** notifications (no 1,198-card flood). `--measure` prints the FUB-inbox-vs-mirror gap.
+   feed with **zero** notifications (no 1,198-card flood). `--measure` prints the FUB-vs-mirror gap.
+
+<Note>
+**Live proof (2026-07-09, dark run).** `--measure`: FUB **1,303** in-app people vs our mirror **2,464** people /
+**10,588** messages (coverage gap 0). Incremental sweep: discovered 1 person newer than the cursor → reused
+extractor scraped → **2 new in-app messages stored** → POSTed body-recovered → **notified: 0** (gate held:
+`_global` + `in_app_message` Notify both off) → `hl_notification` new_message = 0. Discover → scrape → store →
+gate, proven end-to-end, zero cards. In-app messages are **buyer-initiated** (an agent can't originate one), so
+the only remaining live event is a real buyer message once the toggles flip.
+</Note>
 
 **Why not a webhook:** in-app *inquiries* do fire an `eventsCreated` (Property Inquiry) our native router
-already receives — but pure-conversation messages ("What's up with this place?") fire nothing. So the inbox
-sweep is the mandatory floor that catches every message. **Never** set `REALLOOP_FUB_AUTONOMY=1` — that
+already receives — but pure-conversation messages ("What's up with this place?") fire nothing. So the sweep is
+the mandatory floor that catches every message. **Never** set `REALLOOP_FUB_AUTONOMY=1` — that
 revives the poller + FUB-write-autoreply flood stack retired in the one-writer lockdown.
 
 ## Native capture — the webhook that severs realloop.co
