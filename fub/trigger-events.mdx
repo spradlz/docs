@@ -152,8 +152,11 @@ transcript would require us to transcribe `recording_url` ourselves, a separate 
    now logs each save/view as a **note** (`notesCreated`, exposed body with the address). That is the live
    per-event source `classifyFubEvent`/the note parser reads. The scraper's `/v1/events?hasProperty=true`
    intercept is a *different* thing — the one-time deep historical browse-list backfill, **not** the live source.
-2. **In-app is never masked.** Zillow `zillow_inapp` messages are always born-visible in the mirror — they notify
-   directly on INSERT (Lane 1), never need recovery. Only **SMS** ever masks a body.
+2. **In-app is captured by the scraper, not the API.** Zillow `zillow_inapp` chat is NOT in FUB's API or
+   webhooks (proven 2026-07-09) — it lives only in the "Zillow Messages" inbox app, and the `fub-inapp-sweep`
+   scraper reads it (see "How an in-app message becomes a trigger event" below). Once a sweep writes it to the
+   mirror it is born-visible (never masked) and notifies via the native card, gated to existing leads. Only
+   **SMS** ever masks a body.
 </Note>
 
 ## The 3-lane architecture
@@ -161,8 +164,9 @@ transcript would require us to transcribe `recording_url` ourselves, a separate 
 Every FUB event enters the native webhook and `fubWebhookRouter` sorts it into exactly one lane:
 
 ### Lane 1 — Visible activity (~95%): router notifies directly, scraper never touches
-Home saved/viewed (`notesCreated`), inquiries (`eventsCreated`), in-app messages (`zillow_inapp`), visible SMS,
-call metadata, appointments, tasks, deals. The API hands us clean content → the router classifies it and fires
+Home saved/viewed (`notesCreated`), inquiries (`eventsCreated`), visible SMS, call metadata, appointments,
+tasks, deals. (In-app messages are NOT here — they are the inbox-app sweep lane below.) The API hands us clean
+content → the router classifies it and fires
 the owner-only notification immediately.
 
 ### Lane 2 — Masked comms: the ONLY thing that wakes the scraper
@@ -187,6 +191,38 @@ the body is recovered. Born-visible content (in-app, visible SMS) is Lane 1 and 
 `peopleUpdated` / `peopleStageUpdated` / `peopleTagsCreated` / `peopleDeleted`. These update the person record
 only. **They never enqueue a scrape.** (A stage change may fire `stage_changed` if the Notify toggle is on; that
 is a notification, not a scrape.)
+
+## ⭐ How an in-app (Zillow Messages) message becomes a trigger event
+
+Zillow in-app chat is the ONE signal FUB does **not** expose through its API or webhooks (proven 2026-07-09 on
+James Ross: his in-app messages carry synthetic ids and never appear in `GET /v1/textMessages`; no
+`textMessagesCreated` fires). They live only in FUB's **"Zillow Messages" inbox app** (`inboxApp id 1`,
+created by the original account owner's seat). So capture is a scraper reading the inbox — lawfully, gated, and
+Inngest-visible:
+
+1. **Detect (account-wide, no per-lead walk):** the registered Inngest cron **`fub-inapp-sweep-tick`** (Run Log
+   `comms` lane; event-only until sign-off, then cron `*/3`) enqueues one sentinel `inbox_sweep` job into the
+   Railway FUB mirror queue. `UNIQUE(resource_type,resource_id)` means at most one sweep is ever pending — no
+   pile-up.
+2. **Read + extract (reuse, never reinvent):** the Camp David `fub-body-recovery` consumer claims the job and
+   runs **`tools/fub-scraper/fub-inapp-sweep.mjs`**, which lists in-app conversations via FUB's internal inbox
+   endpoint `GET /api/v1/inbox/0/conversations?types=…,InboxAppConversations&publishedInboxApps=2` (the app's
+   exact params — a bare fetch hangs), then reuses the proven extractor in `fub-scraper-lib.mjs`
+   (`scrapeTextContainers` classifies a timeline row `zillow_inapp` by its **`zillow.png`** circle-icon;
+   `matchAndUpdateMessages` mints the synthetic id **`900000000 + personId*1000 + seq`**, dedupes,
+   `ON CONFLICT (id) DO NOTHING`). The relay carries the new born-visible rows Camp David → Railway.
+3. **Notify (native, gated — one notifier):** for each NEW inbound in-app message the sweep POSTs
+   `/api/fub/body-recovered`; **`fub-body-recovered`** maps `message_type='zillow_inapp'` → `in_app_message` →
+   a card, through the gate stack: **existing-lead gate** (no HouseLoop lead ⇒ store-only, NO card, NO mint) +
+   `_global` on + `in_app_message` Notify on + recency. The legacy realloop `notify-scraper` Twilio path is
+   retired (behind `REALLOOP_SCRAPER_NOTIFY`, off) so there is exactly ONE notification per message.
+4. **Backfill is silent:** `fub-inapp-sweep.mjs --backfill` pulls every in-app message into the mirror + All
+   feed with **zero** notifications (no 1,198-card flood). `--measure` prints the FUB-inbox-vs-mirror gap.
+
+**Why not a webhook:** in-app *inquiries* do fire an `eventsCreated` (Property Inquiry) our native router
+already receives — but pure-conversation messages ("What's up with this place?") fire nothing. So the inbox
+sweep is the mandatory floor that catches every message. **Never** set `REALLOOP_FUB_AUTONOMY=1` — that
+revives the poller + FUB-write-autoreply flood stack retired in the one-writer lockdown.
 
 ## Native capture — the webhook that severs realloop.co
 
