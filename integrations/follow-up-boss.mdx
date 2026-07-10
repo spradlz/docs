@@ -64,25 +64,43 @@ NEVER invents a bucket, it lands in Other. Nothing is lost: the fine original or
 a **`Lead Source - <original>` tag** (e.g. `Lead Source - Opcity`). The buckets are seeded by **migration 0315**;
 the old hardcoded `Zillow.com` import label was killed so imports stamp the *real* resolved bucket.
 
-### The one-time backfill sweep (`fub-source-sweep`)
-A registered Inngest function (`fub/source-sweep.run` — manual, **no cron**; it's a one-time cleanup) folded the
-**entire existing book** into the six buckets, in two places, with **no scraping**:
-- **In Follow Up Boss (tags):** it stamps each person with **`HL Source: <bucket>`** + their `Lead Source -
-  <origin>` tag. (FUB's `source` field is **not** API-writable — probed 2026-07-04 — but tags are. Writes are
-  GET → merge → PUT off the **live** FUB record, never the mirror copy, so a stale array can't silently delete a
-  tag a lead just earned.)
-- **In the HouseLoop mirror:** it UPDATEs `fub.people.source` → the bucket name (batched, self-chaining ~2k/run).
+### We do NOT rewrite FUB's Source field — we tag (it's immutable)
 
-The sweep is **Rule #0-gated** — apply mode requires Zach's typed in-session OK (49k-row class) and the reversal
-file saved first. Result (verified via Run-Log receipts 2026-07-04): **47,867 mirror rows folded to exactly six
-source values**, and the FUB tag pass tagged the book at ~2k/run with zero errors. Dry-run distribution across
-49,229 `fub.people`: **Zillow ≈ 28,082 · Other ≈ 14,508 · Google PPC ≈ 4,907 · PC SOI ≈ 1,007 · Realtor.com ≈
-675 · Google Organic ≈ 50.**
+**Follow Up Boss's `source` field cannot be changed via the API** (probed 2026-07-04 → "No valid fields").
+So inside FUB, a lead's Source stays exactly what it always was — "Zillow Preferred", "Premier Agent",
+"zillow.com" — **forever**. We never touch it. The normalized bucket lives in FUB as a **tag** instead.
+
+The one-time backfill — a registered Inngest function (`fub-source-sweep`, event `fub/source-sweep.run`,
+**manual, no cron**; Rule #0-gated, reversal file saved first) — stamped the entire book:
+- **`HL Source: <bucket>`** — the canonical bucket (e.g. `HL Source: Zillow`), for filtering inside FUB.
+- **`Lead Source - <origin>`** — the exact original string preserved (e.g. `Lead Source - Zillow Preferred`).
+
+Tag writes are GET → merge → PUT off the **live** FUB record (never the mirror), so a stale array can't delete a
+tag a lead just earned. **Verified live (mirror, this session):** **48,920 of 49,234** people carry an
+`HL Source:` tag (**28,072 = Zillow**); only **64** Zillow-family stragglers still need it.
+
+<Warning>
+**The `HL Source:` tag is the normalized signal in FUB — the Source field is NOT.** Inside FUB, "Zillow
+Preferred" (and the other raw strings) will always show as the Source; that's expected and unavoidable (FUB owns
+that field). The `HL Source: Zillow` tag is where the bucket lives. Likewise, **do not read
+`fub.people.source` in our mirror as the canonical bucket** — the mirror re-syncs FUB's raw source over any fold,
+so it also shows the raw strings. The canonical bucket is derived by the resolver / carried by the tag, never
+stored durably in a source column.
+</Warning>
+
+### How HouseLoop gets the bucket (it derives, not reads the tag)
+
+When a FUB lead **imports into HouseLoop**, the import runs the raw Source string through the fold map
+(`canonicalizeFubSource`) → resolves the bucket → stores it on the HouseLoop lead (`hl_leads.source_id`) and
+adds the `Lead Source - <origin>` tag. So the HouseLoop lead's Source = **Zillow**, even though FUB's field says
+"Zillow Preferred". HouseLoop derives the bucket from the raw string — it does **not** depend on the
+`HL Source:` tag (the only tag it reads as an override is `Google Adwords PPC` → Google PPC).
 
 **Where you see it:** the **Platform / Source** page — a platform card + the six-bucket KPI rows (click a bucket
-to filter its leads); each imported lead shows its bucket as its Source plus the `Lead Source - <origin>` chip on
-lead detail. This is the normalized list new FUB leads import into, forever — new inbound is canonicalized at
-import time by the same one map.
+to filter its leads); each imported lead shows its bucket as its Source, plus the `Lead Source - <origin>` chip
+on lead detail. New inbound is canonicalized the same way at import time. Live bucket spread across 49,234
+`fub.people` (by `HL Source:` tag): **Zillow ≈ 28,072**, the rest split across Google PPC · PC SOI · Realtor.com ·
+Google Organic · Other.
 
 ## Boundaries that never move
 
