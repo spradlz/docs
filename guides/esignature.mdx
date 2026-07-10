@@ -47,12 +47,18 @@ vision-assisted field builder costs a few cents of LLM tokens, one time per *new
 
 - **Full fill → sign → file pipeline, verified end-to-end live.** A filled Exclusive Buyer Agency was sent for signature,
   signed in the browser, the executed PDF pulled back, and uploaded into a dotloop loop. The plumbing works.
-- **Free automatic field detection, validated on our own forms.** CommonForms auto-detected **46 fields across all 6 pages**
-  of the Exclusive Buyer Agency — every text blank, checkbox, signature line, date line, **and the per-page initials boxes** —
-  placed accurately on the lines, with **no human nudging**.
+- **Deterministic signature/initials mapping — read from the PDF, $0.** `anchor-sig-fields.mjs` extracts every e-sign box's
+  exact coordinates from the PDF (vector rectangles via `pdftocairo` + party labels via `pdftotext`). Verified: initials land
+  inside the box on pages whose boxes sit at *different* Y (722 vs 695) — see "Field & signature mapping" below.
 - **HouseLoop eSignature — white-labeled.** Documenso cloned and fully rebranded to **HouseLoop eSignature**: HouseLoop logos,
   brand navy (`#1B3564`), product name throughout, transactional emails from `noreply@houseloop.ai`. Runs locally with a
   verified branded sign-in page.
+
+> **Honest status of field detection (2026-07-09).** There is **no fully-automatic, zero-touch field detector wired into
+> the fill.** Two tools exist — `vision-field-builder.mjs` (vision, data fields) and `anchor-sig-fields.mjs` (deterministic,
+> signatures) — but **neither is wired into the fill engine yet**: the fill reads hand-authored coordinates in
+> `apps/houseloop-crm/lib/tc/contract-forms.ts`. That disconnect is exactly why signature coordinates were re-tuned by hand
+> ~15×. **The next real task is to wire a generator into the fill so coordinates are generated, never typed.**
 
 ## Why these choices
 
@@ -119,13 +125,17 @@ two different positions, both correct, from the same read-from-the-PDF data.
 
 ---
 
-## 🚧 Work In Progress — updated 2026-07-06
+## 🚧 Work In Progress — updated 2026-07-09
 
 Owners: Benji (CRM integration) · Lee (infra). Current build status:
 
-- **DONE** — Field detection (CommonForms) validated on our forms; fill engine (pdf-lib); dotloop filing (read + upload);
-  full pipeline proven end-to-end; HouseLoop eSignature (Documenso) cloned, rebranded, and running locally with the official
-  HouseLoop brand assets.
+- **DONE** — Fill engine (pdf-lib); dotloop filing (read + upload); full pipeline proven end-to-end; HouseLoop eSignature
+  (Documenso) cloned, rebranded, and running locally with the official HouseLoop brand assets.
+- **DONE (2026-07-09)** — **Deterministic signature/initials mapping** (`anchor-sig-fields.mjs`) + the exact Exclusive
+  Buyer Agency initials coords, verified in the render. Rule: `.claude/rules/SIGNATURE_ANCHORING.md`.
+- **NOT DONE (correcting the record)** — a fully-automatic field detector is **not** built or wired. "CommonForms" was
+  never real code; `vision-field-builder.mjs` (2026-06-23) exists but has never been run to output and is **not wired into
+  the fill**. The fill still reads hand-authored `contract-forms.ts`. Wiring a generator into the fill is the open task.
 - **DONE (2026-07-06)** — **`esign.houseloop.ai` is LIVE on Railway** with a real Let's Encrypt cert, served directly
   from Railway's edge (no proxies). `NEXT_PUBLIC_WEBAPP_URL`/`NEXTAUTH_URL` point at the branded domain, so signing
   links carry `esign.houseloop.ai`. The domain was wedged for 13 days: Railway requires a
