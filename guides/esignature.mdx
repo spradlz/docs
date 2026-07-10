@@ -16,7 +16,7 @@ It is **self-hosted and open-source** — no per-document fees, no third-party "
 
 ```
 Contract PDF
-  → 1. Detect fields      (CommonForms — free, self-hosted vision model)
+  → 1. Map fields        (deterministic extraction from the PDF — see "Field & signature mapping" below)
   → 2. Fill from lead     (pdf-lib — name, price, term, address, etc.)
   → 3. Send for signature (HouseLoop eSignature — self-hosted Documenso)
   → 4. Signer signs        (browser / mobile, branded HouseLoop)
@@ -24,15 +24,22 @@ Contract PDF
   → 6. Archive to our R2 (permanent) · optional backup mirror → dotloop (SkySlope / eXp compliance)
 ```
 
-Every layer is **$0/month**: the only variable cost is a few cents of LLM tokens, one time per *new* form, to label the
-detected fields.
+Every layer is **$0/month**. The signature/initials mapping is fully deterministic ($0, no model); the optional
+vision-assisted field builder costs a few cents of LLM tokens, one time per *new* form, to name/classify data blanks.
 
 | Layer | Technology | Cost |
 |---|---|---|
-| Field detection | CommonForms / FFDNet (self-hosted, Apache-2.0) | $0 |
+| Signature/initials mapping | `anchor-sig-fields.mjs` (pdftocairo + pdftotext, deterministic) | $0 |
+| Data-field mapping (optional) | `vision-field-builder.mjs` (pdftotext + Claude vision) | ~cents / new form |
 | Field fill | pdf-lib (embedded font) | $0 |
 | E-signature | HouseLoop eSignature (Documenso, self-hosted, AGPL-3.0) | $0 |
 | Filing | dotloop API | $0 (existing) |
+
+> ⚠️ **Correction (2026-07-09):** earlier drafts of this page named **"CommonForms / FFDNet"** as the field detector.
+> **No such code ever existed in the repo** — that was aspirational. The actual tooling is
+> `tools/houseloop-contracts/vision-field-builder.mjs` (built 2026-06-23, Claude vision) for data fields and
+> `anchor-sig-fields.mjs` (2026-07-09, deterministic) for signature/initials boxes. See the next section for the
+> real, honest state.
 
 ---
 
@@ -54,6 +61,61 @@ detected fields.
   automatic.
 - **No subscription.** Hosted e-sign vendors charge a monthly platform fee and/or per-signature fees and stamp their own
   brand on the signing experience. Self-hosting open-source gives us our own brand, unlimited volume, and $0/month.
+
+---
+
+## Signature & initials placement — read from the PDF, never typed (locked 2026-07-09)
+
+> **The law:** signature/initials coordinates are **extracted from the PDF itself**, never hand-typed or eyeballed. Full
+> rule: `.claude/rules/SIGNATURE_ANCHORING.md`.
+
+### What we found (the bug that kept coming back)
+
+The signature/initials boxes live in `lib/tc/contract-forms.ts` as a `signatureFields[]` per form. For months those
+coordinates were **measured by hand and typed in** — and they were re-tuned **~15 times** and still landed wrong (the
+cursive floating *above* the box on some pages, inside it on others).
+
+**Root cause:** the initials box sits at a **different Y on every page**. Measured on the Exclusive Buyer Agency:
+
+| Page | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|
+| Initials box top (yTop) | **722** | **718** | **695** | **702** | **697** |
+
+The code used **one hardcoded `yTop: 706`** for all five pages — so it was *mathematically impossible* to be right. Every
+"fix" was a guess that helped one page and broke another. The PDF held the exact answer the whole time; we just never read it.
+
+### The process (deterministic — run it, don't guess)
+
+The dotloop-exported forms are **flat PDFs** (zero AcroForm fields / annotations). dotloop flattens its e-sign field boxes
+into the page as **~27pt-tall vector rectangles** (the form's own data-fill underlines are ~11pt), and the printed party
+labels (**BUYER / BUYER'S AGENT / BROKER'S SIGNATURE / DATE**) sit just *under* each signing line. So we read both:
+
+```bash
+node tools/houseloop-contracts/anchor-sig-fields.mjs <form.pdf>
+```
+
+1. `pdftocairo -svg` per page → parse the axis-aligned rectangles; keep the ~27pt e-sign boxes, drop the ~11pt data underlines.
+2. `pdftotext -bbox` per page → the printed labels, to know **who** signs each box.
+3. Classify: a narrow (`w<70`) bottom pair → **initials** (buyer left, co-buyer right); a wide box with a party label
+   under it → that party's **signature**.
+4. It prints a ready-to-paste `signatureFields` block with the **exact** coordinates, one field **per page**.
+
+**The process for a new/changed form:** run the extractor → paste the output into that form's `signatureFields` → if it
+warns `⚠ unassigned sign box`, add **one** rule to `partyForBox()` in the tool (never type a coordinate) → verify the render
+on a page whose box Y differs from page 1.
+
+### The fill engine
+
+`lib/tc/fill-contract.ts` (`drawSignaturePlaceholders`) draws the signature/initials as **page content** (not form fields) in
+an embedded **Great Vibes** cursive — baked content renders identically in every viewer and keeps the cursive font (a form
+field gets re-rendered by the viewer in its own font, which is why cursive-in-a-field showed as a block). Initials are
+**vertically centered** in the ~27pt box.
+
+**Verified:** with the extracted coords, the initials land inside the box on page 1 (box at 722) *and* page 3 (box at 695) —
+two different positions, both correct, from the same read-from-the-PDF data.
+
+**Tools:** extractor `tools/houseloop-contracts/anchor-sig-fields.mjs` · field maps `apps/houseloop-crm/lib/tc/contract-forms.ts`
+· draw engine `apps/houseloop-crm/lib/tc/fill-contract.ts`. Deps: `poppler` (`pdftocairo`, `pdftotext`, `pdfinfo`).
 
 ---
 
