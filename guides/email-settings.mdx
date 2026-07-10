@@ -94,6 +94,28 @@ So whatever you configure in **Team Email** is honored on every automated send �
 reply-routed, and Gmail-safe. (Manual 1:1 email from the composer still sends via the human's
 Gmail and appends their signature server-side via `/api/email/send`.)
 
+## The deliverability guard — test email NEVER hits Resend (LAW, 2026-07-10)
+
+QA and the registration test harness send to fake `@example.com` recipients. Those bounce 100% (it's
+an RFC-reserved dead domain) and **every bounce burns our Resend sender reputation.** A "don't do that"
+convention is unenforceable, so it's a **hard gate in code at every send chokepoint** — unbypassable:
+
+- `isUndeliverableAddress(to)` blocks reserved/test domains (`example.com/.org/.net`, `.test`, `.invalid`,
+  `localhost`) — real lookalikes like `examplerealty.com` pass. Guards live in
+  `lib/email/deliverability-guard.ts` (CRM **and** website).
+- Wired into **every** Resend path: CRM `sendViaResend`, website `waitlist` confirm, website
+  `saved-search alerts`. A new send path MUST call the guard first.
+- A blocked send is **visible, not silent:** it returns `not delivered: blocked test/undeliverable
+  address`, and the CRM path writes a **`blocked` event to `hl_email_event`** — so the Email analytics
+  shows **"blocked (never sent)"** instead of a fake "bounced."
+
+<Note>
+**Reading the Email analytics:** the bounce/open/delivered/**blocked** counts come from
+`hl_email_event` (Resend webhook events), **not** `hl_email_send_log` (that's the manual composer's
+agent→lead sends). A pile of `*-registration-*@example.com` "bounces" = QA test noise, now caught by
+the guard as `blocked`.
+</Note>
+
 ## Reference
 
 - `apps/houseloop-crm/lib/email/resend-send.ts` — Resend sender (`from`, `reply_to`)

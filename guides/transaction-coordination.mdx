@@ -84,11 +84,14 @@ signature**. (Chosen over SignWell for ownership, no per-sig cost, and SkySlope-
 
 ## The CRM section (navigation)
 
-TC is a **drill-in section**: the main left nav has **Transaction Coordination ›**; clicking it swaps the
-whole left menu for the TC sub-nav + a **Back to CRM** link. Sub-nav (routes under `/tc/*`, additive —
-Dashboard/Leads unchanged):
+TC is a **drill-in section**: the main left nav has **TC Loop ›**; clicking it swaps the whole left menu for
+the TC sub-nav + a **Back to CRM** link. The sub-nav (routes under `/tc/*`, additive — Dashboard/Leads
+unchanged) matches the live left menu exactly:
 
-**Transactions · Email Queue · Forms · Team Files · Team Info · Team Members · Lists · Client Portal · Import**
+- **Loops** — the loop card list (`/tc`, the home)
+- **Forms** — the contract engine
+- **Email Queue** — outbound TC email
+- **Configure** — **Transaction Status · Milestones · Tasks**
 
 ## The TC loop view — REUSE the lead-detail in a TC view mode
 
@@ -168,16 +171,67 @@ The **showing-door** forms (the buyer journey): **Single Property Buyer-Broker R
 **Exclusive Buyer Agency** (multiple homes). Disclosures (wire fraud, ABA, broker disclosure) roll in later
 at contract time, not at showing.
 
-**Fill INTO the loop (G2):** `POST /api/tc/loops/[id]/documents` `{ formKey, folderId? }` builds a
-`FillContext` from the loop's own lead/deal → `getTemplateBytes` → `fillContract` → uploads the filled PDF
-to **R2** (`tc-loops/<loopId>/<form>.pdf`) → inserts `hl_tc_loop_document` (`file_url` + `contract_fill_id`).
-If the loop has no folder it auto-creates a "Forms" folder. UI: an **"Add from Form"** button +
-`AddFromFormModal` in the TC **Documents** tab (reuses `HlFormModal`). Filled PDFs are stored in R2, never
-base64'd into Postgres.
+**Fill INTO the loop (G2):** `POST /api/tc/loops/[id]/documents` builds a `FillContext` from the loop's own
+lead/deal → `getTemplateBytes` → `fillContract` → uploads the filled PDF to **R2**
+(`tc-loops/<loopId>/<form>.pdf`) → writes `hl_tc_loop_document` (`file_url` + `contract_fill_id` +
+`contract_key`). If the loop has no folder it auto-creates a "Forms" folder. Filled PDFs live in R2, never
+base64'd into Postgres. Two entry points share this engine (`lib/tc/fill-loop-document.ts`, no fork):
+
+- **`{ formKey, draft: true }` → the human path.** "Add Document" drops a **blank DRAFT** row (status
+  `draft`, no fill, carries its `contract_key`). No auto-filled defaults — you fill it deliberately.
+- **`{ formKey }` → Myli's headless path.** Fills straight from loop data (`createFillSend`).
+
+See **The document workflow** below for how a draft becomes a filled, editable, signable document.
 
 <Note>
 **Local dev:** `R2_PHOTOS_*` live in repo-root `.env`; mirror them into `apps/houseloop-crm/.env.local`
-(gitignored) or local "Add from Form" returns "storage not configured." Prod (Railway) already has them.
+(gitignored) or a local fill returns "storage not configured." Prod (Railway) already has them.
+</Note>
+
+## Loops home + Create + Workspace — the dotloop 1:1 port (P7)
+
+The Loops surface is a **screen-for-screen port of dotloop**, skinned in HouseLoop tokens (white-on-blue) and
+fed by our own leads + website `Listing` data. The design was locked as an HTML wireframe first, then ported
+node-by-node (`.claude/wireframes/tc-loop-build-sheet-LOCKED-2026-07-09.html`; the
+[wireframe-is-the-truth](/claude-process/overview) rule).
+
+- **Loops home = a CARD LIST** (`TransactionsTable.tsx` → `LoopCard`), not a table. Each card shows the house
+  photo, the **spelled-out** loop name `({Side}) {Client} - {Address}` (`resolveLoopDisplayName`), the
+  **Created** date/time (top-right), a loop-**category badge** (🗂 Agency Loop vs 🏠 Transaction Loop), and
+  four labeled columns — **Transaction Type** (Purchase / Listing for Sale), **Status**, **Price**,
+  **Closing** — plus a tag + Archive footer and a working kebab.
+- **Create Loop** (`CreateLoopModal`) is a 4-step wizard: **Loop Name → Template → Photo → Finish**. Step 1 is
+  a `PropertySearchInput` that **looks addresses up from houseloop.ai** (`/api/tc/property-search`, full-address
+  per-token match against the web `Listing`), then derives the name `({Side}) {Client} - {Address}`. The Photo
+  step **auto-pulls the house photo** (`cover_image_url`) — no manual upload. From the same modal a
+  `ClientPicker` lets you **search an existing lead OR add a new lead inline** (`POST /api/leads`).
+- **Loop workspace** (`LoopDetailModal`) opens on the navy shell with the house photo + created date in the
+  header. **People** are editable inline — Add / edit / remove participants (`AddPersonModal` +
+  `POST/DELETE /api/tc/loops/[id]/participants`). **View Details** (`LoopSettingsModal`) is the edit surface for
+  every loop field: loop-name mode (property address vs custom), people, property address, and financials
+  (list/contract price, closing date).
+
+## The document workflow — Add → Fill form → Sign
+
+Every document on a loop is editable through a **form**, not by clicking fields on the PDF (dotloop's clunky,
+old-school way). The loop is Zach's: *"a form that we fill out that updates the pdf."*
+
+1. **Add Document** (`AddFromFormModal`, sends `draft: true`) → a **blank DRAFT** row appears with a **Fill
+   out** button. Nothing is pre-stamped; no junk defaults from other docs.
+2. **The kebab** (⋮, on every doc row via `HlDropdown`) → **Edit fields · Open PDF · Delete document**. (The
+   menu portals *above* the modal — z-index `10080` — so it's actually usable; a doc name is clickable to the
+   same form.) Delete → `DELETE /api/tc/loops/[id]/documents/[docId]` (blocks `signed` docs with a 409).
+3. **Fill out / Edit fields** opens the **fill form** (`FillReviewModal`) — every field editable, pre-filled
+   from the loop (buyer name, general location, price range, term dates). Save → the doc walks
+   **draft → filled**, a fresh PDF is stamped to R2, and the edited values land in `hl_contract_fill.values`
+   (which drives the PDF). Re-openable and re-stampable any time via the same form.
+4. **Send for signature** → the Documenso e-sign flow (below).
+
+<Note>
+**Signatures are anchored, never eyeballed.** Signature/initials coordinates are **extracted from each PDF**
+(`tools/houseloop-contracts/anchor-sig-fields.mjs`) — box Y differs per page, so a single hardcoded number is
+always wrong. The extractor writes the field maps in `lib/tc/field-maps/*.json`. Law:
+[`.claude/rules/SIGNATURE_ANCHORING.md`](/guides/esignature) — *"read the box, don't guess it."*
 </Note>
 
 ## The 3-layer engine + dynamic dates (A-Frame parity)
@@ -241,6 +295,7 @@ API-first Configure builders.
 | Gate | What | State |
 |---|---|---|
 | **G1** | TC loop view = the existing lead-detail page in TC `view` mode (REUSE, no new shells) | ✅ Shipped (P0–P6) + multi-loop sit-rep header |
+| **G1b** | Loops home / Create / Workspace — dotloop 1:1 port (card list, create wizard, People + View Details editable, Add-as-draft, working kebab, fill-form) | ✅ Shipped 2026-07-09 (P7) |
 | **G2** | Forms + fill — our PDF templates + data-fill → filled PDF (R2) into a loop folder | ✅ Shipped (fill → R2 → `hl_tc_loop_document`) |
 | **G3** | E-sign — Documenso self-host: place fields → send → store sealed signed PDF + audit cert | ✅ Shipped 2026-07-06 (`esign.houseloop.ai`; 3 forms sig-verified; sealed PDFs → R2) |
 | **G4** | Runtime cascade — `computeLoopSchedule` fills dates from the 4 key dates; recompute on change | ⬜ (mig 0262 ready) |
@@ -277,6 +332,14 @@ API-first Configure builders.
 
 ## Change log
 
+- **2026-07-09** — **P7 shipped: the dotloop 1:1 UI port + document editing.** Loops home = dotloop card list
+  (`LoopCard`, spelled-out name, created date, category badge, house photo); Create Loop wizard (property
+  search against houseloop.ai, auto-pulled photo, add-a-lead inline); editable People (`AddPersonModal` +
+  participants API) and View Details (`LoopSettingsModal`). **Documents:** Add Document now adds a **blank
+  DRAFT** (no auto-filled junk); the per-doc **kebab works** (Edit fields · Open PDF · Delete, portaled above
+  the modal); every field is edited via a **fill form** that re-stamps the PDF on save (`FillReviewModal` →
+  draft→filled). New endpoints: `DELETE .../documents/[docId]`, `POST/DELETE .../participants`. Signatures are
+  extracted per-PDF (`anchor-sig-fields.mjs`), never hand-typed — `SIGNATURE_ANCHORING.md`.
 - **2026-07-06** — **G3 shipped: Documenso self-hosted e-sign is live** (`esign.houseloop.ai`). Multi-party
   signing (buyer / co-buyer / agent / broker) proven on all 3 contract forms; sealed PDFs + completion
   certs archived to our R2; only `DOCUMENT_COMPLETED` terminates. Send path:
