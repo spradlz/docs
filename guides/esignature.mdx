@@ -123,6 +123,24 @@ two different positions, both correct, from the same read-from-the-PDF data.
 **Tools:** extractor `tools/houseloop-contracts/anchor-sig-fields.mjs` · field maps `apps/houseloop-crm/lib/tc/contract-forms.ts`
 · draw engine `apps/houseloop-crm/lib/tc/fill-contract.ts`. Deps: `poppler` (`pdftocairo`, `pdftotext`, `pdfinfo`).
 
+### Recommended architecture — ONE deterministic mapper, wired into the fill (Benji 2026-07-09)
+
+The permanent fix is a single, **deterministic-first** field mapper whose output the fill engine **loads directly**, so no
+coordinate is ever hand-authored:
+
+1. **Signatures / initials → vector extraction** (the `anchor-sig-fields.mjs` method). Read the exact e-sign rectangle from
+   the PDF. $0, no model, pixel-exact, reproducible. Strictly better than a vision pixel-box estimate for drawn boxes.
+2. **Data blanks (name / price / term / address) → text-anchor extraction.** Anchor each value to the printed label's bbox
+   (`pdftotext -bbox`). The **coordinate always comes from the PDF layer**, never from a model's guess.
+3. **Vision is an OPTIONAL naming assist only.** Use it once per new form to *classify/name* an ambiguous blank — never to
+   produce a coordinate. This folds the useful half of `vision-field-builder.mjs` in and drops its imprecise pixel-boxes.
+4. **Wire the output into the fill.** The generator writes `field-maps/<form-key>.json`; the fill loads it (retiring the
+   hand-authored arrays in `contract-forms.ts`). Regenerate when a form revises; the fill never changes.
+
+Why this over the status quo: two detectors exist and **neither is wired in**, so coordinates get typed by hand and drift.
+One generator, deterministic-first, loaded by the fill = coordinates are *generated, never typed* — the actual lock. This
+supersedes both the never-real "CommonForms" idea and the vision-only `vision-field-builder.mjs` pixel-box approach.
+
 ---
 
 ## 🚧 Work In Progress — updated 2026-07-09
