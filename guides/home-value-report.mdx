@@ -1,113 +1,209 @@
 ---
-title: "HouseLoop Home Value Report (Seller Report Modal)"
-description: "The per-home value report for past clients — the two HouseLoop value visuals (estimate distribution + value-history) plus comps, neighborhood average, client lifetime value, and FUB links. The seller-report modal and the monthly valuation email both render this report. INITIAL SPEC — a future build; the data sources must be wired first."
+title: "HouseLoop Home Value Report (Seller Report)"
+description: "The per-home value story for past clients — the two HouseLoop value visuals plus gain stats, closings, client lifetime, and FUB links. Renders in three places: the seller-report modal, the LIVE seller-report dashboard, and the monthly valuation email. Covers the modal build, the email template spec, the dashboard, and where every field reads from."
 ---
 
-<Note>
-**Status: FUTURE BUILD — initial spec (2026-06-22).** The two value visuals exist on the website and the
-monthly email template is already built. The **seller-report modal** that brings them together (plus comps,
-neighborhood average, client lifetime value, and FUB links) is **not built yet** — and two of its data
-sources (comparable sales + neighborhood average) are **not wired into the CRM**. Get the data right first,
-then build. This page is the spec we build to.
-</Note>
+The **HouseLoop Home Value Report** is the per-home value story for a past client. The **same underlying
+report** renders in three places:
+
+1. **The seller-report modal** (internal — what the *agent* looks at). Open it from `/settings/seller-report`.
+   Third-person voice ("since **they** purchased").
+2. **The seller-report dashboard** (`/settings/seller-report`) — the command center listing every past client
+   with their current home + value. Third-person / agent-facing.
+3. **The monthly "Home Valuation Report" email** (client-facing — what we *send the homeowner*). Second-person
+   voice ("since **you** purchased").
+
+All three read the home's value from the website `Listing` (see
+[Past-Client Data Pipeline](/guides/srg-reconciliation-engine) for how that value gets there). The website is
+our Zillow; the CRM pulls value FROM it by `website_hlid` and never stores or recomputes it (no copy = no drift).
 
 <Note>
-**Value-history graph — never blank, anchored on the real sale, floored to 2012 (Benji, 2026-06-28).**
-Audit found **125 sold homes (4.3%) — 80 of them past-client (4.5%)** that had a HouseLoop value but a
-**blank** value-history graph (e.g. 816 E Saddlewood). Cause: the sold/stored-value branch only read the
-precomputed `Listing.valueHistory` column, and homes that sold before the disposition pipeline have an empty
-column. **Fixed read-side in `get.ts`:** when the column is empty, build the line as
-**ZHVI back-projection (`hl_market_index`, 2012 → the sale month) + `appreciationRocket`(real sale → today)** —
-the real sale sits ON the line as an anchor, and the graph always reaches **2012**. The **appreciation % is
-measured across the WHOLE line — since the 2012 floor** (the % label reads the line's start year, not a flat
-"since sold"). No real sale at all → pure ZHVI 2012 → today. Verified: 816 E Saddlewood now runs **Jan 2012
-$228,348 → Jul 2020 $346,000 (real sale, on the line) → Jun 2026 $458,179, +100.6% since 2012.** Mechanics:
-[Sold Data & Price History](/guides/sold-data-and-price-history).
+**What's built (2026-07):** The seller-report **dashboard is LIVE** (`/settings/seller-report`) and the
+**modal is built + wired** — `apps/houseloop-crm/components/seller-report/SellerReportHomeModal.tsx` renders
+the hero valuation, closings, dossier, and FUB actions. What remains unwired are two data sources only:
+**comparable sales** and **neighborhood average**. Get those right, then finish those two sections.
 </Note>
 
-The **HouseLoop Home Value Report** is the per-home value story for a past client. It exists in two places
-that render the **same underlying report**:
+## Where the value data lives (the ONE truth — no valuation table)
 
-1. **The seller-report modal** (internal — what the *agent* looks at). Click the eye / "View home report" on
-   a client in `/settings/seller-report`. Third-person voice ("since **they** purchased").
-2. **The monthly "Home Valuation Report" email** (client-facing — what we *send the homeowner*). Already
-   built; see [Home Valuation Template](/guides/home-valuation-template). Second-person voice ("since **you**
-   purchased").
+There is **no `hl_srg_home_valuations` table**. It existed only for migration `0136` and was **dropped**
+afterward under [Data Doctrine](/guides/property-data-and-address-identity) law #5 — any doc or code that
+still cites it is stale. Live value reads come from:
 
-The modal **mimics** the email report, and adds an agent-only **client lifetime** section (deals, volume) and
-**FUB profile links**. Both read the home's value from the website `Listing` (see
-[Past-Client Data Pipeline](/guides/srg-reconciliation-engine) for how that value gets there).
+- **The web `Listing`** — `hlEstimate` / `hlEstimateLow` / `hlEstimateHigh` / `zestimate`, resolved by
+  `website_hlid` (`apps/houseloop-crm/app/(crm)/settings/seller-report/page.tsx`, ~lines 210–242). This is the
+  SAME value the public `/home` page renders — one source, never re-derived.
+- **`hl_value_history`** (web side) — the monthly value-history series.
+- **`hl_srg_past_clients`** (1,779 rows — the SSOT) + child **`hl_srg_past_client_homes`** — the person, their
+  current home pin (`website_hlid`), purchase price/date, and `closings`.
 
-## Where it reads from
+## Where each section reads from
 
 Everything is anchored on the client's **most-recent home** (`is_current_home`), keyed by `website_hlid` →
-the web `Listing`. The value + history are the SAME data the public `/home` page renders (one source, never
-re-derived):
+the web `Listing`.
 
 | Section | Source | Status |
 |---|---|---|
-| **HouseLoop Value** distribution — Low / Estimated / High + $/ft² | web `Listing.hlEstimate` / `hlEstimateLow` / `hlEstimateHigh` (Zestimate × 1.005 band, or soldPrice × 1.005 for a fresh sale) | ✅ data exists |
-| **HouseLoop Home Value History** — line over time, % over the whole line (since 2012). **Never blank** for a home with a value: ZHVI floor → 2012 + the **real sale anchored on the line** → [Sold Data & Price History](/guides/sold-data-and-price-history) | web `Listing.valueHistory` if present; else built read-side in `get.ts` from the real sale + ZHVI; re-anchored to the oldest real price by `reanchorValueHistory` | ✅ data exists |
-| Purchase price · Total Gain · Avg Monthly Gain · appreciation % | `hl_srg_past_client_homes` (purchase) + the value above (current) — computed | ✅ data exists |
-| **Comparable sales** — ~3 addresses + sale price, each linking to a houseloop.ai saved search | a comps feed | ⛔ **NOT wired into the CRM** |
-| **Neighborhood average** (last 12 months) | market/neighborhood stats (`hl_market_index` / market-report) | ⛔ **NOT wired into the CRM** |
-| **Client lifetime** — # deals, lifetime volume, every closing | `hl_srg_past_clients` + child homes (modal only, not the email) | ✅ data exists |
-| **FUB profile link(s)** — one per person (a couple = two links) | `hl_srg_past_clients.fub_id` + spouse in `fub_identity` → FUB person URL | ✅ data exists |
+| **HouseLoop Value** distribution — Low / Estimated / High + $/ft² | web `Listing.hlEstimate` / `hlEstimateLow` / `hlEstimateHigh` (Zestimate band, or soldPrice band for a fresh sale), resolved by `website_hlid` | ✅ wired |
+| **HouseLoop Value History** — line over time, % over the whole line (since 2012). **Never blank** for a home with a value: ZHVI floor → 2012 + the **real sale anchored on the line** → [Sold Data & Price History](/guides/sold-data-and-price-history) | web `Listing.valueHistory` if present; else built read-side in `get.ts` from the real sale + ZHVI; re-anchored to the oldest real price | ✅ wired |
+| Purchase price · Total Gain · Avg Monthly Gain · appreciation % | `hl_srg_past_client_homes` (purchase) + the value above (current) — computed | ✅ wired |
+| **Client lifetime** — # deals, lifetime volume, every closing | `hl_srg_past_clients.closings` + child homes (modal + dashboard, not the email) | ✅ wired |
+| **FUB profile link(s)** — one per person (a couple = two links) | `hl_srg_past_clients.fub_id` + spouse in `fub_identity` → FUB person URL | ✅ wired |
+| **Comparable sales** — ~3 addresses + sale price, each linking to a houseloop.ai saved search | a comps feed (Repliers sold comps) | ⛔ **NOT wired into the CRM yet** |
+| **Neighborhood average** (last 12 months) | market/neighborhood stats (`hl_geo_market_stats` / `hl_market_index`) | ⛔ **NOT wired into the CRM yet** |
 
 ## The two value visuals (the centerpiece)
 
-These are the two graphs from the `/home` page (`apps/houseloop-web/components/listing/HouseLoopValueHero.tsx`):
+These are the two graphs from the `/home` page
+(`apps/houseloop-web/components/listing/HouseLoopValueHero.tsx`):
 
 1. **HouseLoop Value** — a bell-curve bar distribution with **Low / Estimated Value / High** columns (value +
-   $/ft², circle icons), titled "Estimated Sales Range." (301 E 68th: Low $501,244 · Est **$527,625** · High
-   $554,006.)
+   $/ft², circle icons), titled "Estimated Sales Range." (301 E 68th: Low `$501,244` · Est **`$527,625`** ·
+   High `$554,006`.)
 2. **HouseLoop Home Value History** — an interactive line/slider over time. **The line always reaches back to
    2012** (the ZHVI floor), with **every real sale anchored on it** (the line passes through the actual
    transacted price at its date), climbing to today's HouseLoop value. The **appreciation % spans the whole
    line — since the 2012 floor**, and the % **label reads the line's start year** (e.g. "+100.6% since 2012"),
    not a flat "since sold". A home with no real sale at all uses a pure ZHVI back-projection to 2012. It is
-   never blank for a home that has a value. Mechanics:
-   [Sold Data & Price History](/guides/sold-data-and-price-history).
+   never blank for a home that has a value.
 
-> **Architecture note (do not cross-app copy).** `HouseLoopValueHero` is a **website** component built in
-> **Tailwind**; the CRM modal uses inline design tokens (no Tailwind). So the modal must **rebuild these two
-> visuals CRM-native**, reading the value data off the web `Listing` (`qWeb`) — not import the Tailwind
-> component across the app boundary.
+<Note>
+**Value-history graph — never blank, anchored on the real sale, floored to 2012 (Benji, 2026-06-28).**
+Audit found **125 sold homes (4.3%) — 80 of them past-client (4.5%)** that had a HouseLoop value but a
+**blank** value-history graph (e.g. 816 E Saddlewood). Cause: the sold/stored-value branch only read the
+precomputed `Listing.valueHistory` column, which is empty for homes that sold before the disposition pipeline.
+**Fixed read-side in `get.ts`:** when the column is empty, build the line as **ZHVI back-projection
+(`hl_market_index`, 2012 → the sale month) + `appreciationRocket` (real sale → today)** — the real sale sits ON
+the line as an anchor, and the graph always reaches **2012**. Verified: 816 E Saddlewood now runs **Jan 2012
+`$228,348` → Jul 2020 `$346,000` (real sale, on the line) → Jun 2026 `$458,179`, +100.6% since 2012.**
+Mechanics: [Sold Data & Price History](/guides/sold-data-and-price-history).
+</Note>
 
-## The seller-report modal — the build spec
+<Note>
+**Architecture note (do not cross-app copy).** `HouseLoopValueHero` is a **website** component built in
+**Tailwind**; the CRM modal uses inline design tokens (no Tailwind). The modal **rebuilds these two visuals
+CRM-native**, reading the value data off the web `Listing` (`qWeb`) — it does not import the Tailwind component
+across the app boundary.
+</Note>
 
-A wide modal (the two value visuals **side by side**), **not super tall** (no scroll). Internal agent view —
-third person ("since **they** purchased"). Sections:
+## The seller-report modal
+
+`apps/houseloop-crm/components/seller-report/SellerReportHomeModal.tsx` — a wide modal (the two value visuals
+**side by side**), internal agent view, third person ("since **they** purchased"). Sections:
 
 1. **Header** — client name + most-recent home address. Estimated Value + range.
 2. **The two value visuals, side by side** — HouseLoop Value distribution + Value History (rebuilt CRM-native).
 3. **Gain stats** — Purchase Price · Current Value · **Total Gain** (current − purchase) · **Avg Monthly Gain**
-   (total ÷ months held) · appreciation %. (No mortgage/equity — that's deferred to Realie; see the
-   past-client pipeline.)
-4. **Comparable sales** *(future — needs the comps feed)* — ~3 comps as **address · sale price · link**, each
-   link opening **houseloop.ai with a saved search pre-loaded** with those comparable properties.
-5. **Neighborhood average (last 12 mo)** *(future — needs neighborhood stats wired into the CRM)*.
-6. **Client lifetime** *(agent-only, the part the email doesn't have)* — # deals, lifetime volume, every
-   closing, formatted.
-7. **FUB profile link(s)** — the client's FollowUp Boss profile; for a couple (e.g. Kyle **and** Karly
+   (total ÷ months held) · appreciation %. (No mortgage/equity — deferred to Realie AVM; see the past-client
+   pipeline.)
+4. **Client lifetime** *(agent-only, not in the email)* — # deals, lifetime volume, every closing, formatted.
+5. **FUB profile link(s)** — the client's FollowUp Boss profile; for a couple (e.g. Kyle **and** Karly
    Nations), **one link each**, resolved from `fub_id` + the spouse record in `fub_identity`.
+6. **Comparable sales** *(future — needs the comps feed)* — ~3 comps as **address · sale price · link**, each
+   link opening houseloop.ai with a saved search pre-loaded with those comparable properties.
+7. **Neighborhood average (last 12 mo)** *(future — needs neighborhood stats wired into the CRM)*.
 
-## The monthly email template (already built — the starting point)
+## The monthly email template
 
-The **"Home Valuation Report (Monthly)"** email template already exists in the CRM (branded SG | HouseLoop
-lockup, Myli sender, subject `Your <Month Year> Home Valuation Report — <address>`, `{{valuation.*}}` merge
-tokens; the monthly send is the `hvrSend` Inngest function). It will be **edited**, but it is the reference
-the modal mimics. Detail: [Home Valuation Template](/guides/home-valuation-template) ·
-[Home Valuation Dashboard](/guides/home-valuation-dashboard).
+The **"Home Valuation Report (Monthly)"** email is sent to past clients from their assigned agent (Ana
+Spradling, Zach Spradling, or Myli). It combines a short personal note with a full property valuation card.
+The monthly send is the `hvrSend` Inngest function; the subject line reads *Your [Month Year] Home Valuation Report — [address]*, populated with `{{valuation.*}}` merge tokens.
 
-## What to build first (the gate)
+### Email structure
+
+**1. Personal message (above the report).** A 2–3 sentence casual note from the agent, AI-generated from merge
+fields at send time but reading like a human wrote it. No branding above it — reads like a plain email.
+
+> Hey John,
+>
+> Just wanted to send over your June home value update — looks like your home went up another **$13,000** this
+> month! The Blackthorne Estates neighborhood is continuing to do really well, and your home is actually
+> outperforming the broader KC market. Here's your full report below.
+>
+> **Ana Spradling** — Spradling Group | eXp Realty
+
+**2. Report card.** A single white rounded card:
+
+| Section | Description |
+|---------|-------------|
+| **Header** | Lockup A (stacked: Spradling Group eXp / Powered By / HouseLoop) + "Home Valuation Report" title + month pill |
+| **Property photo** | Hero image scraped from Redfin, stored in R2 |
+| **Address card** | Street, city/state/zip, beds/baths/sqft/year/subdivision |
+| **Estimated value** | Big bold number on white card, 56px DM Sans |
+| **Valuation range** | Low / Estimate / High bar-chart distribution (blue→green→yellow) |
+| **Value history chart** | SVG line chart from purchase date to current, with gradient fill |
+| **Market temperature** | Gauge bar with plain-English verdict ("Balanced & Stable") + DOM / list-to-sale / inventory |
+| **Beating the market** | Three stat boxes: Your Home vs ZIP vs KC Metro appreciation |
+| **Appreciation cards** | +X% / +$X card alongside purchase price/date card |
+| **Comparable sales** | Horizontal scroll of comp cards with photos, address, price, sold date, bed/bath/sqft, distance, similarity % |
+| **Agent + CTA** | Agent headshot + contact + "Schedule a Call" full-width button |
+| **Brand band** | Dark blue footer with white Spradling Group / eXp / HouseLoop logos + disclaimer |
+
+Design inspiration: **HomeBot** (value-over-time + market verdict), **House Canary** (Low/Med/High bar chart +
+comp cards), **Zillow** (three stat boxes + history chart).
+
+### Template DB entry
+
+- **Key:** `home_value_report` · **Category:** `market_report`
+- **DB ID:** `9a523d97-4178-444e-b3e7-7e061a0afd3b`
+- **Migration:** `0127_home_value_report_template.sql`
+- **Merge fields:** 16 VALUATION fields + standard contact/agent fields
+
+### The data contract (HvrData)
+
+The report's field shape is the canonical **`HvrData`** interface in
+`apps/houseloop-web/components/listing/HomeValuationReport.tsx`: `estimatedValue`, `valueLow` / `valueHigh`,
+`psf*`, `purchasePrice` / `Date`, `appreciationPct`, `equityGain`, market temp (`avgDom` / `listToSalePct` /
+`inventoryMonths`), `zip` / `metroAppreciation`, `comps[]`, `valueHistory[]`, `beds` / `baths` / `sqft` /
+`yearBuilt` / `neighborhood`, `photoUrl`. Every surface renders this same shape — but reads it live from the
+web `Listing` + `hl_value_history`, not from a stored valuation snapshot table.
+
+## The seller-report dashboard (LIVE)
+
+`/settings/seller-report` (`apps/houseloop-crm/app/(crm)/settings/seller-report/page.tsx`) is the command
+center for monthly home value reports. It is **live**, not "coming soon." It lists every past client with a
+HouseLoop property profile and:
+
+- Reads the past-client list from **`hl_srg_past_clients`** (1,779 — the SSOT) + child
+  **`hl_srg_past_client_homes`** — NOT the raw SISU `hl_transactions` import.
+- Pulls each home's **value live from the web `Listing`** by `website_hlid` (`hlEstimate` / `Low` / `High`,
+  `zestimate` fallback) — never a stored copy.
+- Shows current home, purchase price/date, gain, and report status per client, sortable by name / address /
+  value change.
+- Row → opens the seller-report modal above.
+
+## Design tokens (email)
+
+| Token | Value | Usage |
+|-------|-------|-------|
+| Font | DM Sans (web) / Arial (email fallback) | All text |
+| Brand blue | `#2D6DFF` | Pills, CTA buttons, chart line |
+| Text | `#111827` | Headings, bold numbers |
+| Muted | `#6b7280` / `#9ca3af` | Labels, secondary text |
+| Green | `#16A34A` / `#10B981` | Appreciation, positive indicators |
+| Red | `#EF4444` | Depreciation (if negative) |
+| Surface | `#f8fafc` | Card backgrounds |
+| Border | `#e5e7eb` | Card borders, dividers |
+| Navy band | `#1B3564` | Footer brand band |
+| Max width | 640px (web) / 560px (email) | Container |
+
+## Brand assets used
+
+All hosted PNGs — never re-rendered (see the lockup law):
+
+- `houseloop.ai/brand/lockup/stacked-spradling-group.png` — report header
+- `houseloop.ai/brand/partner/exp-realty-white.png` — footer band
+- `houseloop.ai/brand/email/email-logo-white@2x.png` — footer band
+- `houseloop.ai/brand/headshots/anna.jpg` · `zach.jpg` · `myli.jpg` — agent card
+
+## What's left to build
 
 1. **Wire the comps feed** into the CRM (comparable recent sales near the home → addresses + price + a
    houseloop.ai saved-search link).
 2. **Wire neighborhood-average (12 mo)** into the CRM (from the market/neighborhood stats the `/home` page
-   already uses).
-3. Then build the modal: rebuild the two value visuals CRM-native, add the gain stats (done on the card
-   already), the client-lifetime section, and the FUB links.
+   already uses — `hl_geo_market_stats` / `hl_market_index`).
+3. **Realie AVM** (deferred) — `modelValue`, range, equity, mortgage owed, LTV, lender — for the equity/mortgage
+   sections not shown today.
 
-Owner: Caleb (data) + the modal build. Until then, the seller-report card shows the gain stats and links to
-`/home` for the full value visuals.
+Owner: Caleb (data wiring) + the modal build. Related: [Past-Client Data Pipeline](/guides/srg-reconciliation-engine) ·
+[Houseloop Home Value](/guides/houseloop-home-value) · [Sold Data & Price History](/guides/sold-data-and-price-history).

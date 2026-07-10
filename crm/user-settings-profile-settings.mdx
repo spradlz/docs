@@ -1,19 +1,21 @@
 ---
 title: "Profile Settings"
-description: "Profile Settings in the HouseLoop CRM — the /settings/profile route resolves the signed-in user and opens their row in the shared member editor, where identity (name, phone, time zone) is edited."
+description: "Profile Settings (My Profile / Account) in the HouseLoop CRM — /settings/profile resolves the signed-in user and opens their row in the shared member editor, where identity, access, connections, roles, and AI clone are edited."
 ---
 
 **In the app:** CRM sidebar → **User Settings** → **Profile Settings** — [`/settings/profile`](https://crm.houseloop.ai/settings/profile)
+
+<Info>There is no standalone profile form. `/settings/profile` immediately resolves the signed-in user and redirects to that user's row in the shared member editor at `/settings/team/agents/[id]` — the same page used to edit any teammate. "My Profile" / "Account" and "edit a member" are one editor, self or others. The old dedicated profile form has been retired.</Info>
 
 ## What it does
 
 `/settings/profile` is **not a standalone form** — it is a thin redirect. On load it calls `GET /api/profile` to find the signed-in user's id, then `router.replace`s to that user's row in the shared member editor at **`/settings/team/agents/{id}`**. If the id can't be resolved it falls back to `/settings/team`. While resolving it shows an "Opening your profile…" placeholder.
 
-This is the same one-editor pattern the Account page uses: "My Profile" is not a separate screen anymore — you edit yourself in the exact editor teammates are edited in, just pre-opened to your own row. The old dedicated profile form has been retired.
+The member editor is one scrollable page with a filter bar — `All · Permissions · Profile · Connections · Roles` — plus an `AI Clone` tab for human members. Edits auto-save (debounced ~600ms after the last change) and a **Save** button forces an immediate save.
 
 ## What you configure
 
-The identity fields live in the member editor's **Profile** section (one scrollable page with a filter bar: `All · Permissions · Profile · Connections · Roles`, plus `AI Clone` for human members):
+The identity fields live in the member editor's **Profile** section:
 
 | Field | Editable | Notes |
 |-------|----------|-------|
@@ -22,17 +24,24 @@ The identity fields live in the member editor's **Profile** section (one scrolla
 | Phone | Yes | `phone`. |
 | Time zone | Yes | `timezone` (Eastern / Central / Mountain / Pacific). |
 
-Other member-editor sections (Permissions/Access, Roles, Connections, AI Clone) are documented with the Team / member editor, not here — this page only opens the editor.
+The surrounding editor also exposes (subject to permissions), documented in full with the Team / member editor:
+
+- **Permissions** — Access level (Owner / Admin / Member) and member Type (Human / AI Agent). Only admins can change another member's access, and you cannot change your **own** access.
+- **Connections** — Email, Calendar, Phone, and iMessage channel connections.
+- **Roles** — job roles for humans; AI-kind roles with per-role persona/tool/doc overrides for AI agents.
+- **AI Clone** — human members only: assign and configure the AI clone that sends as you (your phone, email, calendar).
 
 ## Data source
 
-- **Route page:** `apps/houseloop-crm/app/(crm)/settings/profile/page.tsx` — client component, GET `/api/profile` → redirect.
-- **API:** `apps/houseloop-crm/app/api/profile/route.ts`
-  - `GET /api/profile` — returns the current user's row (`id, full_name, email, role, phone, timezone, avatar_url`, plus `data->>'notification_email'`) from `hl_users`, keyed by session.
-  - `PATCH /api/profile` — updates `full_name`, `phone`, `timezone`, and `data.notification_email` on `hl_users`, then re-issues the session cookie. (The redirect page itself only calls GET; edits made in the member editor go through `PATCH /api/team/users/{id}`.)
-- **Table:** `hl_users` — the columns above. Editable profile writes go here.
-- **Downstream editor:** `apps/houseloop-crm/app/(crm)/settings/team/agents/[id]/page.tsx`, which loads via `/api/team/users/{id}`, `/api/team/roles`, and `/api/me`, and stores per-role overrides on `hl_member_role`.
+- **Route page:** `apps/houseloop-crm/app/(crm)/settings/profile/page.tsx` — client component, `GET /api/profile` → redirect.
+- **`/api/profile`** (`GET` / `PATCH`) — `apps/houseloop-crm/app/api/profile/route.ts`. Reads/writes the current user's row in **`hl_users`**: `id`, `full_name`, `email`, `role`, `phone`, `timezone`, `avatar_url`, and `data->>'notification_email'`. `PATCH` updates `full_name`, `phone`, `timezone`, and `data.notification_email`, then re-issues the session cookie. (The redirect page itself only calls `GET`; edits made in the member editor go through `PATCH /api/team/users/{id}`.)
+- **`/api/team/users/[id]`** — the member editor's primary load/save. Joins **`hl_users`** with role assignments (**`hl_member_role`**) and connection state: **`hl_oauth_connections`**, **`hl_dialer_assignments`**, **`hl_imessage_assignments`**, **`hl_calendar_connections`**. Editor at `apps/houseloop-crm/app/(crm)/settings/team/agents/[id]/page.tsx`.
+- **`/api/team/roles`** — the role catalog (human and AI-kind roles).
+- **`/api/me`** — the viewer's identity + access level, used to gate the Access dropdown.
+- **`/api/team/users/[id]/roles/[roleId]`** (`PATCH`) — persists per-role overrides (persona/tools/docs/workflow_ids) on **`hl_member_role`**.
+
+No Inngest functions are involved; all writes are synchronous CRM API calls.
 
 ## How it fits
 
-Profile Settings is the User Settings entry point into HouseLoop's unified member model: one editor renders every member (human or AI agent), and "your profile" is just your own row in it. Access/role permissions and channel connections sit alongside identity in that same editor, so signing-in identity (name/phone/time zone, Google-managed email) and team administration stay in one place.
+Profile Settings is the User Settings entry point into HouseLoop's single member model: every teammate — human or AI agent — is one row edited through one page, and "your profile" is just your own row in it. Because your profile is your own member record, the same editor governs access levels, comms connections, and AI-clone configuration, keeping signing-in identity (name/phone/time zone, Google-managed email), permissions, and channels in one place rather than a separate account screen.

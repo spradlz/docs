@@ -1,12 +1,14 @@
 ---
 title: "Google Search Console"
-description: "HouseLoop's Search Console setup — the verified property, its owners, the API credentials (read token + service-account write path), the gsc-report diagnostic tool, and the 2026-06-27 fix where the sitemap was finally submitted and the SA was granted owner so writes work via the API."
+description: "HouseLoop's Search Console setup and index pipeline — the verified property, its owners, the API creds (read token + service-account write path), the gsc-report diagnostic, the sitemap-submit script, and the weekly seoIndexMonitor Inngest job that tracks ~234k property pages moving unknown → crawled → indexed."
 ---
 
 <Info>
-**Why this page exists:** so the GSC setup never gets lost again. The property, its owners, the creds, the tool,
-and the live status all live here. Canonical SEO context: [Property Data & Address Identity](/guides/property-data-and-address-identity).
-Build log: [SEO Google Index (WIP Log)](/guides/seo-google-index-wip).
+**Why this page exists:** so the GSC setup + the index pipeline never get lost again. The property, its owners,
+the creds, the tools, the automation, and the live status all live here. Canonical SEO context:
+[Property Data & Address Identity](/guides/property-data-and-address-identity). Governing PRD:
+`GT/GT - ACTIVE/GT_HOUSELOOP_SEO_INDEXING_PRD.md`. Owners: Benji (GSC automation + sitemap submit); Lee owns the
+canonical/identity/fork prerequisites.
 </Info>
 
 ## The property
@@ -39,23 +41,60 @@ canonical), and search-analytics clicks/impressions.
 node tools/seo/gsc-report.mjs
 ```
 
-The SA **write** path (mint a `webmasters` token from the SA key → `PUT
-.../sites/sc-domain:houseloop.ai/sitemaps/<encoded url>`) returns **204** now that the SA is an owner — reuse that
-auth pattern for the weekly automation.
+## The submit script — `tools/seo/gsc-submit-sitemap.mjs`
+Mints an SA access token (the SA acts **as itself** — JWT `iss` = SA email, **no `sub`**, scope
+`https://www.googleapis.com/auth/webmasters`, RS256-signed), then `PUT`s the sitemap to
+`webmasters/v3/sites/sc-domain:houseloop.ai/sitemaps/<encoded url>`. **Returned 204 on 2026-06-27** — sitemap
+registered, `lastDownloaded=2026-06-27`, 0 warnings / 0 errors, Google processing. `--status` reads without
+submitting. (Earlier 403 → fixed by adding the SA as a GSC Owner.) Reuse this same SA-as-itself auth pattern for
+any GSC write.
+
+## The weekly monitor — `seoIndexMonitor` (Inngest)
+Registered Inngest fn `seo-index-monitor` in `lib/inngest/functions/seo-index-monitor.ts` (cron `0 14 * * 1` =
+Mon 14:00 UTC ≈ 8am CT, plus manual event `seo-index-monitor/manual.run`). Each run re-submits the sitemap, pulls
+GSC's index data (sitemap child counts + a sample live `/home` page's crawl/index verdict + 28-day traffic), and
+Telegram-pings Zach the climb. Auto-captured in the CRM Run Log (capture-fn subscribes to `function.finished`).
+Auth via `mintSAAccessToken()` (SA-as-itself) in `lib/google/dwd.ts`.
+
+**Verify-run 2026-06-27** — dispatched `seo-index-monitor/manual.run` → ran in Inngest cloud, run_id
+`01KW517NWQS4ATAE9G0G8MVDVZ`, **status=success**, in the Run Log. Payload: `submit ok 204`, sitemap errors 0,
+sample page baseline `coverage="URL is unknown to Google" · lastCrawl=NEVER` (the expected pre-crawl baseline),
+traffic 31 clicks / 2,259 impressions.
 
 ## Status (2026-06-27) — the #1 indexing blocker is FIXED
-**Before:** Google had crawled **zero** of our ~234k property pages because **the sitemap was never submitted to
-GSC** (a property page inspected as "URL is unknown to Google, last crawl = NEVER"; the homepage was the only
-indexed page; ~31 clicks / ~2,259 impressions / 28d, essentially all homepage).
+**The finding (measured from GSC's own API):** "Google can't index what it can't discover." The homepage was
+indexed and crawled daily — but **the sitemap was never submitted to GSC**, so Google had **never crawled a
+single `/home/<slug>` property page** ("URL is unknown to Google, last crawl = NEVER"). The ~234k property pages
+(11 child sitemaps × ~21k) contributed ~nothing. 28-day traffic ≈ 31 clicks / 2,259 impressions, essentially all
+homepage.
 
 **Done 2026-06-27:**
-1. ✅ **Sitemap submitted** — `https://houseloop.ai/sitemap-index.xml` (11 children, ~234k URLs) submitted via the
-   GSC UI. **Status: Success.** Google will process it and begin crawling property pages (discovered count climbs
-   from 0 over days/weeks).
-2. ✅ **Service account granted Owner** — so the submit + weekly Coverage report run programmatically (verified the
-   API write returns **204**).
-3. ✅ **Absolute canonicals** — `metadataBase` added to `app/layout.tsx` (ships next web deploy).
+1. ✅ **Sitemap submitted** — `https://houseloop.ai/sitemap-index.xml` (11 children, ~234k URLs) submitted (both
+   via the GSC UI and via the SA write path — HTTP 204, downloaded by Google, `lastDownloaded=2026-06-27`, 0
+   warnings/errors). Google will process it and begin crawling property pages (discovered count climbs from 0 over
+   days/weeks).
+2. ✅ **Service account granted Owner** — so the submit + weekly Coverage report run programmatically (API write
+   returns 204).
+3. ✅ **Weekly `seoIndexMonitor` built + registered + deployed + verify-run** (run_id above).
+4. ✅ **Absolute canonicals** — `metadataBase` added to `app/layout.tsx`.
 
-**Now monitor:** re-run `gsc-report.mjs` over the next days/weeks to watch property pages move "unknown" → "crawled"
-→ "indexed." The weekly Inngest automation (re-submit + Coverage report → Telegram Zach) is tracked in
-[SEO Google Index (WIP Log)](/guides/seo-google-index-wip) (Benji).
+**Done looks like:** sitemap Submitted + processed in GSC with child counts ✅ · the weekly Inngest run lands in
+the Run Log + pings Zach ✅ · `gsc-report.mjs` shows a property page flip **unknown → crawled → indexed** ⏳ (the
+climb the monitor tracks).
+
+**Now monitor:** re-run `gsc-report.mjs` over the next days/weeks to watch property pages move unknown → crawled →
+indexed. The weekly Inngest job does this automatically.
+
+## Out of scope
+Rebuilding the sitemap (healthy: 11 children, ~234k URLs) · buying authority/backlinks · the canonical/fork/
+identity prerequisites (Lee's `GT_HOUSELOOP_HOME_IDENTITY_PRD.md`).
+
+## Changelog
+- **2026-06-27 (PM)** — **Pipeline complete + verified.** Sitemap submitted (204, downloaded by Google). Built +
+  registered the weekly `seoIndexMonitor` Inngest fn (re-submit + coverage → Run Log + Telegram) via a new
+  `mintSAAccessToken()` (SA-as-itself) in `dwd.ts`; deployed; **verify-ran in Inngest cloud (run_id
+  01KW517NWQS4ATAE9G0G8MVDVZ, success)** — re-submit 204, baseline captured. Weekly cron now tracks the
+  crawl→index climb.
+- **2026-06-27 (AM)** — Root finding confirmed via GSC API (0 sitemaps registered, every property page "unknown to
+  Google"). Built + tested `gsc-submit-sitemap.mjs` (403 → SA needed owner access). Handoff from Lee (#10941); PRD
+  `GT_HOUSELOOP_SEO_INDEXING_PRD.md`.

@@ -1,6 +1,6 @@
 ---
 title: "AI Clone"
-description: "The AI Clone is a HouseLoop CRM user's autonomous double — it texts leads AS the agent (their number, email, calendar), with the agent's persona, and can search homes, speak to a specific listing, and book/cancel showings on the agent's real Google Calendar. Distinct from Myli (who has her own identity)."
+description: "The AI Clone is a HouseLoop CRM user's autonomous double — it texts leads AS the agent (their number, email, calendar), with the agent's persona, and can search homes, book/cancel showings, manage the lead's stage/tags/contact, send agreements, and create saved searches. Covers the full capability/tool set (20 wired today), the lead-detail AI Agent card, and Myli's Context View + Brain Map dossier. Distinct from Myli (who has her own identity)."
 ---
 
 The **AI Clone** is *you, electrified*: an AI that acts as a specific human agent on
@@ -59,27 +59,54 @@ The clone's system prompt is prepended with live context so it never guesses:
 
 ## Permissions (capability toggles)
 
-Per-clone toggles live on the agent's **AI Clone → Permissions** tab. Each capability
-maps to runtime tools (`lib/agent-runtime/capabilities.ts`). **WYSIWYG default-on:** a
-wired capability is enabled unless explicitly toggled off; "Coming soon" capabilities
-are disabled. Turning **Text messages** off, for example, makes the clone go silent
-(no reply, no typing) — the toggle truly gates the tool.
+Per-clone toggles live on the agent's **AI Clone → Permissions** tab, rendered from the
+**two-level capability tree** in `lib/agent-runtime/capabilities.ts`: a top-line CATEGORY
+(Communication, Search Homes, Appointments, Tasks & Follow-up, CRM, Calls) with inline
+CHILD toggles. **Each child = exactly one runtime tool** the model can invoke (auditable
+in the Run Log). **WYSIWYG default-on:** a wired capability is enabled unless the config
+explicitly sets it `false`; a `built:false` capability shows "Coming soon" and is never
+grantable. Turning **Text messages** off, for example, makes the clone go silent (no
+reply, no typing) — the toggle truly gates the tool (`toolEnabled` → `TOOL_TO_CAPABILITY`).
 
-Wired today: **Text messages, Email, Appointments, Tasks, Notes, Search homes.**
+**Wired today: 20 capabilities are `built:true`** across five categories. The only
+capability still `built:false` is **`call`** (outbound voice — voice isn't wired). Source
+of truth: `apps/houseloop-crm/lib/agent-runtime/capabilities.ts`.
 
-## What the clone can do (tools)
+## What the clone can do (the capability tree)
 
-| Tool | Capability | What it does |
+Every row below is a `built:true` child in `capabilities.ts` — a real tool wired into
+`ALL_TOOLS` (`lib/ai/lead-conversation.ts`). Human `↔` AI is 1:1 parity: each maps to ONE
+shared `lib/` function driven by the human button, the AI tool, and the Workflow Builder
+step.
+
+| Category | Tool (child key) | What it does |
 |---|---|---|
-| `text_lead` | Text messages | Reply by SMS/iMessage in the agent's voice. |
-| `search_homes` | Search homes | Search HouseLoop.ai listings. Plain facets (city/price/beds/type) → fast `/api/listings/search` + `/api/listings/count`; with `features` (pool, white kitchen…) → the photo-vision AI engine. Returns count + top 3 with links + hlids. |
-| `get_home_details` | Search homes | Full detail on ONE home (by hlid): description, MLS interior/exterior/lot features, flooring, pool, schools, **and AI vision tags** — so the clone gives a genuine opinion. |
-| `lookup_property` | Search homes | Look up one specific address/MLS#/Zillow URL via Repliers. |
-| `schedule_appointment` | Appointments | Book a showing — see Appointments below. |
-| `disposition_appointment` | Appointments | Cancel / mark outcome — see Appointments below. |
-| `send_email` | Email | Send an email from the agent's Gmail. |
-| `create_task` | Tasks | Create a follow-up task on the lead. |
-| `add_note` | Notes | Add a note to the lead. |
+| Communication | `text_lead` (`texts`) | Reply by SMS/iMessage in the agent's voice. Channel = Twilio number, or the assigned BlueBubbles line. |
+| Communication | `send_email` (`email`) | Send/reply to email from the agent's connected inbox. |
+| Search Homes | `search_homes` | Search HouseLoop.ai listings by location/price/beds/type/amenities. Plain facets → fast `/api/listings/search` + `/count`; with `features` (pool, white kitchen…) → the photo-vision engine. Returns count + best matches with links + hlids. |
+| Search Homes | `lookup_property` | Look up ONE specific address/MLS#/listing URL and confirm details before talking about it. |
+| Search Homes | `get_home_details` | Full detail on one home (by hlid): description, MLS interior/exterior/lot features, flooring, pool, schools, **and AI photo-vision tags** — so the clone gives a genuine opinion. |
+| Search Homes | `send_home` | Text the lead a specific listing with a photo and link. |
+| Search Homes | `create_saved_search` | Set up a standing saved search for the lead so future matches keep coming automatically. |
+| Appointments | `schedule_appointment` | Book a tour/consult/call — see Appointments below. |
+| Appointments | `start_showing_coordination` | Coordinate a showing behind the scenes — line up the time with the listing side (masked as the sellers) + kick off the buyer's-agency signature. |
+| Appointments | `send_document` | Create + fill + send the buyer's-agency (or showing) agreement for e-signature; text the buyer the signing link. |
+| Appointments | `update_appointment` | Move an existing appointment to a new time and update the Google Calendar event. |
+| Appointments | `cancel_appointment` | Cancel an appointment and cancel its Google Calendar event. |
+| Appointments | `disposition_appointment` | Record an appointment outcome (showed up, no-show, signed…) and move the lead's stage — see Appointments below. |
+| Tasks & Follow-up | `create_task` (`tasks`) | Create a follow-up task on the lead. |
+| Tasks & Follow-up | `schedule_followup` | Schedule future attention on the lead (the scheduled-action floor). |
+| CRM | `update_contact` | Edit the lead's name, email, phone, or source (dedup-aware). |
+| CRM | `add_note` (`notes`) | Add a private note to the lead's record. |
+| CRM | `update_stage` | Move the lead between pipeline stages directly. |
+| CRM | `manage_tags` (`tags`) | Add or remove tags on the lead. |
+| CRM | `build_context` | Rebuild Myli's dossier — read everything and refresh the stored facts + summary. |
+
+**Inbound / read:** an inbound text feeds the AI via `dispatchInboundToAi` (trigger +
+thread context, not a button). Still on the roadmap (not `capabilities.ts` toggles):
+inbound **email → AI** (syncs to the timeline but doesn't yet feed the model), **read
+calendar** free/busy (write-only today — this unblocks availability-aware booking), and
+**answer a call** (voice, a large separate project).
 
 ## Appointments (the important flow)
 
@@ -108,7 +135,7 @@ Google's design, not a bug.
 stage advance via `hl_appointment_types.stage_advance_to_stage_id`. The clone is shown
 the lead's pipeline stage and picks the type by this rule:
 
-- Buyer lead **before** "1st Appointment Set" (Buyer Pipeline position < 3) →
+- Buyer lead **before** "1st Appointment Set" (Buyer Pipeline position `< 3`) →
   `first_buyer_appointment` → advances to **1st Appointment Set**.
 - Buyer lead **at/past** "1st Appointment Set" → `buyer_showing` → advances to
   **Showing Homes**.
@@ -125,21 +152,126 @@ cancellation). Valid outcomes: `cancelled, rescheduled, no_show, showed_up,
 listing_signed, listing_not_signed`. On a cancel it re-engages ("was it the home or the
 timing? want to reschedule?").
 
-> **Shared engine:** the UI route `PATCH /api/appointments/[id]/outcome` and the clone
-> both call `applyAppointmentOutcome` — no drift between "Save Outcome" in the UI and a
-> clone dispositioning a text cancellation.
+<Note>
+**Shared engine:** the UI route `PATCH /api/appointments/[id]/outcome` and the clone
+both call `applyAppointmentOutcome` — no drift between "Save Outcome" in the UI and a
+clone dispositioning a text cancellation.
+</Note>
+
+## The AI Agent card (lead-detail right lane)
+
+The lead detail page follows the **two-lane parity** model: the **LEFT lane** is the
+**human agent + their AI clone** (human Agent + AI Mode toggle, Collaborators, Contact,
+Tags); the **RIGHT lane** is **Myli**, the assigned AI. Both lanes render the same
+skeleton — an always-on **Tasks & Appointments** section plus a gated **AI Workflow**
+section — see [Lead Detail — Parity Lanes](/guides/lead-detail-parity-lanes). The AI
+Workflow reasoning chain (Active Triggers → Current Workflow → Current Action → Next
+Actions → Recent Actions) is the shared `AiReasoningChain` on **both** lanes (`actor` =
+`clone` on the left, `myli` on the right) — see
+[Closed Loop Follow-Up](/guides/closed-loop-follow-up).
+
+The **RIGHT lane's AI Agent card** carries two buttons that open Myli's dossier:
+
+| Element | What it is |
+|---------|-----------|
+| **AI Agent dropdown** | The assigned AI agent + role (e.g. Myli · AI ISA). `assigned_ai_agent_id` — Myli by default, swappable. |
+| **Context** button | Opens the **Context View** (Myli's read). Spec below. |
+| **Brain Map** button | Opens the **Brain Map** (the fact constellation). Spec below. |
+| **Capabilities** (own card) | The agent's role tools as permission toggles (the capability tree above). Mirrors the lead's Collaborators card. |
+| **Contact** (own card) | The AI agent's comms identity — email · call/text · iMessage. |
+
+<Note>
+**Status:** The AI Agent card, Capabilities, Contact, and the Context / Brain Map
+**buttons** are LIVE. The **Context View** and **Brain Map** panels themselves are the
+planned build specced below (the buttons currently show "· soon"). The facts behind both
+come from the Memory engine in the Myli Closed-Loop SSOT
+(`GT_HOUSELOOP_MYLI_CLOSED_LOOP_FOLLOWUP_v1` §5).
+</Note>
+
+### The fact taxonomy (shared by Context View + Brain Map)
+
+Myli holds a dossier as **12 domains × 6 fixed fact slots**. Six describe the **person**;
+six describe their **home journey** (buyer or seller).
+
+**PERSON — who they are:**
+
+| Domain | Slots |
+|--------|-------|
+| Family | children · partner · parents · pets · siblings · household |
+| Lifestyle | hobbies · fitness · travel · home life · food · entertainment |
+| Finance | income · investments · expenses · debt · savings · financial goals |
+| Mindset | beliefs · challenges · motivations · fears · growth · attitude |
+| Personality | traits · communication · humor · values · quirks · interests |
+| Social | network · community · events · clubs/orgs · volunteering · connections |
+
+**HOME — their real-estate journey** *(proposed — pending sign-off):*
+
+| Domain | Slots |
+|--------|-------|
+| Search Criteria | beds · baths · price range · must-haves · style · deal-breakers |
+| Current Situation | own/rent · current home · location · equity · listing status · move reason |
+| Timeline & Urgency | target date · lease end · urgency · flexibility · season · triggers |
+| Budget & Financing | budget · pre-approval · lender · down payment · cash/loan · monthly target |
+| Motivation & Goals | why moving · life event · upgrade/downsize · investment · primary goal · dealbreaker |
+| Logistics & Process | showings availability · comms pref · decision-makers · agent history · offer readiness · contingencies |
+
+### Context View — PRD
+
+**The button:** "Context" on the AI Agent card. **What it is:** Myli's *read* on the lead
+— a quick, human-readable dossier, no message log. **Contents:**
+
+1. **Sentiment** — current read on the lead's mood/temperature.
+2. **DISC profile** — communication style (D/I/S/C) Myli infers, to tailor tone.
+3. **Facts** — a scrolling list grouped by the 12 domains above; each fact is a slot +
+   value (e.g. Family · Children → "two kids, 8 and 11"). Click a domain to jump to it.
+4. **Where they stand** — a one-line plain-English status ("Confirmed for two showings,
+   signed the rep agreement, ready to go").
+
+**Data:** reads the facts store + sentiment + DISC populated by the extraction engine
+(SSOT §5). **Build order:** B3 (after the facts model + extraction engine). **No
+fabricated facts** — empty until the engine fills them.
+
+### Brain Map — PRD
+
+**The button:** "Brain Map" on the AI Agent card. **What it is:** the interactive
+constellation of everything Myli knows — the visual, explorable version of the dossier.
+**Behavior:**
+
+- A **node constellation**: the 12 domains as clusters (PERSON colorway vs HOME colorway),
+  with connecting lines. HUD overlay: lead name, stats, recenter, summary, category words.
+- **Dark mode / light mode** — the same component, toggleable.
+- **Hover** a domain → preview it. **Click** → zoom into that domain's 6 slots. Keep
+  drilling in and out — domain → slot → fact.
+- Reads the same facts store as Context View (domain → slot → value).
+
+**Inspiration:** PlacedAgent's `BrainMapView` (study for UX only — HouseLoop is
+PlacedAgent-free; rebuild native, no PA imports). **Build order:** B4 (the big visual
+lift, after the facts engine).
 
 ## Known limits / roadmap
 
 - **Reactive only** — the clone replies when texted; it does not yet *initiate*
   follow-up/cadence (proactive nudges) on its own.
 - **Booking is not availability-aware yet** — it books the requested time without
-  checking the agent's free/busy.
-- **Reschedule** is "disposition rescheduled + rebook," not a single dedicated flow.
+  checking the agent's free/busy (blocked on the `read_calendar` tool).
+- **Voice not wired** — the `call` capability is `built:false`; the AI can't place or
+  answer calls yet.
+- **Inbound email doesn't feed the AI yet** — it syncs to the timeline but doesn't
+  dispatch to the model.
 - **iMessage typing indicator** depends on the BlueBubbles host's Private API; on some
   macOS versions it can lag or no-op (cosmetic only).
 
-Source: `apps/houseloop-crm/lib/ai/lead-conversation.ts` (dispatch + tools),
-`lib/agent-runtime/capabilities.ts` (toggles), `lib/appointments/apply-outcome.ts`
-(disposition), `lib/calendar/google-calendar.ts` (calendar), `lib/datetime.ts` +
-`lib/business-profile.ts` (business timezone).
+## Related
+
+- [Lead Detail — Parity Lanes](/guides/lead-detail-parity-lanes) — the two-lane skeleton both lanes share
+- [Closed Loop Follow-Up](/guides/closed-loop-follow-up) — the reasoning chain + Memory engine that feeds these facts
+- [Care-Team Routing](/guides/care-team-routing) — the two-AI model (Myli vs the agent's clone)
+- [Task & Appointment Assignment](/guides/task-and-appointment-assignment)
+
+## Source
+
+- `apps/houseloop-crm/lib/agent-runtime/capabilities.ts` — the capability tree + toggles (20 `built:true`, only `call` `built:false`)
+- `apps/houseloop-crm/lib/ai/lead-conversation.ts` — dispatch + `ALL_TOOLS`
+- `lib/appointments/apply-outcome.ts` — shared disposition engine (UI + clone)
+- `lib/calendar/google-calendar.ts` — calendar; `lib/datetime.ts` + `lib/business-profile.ts` — business timezone
+- Internal PRDs: `GT/GT - ACTIVE/GT_HOUSELOOP_AI_CAPABILITY_MATRIX.md`, `GT/GT - Pending/GT_HOUSELOOP_BRAIN_CONTEXT_MAP_PRD.md`

@@ -1,13 +1,14 @@
 ---
 title: "FUB Scraper (Camp David)"
-description: "The FUB scraper — the headless-Chrome-as-Zach process on Camp David that recovers what Follow Up Boss's API masks (message/email/call bodies, the full Zillow browse list) and mirrors it to the store the CRM reads. Architecture, the login, the processes, what it can and can't recover, health, and the runbook."
+description: "The FUB scraper — the headless-Chrome-as-Zach process on Camp David that recovers what Follow Up Boss's API masks (message/email/call bodies, the full Zillow browse list) and mirrors it to the store the CRM reads. Architecture, the login, the processes, what it can and can't recover, the consumers it serves, health, the runbook, and the 2026-07-09 Fable-5 audit of record."
 ---
 
 <Info>
 **This is the first-class reference for the FUB scraper itself** — the process, not the lead-import it feeds.
 For how a scraped lead *becomes a HouseLoop lead*, see [FUB → HouseLoop: Lead Import](/fub/lead-import) (the
-master). Private SSOT this mirrors: `GT_FUB_SCRAPER.md` (the one canonical scraper doc). Owner: **Caleb** (data
-/ intel lane) · Camp David infra: **David**.
+master). The 3-lane notification contract is [Follow Up Boss Trigger Events](/fub/trigger-events). Private SSOT
+this mirrors: `GT_FUB_SCRAPER.md` (the one canonical scraper doc). Owner: **Caleb** (data / intel lane) · Camp
+David infra: **David**.
 </Info>
 
 ## One-line truth
@@ -36,10 +37,12 @@ Under the 3-lane model (full detail: [Follow Up Boss Trigger Events](/fub/trigge
 the source of truth and the scraper is a dumb, on-demand grabber of HIDDEN content only.** It does not decide
 what's new, does not crawl, and **never re-scrapes on a record edit.**
 
-- **The only thing that wakes it is Lane 2** — a masked body. The native webhook writes a targeted job to
-  **`fub.body_recovery_queue` (Camp David)** `{ person_id, resource_type:'text'|'email', resource_id }`; the
-  scraper reads **that one body**, writes it back, and flips `content_status` hidden→visible (which fires
-  `trg_fub_new_message` → the notification, now with the body). A surgical fetch, not a re-walk.
+- **The only thing that wakes it is Lane 2** — a masked body. The native webhook writes a targeted job to the
+  **`fub.body_recovery_queue` on the Railway mirror** (relocated there 2026-07-09 — the original Camp David copy
+  was unreachable from the CRM; see the audit F1 below) `{ person_id, resource_type:'text'|'email'|'call_note', resource_id }`;
+  the consumer polls it from Camp David, scrapes **that one body**, writes it back, and flips `content_status`
+  hidden→visible (which fires `trg_fub_new_message` → the notification, now with the body). A surgical fetch, not
+  a re-walk.
 - **Masked = exactly three things:** SMS bodies (~7%), most email bodies, and 5,690 call notes. Saves/views,
   inquiries, and call metadata are **exposed** (API) and never touch the scraper (Lane 1).
 - **In-app (Zillow Messages) chat is a scraper job** (corrected 2026-07-09 — bodies are NOT API-exposed). WHO
@@ -57,11 +60,10 @@ what's new, does not crawl, and **never re-scrapes on a record edit.**
 
 <Warning>
 **The flood loop is killed, but the strict Lane-2-only consumer is still in build (honest status 2026-07-09).**
-The scraper is **idle** (0 pending, all locked) and record-edits no longer re-scrape — the `peopleUpdated`
-re-scrape loop that caused the 2026-07-09 flood is retired. It does **not yet** run as a pure "Lane-2-only"
-consumer: it still carries the old full-person claim path. Caleb's next build drains `fub.body_recovery_queue`
-(targeted body reads only) and retires the full-scrape path in the same pass. This doc + the FUB master will be
-flipped to "Lane-2-only" once that ships.
+The backfill scraper is **idle** (0 pending, all locked) and record-edits no longer re-scrape — the
+`peopleUpdated` re-scrape loop that caused the 2026-07-09 flood is retired. The Lane-2 body-recovery consumer
+(`fub-body-recovery-consumer.mjs`) shipped C1 (see the audit below); the old full-person claim path is retired
+in the same pass. This doc + the FUB master flip to "Lane-2-only" once that finishes.
 </Warning>
 
 ## Architecture
@@ -84,11 +86,8 @@ Camp David Postgres  fub.*   ── MASTER (host 192.168.1.211, db bossloop)
 
 **Two databases (memorize this before any photo/blank-card debugging):**
 - **Camp David `fub.*`** — where the scraper **writes**. Ground truth for scraped data.
-- **Railway `fub.*`** (`FUB_RAILWAY_DATABASE_URL`) — what the **CRM reads**. The CRM never reads Camp David directly.
-- Most tables sync via the **relay** (`fub-relay`). **`fub.zillow_home_activity` is OFF the relay** — the scraper
-  is its **single writer to the mirror** (a per-person full-replace right after it scrapes). So a home's photo
-  reaches the CRM **only when the scraper runs for that person**. Blank photo in the CRM → check the **mirror**,
-  then re-run the scraper for that lead.
+- **Railway `fub.*`** (`FUB_RAILWAY_DATABASE_URL`) — what the **CRM reads**. The CRM never reads Camp David directly. Railway (the CRM) has **no route to LAN postgres** — this is why the Lane-2 queue had to live on the mirror.
+- Most tables sync via the **relay** (`fub-relay`), a 30s one-way CD→Railway loop over a 16-table allowlist, **upsert-only, never deletes** (by design, Rule #0). Measured lag: **milliseconds**. **`fub.zillow_home_activity` is OFF the relay** — the scraper is its **single writer to the mirror** (a per-person full-replace right after it scrapes). So a home's photo reaches the CRM **only when the scraper runs for that person**. Blank photo in the CRM → check the **mirror**, then re-run the scraper for that lead.
 
 **ONE Chrome (Zach LOCKED 2026-07-08 — "go down to one chrome, harden it up").** A single persistent Chrome —
 **Chrome A** on CDP port **18800** (`~/.chrome-fub-profile`), holding a live Google session — runs the scrape.
@@ -132,6 +131,10 @@ that looked exactly like "the scraper won't stay logged in." Two guards now prev
 
 Rule for anyone touching the watchdog: a monitor may **look** but must never **close/relaunch a browser that has a
 live worker.** Code: `fub-backfill-watchdog.mjs` — `isCdpConnectable` + the `workerFresh` guard in `check()`.
+**Known gap (audit F9, 2026-07-09):** a Chrome whose DevTools websocket has wedged (HTTP alive, ws hangs forever)
+can hide behind the fresh-log guard, because the empty-queue exit loop keeps writing "Nothing to scrape" — a log
+write, not real scrape output. The freshness signal must key on *scrape output*, and CDP connects need an
+external timeout, not an in-process race.
 </Warning>
 
 **Manual override (rarely needed):**
@@ -145,15 +148,28 @@ could sit spinning until someone ran this tool by hand. That gap is now closed.*
 
 ## Processes (pm2 on Camp David)
 
+Live reading 2026-07-09 (audit of record). **Read the heartbeat, not pm2 "online"** — pm2 status lies (see F2/F4).
+
 | pm2 name | script | role | live? |
 |---|---|---|---|
-| **fub-backfill-a** | `fub-parallel-scraper.mjs` | THE scraper — `FUB_WORKERS` (3) pages inside the one Chrome A `:18800`, pending-first from `fub.rehydration_log` (`FOR UPDATE SKIP LOCKED`) | ✅ |
-| **fub-webhook-scraper** | `fub-webhook-scraper.mjs` | real-time — polls `fub.rehydration_queue` | ✅ |
-| **fub-watchdog** | `fub-backfill-watchdog.mjs` | self-healing (`FUB_SINGLE_CHROME=1`) — relaunches a dead Chrome A, auto-logs-in, restarts a stalled worker. **Watches passively; never closes/relaunches a Chrome with a live worker** (see the login §). | ✅ |
+| **fub-backfill-a** | `fub-parallel-scraper.mjs` | THE scraper — `FUB_WORKERS` (3) pages inside the one Chrome A `:18800`, pending-first from `fub.rehydration_log` (`FOR UPDATE SKIP LOCKED`). High restart count is the **exit-relaunch cycle** (exits clean on empty queue, pm2 relaunches), not crashes. | ✅ online |
+| **fub-watchdog** | `fub-backfill-watchdog.mjs` | self-healing (`FUB_SINGLE_CHROME=1`) — passive websocket probe, fresh-log guard, relaunches a dead Chrome A, auto-logs-in. **Watches passively; never closes/relaunches a Chrome with a live worker.** | ✅ online |
+| **fub-relay** | `tools/fub-sync/fub-relay.mjs` | Camp David `fub.*` → Railway `fub.*` mirror — 30s loop, 16-table allowlist, upsert-only, never deletes. Measured lag: ms. | ✅ online |
+| **fub-body-recovery** | `fub-body-recovery-consumer.mjs` | **Lane 2 consumer (shipped C1, 2026-07-09)** — polls `fub.body_recovery_queue` on the mirror, scrapes the one masked body, flips `content_status` + bumps `synced_at`. | ✅ online |
+| **fub-webhook-scraper** | `fub-webhook-scraper.mjs` | the OLD "real-time" rehydrator — **DEAD ~6 weeks / online-but-WEDGED** (see below). Its whole path is retired by the Lane-2 plan. | 🔴 wedged / retiring |
 | ~~fub-backfill-b~~ | ~~`fub-parallel-scraper.mjs`~~ | **RETIRED 2026-07-08** — the 2nd Chrome (B `:18802`) was removed; one browser, one boss | ⛔ |
-| **fub-relay** | `tools/fub-sync/fub-relay.mjs` | Camp David `fub.*` → Railway `fub.*` mirror | ✅ |
 | ~~fub-webhook-sink~~ | `fub-webhook-scraper.mjs` | **deliberately stopped** — redundant duplicate, no mem cap → OOM crash-loop. Reading its "down" as a failure is a known trap. | 🛑 stopped on purpose |
 | ~~fub-sync~~ | `fub-complete-sync.mjs` | manual full sync — normally stopped | 🛑 |
+
+<Warning>
+**`fub-webhook-scraper` is NOT live/real-time — it has been silently dead ~6 weeks (audit F2, 2026-07-09).** pm2
+reports it "online" (18h uptime, 270 silent restarts), but its heartbeat (`fub.webhook_scraper_heartbeat`) last
+beat **2026-05-30** and its queue (`fub.rehydration_queue`) last drained **~May 9** — 49,231 rows piled up with
+nothing draining them. It looked healthy only because pm2 "online" was trusted over the heartbeat. This entire
+`rehydration_queue` path is **retired** — Lane 2 (`fub-body-recovery`) replaces it, and losing it loses nothing
+that works. Evidence: `docs-site/fub/scraper-audit.mdx` F2. Going forward, health checks alert on **heartbeat
+recency**, never process status.
+</Warning>
 
 `fub-scraper-lib.mjs` is the **SSOT for all scraping logic** (imported by both the parallel + webhook scrapers).
 Key exports: `scrapePersonFull`, `scrapeEmailCards`, `saveZillowHomeActivity`, `syncPersonHomeActivityToMirror`,
@@ -191,8 +207,9 @@ public-API fetch returns `401`).
 | `fub.events` | lead events (Property Inquiry / Viewed / Seller) with the clean `property` jsonb |
 | `fub.zillow_home_activity` | every home viewed/saved/shared **with the photo** — off the relay, scraper-mirrored |
 | `fub.saved_searches` | saved searches (scraper-only) |
-| `fub.rehydration_log` | backfill queue (status pending/done) |
-| `fub.rehydration_queue` | real-time webhook queue (`FOR UPDATE SKIP LOCKED`) |
+| `fub.rehydration_log` | the **backfill** queue (status pending/rehydrated) — 49,059 rehydrated · 0 pending |
+| `fub.rehydration_queue` | the **retired** old "real-time" queue — 49,231 pending graveyard, nothing draining it (see F2) |
+| `fub.body_recovery_queue` (on the **Railway mirror**) | **Lane 2** targeted masked-body jobs — `resource_type IN ('text','email','call_note')` |
 
 ## Health & runbook
 
@@ -202,11 +219,162 @@ public-API fetch returns `401`).
   Read `health` and compare `last_crash_at` vs `last_deploy_at` — a crash older than the last deploy means the fix is holding.
 - `mcp__camp-david__fub_chrome_restart` — the session-expired fix (relaunch + re-login).
 
-**Healthy =** `fub-backfill-a` + `fub-webhook-scraper` + `fub-relay` + `fub-watchdog` all `online`; the webhook log
-shows `email:N` recoveries on leads that have visible emails; the pending backlog trends down. A big `hidden` count
-is **not** automatically bad (UI-hidden emails). A pending backlog in the tens of thousands is **throughput, not a bug**.
+**Healthy =** `fub-backfill-a` + `fub-body-recovery` + `fub-relay` + `fub-watchdog` all `online` **and beating a
+fresh heartbeat**; the pending backfill backlog trends down. A big `hidden` count is **not** automatically bad
+(UI-hidden emails). **Trust the heartbeat, not pm2 "online"** — F2 proved a wedged process can report online for
+6 weeks. `fub-webhook-scraper`, `fub-webhook-sink`, and `fub-sync` are dead/retired — don't restart them.
 
-**The two known "down but fine" processes:** `fub-webhook-sink` and `fub-sync` are deliberately stopped — don't restart them.
+## Audit of record — Fable-5 end-to-end (2026-07-09)
+
+Ordered by Zach before the notifications/triggers/FUB-update build. Every claim carries evidence: a `file:line`, a
+live SQL count, or a pm2 reading. Full page was `docs-site/fub/scraper-audit.mdx` (now folded here).
+
+### Verdict in one paragraph
+
+The **core pipeline is healthy**: one hardened Chrome, the watchdog fix is holding (zero crash-loops since
+2026-07-08), the backfill drained the book (49,059 rehydrated / **0 pending**), and the Camp David → Railway relay
+is **real-time to the millisecond** with the notify triggers enabled on the mirror. What's broken is the
+**edges**: the "real-time" rehydrator has been silently dead ~6 weeks over a 49k-row graveyard queue (F2), the
+Lane-2 body-recovery queue had zero writers/readers (F1), the mirror carries 46k ghost rows the master deleted
+(F3), monitoring lies twice (a startup-snapshot heartbeat + a pm2-online-but-wedged process, F4), and the Lane-2
+queue as originally designed was **unreachable from the CRM** (Camp David is LAN-only) — relocated to the mirror.
+
+### The three queues (this is where past confusion lived)
+
+| Queue | Purpose | Live state | Verdict |
+|---|---|---|---|
+| `fub.rehydration_log` | the **backfill** queue (parallel scraper claims from it, `fub-parallel-scraper.mjs:100-116`) | 49,059 rehydrated · 175 error · **0 pending** | ✅ Drained; the `peopleCreated`-only flood-fix held (`apps/dashboard/server/fub-webhooks.ts:346-358`). |
+| `fub.rehydration_queue` | the **old "real-time"** queue (`fub-webhook-scraper` polls it) | **49,231 pending · 820 done (newest ~May 9)** | 🔴 Graveyard — retired by the Lane-2 plan; losing it loses nothing that works. |
+| `fub.body_recovery_queue` | **Lane 2** targeted masked-body jobs | live on the mirror (was empty CD copy) | 🟡→✅ Relocated to the Railway mirror; C1 consumer live. |
+
+### The data (live counts, Camp David master)
+
+- `fub.text_messages` — 400,920 rows: `sms` 288k · `group_sms` 100k · `zillow_inapp` 12.6k. `content_status`:
+  visible 379,503 · hidden 21,289 · api_only_unrecoverable 128. In-app is born-visible (0 ever masked).
+- `fub.emails` — hidden 173,948 vs visible 28,747 (~86% masked — the biggest recovery backlog, served on-demand
+  by Lane 2, never bulk).
+- Notify triggers on the mirror: `trg_fub_new_message` + `trg_fub_new_email` both **enabled**, gated
+  `content_status='visible' AND is_incoming=true` with the re-sync transition guard
+  (`tools/fub-sync/sql/fub_new_message_notify.sql`).
+
+### Who consumes the scraper's output (the "entire project" it serves)
+
+| Consumer | Reads | Via |
+|---|---|---|
+| CRM lead import | `fub.people/events/notes/text_messages` | `lib/fub-import/`, `lib/inngest/functions/fub-lead-import.ts` |
+| Lead-detail live refresh | `pg_notify('fub_lead_changed')` from the relay | `lib/realtime/fubListener.ts` (LISTEN, SSE fan-out) |
+| Comms dock / texts / activity feed | `fub.text_messages/calls/emails` | `app/api/leads/[id]/fub-activity/`, `lib/fub/backfill-fub-*` |
+| AI brief / Myli context | `fub.people/events/text_messages/calls/notes` | `lib/ai/fub-brief.ts` |
+| Notifications (current, being replaced) | mirror pollers | the 4 `fub-*-poll` Inngest fns — being ripped (flood anti-pattern) |
+| Past-client / SRG reconciliation | `fub.*` + `fub.zillow_home_activity` | `tools/fub-scraper/build-*` tools |
+
+### Findings — ranked
+
+<AccordionGroup>
+  <Accordion title="F1 🔴 The Lane-2 queue was unreachable from the CRM — relocated to the mirror (DECIDED)">
+    `fub.body_recovery_queue` was created on Camp David, but the enqueuing router runs on **Railway**, which has
+    no route to LAN postgres (the tailscale funnel proxies HTTPS only). **Decision (Caleb+Lee 2026-07-09): the
+    queue lives on the RAILWAY mirror.** Lee enqueues there natively; Caleb's consumer polls it from Camp David
+    (CD→RW connections already exist — the relay does exactly this). The relay can never clobber it because the
+    relay is **allowlist-based** (16 named tables) and the queue is simply never added. `resource_type` CHECK
+    extended to `('text','email','call_note')` so masked call-notes can queue too.
+  </Accordion>
+  <Accordion title="F2 🔴 The 'real-time' rehydrator has been dead 6 weeks while pm2 said online">
+    `fub-webhook-scraper`: pm2 online, heartbeat last beat **2026-05-30**, queue last drained ~May 9, 270 silent
+    restarts, 49,231 pending rows piled up. Nobody noticed because pm2 "online" was trusted over the heartbeat.
+    **Fix:** the joint plan retires this path entirely (Lane 2 replaces it); the systems-health cockpit (Phase D)
+    must alert on **heartbeat recency**, never process status.
+  </Accordion>
+  <Accordion title="F3 🟠 The mirror carries 46,046 ghost rows the master deleted">
+    `fub.text_messages`: Camp David 400,920 rows vs Railway **446,966** — same id range. The relay never deletes
+    (by design, Rule #0), so Camp David's group_sms dedup never propagated. Ghost rows can surface as duplicate
+    texts in any CRM thread that reads the mirror. **Fix:** a one-time reconciled cleanup on the mirror (delete
+    RW rows whose id no longer exists on CD, table named, count stated) — **needs Zach's typed approval** — plus
+    a documented rule that master-side deletes require a mirror-side reconcile pass.
+  </Accordion>
+  <Accordion title="F4 🟠 Monitoring lies twice">
+    (a) The scraper heartbeat computes `total` **once at startup** (`fub-parallel-scraper.mjs:370-373`) and never
+    refreshes — it still displays the pre-lock flood backlog while the real queue is **0 pending**. (b) pm2
+    "online" ≠ working (see F2). **Fix:** heartbeat re-counts the queue each beat; health checks read heartbeats +
+    queue depth, not process state. Phase D probes: queue depth stale &gt;N = RED · webhook recency &gt;30min =
+    RED · consumer heartbeat.
+  </Accordion>
+  <Accordion title="F5 🟠 ecosystem.config.cjs drift — the pm2 config can't reproduce the live box">
+    The ecosystem file still defines the dead `fub-webhook-sink` and does NOT define the live-named
+    `fub-webhook-scraper` that `deploy.sh` reloads (`deploy.sh:18-22` vs `ecosystem.config.cjs:56-70`). A fresh
+    `pm2 start ecosystem.config.cjs` would start the wrong world. Also: DB/FUB creds are hardcoded in the file,
+    and `fub-parallel-scraper.mjs:25` imports the lib from a hardcoded `/Users/lee/` path. **Fix:** rewrite the
+    ecosystem to exactly the intended apps (backfill-a, watchdog, relay, the Lane-2 consumer), env from `.env`,
+    retire dead blocks.
+  </Accordion>
+  <Accordion title="F6 🟡 Empty-queue exit loop burns pm2 restarts">
+    On an empty queue the parallel scraper exits instantly (`:376-380`) under pm2's `min_uptime` (30s), so the
+    restart counter climbs forever (280k) and every relaunch pays full startup. Harmless today but it masks real
+    crashes inside the same counter. **Fix:** idle-sleep (e.g. 5 min) before the empty-queue exit, mirroring the
+    existing `cooldownExit()` error path (`:87-92`).
+  </Accordion>
+  <Accordion title="F7 🟡 The 216k cleanup (zillow_home_activity dedup) — tool ready, run pending">
+    `fub.zillow_home_activity` accumulated ~77% duplicate rows (volatile upsert key + NULL list_position; 1.78M →
+    ~411k target) plus URL-as-address rows from the note-parser path. The reversible cleanup tool exists
+    (`tools/fub-scraper/dedup-home-activity.mjs`, Zach-approved design 2026-06-27): collapse to one row per
+    (person, zpid/address, activity_type), fix the unique indexes, run CD first then mirror. `--execute` is
+    Rule #0 — **needs Zach's typed approval in-session** before running.
+  </Accordion>
+  <Accordion title="F8 ✅ What's confirmed healthy (don't touch)">
+    The watchdog fix (passive probe + fresh-log guard) — zero kill-loops since 2026-07-08. The login bot (Google
+    SSO, actionable-inputs-first). The relay (ms-level parity, allowlist, never-delete). The `peopleCreated`
+    enqueue gate — flood fix held (0 pending). The mirror notify triggers (enabled, transition guard verified).
+    Throughput after the one-Chrome consolidation: 65/hr → 236/hr.
+  </Accordion>
+</AccordionGroup>
+
+### The build this feeds (the Caleb+Lee joint plan, in flight)
+
+Phases A–D, each gated, all notification toggles OFF until the staged flip-on: **A** parallel build (Lee: rip the
+4 pollers, recency gate, Lane-2 enqueue, router stores calls/texts/emails natively · Caleb: the Lane-2-only
+consumer on the relocated queue, retire the full-person claim path, the shared called#→subtype resolver lib) →
+**B** repoint FUB's 20 webhooks to `crm.houseloop.ai` + dark-verify on real traffic → **C** staged flip-on one
+family at a time, each verified on Zach's phone → **D** permanence: health probes on heartbeat/queue-depth recency
+(the F2/F4 lesson), run-log lanes, docs flipped. Interface locks (ACK trail cipher #11671/#11672): store
+`content_status` as visible-if-body-present (in-app is born-visible), consumer reads the full RW row at claim so
+the relay round-trip never drops metadata, queue CHECK includes `call_note`.
+
+### Live-fire addendum — what building C1 surfaced (same day)
+
+<Update label="2026-07-09 PM" description="C1 shipped + live-fire findings">
+  **C1 SHIPPED:** `fub-body-recovery-consumer.mjs` live on Camp David (pm2 `fub-body-recovery`), queue + NOTIFY
+  trigger + heartbeat live on the mirror. **Proven on a real masked SMS** (id 296220): 47ms enqueue→claim, 13s
+  scrape via the timeline-API sniff, body visible on both DBs. Unrecoverable rows honest-error after 3 spaced
+  attempts. New findings from the live fire:
+
+  - **F9 🔴 A wedged Chrome hides behind the fresh-log guard.** Chrome A's DevTools websocket wedged (HTTP alive,
+    ws connections hang forever) — and the backfill's empty-queue exit loop kept writing "Nothing to scrape" to
+    its log, which kept the watchdog's fresh-log guard satisfied. A wedged Chrome can therefore persist
+    indefinitely. Worse: a hung `connectOverCDP` **blocked the consumer's whole event loop**. Fix directions: the
+    freshness signal must be *scrape output*, not any log write; CDP connects need an external watchdog.
+  - **F10 🟠 The masked-SMS backlog is 99.7% fake.** 21,232 of 21,289 hidden texts sit on **`person_id = 0`** —
+    orphans from a webhook attribution bug, tied to no person. Real-person masked texts: **56**, mostly ancient
+    outbound bulk with empty FUB timelines (unrecoverable by design). Lee's A4 storage path must guard against
+    writing `person_id=0`.
+  - **F10 outcome (2026-07-09 eve): 9,343 orphans RE-ATTACHED, Zach-approved.** Gold tier 5,676 (phone +
+    exact-name + no-twin) + Tier-2 3,667 (family/co-buyer names + the existed-before-message guard). The twin
+    check killed 7,793 would-be duplicates. Orphans 21,234 → 11,891. Reversal snapshots:
+    `.claude/reports/personid0-reattach-{gold,tier2}-2026-07-09.csv`.
+  - **F12 🔴 fub-relay cursor strands same-timestamp bulk writes.** The text_messages cursor advances to
+    `max(synced_at)` after its 2,000-row batch cap — when &gt;2,000 rows share one `synced_at`, the tail is
+    **silently skipped forever** (2,669 rows stranded, zero errors). Data healed with unique per-row re-bumps; the
+    code fix (Lee) is a keyset cursor `(synced_at, id)`. Until then bulk CD writes must stagger `synced_at`.
+  - **F11 🔴→✅ Recovered bodies only reached the mirror via LEGACY realloop (fixed).** The lib's recovery fns
+    (`applyApiTexts`/`matchAndUpdateMessages`) set body + `content_status` but **not `synced_at`** — so the
+    cursor-driven relay never carried flips; they reached Railway only through the legacy
+    `realloop.co/api/fub/sync-message` POST, which dies at cutover. The consumer now **bumps `synced_at` on every
+    flipped row**; proven live. The legacy POST inside the lib should be removed with the C2 retirement pass.
+</Update>
+
+### What stays parked behind this
+
+Number porting ([Phone Porting PRD](/guides/phone-voice-prd)) and the [Myli Voice](/guides/myli-voice) buildout —
+in that order, only after the FUB pipeline is verified live and signed off.
 
 ## Incidents
 
@@ -217,38 +385,30 @@ is **not** automatically bad (UI-hidden emails). A pending backlog in the tens o
      Chrome build that close tears down the browser's live pages. So every 60s the watchdog killed the
      actively-scraping worker mid-lead, mis-read the aftermath as "WEDGED," and hard-relaunched Chrome —
      **chrome-restart #568**, an endless self-inflicted crash loop. → **Fix:** passive raw-websocket probe (never
-     `browser.close()`) + a **fresh-log guard** (a worker that wrote output seconds ago proves CDP is healthy — the
-     watchdog never probes/relaunches a Chrome with a live worker).
+     `browser.close()`) + a **fresh-log guard**.
   2. **The scraper's startup re-login was dead code.** It clicked `input[type=submit].u-bigBlueButton` — the legacy
      FUB email/password form button. FUB is Google SSO now, so it always failed → instant 10-min cooldown. → **Fix:**
      delegate to `fub-login-bot.mjs` (Google SSO) and re-verify.
   3. **A stray-tab auto-closer** (`ctx.on('page')`) closed any non-FUB page — including the Zillow pages a worker
-     legitimately opens mid-scrape. → **Fix:** made it **log-only** (never closes a page out from under a worker).
+     legitimately opens mid-scrape. → **Fix:** made it **log-only**.
   Then per Zach ("go down to one chrome, harden it up"): **retired Chrome B (18802) + `fub-backfill-b`**, ran the
-  watchdog with `FUB_SINGLE_CHROME=1` (one browser, one boss), and set `FUB_WORKERS=3` on the single Chrome.
-  Result: `restarts:0`, throughput **65/hr → ~236/hr**, stable through a hands-off window. Commits `62b28ef234`,
-  `83b02ff6d8`, `8f8e01cb65`; `pm2 save`d so it survives reboot. Next hardening (not yet done): shrink the scraper
-  to ONLY the API-masked data (text/call bodies + deep Zillow browse) and let FUB webhooks carry the rest.
+  watchdog with `FUB_SINGLE_CHROME=1`, set `FUB_WORKERS=3`. Result: `restarts:0`, throughput **65/hr → ~236/hr**.
+  Commits `62b28ef234`, `83b02ff6d8`, `8f8e01cb65`; `pm2 save`d so it survives reboot.
 - **2026-07-08 07:41 UTC (Caleb / Opus 4.8)** — Chrome A (18800) kept getting kicked out and **couldn't log itself
   back in** (Zach report). Diagnosis: **the login-bot was crying wolf on 2FA.** `driveGoogle()` tested a broad regex
   (`2-Step Verification | verify it's you | passkey | try another way | authenticator`) **before** it ever filled the
   password — but Google renders "Try another way" and a passkey hint as *options* on the ordinary password screen, so
-  the bot bailed `exit 3 "2FA — human required"` while a usable password field sat right there. Proven false: a manual
-  email+password drive landed straight in `/2/people`, zero 2FA. **Fix (`fub-login-bot.mjs`, commit `8f8e01cb65`):**
-  exhaust every action the bot CAN take — email → password → chooser → consent — FIRST; declare `2fa` only as a last
-  resort when a REAL challenge is present (a visible code input `input[type=tel]` / `one-time-code`, or a "Google sent
-  a notification" push) AND nothing else is actionable. **Verified end-to-end:** cleared ALL cookies (true cold state —
-  Google + FUB sessions dead) → the fixed bot re-logged in via Google SSO **autonomously in 11 seconds** (`Login
-  required → Starting Google SSO → Logged in via Google.`). Chrome A authed, backfill-a resumed (heartbeat live,
-  ~185/hr, no error). Deployed to `/Users/lee/fub-login-bot.mjs`.
-- **2026-07-03** — BOTH Chromes logged out, workers crash-looping (*"hit expired FUB session mid-scrape"*), and the
-  watchdog **sat there spinning** — it only ran the in-session login-bot and, on a real logout, gave up + alerted a
-  human (it never did a hard relaunch). Fixed live with `fub_chrome_restart`, then **made the fix persistent**: the
-  watchdog now HARD-relaunches Chrome (kill + fresh-profile launch + re-login) for A **and** B whenever the
-  in-session login fails on a persistent login tab. It only alerts a human if even that fails (real 2FA). Deployed
-  via `tools/fub-scraper/deploy.sh`. No more autonomous spinning.
+  the bot bailed `exit 3 "2FA — human required"` while a usable password field sat right there. **Fix
+  (`fub-login-bot.mjs`, commit `8f8e01cb65`):** exhaust every action the bot CAN take — email → password → chooser →
+  consent — FIRST; declare `2fa` only when a REAL challenge is present (a visible code input `input[type=tel]` /
+  `one-time-code`, or a "Google sent a notification" push) AND nothing else is actionable. **Verified:** cleared ALL
+  cookies (true cold state) → the fixed bot re-logged in via Google SSO **autonomously in 11 seconds**.
+- **2026-07-03** — BOTH Chromes logged out, workers crash-looping, and the watchdog **sat there spinning** — it only
+  ran the in-session login-bot and, on a real logout, gave up + alerted a human. Fixed live with `fub_chrome_restart`,
+  then made persistent: the watchdog now HARD-relaunches Chrome (kill + fresh-profile launch + re-login) whenever the
+  in-session login fails on a persistent login tab. Only alerts a human if even that fails (real 2FA).
 - **2026-06-30** — FUB session expired, auto-login failed → workers crash-looping on the login page. Fixed live with
-  `fub_chrome_restart` (re-logged-in, landed on `/2/people`).
+  `fub_chrome_restart`.
 - **2026-06-28** — Blank-photo root cause: `mirrorUrl()` used `require()` in an ES module → silently null'd the mirror
   URL on on-demand scrapes, so photos wrote Camp David but never the Railway mirror the CRM reads. Fixed: ESM `fs`,
   mirror sync sources from Camp David, always runs, never shrinks, fails loud.

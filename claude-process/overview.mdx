@@ -1,6 +1,6 @@
 ---
-title: "Claude Process — Overview"
-description: "How we effectively use Claude Code to build HouseLoop. A living operating manual: each section captures a working method plus the lessons that shaped it, and is updated the moment we learn a better way."
+title: "Claude Process — Operating Manual"
+description: "How we effectively use Claude Code to build HouseLoop: the working methods, plus the two domains that burned us into laws — UI design (the wireframe is the truth) and memory (facts live in durable, auto-injected files). A living manual, updated the moment we learn a better way."
 ---
 
 This tab is the operating manual for **working with Claude Code on HouseLoop** — not what the product does, but
@@ -9,7 +9,7 @@ work; it's a **process gap** between what was agreed and what got built. Every s
 
 ## How to read this
 
-Each section documents one working method in three parts:
+Each method is documented in three parts:
 
 | Part | What it is |
 |---|---|
@@ -23,26 +23,128 @@ It updates **section by section, on demand**. When we hit a lesson in a domain �
 Zach points at the relevant section and it gets rewritten to fold that lesson in. The doc always reflects the
 *current* best way to work, not a frozen snapshot. New domains get new sections as we learn them.
 
-## Sections
-
-<CardGroup cols={2}>
-  <Card title="UI Design" href="/claude-process/ui-design">
-    Iterate UI fast in HTML, lock the wireframe, derive an exact spec from it, then port it node-for-node. Why we
-    never build UI from prose.
-  </Card>
-  <Card title="Memory" href="/claude-process/memory">
-    How Claude's memory works here — the Memory Constitution, working-memory progress files, lessons, and the
-    file-based long-term memory — and how each gets updated.
-  </Card>
-</CardGroup>
-
 ## The through-line
 
 Every method here reduces to one idea: **the source of truth must be a single, concrete artifact — and the build
 must be a faithful translation of that artifact, never a reconstruction from memory or prose.** A wireframe for UI.
 A progress file for state. A memory file for a fact. When the build reads directly from the artifact, it can't drift.
 
+---
+
+# UI Design — the wireframe is the truth
+
+UI moves fastest when the thing we're approving **is** the thing we build from. Claude can iterate an HTML
+wireframe in seconds — change a layout, restyle a card, move a control — and Zach can eyeball and approve it
+instantly. That speed is the point. The failure mode is letting the approved *pixels* get re-described in prose and
+then rebuilding from the prose. This process keeps the pixels authoritative end to end.
+
+## The method — HTML first, port second
+
+### Phase A — iterate in HTML (fast, WYSIWYG)
+
+1. Claude builds an **HTML wireframe** using the real HouseLoop tokens (navy `#1B3A8A`, blue `#2D6DFF`, hairline
+   `#E5E7EB`, radii, Inter) and publishes it as an **artifact** Zach can open.
+2. Zach directs edits; Claude edits the **same HTML file** live and re-publishes. Repeat until Zach says
+   **"the HTML is locked."**
+3. **Every edit lands in the HTML first.** A verbal change ("stack these two", "abbreviate that") is not a
+   decision until it's *in the wireframe* and re-confirmed. The approval surface and the build source never diverge.
+
+### Phase B — port the locked HTML (deterministic, no eyeballing)
+
+Once locked, Claude does **not** rebuild from memory. It runs a fixed translation:
+
+1. **Freeze + pin** the locked HTML into the repo (`docs/wireframes/…`) so it's version-pinned, not an ephemeral file.
+2. **Derive the spec FROM the HTML, node-by-node** — a mapping table, one row per element:
+
+   | HTML node | Exact CSS (height, grid, gaps, border, font-px, color→token) | Verbatim text | React component (reuse) |
+   |---|---|---|---|
+
+   Every spec row traces to a line in the HTML. **No English design-prose** — it's a literal translation table.
+3. **Hard values become named constants** — every dimension the HTML fixes (`height:70px`, grid ratios, gaps)
+   is a constant in the spec and the code. **No `flex` auto-expand or wrapping where the HTML fixes a size.**
+4. **Strings are copied verbatim** — "Inspect Ends", "Inspect Res", "Pending", "Clear", "Walkthru" — lifted from
+   the nodes, never paraphrased or "improved."
+5. **Reuse existing components** — the table maps each node to the real component (`StatCard`, the pills, `IpadModal`),
+   never a hand-rolled lookalike (see the `REUSE_NOT_RECREATE` law).
+6. **Verify by overlay** — screenshot the built React at the wireframe's viewport, place it beside the HTML render,
+   and diff **every** element: outline present? label text exact? height matched? position right? "Matches the
+   wireframe," not "matches my memory." Only then is it done.
+
+## The lesson — the mode-bands divergence (2026-07-03)
+
+Zach signed off on a pixel-exact HTML wireframe for the lead-detail **TC Dashboard** and **Referral Dashboard**
+bands. The shipped React looked nothing like it: no card outlines, full words where abbreviations were locked
+("Inspection Ends" instead of "Inspect Ends"), an invented Buyer/Seller toggle in the wrong corner, a band that
+auto-expanded and wrapped instead of holding a fixed height.
+
+**The mechanism** (this is the part that matters):
+
+1. After sign-off, the design was re-described in a **PRD + plan in English prose** ("hero + 5 TC fields as inline
+   blocks", "6 KPIs in navy"). That prose was a **lossy compression** of the HTML — it silently dropped the
+   outlined cards, the exact grid, the switch structure, the abbreviation strings, and the pixel heights.
+2. The React was then built **from the prose and memory — the HTML file was never re-opened.** Everything that
+   lived only in the pixels got **reconstructed from a vague mental model. That reconstruction is the hand-rolling.**
+3. Two verbal edits Zach made were never written back into the HTML, so there was no spec to port them from, and
+   they were implemented wrong from memory.
+
+In HTML, Claude was editing the actual pixels Zach was looking at — one source, WYSIWYG. In React, it was working
+from a text abstraction one step removed, so drift entered at every gap between the prose and the pixels.
+
+<Warning>
+**A signed-off wireframe is a spec, not a suggestion.** Building UI from a prose description of an approved
+wireframe — instead of from the wireframe itself — is the root cause. The prose is a *pointer* to the HTML, never
+a replacement for it.
+</Warning>
+
+## The rule
+
+> **The wireframe is the truth. Edits land in the HTML first and are re-confirmed; the spec is derived from the
+> locked HTML node-by-node; the build is a verbatim port of that spec; done means an overlay diff against the
+> wireframe, not against memory.**
+
+Enforced by `.claude/rules/UI_ITERATION_HTML_FIRST.md` (constitutional). This is the design-artifact counterpart to
+`WORKFLOW_CANVAS_IS_TRUTH` — same principle, applied to UI: what runs equals what was drawn, nothing reconstructed.
+
+---
+
+# Memory — facts live in durable, auto-injected files
+
+Claude's context is wiped between sessions and compacted mid-session. So "memory" here is not the model
+remembering — it's a set of **durable files that get injected back into context** at session start and after every
+compaction. The discipline is: **a fact worth keeping goes into exactly one durable artifact, and that artifact is
+auto-loaded** — never left only in the conversation, where it evaporates.
+
+## The layers
+
+| Layer | Where | What it holds | Updated by |
+|---|---|---|---|
+| **Working memory** | `.claude/state/progress/<subproject>.md` | The live scoreboard for the active subproject — current step, step log, decisions, next action. | Auto-written after every edit; auto-synthesized; injected on session start + post-compaction. |
+| **Shipped/closures** | `.claude/state/progress/_shipped/<subproject>.md` | What's been replaced or killed, so dead work isn't redone. | Auto-detected from git diffs. |
+| **Lessons** | `.claude/lessons/` | Topic-scoped "never do this again" write-ups. | Written when a lesson is learned; scanned by topic each session. |
+| **Rules (constitutional)** | `.claude/rules/*.md` | Hard laws that override defaults (e.g. `UI_ITERATION_HTML_FIRST`, `WORKFLOW_CANVAS_IS_TRUTH`). | Written once, injected every session via `CLAUDE.md`. |
+| **Long-term memory** | the agent memory store (`MEMORY.md` index + one file per fact) | Durable facts about the user, feedback, projects, and references. | Written as facts are learned; the index is loaded every session; individual files recalled on relevance. |
+| **This process doc** | `docs-site/claude-process/` | The operating methods + the lessons that shaped them. | Updated section-by-section, on demand (see below). |
+
+## How memory gets updated
+
+- **Automatically** — working-memory progress files and closure detection run on hooks (after edits, before
+  compaction, on a cron). No manual journaling; the scoreboard maintains itself.
+- **On a lesson** — when we learn a better way, it's captured in the right layer: a **rule** if it's a hard law, a
+  **lesson file** if it's topic guidance, a **memory file** if it's a durable fact, and a **section of this doc** if
+  it's a working method. The same lesson can land in more than one layer (a rule *and* this doc) so it's both
+  enforced and explained.
+- **Before saving** — check for an existing file that already covers it and update that, rather than creating a
+  duplicate. One fact, one home.
+
+## This doc as a memory surface
+
+The **Claude Process** manual is itself a memory layer — the human-readable home for *how we work*. It updates
+**section-by-section, on demand**: Zach names the section (UI Design, Memory, Deploys…) and the lesson we just
+learned, and that section is rewritten to fold it in. It is not auto-generated prose; it is deliberately curated so
+each section stays the current best method. New domains become new sections as they're learned.
+
 <Note>
-If a working method isn't written here yet, that's the gap — not the method's absence. Tell Claude which section
-to update with the lesson, and it lands here.
+The test for whether a fact is "remembered": will it be injected back into context next session **without anyone
+re-typing it?** If yes, it's in memory. If it only lives in the chat, it's already gone. If a working method isn't
+written here yet, that's the gap — not the method's absence. Tell Claude which section to update, and it lands here.
 </Note>

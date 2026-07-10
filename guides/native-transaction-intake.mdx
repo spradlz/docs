@@ -1,6 +1,6 @@
 ---
 title: "Native Transaction Intake Form"
-description: "The plan to replace Cognito Forms with a native HouseLoop transaction intake: one Add Transaction flow on the lead's TC dashboard that creates/links the loop, captures the intake, sets the anchor dates, records the deal, and projects the dated stepper — for buyers or sellers."
+description: "The plan to replace Cognito Forms with a native HouseLoop transaction intake: one Add Transaction flow on the lead's TC dashboard that creates/links the loop, captures the intake, sets the anchor dates, records the deal, and projects the dated stepper — plus the planned Under-Contract stage trigger that fires the same funnel automatically. For buyers or sellers."
 ---
 
 <Note>
@@ -23,13 +23,6 @@ The React port is a verbatim node-by-node translation of that file (band + docke
 + Add Transaction funnel), verified by overlay against it. Nothing is built from this prose.
 </Note>
 
-<Note>
-**The Under-Contract trigger has its own spec now.** The half of this plan that fires the funnel automatically
-when a lead moves to **Under Contract** (auto-filled from the lead AND its loop) is documented + status-tracked
-separately: [The Under Contract Funnel](/guides/under-contract-funnel). It's the unbuilt trigger + deep-intake
-piece.
-</Note>
-
 ## The goal
 
 An agent opens a lead in **TC view** and clicks **Add Transaction**. A native intake funnel — the Cognito-equivalent,
@@ -50,6 +43,14 @@ Today the TC surfaces are fragmented — three unlinked pieces:
 
 **Loops and deals are separate, unlinked rows** in `hl_transactions` produced by two independent flows. Nothing
 joins them, nothing captures the intake, and the stepper has no dates.
+
+<Note>
+**The canonical transaction record is `hl_transactions`.** Both loops and deals live in this one table — it was
+renamed from `hl_lead_deals` in migration 0241, so any older doc/code citing an `hl_lead_deals` table is stale
+(the TC transactions API reads/writes `hl_transactions`:
+`apps/houseloop-crm/app/api/tc/transactions/route.ts`). The whole point of this plan is to stop the two flows
+producing two orphan rows and instead **link them into one transaction**.
+</Note>
 
 ## The target — one "Add Transaction" flow
 
@@ -78,17 +79,79 @@ The deal (commission / close) is recorded and **linked to the loop** — deal + 
 
 Same funnel for buyers and sellers; same funnel whether triggered by the button or the Under-Contract stage move.
 
+## The Under Contract trigger (planned — NOT built)
+
+The half of this plan that fires the funnel automatically is the **Under Contract stage trigger**. Today it is
+spec only — the funnel exists but is only reachable manually via the band's **View / Add Transactions** hub, and
+only Step 1 (Contract & Dates) is wired.
+
+**The one idea:** moving a lead to Under Contract IS the moment a real transaction begins — so that stage move
+should open the full TC intake funnel, not a one-row deal capture. This is the "section that's supposed to pop up
+when you hit Under Contract."
+
+### Where it fits — the two-chapter loop
+
+It's the hinge between the two chapters of the TC Loop band:
+
+1. **Chapter 1 — Shopping** (the Agency Loop): agreement prep → sent → signed. No transaction chrome.
+2. **→ Under Contract** — the stage move fires **this funnel**.
+3. **Chapter 2 — Contract** (the Property Loop): the funnel's anchor dates drive Under Contract → EMD → … → Possession.
+
+The Under-Contract gate node in the shopping stepper ("→ Under Contract · starts loop") is the visual promise of
+this trigger.
+
+### The trigger (unbuilt)
+
+| Today | Planned |
+|---|---|
+| Stage → Under Contract → **DealMilestoneModal** (5 fields → an `hl_transactions` deal row) | Stage → Under Contract → **the TC intake funnel** (full intake → creates/links the **loop** + records + links the deal) |
+| Fires from `PipelineChipDropdown` / `CenterLane` intercept matrix | Same intercept, but routes Under Contract to the funnel instead of the deal modal |
+| Captures a deal, not a transaction; no loop, no dates, no stepper | Captures the transaction, writes the 2 anchors, projects the dated stepper |
+
+The intercept matrix lives in [Lead Detail — Stages, Deals & Audit Trail](/guides/lead-detail-stages-and-deals)
+(`Anything → Under Contract`). Wiring this feature means that row opens the funnel.
+
+### The pre-fill (two sources)
+
+On open, the funnel auto-fills from **two sources**:
+
+- **The lead** (`hl_leads`): name, phone, property address, assigned agent, lead source. ✅ built
+  (`AddTransactionFunnel` `prefill` prop).
+- **The selected loop** (`hl_transactions` + children): side, agency price, participants, and any agency-chapter
+  data already captured. ⛔ **This loop-side pre-fill is NOT built.**
+
+### The deep intake (Steps 2–6 — unbuilt)
+
+The funnel's Steps 2–6 are the ~140-field intake, rebuilt natively from the
+[Cognito Forms schema](/guides/cognito-forms-api) (TC Intake Form Buyers #103 / Sellers #108). Today they render
+as **structural placeholders** — the deep field capture was deferred to "the Transaction Summary pass" and never
+built. The A-Frame `Collection → Group → Field` map (Property · EMD · HOA · Inspections · Financing · Commission)
+is documented in the Cognito guide.
+
+### On save — what it must do
+
+1. **Create / link the loop** — `createLoop` if none for that side (seeds the side's milestones + tasks), else link.
+2. **Write the two anchor dates** — `EffectiveDate` (Under Contract) + `ClosingDate` → `hl_tc_loop_event.event_date`
+   via `PATCH /api/tc/loops/[id]/dates` (built), so the date engine projects the rest of the stepper.
+3. **Record + link the deal** — the deal milestone row (in `hl_transactions`) is created AND linked to the loop
+   (one transaction, not two orphan rows). ⛔ The deal↔loop link is NOT built.
+4. **Write the audit row** — `deals.under_contract` to `hl_audit_log`, same as today.
+
 ## What's built vs what we build
 
-| | Status |
+| Piece | Status |
 |---|---|
 | `createLoop` → `instantiateMilestones` / `instantiateTasks` (`lib/tc/loop-engine.ts`) | ✅ built |
 | The deal route (`app/api/leads/[id]/deal`) + milestone templates (14 buyer / 16 seller) | ✅ built |
 | `computeDue` — the date offset math (`lib/tc/date-engine.ts`, tested) | ✅ built |
-| **Native intake form** (from the Cognito schema) + auto-fill from the lead | ⛔ build |
+| The funnel shell + Step 1 (Contract & 2 anchor dates) → creates/seeds loop (`AddTransactionFunnel`) | ✅ built |
+| Lead-side pre-fill (address · phone · agent) | ✅ built |
+| `PATCH /api/tc/loops/[id]/dates` (anchor write) | ✅ built |
+| **Under-Contract stage move OPENS the funnel** (instead of DealMilestoneModal) | ⛔ build |
+| **Loop-side pre-fill** (side · price · participants from the loop) | ⛔ build |
+| **Deep intake capture** (Steps 2–6, ~140 fields from the Cognito schema) | ⛔ build |
 | **Add Transaction** button + funnel on the TC band (replaces `TcCreateLoopPrompt`) | ⛔ build |
-| **Key-date write endpoint** — `PATCH /api/tc/loops/[id]/dates` writing `hl_tc_loop_event.event_date` | ⛔ build (mine) |
-| **`computeLoopSchedule`** — the loop-aware cascade wrapping `computeDue` | ⛔ build (Adam's G4) |
+| **`computeLoopSchedule`** — the loop-aware cascade wrapping `computeDue` (Adam's G4) | ⛔ build |
 | **Deal ↔ loop link** (`loop_id` on the deal / shared transaction id) | ⛔ build |
 
 ## Ownership + reuse
@@ -107,3 +170,9 @@ The intake is stored natively in `hl_tc_*` using the A-Frame-style **Collection 
 (config-not-code), seeded from the [Cognito schema](/guides/cognito-forms-api). Cognito's New Listing / Status Change
 / Pending Transaction forms map the same way as future native forms. The [key dates](/guides/cognito-forms-api)
 (`ContractDetails.EffectiveDate` + `ClosingDate`) are the anchors the stepper runs on.
+
+## Related
+
+- [Cognito Forms API — Reverse Engineering](/guides/cognito-forms-api) — the 140-field schema this rebuilds
+- [Lead Detail — Stages, Deals & the Audit Trail](/guides/lead-detail-stages-and-deals) — the intercept matrix + DealMilestoneModal this upgrades
+- [Transaction Coordination](/guides/transaction-coordination) — the loop/stepper PRD

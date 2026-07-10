@@ -1,17 +1,18 @@
 ---
 title: "Transaction Coordination"
-description: "The HouseLoop CRM section for running a deal contract-to-close — transactions, fillable contracts, email queue, and the dotloop integration underneath."
+description: "TC Loop — HouseLoop's own Transaction Coordination platform (our own dotloop, owned end-to-end): transactions, fillable contracts, self-hosted e-sign, the compliance archive, plus the architecture, data model, and build state."
 ---
 
 ## What this section is
 
-**Transaction Coordination (TC)** is the HouseLoop CRM section for running a deal — the coordination
-layer (transactions, contracts, email queue, team files) on top of the transaction-management platform
-(dotloop) that holds the loop file. Modeled as a *light*, AI-native (Myli-fillable) version of a
-dedicated TC tool, built on HouseLoop's own rails.
+**Transaction Coordination (TC Loop)** is the HouseLoop CRM section for running a deal contract-to-close.
+It is **our own dotloop, built and owned end-to-end** — documents, forms, fill, self-hosted e-signature,
+the compliance archive, and a direct brokerage push all live on our side. It is a *light*, AI-native
+(Myli-fillable) version of a dedicated TC tool, built on HouseLoop's own rails and reusing the CRM's
+existing components.
 
-Where [Website Integration](/guides/listing-lifecycle) is about the *listing* and the CRM guides are
-about the *lead*, **Transaction Coordination is about the deal** — the contract-to-close record.
+Where [Website Integration](/guides/listing-lifecycle) is about the *listing* and the CRM guides are about
+the *lead*, **Transaction Coordination is about the deal** — the contract-to-close record.
 
 ## The model
 
@@ -19,61 +20,275 @@ about the *lead*, **Transaction Coordination is about the deal** — the contrac
 |---|---|---|
 | **Listing** (the home) | `Listing` (web DB) | renders `/home/<slug>`, value, history |
 | **Lead** (the person) | `hl_leads` (CRM DB) | CRM, AI follow-up, activity log |
-| **Transaction** (the deal) | **`hl_transactions`** (CRM DB) | the deal record — written by disposition |
+| **Transaction / Loop** (the deal) | **`hl_transactions`** (CRM DB) | the deal record — written by disposition |
 
 **The transaction record already exists: `hl_transactions`** (disposition-driven — marking a lead
 *Under Contract* or *Closed* in the pipeline writes a row with address · price · closing · commission;
 `milestone` = `under_contract` \| `closed` \| `fell_through`). **Past clients = leads with a `closed`
-transaction.** The TC tables that sit alongside it: `hl_contract_template` (fillable form store),
-`hl_contract_fill` (a filled contract, per-lead), `hl_tc_email` (the email queue). dotloop stays the
-system of record for signed docs; HouseLoop reads loops and pushes finished documents back.
+transaction.** A **loop is ONE side** (`hl_transactions.transaction_type`: `purchase` → Buyer, `sale` →
+Seller); a client buying AND selling has **two loops**.
+
+The child tables that make up the loop file: `hl_tc_loop_folder` / `hl_tc_loop_document` (**our document
+source of truth**), `hl_tc_loop_participant` (people), `hl_tc_loop_task` (per-loop task instances),
+`hl_contract_template` / `hl_contract_fill` (fillable forms + a filled contract), `hl_tc_email` (email
+queue).
+
+## Own the whole stack — why (LOCKED 2026-06-27)
+
+TC Loop is **our own dotloop**, owned end-to-end. We do NOT hand a third party our finished documents.
+Two hard reasons a wrapped dotloop can't satisfy:
+
+1. **dotloop can't fill or sign via API.** No API-fillable smart fields, and you can't place signature
+   fields or trigger a signature through its public API (UI-only) — so Myli could never run a contract
+   through dotloop.
+2. **SkySlope / eXp compliance requires we own the documents end-to-end** — we must push signed docs
+   directly to SkySlope, only possible if the documents live on our side.
+
+**dotloop is OUT of the critical path.** It is an optional legacy importer only — read historical SRG
+loops via the read-only API in `lib/dotloop/client.ts`. See [dotloop integration](/guides/dotloop-integration).
+
+## The stack
+
+| Layer | What | Where |
+|---|---|---|
+| Loop | container + status/stage | `hl_transactions` + `hl_tc_stage` |
+| Documents | folders + document lines (**our source of truth**) | `hl_tc_loop_folder` / `hl_tc_loop_document` |
+| Forms + fill | our PDF templates + data-fill → filled PDF (R2) into a loop folder | `lib/tc/{contract-forms,fill-contract,template-store}.ts` + `POST /api/tc/loops/[id]/documents` |
+| **E-signature** | place fields · send · seal · audit | **Documenso, self-hosted** — the system of record |
+| Compliance archive | signed PDF + completion certificate, immutable, retained | our storage (**R2**) |
+| Broker integration | push signed docs to **SkySlope (eXp)** | to build |
+| People / Tasks | participants + the A-Frame dated checklist | `hl_tc_loop_participant` · `hl_tc_loop_task` |
+| The UI | the existing lead-detail page in TC `view` mode (reused, not rebuilt) | see below |
+
+## E-signature = Documenso, self-hosted (the system of record)
+
+**Documenso, self-hosted, is the system of record for signed documents** — the sealed final PDF plus its
+completion certificate are archived to **our R2**. dotloop is only an optional legacy backup, out of the
+critical path. This is not a plan: **e-sign shipped 2026-07-06** (instance live at `esign.houseloop.ai`;
+multi-party signing — buyer / co-buyer / agent / broker — proven on all 3 contract forms; sealed PDFs
+archived to R2; only the `DOCUMENT_COMPLETED` webhook terminates the flow). The send path is in
+`apps/houseloop-crm/lib/esign/send-loop-document.ts`.
+
+**The compliance bar.** US e-signatures are governed by the **ESIGN Act (federal) + UETA** (both adopted
+by Kansas and Missouri). An e-signature binds an agency/purchase contract when we capture: (1) **intent to
+sign**, (2) **consent** to do business electronically, (3) **attribution** (email/identity verify + IP +
+timestamp), and (4) **integrity + retention** — a tamper-evident record (document hash / digital seal),
+retained and reproducible. The legal backbone is the **audit trail / completion certificate** (who · when ·
+IP · email-verified · doc hash · event log) plus the sealed final PDF. US real estate does **not** require
+an RFC-3161 trusted-timestamp authority (that's EU/eIDAS) — a reliable system timestamp + audit log + seal
+is the accepted standard.
+
+**Documenso provides all of it** — audit log, PAdES cert-seal, completion certificate, and an API to place
+fields, send, and webhook on completion — and is self-hostable, so we own the data and pay **$0 per
+signature**. (Chosen over SignWell for ownership, no per-sig cost, and SkySlope-grade control.)
 
 ## The CRM section (navigation)
 
-TC is a **drill-in section**: the main left nav has **Transaction Coordination ›**; clicking it swaps
-the whole left menu for the TC sub-nav + a **Back to CRM** link. Sub-nav (routes under `/tc/*`,
-additive — Dashboard/Leads unchanged):
+TC is a **drill-in section**: the main left nav has **Transaction Coordination ›**; clicking it swaps the
+whole left menu for the TC sub-nav + a **Back to CRM** link. Sub-nav (routes under `/tc/*`, additive —
+Dashboard/Leads unchanged):
 
 **Transactions · Email Queue · Forms · Team Files · Team Info · Team Members · Lists · Client Portal · Import**
+
+## The TC loop view — REUSE the lead-detail in a TC view mode
+
+**The TC loop view IS the existing lead-detail page, driven into a TC `view` mode. We REUSE the real
+components — never recreate them.** The shell + lanes are canonical:
+
+- **LEFT** `LeadLane` · **MIDDLE** the navy iPad `CenterLane` (its real `StatStrip` 6-KPI cards + the
+  Buyer/Seller stage rows + the dock-bar tabs + the activity streams) · **RIGHT** `MyliLane`.
+- "TC view" = those SAME components with a `view='tc'` flag that swaps data/labels: TC KPI metrics, the TC
+  dock-tab set, and loop data (Tasks / Documents / People). **No `Tc*` components.** Tables stay
+  `HlDataTable`; group headers stay `SectionBand`.
+- The `/tc/transactions/[id]` route **redirects to `/leads/[leadId]?view=tc`** (the real page, TC mode). The
+  `Agent | TC` toggle (TC/Admin only, inline in the navy lane header) flips `?view`.
+
+**6 KPI cards (this deal, never system totals):** Last Ctct · Stage · UC Days · To Close · Docs (X/Y) ·
+Awaiting — rendered by the existing `StatStrip` (labels kept ≤10 chars to fit the fixed `StatCard` width).
+
+**9 dock tabs (mirror the lead view, swap 2):** All · Texts · Calls · Emails · Notes · Tasks · Appointments
+· **Documents** · **People** (Website → Documents, Deals → People; Notes kept). Default TC tab = **Tasks**.
+Comms tabs reuse the existing lead streams unchanged.
+
+<Note>
+**Agent view is byte-identical.** Without `?view=tc` the lead-detail page renders exactly as before — every
+TC branch is gated on `isTcView`. A lead with no loop in TC view shows a tokenized **Create Loop** CTA in
+place of the panel.
+</Note>
+
+<Warning>
+**Recreating shells is banned and ENFORCED.** An earlier attempt hand-rolled plain-div lookalikes
+(`TcLoopLane`, `TcCenterLane`, `TcStageStepper`, single-scroll `LoopDetail`) and introduced off-brand
+green — rejected and deleted. Guards: `.claude/rules/REUSE_NOT_RECREATE.md` (constitutional, auto-injected)
+and the **`hl/no-duplicate-shell-components`** ESLint rule — the build **fails** if a component named
+`*Lane` / `*Stepper` / `*StatStrip` / `*DockBar` is defined outside `components/leads/detail/`. Brand:
+white-on-blue, no green, tokens only.
+</Warning>
+
+## Multi-loop sit-rep header + Buyer/Seller toggle
+
+The TC Milestones-band navy header is a **one-line sit-rep** so you can read both sides of a client's
+business at a glance and flip between them:
+
+```text
+MILESTONES    CLIENT: JESSICA MOORE    BUYER · NEW LEAD · JUL 31    SELLER · ACTIVE LISTING · JUL 12    [ Buyer | Seller ]
+```
+
+- **No pills — big bold white ALL-CAPS text** on the navy header. `MILESTONES` label left; `CLIENT: <name>`
+  + one line per loop (`<SIDE> · <stage> · <key date>`, **Buyer first**) centered; the `Buyer | Seller`
+  toggle pinned right, shown only when the lead has BOTH a buyer and a seller loop. One line, never wraps.
+- **Active side = full white + a thin underline accent;** the inactive side is muted
+  (`--hl-on-navy-text-muted`) but still clickable. Per-side `status` = the lead's side-matched pipeline
+  stage (falls back to the loop's Transaction Status); `key date` = the `closed` milestone date, else
+  `under_contract`.
+- **The active loop is a URL param** `?loop=<loopId>` (alongside `?view=tc`). Clicking a side / flipping the
+  toggle routes to `/leads/<id>?view=tc&loop=<loopId>`; the page validates the loop belongs to the lead
+  (else most-recent wins) and feeds that same `tcLoopId` to BOTH `CenterLane` and `MilestoneBand` — so the
+  whole TC view re-points to the selected side.
+- **Reuse, no new shell:** the milestone TRACK is unchanged; the sit-rep is plain tokenized text; the toggle
+  reuses the canonical `hl-toggle hl-toggle--sm` switch. **Single loop (the 99%)** = just `CLIENT:` + that
+  one side's line, no toggle.
+- **Data/API:** `listLoopsForLead(leadId)` (`lib/tc/loop-engine.ts`) → `GET /api/tc/loops?leadId=<id>`
+  returns `[{ id, side, stageName, ucDate, closeDate }]` newest-first. Files:
+  `components/leads/detail/MilestoneBand.tsx`, `app/(crm)/leads/[id]/page.tsx` (the `?loop` seam),
+  `app/api/tc/loops/route.ts`, `lib/tc/loop-engine.ts`.
 
 ## Forms — the Contract Engine
 
 The **Forms** page turns the brokerage's flat dotloop contract PDFs into **fillable forms** HouseLoop
-can complete programmatically:
+completes programmatically:
 
-1. Each form's flat PDF + a coordinate **field-map** (PDF field → lead/deal data source) is stored in
+1. Each form's flat PDF + a coordinate **field-map** (PDF field → lead/deal data source) lives in
    `hl_contract_template` (`lib/tc/contract-forms.ts` holds the maps).
-2. The engine (`lib/tc/fill-contract.ts`, pdf-lib) adds AcroForm fields and fills each from the lead
-   (name, search area, budget, agent, dates) — Myli-verified values override.
-3. Pick a form → fill → **preview the filled PDF inline** → download → (Stage 4) push into the dotloop loop.
+2. The engine (`lib/tc/fill-contract.ts`, pdf-lib) adds AcroForm fields and fills each from the lead (name,
+   search area, budget, agent, dates) — Myli-verified values override.
+3. Pick a form → fill → **preview the filled PDF inline** → download → push into the loop.
 
-The **showing-door** forms (the buyer journey): **Single Property Buyer-Broker Rep** (default, one
-house) → **Exclusive Buyer Agency** (multiple homes). Disclosures (wire fraud, ABA, broker disclosure)
-roll in later at contract time, not at showing.
+The **showing-door** forms (the buyer journey): **Single Property Buyer-Broker Rep** (default, one house) →
+**Exclusive Buyer Agency** (multiple homes). Disclosures (wire fraud, ABA, broker disclosure) roll in later
+at contract time, not at showing.
 
-## Build stages
+**Fill INTO the loop (G2):** `POST /api/tc/loops/[id]/documents` `{ formKey, folderId? }` builds a
+`FillContext` from the loop's own lead/deal → `getTemplateBytes` → `fillContract` → uploads the filled PDF
+to **R2** (`tc-loops/<loopId>/<form>.pdf`) → inserts `hl_tc_loop_document` (`file_url` + `contract_fill_id`).
+If the loop has no folder it auto-creates a "Forms" folder. UI: an **"Add from Form"** button +
+`AddFromFormModal` in the TC **Documents** tab (reuses `HlFormModal`). Filled PDFs are stored in R2, never
+base64'd into Postgres.
 
-| Stage | What | Status |
+<Note>
+**Local dev:** `R2_PHOTOS_*` live in repo-root `.env`; mirror them into `apps/houseloop-crm/.env.local`
+(gitignored) or local "Add from Form" returns "storage not configured." Prod (Railway) already has them.
+</Note>
+
+## The 3-layer engine + dynamic dates (A-Frame parity)
+
+The stages, milestones, and tasks are an **EXACT MIRROR of A-Frame** today (names, phases, anchors, offsets,
+assignees lifted verbatim from the recon). Only the UI chrome is ours. **Why:** mirror A-Frame 1:1 to
+understand + measure it before changing anything — a divergence in task content is a bug, not a feature.
+There are **no per-task instruction manuals** (A-Frame's task `description` is empty; verified). TC task rows
+that read e.g. "SLACK: Front end TC accepts assigned transaction" / "AFRAME: Change Status" are the verbatim
+A-Frame source text, not placeholder copy. Converting to a HouseLoop-native set is deferred.
+
+Three layers + an offset engine:
+
+1. **STATUS** — the headline word = our **Stages** (~5/side).
+2. **DATES — 4 KEY DATES you ENTER drive everything:** `effective` (Under Contract) · `inspection_end` ·
+   `closing` · `on_market` — the milestones' anchors.
+3. **TASKS (139, in phase folders)** — each is a **relative rule** (`anchor + offset`). Buyer = Intake ·
+   Contract Review · Scheduling · Communication · Compliance · Inspections · Appraisal · Closing. Listing
+   adds the pre-market run-up: Within 24h of ERTS Signed · 10 Days Before Going Live · 5 Days Before Going
+   Live · Listing Goes Live · Weekend After Going Live.
+
+**Dynamic dates** (`lib/tc/date-engine.ts`): a task/milestone stores a RELATIVE rule; the due date computes
+from the live key date and cascades when it moves. Rule = anchor (key date) or task→task chain · signed
+offset · `day_unit` · `business_day_def` (TRID precise/general) · weekend/holiday roll · holiday calendar
+(US_FEDERAL) · conditional "If Applicable" · `task_type`. Proven: 13/13 unit tests.
+
+> **Status = headline · Milestones = the key dates · Tasks = the auto-scheduled checklist.** Enter 4 dates →
+> the plan schedules; move one → it all re-shifts.
+
+**Task counts (A-Frame parity):** 58 buyer + 81 listing = **139**. Listing's 81 = 57 contract-to-close +
+24 pre-market.
+
+### Re-platforming switch — `{{platform.tc}}`
+
+The ~60 task labels that name the platform itself store the token `{{platform.tc}}`, resolved at
+display time from `hl_settings` `tc_platform` → `value.name` (default **"AFRAME"**). Flip that one value to
+**"TC Loop"** to re-platform every label at once. Only the platform word is tokenized — SLACK / DOTLOOP /
+SKYSLOPE / FUB / SISU stay literal. Code: `lib/tc/platform.ts` (pure) + `lib/tc/platform-settings.ts`
+(server). Parity-safe today.
+
+## Architecture (locked)
+
+1. **API-first.** Every loop action is a REST endpoint; UI + Myli call the same one.
+2. **Role-gated `/tc` surface + an `Agent ⇄ TC` toggle** (TC/Admin only). `/tc/transactions/[id]` resolves
+   the loop's lead and opens the real lead-detail page in TC `view` mode (`?view=tc`).
+3. **Reuse, NEVER recreate** — `StagesPage`, `PipelineSwitcher`, `HlDataTable`, `HlFormModal`,
+   `HlFilterPills`, `SectionBand`, and the lead-detail `LeadLane` / `CenterLane` / `MyliLane` + comms
+   streams. Enforced by `REUSE_NOT_RECREATE.md` + the `hl/no-duplicate-shell-components` ESLint rule.
+4. **Side-aware** (TC Buyer vs TC Listing).
+5. **E-signature = Documenso, self-hosted** (own data, $0/sig, cert-sealed, ESIGN/UETA). dotloop NOT in
+   the path.
+6. **We own documents end-to-end** → push to SkySlope for compliance.
+
+## Build state
+
+**Phase 1 — Configure template builders: DONE.** A-Frame engine reverse-engineered + rebuilt as editable,
+API-first Configure builders.
+
+**Phase 2 — Build our own dotloop (owned end-to-end): BUILDING.**
+
+| Gate | What | State |
 |---|---|---|
-| 0 | The shell — drill-in nav + TC sub-nav | **Shipped** |
-| 1 | Contract Engine — fillable forms (Single Property / Exclusive) → fill from a lead → inline PDF preview | **Shipped** |
-| 1b | Transactions table + Email Queue (read `hl_transactions` / `hl_tc_email`) | **Shipped** |
-| 2 | Transaction detail (per-deal tabs) + checklists | Planned |
-| 3 | Admin — Team Members, Lists, Client Portal, Import | Planned |
-| 4 | dotloop push + Myli autonomy (upload the filled PDF into the loop; Myli drives the showing→agreement flow) | Planned |
+| **G1** | TC loop view = the existing lead-detail page in TC `view` mode (REUSE, no new shells) | ✅ Shipped (P0–P6) + multi-loop sit-rep header |
+| **G2** | Forms + fill — our PDF templates + data-fill → filled PDF (R2) into a loop folder | ✅ Shipped (fill → R2 → `hl_tc_loop_document`) |
+| **G3** | E-sign — Documenso self-host: place fields → send → store sealed signed PDF + audit cert | ✅ Shipped 2026-07-06 (`esign.houseloop.ai`; 3 forms sig-verified; sealed PDFs → R2) |
+| **G4** | Runtime cascade — `computeLoopSchedule` fills dates from the 4 key dates; recompute on change | ⬜ (mig 0262 ready) |
+| **G5** | SkySlope / eXp — push signed docs for brokerage compliance | ⬜ |
+| **G6** | Myli-TC — autonomous fill → sign → file via the same endpoints | ⬜ |
+
+## Data model — migrations 0253–0263
+
+`apps/houseloop-crm/db/migrations/` (additive + reversible; `node db/migrate.mjs` against
+`HL_CRM_DATABASE_URL`):
+
+- **0253** — foundation: loop columns + child tables (`hl_tc_loop_folder/_document/_participant/_event`) +
+  `hl_templates.scope`. (`hl_tc_loop_document` already carries `file_url` + `contract_fill_id` — what G2
+  fill uses.)
+- **0254** — TC pipelines · repoint `tc_stage_id` · `lost_reason` · `hl_tc_milestone_template`.
+- **0255** — milestone `color` + `icon`.
+- **0256** — full milestone set (14 buyer / 16 seller) + offset-engine columns (`anchor`, `is_key_date`).
+- **0257** — `hl_tc_task_template` (139 A-Frame tasks).
+- **0258** — task **date-rule** + `hl_tc_phase` **folders** + `hl_holiday_calendar` (US_FEDERAL).
+- **0259** — listing pre-market phase label rename + Stage-3 offsets −4d → −5d.
+- **0260 / 0261** — `{{platform.tc}}` token + `hl_settings` `tc_platform` switch.
+- **0262** — `hl_tc_loop_task` (per-loop task instances) + `provides_anchor` on key milestones.
+- **0263** — `hl_role.is_system` + `grants_tc` (built-in undeletable Real Estate Agent + Transaction
+  Coordinator; TC view gate).
 
 ## Integrations
 
 <CardGroup cols={2}>
-  <Card title="dotloop" icon="file-signature" href="/guides/dotloop-integration">
-    dotloop Public API v2 (OAuth 2.0). Read loops, participants, documents, folders; upload completed
-    documents back into the loop. The integration underneath this section.
+  <Card title="dotloop (legacy import only)" icon="file-signature" href="/guides/dotloop-integration">
+    dotloop Public API v2 (OAuth 2.0), read-only — import historical SRG loops. Out of the critical path;
+    Documenso handles signing, SkySlope is the compliance destination.
   </Card>
 </CardGroup>
 
 ## Change log
 
-- **2026-06-22** — Section shipped: TC drill-in nav, **Transactions table** (`hl_transactions`, renamed
-  from `hl_lead_deals`), **Email Queue**, and the **Contract Engine** (fillable Single Property /
-  Exclusive buyer forms → fill from a lead → inline PDF preview). dotloop Public API v2 integration live.
-  Next: transaction detail, dotloop push, Myli autonomy.
+- **2026-07-06** — **G3 shipped: Documenso self-hosted e-sign is live** (`esign.houseloop.ai`). Multi-party
+  signing (buyer / co-buyer / agent / broker) proven on all 3 contract forms; sealed PDFs + completion
+  certs archived to our R2; only `DOCUMENT_COMPLETED` terminates. Send path:
+  `lib/esign/send-loop-document.ts`. Documenso is the system of record; dotloop is optional backup only.
+- **2026-06-27** — Multi-loop sit-rep header + Buyer/Seller toggle; **G2 shipped** (forms + fill into the
+  loop, R2 + `hl_tc_loop_document`); **G1 shipped** (TC view mode P0–P6, open-loop-in-TC). Architecture
+  locked: build our own dotloop, owned end-to-end, e-sign = Documenso self-host; dotloop leaves the critical
+  path. Hand-rolled loop UI ripped out; `REUSE_NOT_RECREATE` + `hl/no-duplicate-shell-components` enforced.
+  Platform re-brand token `{{platform.tc}}`; dynamic dates + folders + phase filter; task layer + full
+  milestone set.
+- **2026-06-26** — Model locked (two-axis status/milestone, PRD §12); Milestones builder; canonical
+  `HlFormModal`; loop engine (mig 0253/0254); A-Frame + dotloop reverse-engineered.
+- **2026-06-22** — Section shipped: TC drill-in nav, Transactions table (`hl_transactions`), Email Queue,
+  and the Contract Engine (fillable Single Property / Exclusive buyer forms → fill from a lead → inline PDF
+  preview).

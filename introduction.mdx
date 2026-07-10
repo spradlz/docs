@@ -1,6 +1,6 @@
 ---
 title: "HouseLoop CRM API"
-description: "The complete API for HouseLoop CRM — Myli-accessible on every layer."
+description: "The complete, API-first HouseLoop CRM — every UI action has a REST endpoint, Myli-accessible on every layer."
 ---
 
 ## Overview
@@ -13,16 +13,17 @@ http://localhost:3020/api       (local dev)
 https://crm.houseloop.ai/api    (production)
 ```
 
-**Authentication:** All endpoints require a valid session cookie (set by `POST /api/auth/login`) unless explicitly marked otherwise (webhooks, public health checks, OAuth callbacks).
+**Authentication:** Endpoints require either a valid session cookie (set by `POST /api/auth/login`) or a service API key passed as `Authorization: Bearer <key>`. Some endpoints are explicitly unauthenticated (webhooks, public health checks, OAuth callbacks).
 
 ## What's in the API
 
 | Domain | Highlights |
 |---|---|
 | **Leads** | List + filter + search · create with full payload · update any field · move pipeline · append notes · soft-delete · bulk ops |
-| **Pipeline** | 13-stage Buyer + Seller pipelines · per-pipeline membership · stage transitions logged |
+| **Pipeline / Stages** | 13-stage Buyer + Seller pipelines · per-pipeline membership · stage transitions logged |
+| **Tasks** | Follow-up tasks on a lead |
 | **Calendar & Appointments** | Schedule + sync · type-driven stage auto-advance · disposition with `outcome` + notes · forward-only rule · Google Calendar export |
-| **Email — Outbound** | Templates · static + smart lists · campaigns · per-template send · one-off send |
+| **Email — Outbound** | Templates · static + smart lists / audiences · campaigns · per-template send · one-off send |
 | **Email — Integration** | Per-user Gmail OAuth · signature management · CAN-SPAM compliance · team status · Instantly warmup health |
 | **Email — Infrastructure** | Org sending inboxes (purpose-segmented) · Instantly + Resend provider config |
 | **Messaging — Text Templates** | Saved SMS/iMessage bodies |
@@ -35,6 +36,23 @@ https://crm.houseloop.ai/api    (production)
 | **Lookups (Settings)** | Lead sources · tags · stages · appointment types · options bundle |
 | **System** | DB health |
 
+## Resource reference
+
+| Resource | Description |
+|---|---|
+| [Leads](/api-reference/leads/list) | Contacts in the pipeline |
+| [Stages](/api-reference/stages/list) | Pipeline stages (Buyer + Seller) |
+| [Lead Sources](/api-reference/lead-sources) | Where leads come from |
+| [Tags](/api-reference/tags) | Labels applied to leads |
+| [Tasks](/api-reference/tasks) | Follow-up tasks |
+| [Email Templates](/api-reference/email/templates-list) | Saved email bodies |
+| [Email Audiences](/api-reference/email/audiences-list) | Lists / segments |
+| [Email Campaigns](/api-reference/email/campaigns-list) | Bulk send campaigns |
+| [Text Templates](/api-reference/messaging/text-templates-list) | Saved SMS/iMessage bodies |
+| [Calendar Events](/api-reference/calendar/events-list) | Appointments |
+| [Team Users](/api-reference/team/users-list) | CRM user accounts |
+| [Smart Filters](/api-reference/smart-filters) | Saved lead filter sets |
+
 ## Big rules (read before you build)
 
 - **Appointment disposition law** — scheduling certain types auto-advances stage; certain outcomes auto-advance further. Forward-only. See [GT_HOUSELOOP_CRM_APPOINTMENT_DISPOSITION_V1](https://github.com/spradlz/BossLoop-Gold/blob/houseloop-app/GT/GT%20-%20ACTIVE/GT_HOUSELOOP_CRM_APPOINTMENT_DISPOSITION_V1.md) for the locked spec.
@@ -45,7 +63,8 @@ https://crm.houseloop.ai/api    (production)
 
 <CodeGroup>
 ```bash Create a Lead
-curl -X POST http://localhost:3020/api/leads \
+curl -X POST https://crm.houseloop.ai/api/leads \
+  -H "Authorization: Bearer $HL_SERVICE_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "first_name": "Jane",
@@ -57,6 +76,18 @@ curl -X POST http://localhost:3020/api/leads \
     "stage_id":   "<uuid>",
     "note":       "Met at open house"
   }'
+```
+
+```bash List Leads
+curl https://crm.houseloop.ai/api/leads \
+  -H "Authorization: Bearer $HL_SERVICE_TOKEN"
+```
+
+```bash Move a Lead to a Stage
+curl -X PATCH https://crm.houseloop.ai/api/leads/{id} \
+  -H "Authorization: Bearer $HL_SERVICE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"stage_id":"<stage-uuid>"}'
 ```
 
 ```bash Disposition an Appointment (Myli)
@@ -94,4 +125,4 @@ curl -X POST http://localhost:3020/api/calendar/events \
 
 ## Live endpoint count
 
-As of 2026-05-18, the live API surface is **82 endpoints** across 18 tags. Every one is specified in `openapi.yaml`. If you find a UI action without a corresponding endpoint, file it in [API Gap Audit](/guides/gaps-audit).
+The API surface is specified in full by `openapi.yaml` — treat that file as the single source of truth for the live count. As of this writing `openapi.yaml` carries roughly **119 path entries across 27 tags** (the older "82 endpoints / 18 tags" figure is stale). Because the spec grows, don't quote a hardcoded number from this page — check `openapi.yaml` directly. If you find a UI action without a corresponding endpoint, file it in [API Gap Audit](/guides/gaps-audit).

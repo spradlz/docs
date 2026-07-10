@@ -1,14 +1,38 @@
 ---
 title: "E-Signature (HouseLoop eSignature)"
-description: "HouseLoop's own white-labeled e-signature engine for Transaction Coordination — fill a contract from a lead, send for multi-party signature as HouseLoop eSignature, and archive the executed PDF to our own R2. Documenso is the SYSTEM OF RECORD; dotloop gets only a backup mirror. Self-hosted, $0/month."
+description: "HouseLoop's own white-labeled e-signature engine for Transaction Coordination — fill a contract from a lead, send for multi-party signature as HouseLoop eSignature, and archive the executed PDF to our own R2. Built on self-hosted Documenso (open-source, $0/month). R2 is the system of record; dotloop gets only a backup mirror."
 ---
 
 HouseLoop eSignature is the e-signature layer of [Transaction Coordination](/guides/transaction-coordination). It takes a
 real-estate contract (a flat PDF — KCRAR / Heartland MLS / eXp association forms), **auto-detects every fillable field**,
 **fills it from the lead**, **sends it out for signature under the HouseLoop brand**, pulls the **executed PDF** back, and
-**archives it to OUR OWN R2 on the loop document** (permanent URL — KS/MO retention). A **backup mirror** can push to [dotloop](/guides/dotloop-integration) for eXp/SkySlope compliance — dotloop is NOT the system of record (Zach locked Documenso-first 2026-07-06).
+**archives it to OUR OWN R2 on the loop document** (permanent URL — KS/MO retention). A **backup mirror** can push to
+[dotloop](/guides/dotloop-integration) for eXp/SkySlope compliance — dotloop is NOT the system of record (Zach locked
+Documenso-first 2026-07-06).
 
 It is **self-hosted and open-source** — no per-document fees, no third-party "powered by" branding, no subscription.
+
+---
+
+## The engine: Documenso (white-labeled)
+
+The signing substance is [Documenso](https://documenso.com) — an **open-source, self-hostable e-signature platform**
+(the "open-source DocuSign"). It provides signing fields, multi-signer routing, audit trails, and a tamper-evident,
+digitally-certified signed PDF — with no per-document fees and no third-party branding. We clone it, rebrand it fully to
+**HouseLoop eSignature** (HouseLoop logos, brand navy `#1B3564`, product name throughout, transactional emails from
+`noreply@houseloop.ai`), and self-host it on Docker.
+
+### Why we own the signing layer
+
+**dotloop has e-signature in its product, but NOT in its public API.** The dotloop API can read/write loops, folders,
+documents, and participants, and can *download* a signed PDF — but there is **no endpoint to initiate or track a
+signature request** (see the [dotloop API matrix](/guides/dotloop-api-matrix#e-signature)). A-Frame has no e-sign at all.
+So to make TC AI-driven end-to-end, we run our own engine:
+
+- **Self-hosted** → $0/document, unlimited volume, no SaaS dependency.
+- **White-labeled** → signers see *HouseLoop eSignature*, not a third-party "powered by".
+- **API-first** → an AI agent (Myli-TC) can create a document, place fields, add signers, and send — fully
+  programmatically. That is impossible through dotloop's API and is the whole point.
 
 ---
 
@@ -16,13 +40,17 @@ It is **self-hosted and open-source** — no per-document fees, no third-party "
 
 ```
 Contract PDF
-  → 1. Map fields        (deterministic extraction from the PDF — see "Field & signature mapping" below)
+  → 1. Map fields         (deterministic extraction from the PDF — see "Signature & initials placement" below)
   → 2. Fill from lead     (pdf-lib — name, price, term, address, etc.)
   → 3. Send for signature (HouseLoop eSignature — self-hosted Documenso)
-  → 4. Signer signs        (browser / mobile, branded HouseLoop)
-  → 5. Pull executed PDF   (signed doc + audit trail)
-  → 6. Archive to our R2 (permanent) · optional backup mirror → dotloop (SkySlope / eXp compliance)
+  → 4. Signer signs       (browser / mobile, branded HouseLoop)
+  → 5. Pull executed PDF  (signed doc + audit trail)
+  → 6. Archive to our R2  (permanent, system of record) · optional backup mirror → dotloop
 ```
+
+The executed PDF is archived to **HouseLoop R2** as `doc.file_url` — that is the **system of record**. Pushing it into
+the dotloop loop folder is an **optional backup mirror only** for eXp/SkySlope compliance, never the destination of
+record (`apps/houseloop-crm/lib/esign/send-loop-document.ts`; Documenso-first locked 2026-07-06).
 
 Every layer is **$0/month**. The signature/initials mapping is fully deterministic ($0, no model); the optional
 vision-assisted field builder costs a few cents of LLM tokens, one time per *new* form, to name/classify data blanks.
@@ -33,55 +61,63 @@ vision-assisted field builder costs a few cents of LLM tokens, one time per *new
 | Data-field mapping (optional) | `vision-field-builder.mjs` (pdftotext + Claude vision) | ~cents / new form |
 | Field fill | pdf-lib (embedded font) | $0 |
 | E-signature | HouseLoop eSignature (Documenso, self-hosted, AGPL-3.0) | $0 |
-| Filing | dotloop API | $0 (existing) |
+| Archive (system of record) | HouseLoop R2 | $0 |
+| Backup mirror (optional) | dotloop API | $0 (existing) |
 
-> ⚠️ **Correction (2026-07-09):** earlier drafts of this page named **"CommonForms / FFDNet"** as the field detector.
-> **No such code ever existed in the repo** — that was aspirational. The actual tooling is
+> ⚠️ **Correction (2026-07-09):** earlier drafts named **"CommonForms / FFDNet"** as the field detector. **No such code
+> ever existed in the repo** — that was aspirational. The actual tooling is
 > `tools/houseloop-contracts/vision-field-builder.mjs` (built 2026-06-23, Claude vision) for data fields and
-> `anchor-sig-fields.mjs` (2026-07-09, deterministic) for signature/initials boxes. See the next section for the
-> real, honest state.
+> `anchor-sig-fields.mjs` (2026-07-09, deterministic) for signature/initials boxes.
+
+---
+
+## The Documenso API / flow
+
+Documenso exposes a REST API (+ webhooks) that the pipeline drives:
+
+```
+1. Create document           — upload the filled contract PDF
+2. Add recipients            — signer(s) by name + email + signing order
+3. Place fields              — signature / date / text fields at coordinates (mapped from the PDF)
+4. Send for signature        — Documenso emails each signer a HouseLoop-branded signing link
+5. Webhook: document.signed  — fires when all signers complete
+6. Download signed PDF       — the certified, tamper-evident artifact
+7. Archive to R2             — system of record; optional backup mirror → dotloop loop folder
+```
+
+Documenso webhooks (`document.created`, `document.sent`, `document.opened`, `document.signed`, `document.completed`)
+let TC advance the loop's stage and run the next task the moment signing finishes — no polling, same pattern as the
+[dotloop webhooks](/guides/dotloop-api-matrix#webhooks-real-time-events).
 
 ---
 
 ## What we built (proven)
 
-- **Full fill → sign → file pipeline, verified end-to-end live.** A filled Exclusive Buyer Agency was sent for signature,
-  signed in the browser, the executed PDF pulled back, and uploaded into a dotloop loop. The plumbing works.
-- **Deterministic signature/initials mapping — read from the PDF, $0.** `anchor-sig-fields.mjs` extracts every e-sign box's
-  exact coordinates from the PDF (vector rectangles via `pdftocairo` + party labels via `pdftotext`). Verified: initials land
-  inside the box on pages whose boxes sit at *different* Y (722 vs 695) — see "Field & signature mapping" below.
-- **HouseLoop eSignature — white-labeled.** Documenso cloned and fully rebranded to **HouseLoop eSignature**: HouseLoop logos,
-  brand navy (`#1B3564`), product name throughout, transactional emails from `noreply@houseloop.ai`. Runs locally with a
-  verified branded sign-in page.
+- **Full fill → sign → archive pipeline, verified end-to-end live.** A filled Exclusive Buyer Agency was sent for
+  signature, signed in the browser, the executed PDF pulled back and archived. The plumbing works.
+- **Deterministic signature/initials mapping — read from the PDF, $0.** `anchor-sig-fields.mjs` extracts every e-sign
+  box's exact coordinates from the PDF (vector rectangles via `pdftocairo` + party labels via `pdftotext`). Verified:
+  initials land inside the box on pages whose boxes sit at *different* Y (722 vs 695).
+- **HouseLoop eSignature — white-labeled.** Documenso cloned and fully rebranded, running with a verified branded
+  sign-in page.
 
-> **Status of field detection (2026-07-09, updated).** The signature/initials generator is now **WIRED into the fill for
-> all 3 forms** — `contract-forms.ts` imports `lib/tc/field-maps/*.json`, generated by `anchor-sig-fields.mjs` from the PDF,
-> so those coordinates are **generated, never typed** (the ~15× hand-tuning is over). Verified with render receipts on all
-> 3 forms **and a live in-app fill** (Add Document → Fill & add → the executed PDF on R2: initials "MO" in-box on page 1,
-> signatures in-box on page 6). Still authored inline (small, not e-sign boxes): the eXp forms' typed print-NAME + DATE
-> underlines. DATA-field detection (which blank → which datum) remains vision-assisted (`vision-field-builder.mjs`) and is
-> the one piece not yet auto-wired.
-
-## Why these choices
-
-- **No per-deal human.** The industry hand-tags each association form once into a maintained library; we replace that with an
-  open model that auto-detects the fields, so a brand-new form is set up once (a glance) and every deal after is fully
-  automatic.
-- **No subscription.** Hosted e-sign vendors charge a monthly platform fee and/or per-signature fees and stamp their own
-  brand on the signing experience. Self-hosting open-source gives us our own brand, unlimited volume, and $0/month.
+> **Status of field detection (2026-07-09).** The signature/initials generator is **WIRED into the fill for all 3
+> forms** — `contract-forms.ts` imports `lib/tc/field-maps/*.json`, generated by `anchor-sig-fields.mjs` from the PDF,
+> so those coordinates are **generated, never typed** (the ~15× hand-tuning is over). Verified with render receipts on
+> all 3 forms **and a live in-app fill**. DATA-field detection (which blank → which datum) remains vision-assisted
+> (`vision-field-builder.mjs`) and is the one piece not yet auto-wired.
 
 ---
 
 ## Signature & initials placement — read from the PDF, never typed (locked 2026-07-09)
 
-> **The law:** signature/initials coordinates are **extracted from the PDF itself**, never hand-typed or eyeballed. Full
-> rule: `.claude/rules/SIGNATURE_ANCHORING.md`.
+> **The law:** signature/initials coordinates are **extracted from the PDF itself**, never hand-typed or eyeballed.
+> Full rule: `.claude/rules/SIGNATURE_ANCHORING.md`.
 
-### What we found (the bug that kept coming back)
+### The bug that kept coming back
 
 The signature/initials boxes live in `lib/tc/contract-forms.ts` as a `signatureFields[]` per form. For months those
-coordinates were **measured by hand and typed in** — and they were re-tuned **~15 times** and still landed wrong (the
-cursive floating *above* the box on some pages, inside it on others).
+coordinates were **measured by hand and typed in** — re-tuned **~15 times** and still landing wrong.
 
 **Root cause:** the initials box sits at a **different Y on every page**. Measured on the Exclusive Buyer Agency:
 
@@ -89,14 +125,14 @@ cursive floating *above* the box on some pages, inside it on others).
 |---|---|---|---|---|---|
 | Initials box top (yTop) | **722** | **718** | **695** | **702** | **697** |
 
-The code used **one hardcoded `yTop: 706`** for all five pages — so it was *mathematically impossible* to be right. Every
-"fix" was a guess that helped one page and broke another. The PDF held the exact answer the whole time; we just never read it.
+The code used **one hardcoded `yTop: 706`** for all five pages — so it was *mathematically impossible* to be right. The
+PDF held the exact answer the whole time; we just never read it.
 
 ### The process (deterministic — run it, don't guess)
 
-The dotloop-exported forms are **flat PDFs** (zero AcroForm fields / annotations). dotloop flattens its e-sign field boxes
-into the page as **~27pt-tall vector rectangles** (the form's own data-fill underlines are ~11pt), and the printed party
-labels (**BUYER / BUYER'S AGENT / BROKER'S SIGNATURE / DATE**) sit just *under* each signing line. So we read both:
+The dotloop-exported forms are **flat PDFs** (zero AcroForm fields). dotloop flattens its e-sign field boxes into the
+page as **~27pt-tall vector rectangles** (the form's own data-fill underlines are ~11pt), and the printed party labels
+(**BUYER / BUYER'S AGENT / BROKER'S SIGNATURE / DATE**) sit just *under* each signing line. So we read both:
 
 ```bash
 node tools/houseloop-contracts/anchor-sig-fields.mjs <form.pdf>
@@ -106,44 +142,39 @@ node tools/houseloop-contracts/anchor-sig-fields.mjs <form.pdf>
 2. `pdftotext -bbox` per page → the printed labels, to know **who** signs each box.
 3. Classify: a narrow (`w<70`) bottom pair → **initials** (buyer left, co-buyer right); a wide box with a party label
    under it → that party's **signature**.
-4. It writes the field-map (`--write lib/tc/field-maps/<key>.json`) with the **exact** coordinates, one field **per page**.
-   For forms whose text layer is obfuscated (the eXp forms — `pdftotext` reads nothing), pass
-   `--order buyer,co_buyer,broker,agent` to assign the boxes by top-to-bottom order instead of by label.
+4. It writes the field-map (`--write lib/tc/field-maps/<key>.json`) with the **exact** coordinates, one field **per
+   page**. For forms whose text layer is obfuscated (the eXp forms — `pdftotext` reads nothing), pass
+   `--order buyer,co_buyer,broker,agent` to assign boxes by top-to-bottom order instead of by label.
 
-**The process for a new/changed form:** run the extractor with `--write` → `contract-forms.ts` already imports
+**For a new/changed form:** run the extractor with `--write` → `contract-forms.ts` already imports
 `field-maps/<key>.json`, so the fill picks it up (no coordinate ever typed) → if it warns `⚠ unassigned sign box`, add
 `--order` or **one** `partyForBox()` rule → verify the render on a page whose box Y differs from page 1.
 
 ### The fill engine
 
-`lib/tc/fill-contract.ts` (`drawSignaturePlaceholders`) draws the signature/initials as **page content** (not form fields) in
-an embedded **Great Vibes** cursive — baked content renders identically in every viewer and keeps the cursive font (a form
-field gets re-rendered by the viewer in its own font, which is why cursive-in-a-field showed as a block). Initials are
-**vertically centered** in the ~27pt box.
+`lib/tc/fill-contract.ts` (`drawSignaturePlaceholders`) draws the signature/initials as **page content** (not form
+fields) in an embedded **Great Vibes** cursive — baked content renders identically in every viewer and keeps the cursive
+font (a form field gets re-rendered by the viewer in its own font, which is why cursive-in-a-field showed as a block).
+Initials are **vertically centered** in the ~27pt box.
 
-**Verified (all 3 forms):** the generated field-maps drive correct placement on **Exclusive Buyer Agency** (initials in-box
-on page 1 @ y=722 *and* page 3 @ y=695 — different positions, both correct; page-6 sig block: buyer / co-buyer / agent /
-broker), **Single Property** and **Non-Exclusive** (buyer / co-buyer / broker / agent sig boxes via `--order`). Then a
-**live in-app fill** on the real Exclusive Buyer Agency (Add Document → Fill & add → executed PDF on R2) confirmed "MO" in
-the page-1 initials box and Msale Olongo / Zach Spradling / Chris Cribb in the page-6 boxes.
+**Verified (all 3 forms):** the generated field-maps drive correct placement on **Exclusive Buyer Agency** (initials
+in-box on page 1 @ y=722 *and* page 3 @ y=695 — different positions, both correct; page-6 sig block), **Single
+Property** and **Non-Exclusive** (via `--order`). Then a **live in-app fill** on the real Exclusive Buyer Agency (Add
+Document → Fill & add → executed PDF on R2) confirmed "MO" in the page-1 initials box and the parties in the page-6 boxes.
 
-**Tools:** extractor `tools/houseloop-contracts/anchor-sig-fields.mjs` · generated field maps `apps/houseloop-crm/lib/tc/field-maps/*.json`
-· imported by `apps/houseloop-crm/lib/tc/contract-forms.ts` · draw engine `apps/houseloop-crm/lib/tc/fill-contract.ts`.
-Deps: `poppler` (`pdftocairo`, `pdftotext`, `pdfinfo`).
+**Tools:** extractor `tools/houseloop-contracts/anchor-sig-fields.mjs` · generated field maps
+`apps/houseloop-crm/lib/tc/field-maps/*.json` · imported by `apps/houseloop-crm/lib/tc/contract-forms.ts` · draw engine
+`apps/houseloop-crm/lib/tc/fill-contract.ts`. Deps: `poppler` (`pdftocairo`, `pdftotext`, `pdfinfo`).
 
-### The architecture — ONE deterministic mapper, wired into the fill (IMPLEMENTED 2026-07-09)
+### The architecture — ONE deterministic mapper, wired into the fill (implemented 2026-07-09)
 
-A single, **deterministic-first** mapper whose output the fill engine **loads directly**, so no signature coordinate is
-hand-authored:
-
-1. **Signatures / initials → vector extraction** (`anchor-sig-fields.mjs`). Reads the exact e-sign rectangle from the PDF.
-   $0, no model, pixel-exact, reproducible. ✅ Done — generates `field-maps/*.json`, imported by `contract-forms.ts`.
-2. **Wired into the fill.** ✅ Done — the hand-authored signature/initials arrays are gone; the fill loads the generated
-   maps. Regenerate when a form revises; the fill never changes.
+1. **Signatures / initials → vector extraction** (`anchor-sig-fields.mjs`). Reads the exact e-sign rectangle from the
+   PDF. $0, pixel-exact, reproducible. ✅ Generates `field-maps/*.json`, imported by `contract-forms.ts`.
+2. **Wired into the fill.** ✅ The hand-authored signature/initials arrays are gone; the fill loads the generated maps.
+   Regenerate when a form revises; the fill never changes.
 3. **Still authored inline** (not e-sign boxes): the eXp forms' typed print-NAME + DATE underlines merge in per form.
-4. **Data blanks (name / price / term / address)** — still resolved by the vision-assisted `vision-field-builder.mjs`
-   (which blank → which datum is semantic). Migrating data-field coords to deterministic text-anchor extraction is the one
-   remaining piece; the coordinate should always come from the PDF layer, never a model's pixel-box.
+4. **Data blanks (name / price / term / address)** — still resolved by the vision-assisted `vision-field-builder.mjs`.
+   Migrating data-field coords to deterministic text-anchor extraction is the one remaining piece.
 
 This supersedes both the never-real "CommonForms" idea and the vision-only pixel-box approach for the signature boxes.
 
@@ -151,35 +182,29 @@ This supersedes both the never-real "CommonForms" idea and the vision-only pixel
 
 ## 🚧 Work In Progress — updated 2026-07-09
 
-Owners: Benji (CRM integration) · Lee (infra). Current build status:
+Owners: Benji (CRM integration) · Lee (infra).
 
-- **DONE** — Fill engine (pdf-lib); dotloop filing (read + upload); full pipeline proven end-to-end; HouseLoop eSignature
-  (Documenso) cloned, rebranded, and running locally with the official HouseLoop brand assets.
+- **DONE** — Fill engine (pdf-lib); R2 archive + optional dotloop mirror; full pipeline proven end-to-end; HouseLoop
+  eSignature (Documenso) cloned, rebranded, running locally with the official HouseLoop brand assets.
 - **DONE (2026-07-09)** — **Deterministic signature/initials mapping, generated AND wired for all 3 forms.**
-  `anchor-sig-fields.mjs` extracts every box from the PDF → `lib/tc/field-maps/*.json` → imported by `contract-forms.ts`
-  (the hand-authored signature/initials arrays are gone). Verified with render receipts on all 3 forms **and a live in-app
-  fill** (Exclusive Buyer Agency: "MO" in the page-1 initials box, sigs in the page-6 boxes). Rule:
-  `.claude/rules/SIGNATURE_ANCHORING.md`.
-- **OPEN** — DATA-field coordinates (name/price/term/address) are still authored/`vision-field-builder`-assisted, not yet
-  migrated to deterministic text-anchor extraction. "CommonForms" was never real code (corrected above). The eXp forms'
-  typed print-NAME + DATE underlines remain authored inline (they're not e-sign boxes).
+  `anchor-sig-fields.mjs` → `lib/tc/field-maps/*.json` → imported by `contract-forms.ts`. Verified with render receipts
+  on all 3 forms **and a live in-app fill**. Rule: `.claude/rules/SIGNATURE_ANCHORING.md`.
+- **OPEN** — DATA-field coordinates (name/price/term/address) are still `vision-field-builder`-assisted, not yet migrated
+  to deterministic text-anchor extraction. The eXp forms' typed print-NAME + DATE underlines remain authored inline.
 - **DONE (2026-07-06)** — **`esign.houseloop.ai` is LIVE on Railway** with a real Let's Encrypt cert, served directly
-  from Railway's edge (no proxies). `NEXT_PUBLIC_WEBAPP_URL`/`NEXTAUTH_URL` point at the branded domain, so signing
-  links carry `esign.houseloop.ai`. The domain was wedged for 13 days: Railway requires a
-  **`TXT _railway-verify.<domain>` record** (value = the `domains` query's `status.verificationToken`) before its edge
-  will bind a custom domain, and **nothing in the API/status surface says so** — status just sits in
-  `VALIDATING_OWNERSHIP` and the per-domain target 404s (`x-railway-fallback: true`). A Railway moderator confirmed on
-  our support thread (resolved:
-  [station.railway.com/questions/custom-domains-never-bind-at-edge-404-a-6b4b3cea](https://station.railway.com/questions/custom-domains-never-bind-at-edge-404-a-6b4b3cea)).
-  If a cert stays stuck after that, the explicit `customDomainIssueCertificate(id)` mutation forces issuance in seconds.
-  Full forensics + playbook: `.claude/reports/esign-cert-root-cause-2026-07-06.md`. (An interim Cloudflare Worker
-  front-door carried the domain for ~1 hour during the outage; it was removed the same day once the real binding landed.)
+  from Railway's edge. `NEXT_PUBLIC_WEBAPP_URL`/`NEXTAUTH_URL` point at the branded domain, so signing links carry
+  `esign.houseloop.ai`. The domain was wedged for 13 days: Railway requires a **`TXT _railway-verify.<domain>` record**
+  (value = the `domains` query's `status.verificationToken`) before its edge will bind a custom domain, and **nothing in
+  the API/status surface says so** — status just sits in `VALIDATING_OWNERSHIP` and the per-domain target 404s
+  (`x-railway-fallback: true`). Resolved via a Railway support thread
+  ([station.railway.com](https://station.railway.com/questions/custom-domains-never-bind-at-edge-404-a-6b4b3cea)). If a
+  cert stays stuck after that, the explicit `customDomainIssueCertificate(id)` mutation forces issuance in seconds. Full
+  forensics + playbook: `.claude/reports/esign-cert-root-cause-2026-07-06.md`.
 - **IN PROGRESS** — Benji: the CRM integration (`lib/esign/` Documenso client + send route + webhook; agnostic sender
   via `hl_esign_sender`; e-sign nudge engine keyed to the showing appointment) — the buyer-agency / one-time-showing
   agreements as first-class TC documents.
-- **NEXT** — One-click **"Send for signature"** on a lead (detect → fill → send → file), and a
-  **Transaction Coordination → Forms** admin to drop in a new MLS PDF, auto-detect its fields, and save it as a reusable
-  template (re-run yearly when associations revise a form).
+- **NEXT** — One-click **"Send for signature"** on a lead (detect → fill → send → archive), and a **Transaction
+  Coordination → Forms** admin to drop in a new MLS PDF, auto-detect its fields, and save it as a reusable template.
 
 > An earlier proof-of-concept used a third-party hosted e-sign service to validate the pipeline. That service is being
 > **retired** in favor of HouseLoop eSignature (self-hosted, white-labeled, $0/month).
