@@ -136,6 +136,18 @@ it — lives in the one FUB master: [FUB Trigger Events & Notifications](/fub/tr
 Every notification writes one row to **`hl_notification`**, the topbar **bell** reads it, and the **dispatcher**
 delivers it over the recipient's enabled channels (in-app / SMS / email) per their prefs.
 
+<Note>
+**Global delivery masters — the account-wide kill switches (Lee, 2026-07-09).** On TOP of every per-user pref sit
+**two account-wide masters** — **Email** and **SMS** — stored in `hl_settings('notification_channel_master')` and
+read by `dispatch.ts` on the hot send path (`getChannelMaster()`, cached ~20s, **fail-open**: an absent row or a
+read error = both ON, so notifications never silently drop). **SMS master OFF ⇒ nothing texts anyone team-wide;
+Email master OFF ⇒ nothing emails** — regardless of individual prefs. The **in-app bell always records** (never
+gated here). Admin-only card at the top of **Settings → Notifications** ("Global delivery — master switches"),
+served by `GET/PUT /api/notifications/channel-master`. This is distinct from the **FUB `_global` master** (which
+gates only the Follow Up Boss pipeline — see [FUB Trigger Events](/fub/trigger-events)); these gate ALL
+notification delivery by channel.
+</Note>
+
 ```
 event source                     spine                          surfaces
 website pixel / CRM action  ─▶ createNotification() ─▶ hl_notification row  (owner-only)
@@ -152,6 +164,7 @@ Myli sends a text / logs a call                          ├─▶ bell (unread 
 | The rendered shells | `notify_card` / `notify_card_sms` (folder System) via `composeTemplate` (Blocks Engine) |
 | Payload matrix (the class per event) | **`hl_notify_classes`** (`heading_tpl` · `subline_tpl` · `with_message`) |
 | Prefs + channels | `hl_users.data.notification_prefs` + `notification_channels` (JSONB) |
+| Global delivery masters (Email/SMS kill switches) | `lib/notifications/channel-master.ts` (`hl_settings('notification_channel_master')`) → `GET/PUT /api/notifications/channel-master` |
 | Settings UI | **Settings → Notifications** (`app/(crm)/settings/notifications/page.tsx`) |
 | Website Activity digest | `lib/inngest/functions/website-activity-digest.ts` (Inngest cron, daily 7am CT) |
 | Sign-off harness | `scripts/notification-matrix.ts` |

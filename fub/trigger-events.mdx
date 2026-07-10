@@ -50,6 +50,15 @@ Each FUB trigger event carries **four independent switches** — none implies an
 event **even if you do not create a lead** — a "heads-up, this happened" ping with no lead minted. The card then
 renders "**HouseLoop — no lead created**" (no HouseLoop link) alongside the always-present FUB person link. The
 gate is two-tier: the per-event row toggles over a `_global` master row (`webhook_type='_global'`).
+
+**The `_global` master now has a switch on the wall (Lee, 2026-07-09 night).** It was the ONE breaker for the
+whole FUB pipeline — every per-row Sync/Creates-Lead/Notify toggle is gated behind `_global.enabled` on the
+server (`fub-body-recovered.ts`, `fub-lead-import.ts`) — but its only UI lived in the never-mounted
+`FubChannelBoard`, so with `_global` OFF, flipping the 23 per-row toggles did nothing and there was no control
+to fix it. Fixed: `FubChannelRows` now renders a **master-breaker banner** above the FUB rows on the Trigger
+Events board (red "OFF — nothing below runs" / blue "ON — the pipeline is live"), writing `_global.enabled`.
+This is the go-live switch. **Flipped ON 2026-07-09 night → the pipeline is LIVE** (see
+[Where the build stands](#where-the-build-stands)).
 </Note>
 
 ## ⭐ THE 22 TRIGGER EVENTS — how each is created, and which notification it fires
@@ -57,8 +66,10 @@ gate is two-tier: the per-event row toggles over a `_global` master row (`webhoo
 **This is the master map.** One row per live `hl_fub_webhook_settings` row (22, verified against the table
 2026-07-09). Read a row left→right and you have the whole story: *the door → the FUB signal that creates it →
 the notification class it rolls up to → the card the agent sees.* Every event carries the **four toggles**
-(Sync · Creates Lead · Workflow · Notify) — ⚠️ **all 22 are currently OFF** (the flood hard-kill; see
-[Where the build stands](#where-the-build-stands)).
+(Sync · Creates Lead · Workflow · Notify) — ✅ **LIVE as of 2026-07-09 night**: `_global` master ON, **22 of 23
+events notifying** (Zach muted `property_viewed`, the firehose, right after go-live), **0 Creates-Lead** (nothing
+mints a lead). A 23rd row, `insight_re_engaged` ("Insight: Buyer Re-Engaged"), was boarded 2026-07-09 (mig 0361).
+See [Where the build stands](#where-the-build-stands).
 
 ### How a row becomes a card (the chain every event follows)
 
@@ -303,10 +314,12 @@ Cross-links: the notification contract (owner-only · one-card · deduped · dua
 
 ## Where the build stands (live status — updated 2026-07-09, verified against code + DB)
 
-**One-line verdict: captured & contained, deliberately dark — the router side is DONE.** The flood is dead at the
-root, the architecture is locked, the native webhook + recency gate + Lane-2 enqueue are live, the pollers are
-gone (flatline PROVEN: 227 junk ledger rows/30min → **0**). What's left: Caleb's Lane-2 consumer, then the
-repoint + the staged flip-on.
+**One-line verdict: LIVE — Zach is receiving FUB + Zillow in-app notifications on-device (2026-07-09 night).** The
+flood is dead at the root, the architecture is locked, the native webhook + recency gate + Lane-2 enqueue are live,
+the pollers are gone (flatline PROVEN: 227 junk ledger rows/30min → **0**), and the `_global` master breaker was
+flipped ON — Zach watched real notifications land ("first two are in", a lead "viewed a home") and self-served the
+`property_viewed` mute. Existing-lead-only, zero minting. Remaining cleanup: retire the legacy realloop.co notifier
+(one notifier), and the FUB webhook repoint housekeeping.
 
 ### At a glance
 
@@ -317,7 +330,7 @@ repoint + the staged flip-on.
 | Lane 2 — masked bodies | 🟡 **Router enqueue LIVE** (masked sms/email → queue, card held for the body); Caleb's queue DDL + consumer in build (C1) |
 | Lane 3 — record edits (the flood loop) | 🟢 **Done** — loop killed, 49,059 rehydrated, forward-only |
 | Recency gate | 🟢 **LIVE** (2026-07-09 eve) — records older than `FUB_NOTIFY_RECENCY_HOURS` (48h) dispatch `stale` → stored, never notified |
-| The 22 toggles (`hl_fub_webhook_settings`) | ⚫ **All OFF** — the hard-kill; stays off until the sequence below |
+| The toggles (`hl_fub_webhook_settings`, 23 rows) | 🟢 **LIVE** (2026-07-09 night) — `_global` master ON, 22/23 Notify ON (`property_viewed` muted by Zach), 0 Creates-Lead. Master breaker now has a UI banner on the Trigger Events board. |
 | Mirror-reading pollers (the flood anti-pattern) | 🟢 **RIPPED + verified** (2026-07-09 eve) — deleted from code, unregistered from Inngest; junk-ledger flatline 227/30min → 0 |
 | Door hygiene | 🟢 **LIVE** — existing-person re-imports + behavioral/comms events never fire native registration doors (closed the 1,421-row + near-miss audit find; verified on live traffic) |
 
@@ -334,6 +347,10 @@ repoint + the staged flip-on.
    store/match but never notify; suppression visible in run outputs (`notifySuppressed`).
 4. **Repoint FUB's 20 webhooks** — `camp-zach.taila5bfe9.ts.net` → `crm.houseloop.ai/api/fub/webhook`. The actual
    cutover; script staged; runs after Caleb's C1 → then the DARK VERIFY (toggles off, watch real traffic flow).
+5. ~~Surface the `_global` master + go live~~ ✅ **DONE 2026-07-09 night** — added the master-breaker banner to
+   `FubChannelRows` (Trigger Events board), flipped `_global` ON, Zach confirmed notifications landing on-device.
+   The Email/SMS **global delivery masters** also shipped this pass (see
+   [message-catalog → delivery](/platform/message-catalog#the-bell-spine--delivery-how-a-notification-flows)).
 
 **Caleb (scraper):**
 1. **Build the Lane-2-only consumer** (C1, in build) — create the Railway queue DDL (`CHECK IN
