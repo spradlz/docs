@@ -1,0 +1,145 @@
+---
+title: "Vendor Lead Email Capture (Google Delegation + Forwarding)"
+description: "How every lead vendor's email (Zillow Premier Agent, Follow Up Boss, GMB, Realtor.com…) is funneled into ONE inbox — info@houseloop.ai — using Google domain-wide delegation to create forwarding filters by API. The pattern, the setup, the two live instances (Ben Froeschl + Zillow Premier Agent), and the repeatable playbook for adding the next vendor."
+---
+
+<Info>
+**The goal: one inbox for every vendor lead.** Zillow Premier Agent, Follow Up Boss, Google My Business,
+Realtor.com — every lead-notification email lands in **`info@houseloop.ai`**, where an AI layer can parse it into
+one stream (and it doubles as the consumer "contact HouseLoop" address). The mechanism is a Gmail **filter →
+forward** on each source mailbox, created **by API** via Google **domain-wide delegation**. This page is the
+canonical how-to and the playbook for the next vendor. Built 2026-07-10 (Adam).
+</Info>
+
+## The pattern in one picture
+
+```
+Vendor sends a lead email
+  → a HouseLoop or SRG mailbox that already receives it (ana@, zach@, support@, a takeover alias…)
+  → a Gmail FILTER on that mailbox matches the vendor's sender/recipient
+  → FORWARDS a copy to info@houseloop.ai   (the one vendor-lead inbox)
+  → AI parses info@houseloop.ai
+```
+
+We do **not** ask vendors to change where they send (that risks the integration — e.g. Zillow is a walled
+garden). We take the email **where it already lands** and forward it. The filter + forwarding address are created
+**headlessly by API** — no browser, no admin-console clicking — using the service account below.
+
+## The engine: Google domain-wide delegation
+
+All of this runs on one **service-account key**: `tools/google-sa-key.json` (client ID
+`107101789811232618976`, shown as **"BossLoop"** in the delegation list — the name is cosmetic). It is
+**authorized in BOTH Workspace orgs**:
+
+| Org | Impersonate | Where it's authorized |
+|---|---|---|
+| **houseloop.ai** | `admin@houseloop.ai` or any @houseloop.ai user | HouseLoop Admin → Security → API Controls → Domain-Wide Delegation |
+| **spradlingrealtygroup.com** (SRG) | any @spradlingrealtygroup.com user | SRG Admin → Security → API Controls → Domain-Wide Delegation |
+
+Delegation is **per-Workspace**: the *same key* works on both orgs; only the `sub` (which user to act as)
+changes. Full super-admin scopes are granted on both (all Gmail, Drive, Docs, Calendar, Contacts, directory
+user/group/orgunit management, reports).
+
+**To act as a user, mint a JWT** (`iss` = the SA client_email, `sub` = the target user, `scope` = space-separated
+scopes) and exchange it at `https://oauth2.googleapis.com/token` for an access token, then call the Google API.
+
+<Warning>
+**Two gotchas that will waste hours if you don't know them:**
+
+1. **Adding delegation scopes is console-only and needs a HUMAN paste.** Google has no API to edit the DWD scope
+   list, and its dialog **silently ignores scope text inserted by automation** (Playwright typing shows on screen
+   but the form's model stays empty, so AUTHORIZE saves the *old* set). The reliable path: `pbcopy` the
+   comma-delimited scope list → a human clicks the empty field, **Cmd+V**, **AUTHORIZE**. If **any** scope in the
+   pasted batch is invalid, Google rejects the **whole** batch — `cloud-identity.*` and `cloud-platform` are
+   rejected by the Workspace DWD console (GCP-flavored); leave them out.
+2. **Cross-org forwarding still needs a confirmation click** (see below) — a delegated SA does *not* auto-verify a
+   forward to a different domain.
+</Warning>
+
+## Creating a forward by API (the exact steps)
+
+For a source mailbox `SUB` (e.g. `ana@spradlingrealtygroup.com`), forwarding to `info@houseloop.ai`:
+
+**1. Create the forwarding address** (needs `gmail.settings.sharing`):
+```
+POST https://gmail.googleapis.com/gmail/v1/users/{SUB}/settings/forwardingAddresses
+{ "forwardingEmail": "info@houseloop.ai" }
+```
+It comes back `verificationStatus: "pending"` — because the destination is a **different domain**, Google emails a
+confirmation to `info@houseloop.ai` from `forwarding-noreply@google.com`.
+
+**2. Confirm it headlessly.** Read `info@houseloop.ai`'s inbox with the same SA (`gmail.readonly`), find the
+confirmation email, extract its `https://mail.google.com/mail/vf-…` link, and **HTTP `POST` to that link** — the
+confirm page is a `<form action="" method="post">`, so a self-POST *is* the "Confirm" click. Re-check and the
+status flips to `accepted`.
+
+**3. Create the filter** (needs `gmail.settings.basic`):
+```
+POST https://gmail.googleapis.com/gmail/v1/users/{SUB}/settings/filters
+{ "criteria": { "from": "premieragent.com" }, "action": { "forward": "info@houseloop.ai" } }
+```
+Match on `criteria.from` (the vendor's sending domain) or `criteria.to` (a takeover alias) — never a blanket
+"forward everything," which would firehose the whole mailbox into info@.
+
+## Live instance 1 — Ben Froeschl (Zillow Tech Connect seat takeover)
+
+**The problem:** our Zillow lead feed is bound to the FUB *login email* of a departed employee,
+`bfroeschl@spradlingrealtygroup.com`. We can't delete the seat or change its login email (that risks the Zillow
+sync), and the address was a deleted Google user, so Ben's Zillow/FUB notifications went nowhere.
+
+**The fix:**
+- `bfroeschl@spradlingrealtygroup.com` resurrected as an **email alias on the `support@spradlingrealtygroup.com`
+  user** (an alias, not a Group — org policy blocks external Group members; an alias accepts all external mail).
+- FUB login taken over via password reset to the alias (see [Departed-Agent Zillow
+  Binding](/fub/departed-agent-zillow-binding) for the full FUB side).
+- A filter on **support@**: `criteria.to = bfroeschl@spradlingrealtygroup.com` → forward to `info@houseloop.ai`.
+  Only Ben's mail moves; the rest of support@ is untouched.
+
+## Live instance 2 — Zillow Premier Agent
+
+**The real sender matters.** Premier Agent **leads** come from **`no-reply@leads.premieragent.com`** (subjects like
+"You got a new tour request from a MyAgent connection", "High Intent Buyer Insights") — **not** Zillow's consumer
+marketing (`recommendations@mail.zillow.com`, `my-saved-home@…`, `market-updates@…`), which we deliberately do
+**not** forward. Always inspect the inbox for the true sender before writing the filter.
+
+Filters created (both by API): on **`ana@spradlingrealtygroup.com`** and **`zach@spradlingrealtygroup.com`**,
+`criteria.from = premieragent.com` → forward to `info@houseloop.ai`.
+
+## The playbook — adding the next lead vendor
+
+<Steps>
+<Step title="Find the real sender">
+Read the mailbox that receives the vendor's leads (via the SA, `gmail.readonly`) and identify the **exact sending
+domain** of the *lead* emails — not the vendor's marketing. (e.g. `premieragent.com`, not `mail.zillow.com`.)
+</Step>
+<Step title="Create the forwarding address">
+`POST …/settings/forwardingAddresses { forwardingEmail: "info@houseloop.ai" }` on that mailbox.
+</Step>
+<Step title="Confirm it">
+Read `info@houseloop.ai` for the `forwarding-noreply@google.com` email, extract the `mail/vf-…` link, **POST** to
+it. Confirm status is `accepted`.
+</Step>
+<Step title="Create the filter">
+`POST …/settings/filters { criteria: { from: "<vendor-domain>" }, action: { forward: "info@houseloop.ai" } }`.
+Scope tightly — `from` a domain, or `to` a specific alias. Never forward the whole mailbox.
+</Step>
+<Step title="Verify">
+Re-list the filters, confirm it's present, and (ideally) send a test from the vendor domain and watch it land in
+info@houseloop.ai.
+</Step>
+</Steps>
+
+## What's live today
+
+| Mailbox | Match | Forwards to |
+|---|---|---|
+| `ana@spradlingrealtygroup.com` | from `premieragent.com` | `info@houseloop.ai` |
+| `zach@spradlingrealtygroup.com` | from `premieragent.com` | `info@houseloop.ai` |
+| `support@spradlingrealtygroup.com` | to `bfroeschl@…` (Ben's alias) | `info@houseloop.ai` |
+
+## Credentials & references
+
+- **Service-account key:** `tools/google-sa-key.json` (client `107101789811232618976`). NOT a username/password —
+  a JWT-signing key. Delegated in both houseloop.ai and SRG.
+- **The capture inbox:** `info@houseloop.ai` (`.env` `CRED_GOOGLE_WORKSPACE_INFO_HOUSELOOP_AI_*`).
+- Related: [Departed-Agent Zillow Binding](/fub/departed-agent-zillow-binding) · [Email Settings](/guides/email-settings) · [Follow Up Boss integration](/integrations/follow-up-boss)
