@@ -40,6 +40,50 @@ Zillow / Realtor / PPC → Follow Up Boss
 FUB-platform fires show on the **Follow Up Boss** section of [Trigger Events](/guides/trigger-events) — never
 on the native HouseLoop.ai board (ledger scoped by platform).
 
+## Lead-source canonicalization — the six buckets
+
+Follow Up Boss carries **hundreds of messy source strings** ("Zillow Preferred", "Premier Agent", "Trulia.com",
+"Agent COI", "&lt;unspecified&gt;", "FiveStreet", "Opcity"…). Importing those verbatim would give HouseLoop an
+un-filterable soup. So every FUB lead's source is **folded into exactly SIX canonical buckets** — the normalized
+list you import into and report on. Locked by Zach 2026-07-04: *"clean lead sources — six buckets, everything
+else is noise."*
+
+| Canonical bucket | `hl_lead_sources` key | What folds in |
+|---|---|---|
+| **Zillow** | `fub_zillow` | Zillow, Zillow Preferred, Premier Agent, Zillow Flex, **Trulia** (Zillow-owned) |
+| **Google PPC** | `fub_google_ppc` | anything carrying the `Google Adwords PPC` tag (tag wins, even over a Zillow source string) |
+| **Google Organic** | `fub_google_organic` | `google` / `google organic` source text |
+| **Realtor.com** | `fub_realtor` | `realtor.com` |
+| **PC SOI** | `fub_pc_soi` | Agent COI, SOI, **Referral** (a referral is relationship-based), SRG past client |
+| **Other** | `fub_other` | everything else — FiveStreet, Opcity, Homes.com, HomeLight, unknown/new strings |
+
+**The fold happens in ONE place** — `lib/fub-import/source-canonicalize.ts` (`canonicalizeFubSource`), the single
+map. Three rules, in order: ① the **`Google Adwords PPC` tag wins** → Google PPC (it beats the source field);
+② the **fold map** matches the source text → its bucket; ③ **default = Other** — an unknown or brand-new string
+NEVER invents a bucket, it lands in Other. Nothing is lost: the fine original origin is preserved on the lead as
+a **`Lead Source - <original>` tag** (e.g. `Lead Source - Opcity`). The buckets are seeded by **migration 0315**;
+the old hardcoded `Zillow.com` import label was killed so imports stamp the *real* resolved bucket.
+
+### The one-time backfill sweep (`fub-source-sweep`)
+A registered Inngest function (`fub/source-sweep.run` — manual, **no cron**; it's a one-time cleanup) folded the
+**entire existing book** into the six buckets, in two places, with **no scraping**:
+- **In Follow Up Boss (tags):** it stamps each person with **`HL Source: <bucket>`** + their `Lead Source -
+  <origin>` tag. (FUB's `source` field is **not** API-writable — probed 2026-07-04 — but tags are. Writes are
+  GET → merge → PUT off the **live** FUB record, never the mirror copy, so a stale array can't silently delete a
+  tag a lead just earned.)
+- **In the HouseLoop mirror:** it UPDATEs `fub.people.source` → the bucket name (batched, self-chaining ~2k/run).
+
+The sweep is **Rule #0-gated** — apply mode requires Zach's typed in-session OK (49k-row class) and the reversal
+file saved first. Result (verified via Run-Log receipts 2026-07-04): **47,867 mirror rows folded to exactly six
+source values**, and the FUB tag pass tagged the book at ~2k/run with zero errors. Dry-run distribution across
+49,229 `fub.people`: **Zillow ≈ 28,082 · Other ≈ 14,508 · Google PPC ≈ 4,907 · PC SOI ≈ 1,007 · Realtor.com ≈
+675 · Google Organic ≈ 50.**
+
+**Where you see it:** the **Platform / Source** page — a platform card + the six-bucket KPI rows (click a bucket
+to filter its leads); each imported lead shows its bucket as its Source plus the `Lead Source - <origin>` chip on
+lead detail. This is the normalized list new FUB leads import into, forever — new inbound is canonicalized at
+import time by the same one map.
+
 ## Boundaries that never move
 
 - **Deleting a HouseLoop lead NEVER touches Follow Up Boss** — the delete path has zero FUB references
