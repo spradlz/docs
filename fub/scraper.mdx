@@ -42,13 +42,13 @@ what's new, does not crawl, and **never re-scrapes on a record edit.**
   `trg_fub_new_message` → the notification, now with the body). A surgical fetch, not a re-walk.
 - **Masked = exactly three things:** SMS bodies (~7%), most email bodies, and 5,690 call notes. Saves/views,
   inquiries, and call metadata are **exposed** (API) and never touch the scraper (Lane 1).
-- **In-app (Zillow Messages) chat is a scraper job** (corrected 2026-07-09 — it is NOT API-exposed). It lives
-  only in FUB's "Zillow Messages" inbox app, so `fub-inapp-sweep.mjs` (driven by the `fub-inapp-sweep-tick`
-  Inngest cron → the `inbox_sweep` queue job) reads FUB's internal inbox endpoint
-  `/api/v1/inbox/0/conversations?…InboxAppConversations&publishedInboxApps=2`, then reuses `scrapeTextContainers`
-  (the **`zillow.png`** icon classifier) + `matchAndUpdateMessages` (synthetic id `900000000+personId*1000+seq`)
-  to mint `message_type='zillow_inapp'` rows. Notify is native + gated to existing leads. Full flow:
-  `fub/trigger-events` → "How an in-app message becomes a trigger event".
+- **In-app (Zillow Messages) chat is a scraper job** (corrected 2026-07-09 — bodies are NOT API-exposed). WHO
+  has in-app activity IS in the REST API (`GET /v1/people?sort=-lastInboxAppMessage`), so `fub-inapp-sweep.mjs`
+  (driven by the `fub-inapp-sweep-tick` Inngest cron → the `inbox_sweep` queue job) discovers the people that
+  way — reliable, no browser (the inbox web endpoint hangs) — then reuses `scrapePersonFull` +
+  `scrapeTextContainers` (the **`zillow.png`** icon classifier) + `matchAndUpdateMessages` (synthetic id
+  `900000000+personId*1000+seq`) to mint `message_type='zillow_inapp'` rows. Notify is native + gated to
+  existing leads. Full flow: `fub/trigger-events` → "How an in-app message becomes a trigger event".
 - **The lock (precise mechanism):** the one-time 49K backfill is done — **49,059 people carry
   `fub.rehydration_log.status = 'rehydrated'`** (the terminal "done" state; there is **no** separate
   `fully_scraped` flag/status), **0 pending**, forward-only. The 2026-07-09 fix corrected **25,626** people that

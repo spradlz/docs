@@ -135,20 +135,46 @@ SMS/voice hits a **Twilio webhook → HouseLoop native → the Myli workflow**, 
 line** the person dialed. No middleman, no forwarding shell game, no lost source. We already own **two Twilio
 accounts** (HouseLoop + SRG, `support@spradlingrealtygroup.com`, vault / Master Sheet row 78).
 
-## Port a Google Voice number → Twilio (the 913-954-7123 recipe)
+## Port a Google Voice (Workspace) number → Twilio (the 913-954-7123 recipe, battle-tested 2026-07-09)
 
-1. **Unlock it from Google.** `voice.google.com/about/port` → pay Google's **$3 port-out unlock fee** → Google
-   returns the **port-out info: account number + PIN**.
-2. **Submit the port-in to Twilio.** Twilio Console → Phone Numbers → **Porting & Hosting → Port a number in.**
-   Provide: the number, a signed **LOA** (Letter of Authorization), the GV **account# + PIN**, a proof doc.
-   Twilio runs the carrier port — **~2–4 weeks.**
+A **Google Workspace** Voice number (managed under our domain) ports differently from a consumer GV number — there's
+no `voice.google.com/about/port` unlock screen. The credentials + the address all live in the **Admin Console**.
+
+1. **Get the port-out credentials from Google Admin.** Admin Console → Apps → Google Workspace → **Google Voice →
+   Number porting** → the **"Port-out info"** button (top-right of the Ports list). It shows the **US/Canada
+   port-out PIN** (10 digits; the reveal eye/copy are trusted-click only — read it off-screen if automating).
+   - **Account number** = the **Google Billing ID** from the invoice (e.g. `9620-6665-8983` → `962066658983`) — **NOT**
+     the 10-digit phone number, despite what Google's generic help says.
+   - **PIN** = that port-out PIN.  **BTN** = `+1<number>`.
+2. **Submit the port-in via the Twilio Porting API — not the beta UI.** The "Port-in US Local (Beta)" wizard's
+   eligibility step downloads a CSV via a blob link that **silently kills the request when driven by automation** (it
+   never persists). Use the API (creds `TWILIO_ZACH_ACCOUNT_SID` / `TWILIO_ZACH_AUTH_TOKEN`):
+   - Upload the billing statement: `POST https://numbers-upload.twilio.com/v1/Documents` (multipart `File`,
+     `document_type=utility_bill`) → returns `RD…` doc SID.
+   - Create the port-in: `POST https://numbers.twilio.com/v1/Porting/PortIn` — **must** include top-level
+     `account_sid` + `target_port_in_date` + `notification_emails[]` + `losing_carrier_information{…}` +
+     `phone_numbers[{phone_number, pin}]` + `documents[RD…]`.
+   - Twilio auto-generates the **LOA** and emails it via **HelloSign** to `authorized_representative_email` for
+     signature. On signature → `port_submitted`. Full runbook: memory `reference_google_voice_port_out_playbook`.
 3. **Land it.** Point the number's **Messaging + Voice webhooks at HouseLoop** → native inbound; send AS it.
 
 <Warning>
-**The Google Voice gotcha:** GV numbers *sometimes reject a direct port to Twilio* (Google is treated as VoIP;
-the LOA/account match fails). Battle-tested fallback = a **two-step port**: GV → a cheap **prepaid mobile SIM**
-(Tello / US Mobile, ~$10) first, let it settle a few days, **then** port that SIM → Twilio. Slower, near-100%.
-Try direct first; fall back to two-step if Twilio rejects.
+**⚠️ THE #1 REJECTION CAUSE — `INVALID_ADDRESS` (code 22154) + the 2-BUSINESS-DAY PROPAGATION TRAP.**
+The port validates the service address against the **losing carrier's (Bandwidth) record**, which = the **Google
+Voice "Service address"** (voice.google.com/settings → Service address, per-number), **NOT** the billing/invoice
+address. Two attempts for Ana's number bounced `INVALID_ADDRESS`: first the stale Kansas address, then the *correct*
+Florida one — because Google's own screen says **"Service addresses register within 2 business days."** When you
+**change** the service address it renders instantly in the UI but takes **up to 2 business days to propagate to
+Bandwidth**, and the port validates against the not-yet-updated carrier record. **So: fix the Google Voice service
+address → WAIT ~2 business days → THEN (re)submit the port with that exact string.** `customer_name` + address must
+match letter-for-letter. Twilio opens a Zendesk ticket per attempt but only echoes the `22154` code; reply-to-ticket
+reaches Porting Ops if you need the exact CSR address.
+</Warning>
+
+<Warning>
+**Secondary GV gotcha (VoIP direct-reject):** if a GV number rejects for reasons *other* than address, the
+battle-tested fallback = a **two-step port**: GV → a cheap **prepaid mobile SIM** (Tello / US Mobile, ~$10) first,
+let it settle a few days, **then** port that SIM → Twilio. Slower, near-100%. Try direct first.
 </Warning>
 
 ## Port-vs-Forward — the LOCKED decision (Zach 2026-07-09)
