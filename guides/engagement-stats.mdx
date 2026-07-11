@@ -121,15 +121,33 @@ a prop, so the client renders it verbatim and never calls `Date.now()` during hy
 - `components/listing/ListingEngagementBar.tsx` — reads `listing.lifecycleTime` and only falls back to the
   live compute when the prop is absent.
 
-<Warning>
-**RESIDUAL — someone still needs to fix the CARD path.** The **feed / search cards** (`ListingCard.tsx`)
-ALSO call `lifecycleTimeMetric()` client-side, and the card read path (`searchFromDb` in
-`lib/listings/search`/`cache.ts`) does **not** yet populate the server-computed `lifecycleTime`. So an
-**active-listing card can still throw the same #418 hydration mismatch** on its "days on HouseLoop" text.
-**TODO:** thread the server-computed `lifecycleTime` into the card/search path (set it in `searchFromDb`
-the same way `getListing` does) and make `ListingCard` read the prop instead of computing `Date.now()`.
-Until then the detail page is fixed but cards carry the latent bug.
-</Warning>
+## One derive step for every builder (the structural fix — 2026-07-09)
+
+**Why the detail-page fix didn't land on the cards:** the domain `Listing` object is built by **three
+separate mapper functions**, and the 2026-07-02 fix was applied to only one of them:
+
+| Builder | File | Feeds |
+|---|---|---|
+| `readFromCache` | `lib/listings/get.ts` | the detail page (had the fix) |
+| `dbRowToListing` | `lib/listings/cache.ts` | active search / feed cards (didn't) |
+| `historyRowToListing` | `lib/listings/cache.ts` | sold-archive cards (didn't) |
+
+So the feed/search cards still recomputed the "X days on HouseLoop" label — and the "New · Xh ago" fresh
+pill — from **`Date.now()` at render time**, mismatching SSR↔hydration → the same **#418 → the card's
+engagement blanked to 0 until refresh**.
+
+**The fix is one derive step, not three patches.** `lib/listings/derive.ts` → **`deriveListingFields()`**
+computes the read-time, time-derived display fields **once, server-side** — `lifecycleTime`,
+`listedHoursAgo` (drives the fresh pill), and `openHouseUpcoming`. **All three builders funnel their return
+through it** (one compute site, three call sites), and **`ListingCard` reads those props** — its time
+helpers are now pure formatters, with a live compute only as a fallback for an un-derived listing. No
+component calls `Date.now()` during render on any surface.
+
+<Note>
+**The rule going forward:** a new read-time, time-derived display field goes in `deriveListingFields()` —
+never inline in a builder or a client component. That is the single place, so it lands on the detail page
+AND every card at once. This is the data-layer counterpart to "one way to render a home."
+</Note>
 
 ## Turning the ticker off (later)
 
