@@ -1,0 +1,47 @@
+---
+title: "Design Standards — Enforcement (Lint & the Sweep)"
+description: "How the design system can't drift: a set of ESLint rules that fail the build on raw bands, raw tokens, and (soon) raw buttons and pills, plus a sweep tool that lists every remaining violation with its file, line, and fix."
+---
+
+The rules live in the components and the linter, **not** in a person remembering them. A hand-rolled band, a raw pixel value, or a raw button fails the build.
+
+## The live ESLint rules
+
+In `apps/houseloop-crm/eslint-rules/`, run pre-push (constitutional — never bypassed with `--no-verify`):
+
+| Rule | Bans |
+|---|---|
+| `no-raw-band` | A hand-rolled blue bar — use `SectionBand` / `SettingSection` / `SettingsTable` |
+| `no-raw-style-tokens` | Raw px / hex / color literals — use `var(--hl-*)` |
+| `no-raw-card-token` | Raw card styling — use the section components |
+| `no-raw-hero-icon` | A raw hero icon — use `HlHeroIcon` |
+| `no-raw-icon-size` | Off-scale icon sizes (18px floor) |
+| `no-raw-merge-color` | A non-blue merge chip — use `.hl-merge-chip` |
+| `no-raw-modal-header` / `modal-uses-canonical-header` | A hand-rolled modal header — use `HlFormModal` / `IpadModal` |
+| `no-raw-page-header-action` | A raw header action — use `.hl-btn--on-navy` |
+| `no-raw-search-input` | A raw search box — use `SearchInput` |
+| `no-raw-table` / `table-requires-actions` | A hand-rolled table / a table without actions — use `DataTable` |
+| `no-duplicate-shell-components` | A lookalike of an existing shell component |
+
+## The two rules being added
+
+These are the exact gates whose absence let controls drift — added once every page is migrated (turning a rule on before its target set is at zero would red-flag the un-migrated pages):
+
+| Rule | Bans |
+|---|---|
+| `no-raw-button` | `<button style={{...}}>` with a background / color / border — use `.hl-btn` |
+| `no-raw-pill` | A hand-rolled pill or tag inline style — use `.hl-pill*` / `.hl-status-pill*` / `ColorPill` |
+| `no-raw-hl-card-in-settings` | A raw `hl-card` in a settings surface — use a Section component |
+
+## The sweep
+
+```bash
+node tools/ui-audit/settings-section-audit.mjs          # human report + totals
+node tools/ui-audit/settings-section-audit.mjs --json    # machine list
+```
+
+It lists every violation with `file:line` and the fix. **After every migration batch the violation count must strictly decrease**; a slice is locked when it hits zero. As pages migrate, the auditor is extended to scan the whole app, not just settings.
+
+## The publishing gate (for these docs)
+
+Docs auto-publish on commit (the `docs-site/` post-commit mirror). The gate is all-or-nothing: one orphaned page or one MDX error freezes everyone's docs. Before publishing, run `node tools/docs/mirror-docs.mjs --dry` to catch it, fix the file, then publish.
