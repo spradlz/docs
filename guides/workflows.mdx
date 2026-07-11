@@ -4,11 +4,14 @@ description: "The HouseLoop CRM workflow engine — one intent canvas per thing 
 ---
 
 <Note>
-**Brought current 2026-07-09 (Lee).** This page previously described the retired "one workflow per event /
-new-vs-existing = separate rows" model — that's gone. The current model is **one intent canvas** per thing a
-person did, with the New/Existing split as a **visible branch inside** it, and **one on/off switch** (the Trigger
-Events board's Workflow Active toggle). The strategy layer — which intents exist and when Myli speaks — is
-[The Intent Strategy Map](/guides/intent-workflows); this page is the engine.
+**Brought current 2026-07-11 night (Lee) — v4 FLAT EVENT MODEL.** The current model: **one trigger event per
+human action, TWO SEPARATE workflows per event** — a **New Lead** arm and an **Existing Lead** arm — and the
+router picks the arm automatically from the intake's created-flag. **Never a fork inside a canvas** (Zach
+reversed the earlier one-canvas-with-a-branch model on 2026-07-11). Workflow NAMES carry the arm prefix
+("New Lead — Contact Request" / "Existing Lead — Contact Request"); trigger-event names never do. The
+Workflows page groups the pair under ONE trigger label, pair-shaded, inside the same
+**Activity · Communication · Insights** bands as the Trigger Events board. One on/off switch per arm =
+that arm's Workflow Active toggle on the Trigger Events board.
 </Note>
 
 A **workflow** is a trigger + a sequence of steps (send a text, send an email, assign the lead,
@@ -43,15 +46,15 @@ After deploying a new or changed workflow function, **re-sync Inngest**:
 dashboard until you do.
 </Note>
 
-## One workflow per INTENT (the current model)
+## One trigger event, TWO workflows (the v4 model — locked 2026-07-11)
 
-**A workflow is built around an intent — a thing a person actually did — not around which system the lead came
-from.** There is exactly **one canvas per intent** (13 of them — the full strategy map with the speak/silent
-policy lives in [The Intent Strategy Map](/guides/intent-workflows)), and the "brand-new lead vs. someone we
-already know" split is a **visible branch inside** that one canvas, never two separate workflow rows. Which
-integrations may feed a canvas is a **connector gate** drawn at the top of it. For the **registration family**,
-workflows group **by lead source** on the Workflows page — the same event from a different source is a different
-workflow with different copy (`Workflow = f(source × event)`); the intent canvases handle the rest.
+**A workflow is built around a trigger event — a thing a person actually did — and every event carries TWO
+separate workflows:** the **New Lead arm** (this event just minted the person; first-touch copy) and the
+**Existing Lead arm** (a known lead did it again; follow-up copy). The two arms are two REAL workflow rows —
+each with its own canvas, its own name ("New Lead — Saved Home" / "Existing Lead — Saved Home"), and its own
+Workflow Active toggle on the Trigger Events board. The dispatch's created-flag picks the arm at fire time;
+a canvas never forks on new-vs-existing internally (that earlier model is retired — the fork was invisible
+state, and the arm toggles give Zach per-arm control the internal branch never could).
 
 Two kinds of workflow exist in the builder:
 
@@ -183,24 +186,26 @@ maintenance rule) is the private ground-truth doc `GT_HOUSELOOP_WORKFLOW_TRIGGER
 page is the public engine reference.
 </Note>
 
-### New lead vs. existing lead (the arm picker)
+### New lead vs. existing lead (the arm picker — v4)
 
-The same website action lands on a **different arm of the ONE intent canvas** depending on whether the person is
-brand-new or already known. **The intake's `created` flag is the authority** — it dedupes by email, then by the
-last-10 digits of the phone (the same way Follow Up Boss / SureSend dedupe), so it works whether or not the
-visitor is logged in:
+The same website action routes to a **different WORKFLOW** depending on whether the person is brand-new or
+already known. **The intake's `created` flag is the authority** — it dedupes by email, then by the last-10
+digits of the phone (the same way Follow Up Boss / SureSend dedupe), so it works whether or not the visitor
+is logged in:
 
 - **Logged in** → the Tour / Contact form pre-fills name, email, and phone from the session → on
-  submit the intake matches their existing lead → the **existing-lead arm**.
-- **Logged out, types a known email/phone** → the intake matches it → the **existing-lead arm**.
-- **Logged out, brand-new email/phone** → no match → the **new-lead arm**.
+  submit the intake matches their existing lead → the **Existing Lead workflow**.
+- **Logged out, types a known email/phone** → the intake matches it → the **Existing Lead workflow**.
+- **Logged out, brand-new email/phone** → no match → mint (if the event's Creates Lead gate is ON) →
+  the **New Lead workflow**.
 
-Under the hood the two arms still arrive under different event-key families: `created=true` remaps the key to its
-`*_registration` variant (`REG_VARIANT` → `lead.tag-added` → `REG_SUBEVENTS`); `created=false` fires the
-first-class event (`tour.requested` / `contact.requested` / …). **An alias map (fixed 2026-07-05) folds both name
-families onto the one canonical intent**, so both keys route to the SAME canvas — the New/Existing **branch
-inside it** picks the arm. The lead-visible **tag is the same** for both; the new/existing distinction is the
-*arm*, not the tag, and you edit both arms' copy on the one canvas in the builder.
+Under the hood (v4, mig 0381): there is ONE flat event key per action (`property_saved`, `tour_request`, …) —
+the `*_registration` twin keys are retired (in-flight stragglers normalize onto the flat key via
+`FLAT_KEY` in `dispatchDoor`). The seat row (`hl_lead_source_events`) carries BOTH arms: `workflow_id` +
+`workflow_active` (New) and `existing_workflow_id` + `existing_workflow_active` (Existing). `created=true`
+reads the New columns, `created=false` the Existing columns — fail-closed: an unbound or toggled-off arm is
+a logged skip, never a fallback guess. Registration-guard belt intact: a minting dispatch never falls
+through to the platform/agnostic tiers.
 
 ### Tag Added (FUB-style)
 
