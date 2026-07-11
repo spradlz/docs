@@ -368,7 +368,45 @@ the relay round-trip never drops metadata, queue CHECK includes `call_note`.
     (`applyApiTexts`/`matchAndUpdateMessages`) set body + `content_status` but **not `synced_at`** — so the
     cursor-driven relay never carried flips; they reached Railway only through the legacy
     `realloop.co/api/fub/sync-message` POST, which dies at cutover. The consumer now **bumps `synced_at` on every
-    flipped row**; proven live. The legacy POST inside the lib should be removed with the C2 retirement pass.
+    flipped row**; proven live. **The legacy realloop POSTs were fully removed from the lib 2026-07-11** — see the
+    2026-07-11 update below.
+</Update>
+
+<Update label="2026-07-11 PM" description="Continuous daemon + relay-completeness + realloop removed + two-Chrome backfill (Benji / Fable 5)">
+  A full-pipeline hardening pass while running the ~25K stale-people resync. Verified end-to-end on prod, not
+  assumed. Files: `tools/fub-scraper/fub-parallel-scraper.mjs`, `tools/fub-scraper/fub-scraper-lib.mjs`.
+
+  - **Batch → continuous daemon.** `fub-parallel-scraper.mjs` was a batch job — it drained `pending` then ended
+    without `process.exit()`, so the `connectOverCDP` websocket kept the event loop alive and it hung idle
+    "online", never re-scanning (the root of F9's "empty-queue exit loop"). Now the workers loop forever (claim →
+    on empty `nap POLL_IDLE_MS` → re-poll), **re-verify the FUB session every ~75 scrapes** so a multi-day sweep
+    self-heals its login, and handle SIGTERM cleanly. A lead enqueued later is picked up within the poll interval
+    with **no manual restart**. `claimLead` also orders **HouseLoop leads first**.
+  - **Per-person relay completeness (the F11 root fix, generalized).** On every successful scrape the worker
+    re-stamps `synced_at = NOW()` on that person's `text_messages` / `calls` / `emails` / `notes` / `events` +
+    `people`. The CD→Railway relay forwards by a `synced_at` cursor, so a rehydrated person's historical rows
+    (stamped months ago, behind the cursor) would otherwise **never reach the mirror** — "scraper runs for days,
+    mirror stays behind." Now every rehydrated person's COMPLETE current set propagates. Proven end-to-end: 5 test
+    people, mirror `text_messages` count == Camp David exactly. **Zillow in-app** (`message_type='zillow_inapp'`)
+    rides the same path and lands.
+  - **realloop.co fully removed from the scraper.** All 6 legacy POSTs (3 `sync-message`, 2 `sync-email`, 1
+    `notify-scraper`) deleted from `fub-scraper-lib.mjs`. The relay carries CD→Railway; in-app notify is the native
+    `fub-inapp-sweep → /api/fub/body-recovered → fub-body-recovered` path (SOLE in-app notifier, gated). **Zero
+    realloop references remain** — this scraper no longer touches realloop.co, matching the trigger-events doctrine.
+  - **Two-Chrome parallel backfill (throughput ×2).** `fub-backfill-b` revived on **Chrome B (:18802)** — launched
+    via `launch-chrome2.mjs` with FUB cookies **injected from Chrome A** (shared session, no second SSO). 6 workers
+    total. **Reset-guard:** each scraper's startup now only resets `in_progress` rows older than **15 min** (real
+    crashes), never the sibling's live claims — without it a second scraper's startup clobbered the first's
+    in-flight work and both re-scraped the same person. `fub-chrome-guard` caps BOTH ports (`MAX_CHROME=3`,
+    `MAX_TABS=12`) and never touches the MLS/billing Chromes.
+  - **Safe by construction — no notification flood.** The mirror triggers are transition-guarded: `notify_new_message`
+    fires only on INSERT or a `hidden→visible` transition (a `visible→visible` re-sync does **not** fire), and
+    `auto_queue_lead` only queues `content_status IS NULL` people. Re-stamping `synced_at` on already-visible rows
+    therefore fires **zero** notifications — verified against `hl_notification` on prod (the 2026-07-09 flood cannot recur).
+  - **Op note — Chrome wedge on rapid restart.** Restarting a scraper twice in quick succession can leave its Chrome
+    with orphaned `about:blank` tabs → workers hang on blank pages (0 sub-step logs, CPU idle). Fix:
+    `mcp fub_chrome_restart` (fresh Chrome A), then restart the scraper. If worker pages show `about:blank` instead
+    of `…/people/view/<id>`, that's the wedge.
 </Update>
 
 ### What stays parked behind this
