@@ -1,25 +1,79 @@
 ---
 title: "Trigger Events"
-description: "THE trigger events page, mirroring the live board: 9 registration doors + 12 existing-lead events (HouseLoop.ai) + 22 FUB events, the one-switch workflow law, and the hl_trigger_fire ledger that makes the TRIGGERED count and its drill-down one truth."
+description: "THE trigger events page — Integration → Source → Event, user-created sections with per-event landing addresses, Creates Lead gated to registration, the one-switch workflow law, and the hl_trigger_fire ledger."
 ---
 
 **In the app:** Settings → **Trigger Events** — [`/settings/trigger-events`](https://crm.houseloop.ai/settings/trigger-events)
 
 <Info>
-**This page mirrors what's in code, live** (2026-07-09). It absorbs the retired Intent Strategy Map page — the
-strategy ("one workflow per thing a person did") is now baked into the board itself.
+**This page mirrors what's in code, live** (updated **2026-07-11**, lead-flow v3 — by Lee). It absorbs the
+retired Intent Strategy Map page — the strategy ("one workflow per thing a person did") is baked into the board.
 </Info>
+
+## 2026-07-11 — Lead-Flow v3 shipped (summary + receipts)
+
+**What changed, in one breath:** the board now reads **Integration → Source → Event**. Registration events
+group in a folder per SOURCE (the source is finally visible); you can create your own **sections** (folders
+like "Webinar Signups") and your own **trigger events**, each with a paste-able **landing-page address**;
+**Creates Lead renders ONLY on registration rows** (existing activity + Transaction Coordination never show
+it); FUB splits into its own registration + existing-activity sections. Built + verified live by **Lee,
+2026-07-11**, from the locked wireframe `lead-sources-builder-v3-LOCKED-2026-07-11.html`.
+
+📄 **Full build receipts (prod screenshots · curl proof of every gate · six live-caught bug fixes):**
+[Trigger Events — Build Receipts artifact](https://claude.ai/code/artifact/bd565646-0cfe-4626-9036-fdd1c18f16e2)
+
+![Trigger Events v3 live on prod — the custom Webinar Signups section (source pill, Creates Lead, add-footer) between the Webinars registration folder and Existing Lead Activity with NO Creates Lead column](/images/leadflow-v3/webinar-signups-section.jpg)
+
+### The five laws (locked 2026-07-11)
+
+1. **Integration → Source → Event.** Registration events group under the SOURCE that births the lead.
+2. **Creates Lead exists ONLY on registration rows** — and it is the fail-closed **MINT gate**: OFF on a door
+   means no new lead ever mints through its address (an existing lead still fires the event).
+3. **ONE Existing-Lead-Activity section per integration.** Behavior is branded to the platform it happens on —
+   a Zillow save can never get a HouseLoop-branded message.
+4. **A birth fires only its own door.** A webinar signup runs the webinar workflow, never General Registration.
+5. **Robot actions are silent.** Actions a workflow performs FOR a lead (seeded account, saved search) never
+   fire trigger events; only the lead's own actions fire.
+
+### Creating sections + custom events
+
+Header buttons **New Section** and **Create Trigger Event** open the same four-question modal: *Name it ·
+Section (a folder is born with its first event; blank = Other) · Which source feeds it · Workflow that runs.*
+Create returns the event's **landing-page address** (`https://crm.houseloop.ai/api/leads/in/<source>/<event>`)
+— paste it into the signup page with the source's secret key (`?key=` or the `x-houseloop-intake-secret`
+header). Monthly-webinar routine: create next month's event in the folder → copy its address → paste into the
+new landing page. Done.
+
+![Create Trigger Event — four questions, then the address](/images/leadflow-v3/create-event-modal.jpg)
+
+![Create → get its address — the real landing-page address for the July webinar](/images/leadflow-v3/create-event-success.jpg)
+
+### v3 checklist — everything done / found (2026-07-11 · Lee)
+
+- ✅ Mig 0380 `hl_trigger_events.section` — user-created folders
+- ✅ Landing-address intake `/api/leads/in/<source>/<event>` — header OR `?key=` auth, JSON + form bodies,
+  fail-closed seat check (unwired event → 404, wrong key → 401), `creates_lead` mint gate (verified live:
+  OFF → visible skip, zero mint)
+- ✅ Create-event API seats the door (creates_lead=TRUE explicit) + binds the workflow + returns the address
+- ✅ Creates Lead gated to registration sections · FUB split with one sync master · address column with Copy
+- ✅ End-to-end fire on prod: signup POST → lead minted → `door-custom` Inngest run → `hl_trigger_fire` row
+- 🐛 **Found + fixed live (6):** middleware login-wall ate the address route · custom events dispatched into
+  the void (fixed with the shared `door-custom` channel) · the tag-gate landmine (doors only fired if TAGGED —
+  the fire gate is now the SEAT) · a `::uuid` type-inference error in door seeding · half-born sources on seed
+  failure (creates are atomic now) · a Lead Sources builder crash on refresh
+- ⏳ FUB per-bucket registration folders (New Zillow Lead…) — display-only rows planned; per-bucket toggles
+  await Zach's grain decision
 
 ## What a trigger event is
 
 A thing that happened (someone did something) that can **create a lead** and/or **fire a workflow**. Every
-trigger event is a row on the board with its own switches. The board has three families:
+trigger event is a row on the board with its own switches. The board groups Integration → Source → Event (v3):
 
-| Family | Count | What fires them |
+| Band | Sections inside | What fires them |
 |---|---|---|
-| **HouseLoop.ai · New Lead Registration** | **9 doors** | A brand-new visitor registers via an entry point: General · Liked Home · Saved Home · Saved Search · Shared Home · Tour Request · Contact Request · Seller Get Report · Seller Get Started |
-| **HouseLoop.ai · Existing Lead Activity** | **12 events** | A known lead acts on the site: Property Viewed/Liked/Saved/Shared · Property Inquiry · Saved Search (self / agent-created / system-seeded) · Tour Requested · Contact Requested · Seller Inquiry · Seller Get Report |
-| **Follow Up Boss** | **22 events** | FUB webhook signals (Zillow/Realtor/PPC) — see the [FUB master](/fub/trigger-events) |
+| **HouseLoop.ai Website** | One **New Lead Registration folder per SOURCE** (HouseLoop.ai Organic's 9 doors · Webinars · any source you create) + your **custom sections** (e.g. Webinar Signups) + ONE **Existing Lead Activity** section (12 events, NO Creates Lead column) | Registration = a brand-new visitor through that source's pipe; existing activity = any known lead acting on the site, regardless of birth source |
+| **Follow Up Boss** | **New Lead Registration · sources pulled from FUB** (Creates Lead + Sync) + **Existing Lead Activity · behavior inside FUB** (no Creates Lead) | FUB webhook signals — see the [FUB master](/fub/trigger-events) |
+| **Transaction Coordination** | One section — no Creates Lead, no source (a loop always hangs on an existing lead) | e-sign documents + loop milestones |
 
 ## THE ONE-SWITCH LAW (workflow on/off lives HERE)
 
