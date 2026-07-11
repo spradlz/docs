@@ -1,0 +1,57 @@
+---
+title: "Lead Sources"
+description: "The Lead Sources builder — one clamshell card per marketing source, its performance, routing defaults, and registration doors — and the structural Integration → Source → Lead model behind it."
+---
+
+## What this page is
+
+**Settings → Pipeline & Workflow → Lead Sources** is the builder for every marketing source that feeds you
+leads. One **clamshell card per source**: a bright-blue header (name, its Lead Integration, type pill, status,
+last lead, Edit Source), a white middle (Lead Source Performance + the Default Routing Rule), and a blue
+**Registration Doors** footer (opening it reveals the doors table above the band). Cards **drag-to-reorder**
+by the grip handle (persisted), and a source can be paused, archived, or deleted from its status menu.
+
+The aggregate KPI row on top is a live sum of every card below — same groups (Leads · Under Contract · Sold ·
+Income), never a separate query.
+
+## The model — Integration → Source → Lead
+
+| Layer | What it is | Examples |
+|---|---|---|
+| **Lead Integration** | The connector a lead arrives through. Carries the platform-wide defaults (AI responder, stage, tags) that sources inherit. | Follow Up Boss · HouseLoop |
+| **Lead Source** | The marketing origin. `source_type` is purely the marketing type (Portal / Web / IDX / API / Manual Entry / Email / Pixel). | Zillow · Google PPC · Google Organic · Realtor.com · Other · HouseLoop.ai Organic · HouseLoop PPC · Referral · Sphere of Influence |
+| **Lead** | A person — stamped at creation with its source **and** its integration (`platform`, never NULL). | — |
+
+Two things are deliberately **not** sources: **relationships** (Past Client is what a lead *becomes*, managed
+under Relationships) and **channels** (Manual Entry is how a row is typed in, not a marketing origin).
+Referral and Sphere of Influence are relationship-*origin* sources with **no integration** — their leads
+default to the HouseLoop platform.
+
+## The structural guarantees (locked 2026-07-11)
+
+Full law: `GT/GT - ACTIVE/GT_HOUSELOOP_INTEGRATION_SOURCE_MODEL_PRD.md` — "the integration is a relation, not
+a word."
+
+- **A source's integration is a real FK** (`hl_lead_sources.integration_id` → the integration's config row,
+  mig 0373) — never a text value matched by CASE. The seat-key literals exist in exactly one file
+  (`lib/lead-sources/integrations.ts`); everything else joins the FK.
+- **Every lead has an integration at birth** — `hl_leads.platform` is `NOT NULL DEFAULT 'houseloop'`
+  (mig 0374), and every creation path (website registration, Add-Lead modal, referral-partner insert, FUB
+  import, tools backfill) stamps `platform` + `channel` derived from the source row in SQL.
+- **`is_selectable` separates sources from config seats** (mig 0372) — the integration/global config rows
+  live in the same table but can never appear on this page or be deleted, and editing a source's *type* can
+  never hide its card (visibility never reads `source_type`).
+- **Editing honesty:** the Configure page only shows "Inherit — …" hints when a source actually has an
+  integration to inherit from.
+
+## Per-card anatomy
+
+- **Header (blue):** name · `Lead Integration · <Follow Up Boss | HouseLoop>` · type pill · status dropdown
+  (Active / Pause / Archive… / **Delete source…**) · Last lead · **Edit Source** (opens the editor modal:
+  name, type, defaults — stage, tags, AI responder, human owner).
+- **Lead Source Performance (white):** Total Leads (deep-links to the filtered Leads list) · Under Contract
+  (units + volume) · Sold (units + volume) · Total Income (HouseLoop + Agent).
+- **Default Routing Rule (white):** assigned-to · collaborators · workflow · set-stage — the rule that
+  catches every lead from this source; resolves source override → integration default.
+- **Registration Doors (blue footer):** the read-only list of what fires when a NEW lead registers from this
+  source — trigger event, bound workflow, total leads, last fired. Toggling doors lives under Trigger Events.
