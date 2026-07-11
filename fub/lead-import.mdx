@@ -260,6 +260,26 @@ A lead's card is born from a **webhook, not a poll**. The chain, grounded on rea
 bound to that door, never a hidden canned send. Agent-facing alerts remain.
 </Warning>
 
+### The bulk import wizard — select → assign → tag (Settings → Integrations → Follow Up Boss → Import) 🔒
+The webhook path above imports ONE lead on a live signal. The **wizard** (`FubImportWizard.tsx`) is the operator
+tool to pull people in **in bulk**, all decided on-screen (never hardcoded). It reads live from the synced mirror
+and dispatches the same `fub/lead.import` per person via `fub/import-all.run` (the SILENT path — no doors, no
+workflows, no notifications). Four steps:
+
+1. **WHO — filter who comes in.** Pick FUB **stages** (with live people-counts + a per-stage → HouseLoop-stage
+   mapping) and, optionally, narrow by **FUB tags**: a searchable, scrollable modal over **all live FUB tags**
+   (~1,276, most→least by count, from `fub.people.tags`). Facet logic: OR within stages, OR within tags, **AND**
+   across the two — a live "N match" comes from `/api/integrations/fub/import/count`.
+2. **HOW — depth + tags to apply.** Light-seed (default) vs full-history; silent claimable accounts; and the
+   **HouseLoop tags to apply to every imported lead** — pick from existing `hl_tags` OR type a **new** name to
+   create it (`ensureTag` find-or-creates). These apply on top of the origin tag + the person's own imported FUB tags.
+3. **OWNERSHIP — assign to a person.** A dropdown of human `hl_users` (or **Myli-AI-only**, never ownerless);
+   the pick threads to `assigned_user_id` on every minted lead.
+4. **REVIEW — the Rule #0 gate.** Dry runs + test batches (≤100) are open; the **full run stays disabled** until
+   Zach types the Rule #0 approval (`approval:'ZACH-TYPED-OK'`) — a bulk write to `hl_leads` never fires from the browser.
+
+Stage mapping is applied one-shot at import (`opts.stageId ?? source default`); the flow is **one-way** — FUB → HouseLoop, no stage sync-back. Files: `components/settings/fub/FubImportWizard.tsx`, `app/api/integrations/fub/import/{preview,run,count}/route.ts`, `lib/inngest/functions/fub-import-all.ts`, `lib/fub-import/import-fub-lead.ts`.
+
 ### Layer 1 — real-time sync (event-driven, NO polling) 🔒
 ```
 Camp David fub.*  →  relay  →  Railway fub.*  ──NOTIFY fub_lead_changed(fub_person_id)──►

@@ -40,6 +40,36 @@ Zillow / Realtor / PPC → Follow Up Boss
 FUB-platform fires show on the **Follow Up Boss** section of [Trigger Events](/guides/trigger-events) — never
 on the native HouseLoop.ai board (ledger scoped by platform).
 
+## What a FUB signal becomes in HouseLoop — the 2026-07-10/11 hardening
+
+Once captured, a lead's activity is mirrored into HouseLoop the right way — governed by **one master**, **forward-only**,
+with **real timestamps**. What shipped this pass (deep detail: [FUB Lead Import](/fub/lead-import)):
+
+- **ONE FUB master switch.** There were secretly **two** — the UI toggle wrote `hl_settings.fub_sync_master` while
+  the fail-closed notify/process gate read `hl_fub_webhook_settings._global.enabled`. They diverged, `_global` was
+  orphaned OFF, and it **silently killed every FUB notification for hours**. Collapsed: `getFubSyncMaster` /
+  `setFubSyncMaster` now read/write `_global.enabled` — the flag the UI shows and the code obeys (notify + process +
+  forward-sync). It can't orphan again.
+- **The lead-detail feed is FORWARD-ONLY.** A pulled-in lead starts CLEAN — pre-import texts/calls/emails stay
+  context-only under the FUB tab; only new comms flow into the feed + Texts/Calls/Emails sub-tabs going forward
+  (`backfillFubComms` watermark floored at the lead's `created_at`).
+- **Real timestamps, not "22 hours ago."** Property view/save activity is stamped from `scraped_at` (the real
+  trigger time, matches FUB to the minute) instead of a date-only midnight, and the feed renders the actual date +
+  time (Central), not a relative "Xh ago."
+- **ONE home-activity writer.** The dashboard's `parseZillowViewNote` ghost writer — which hardcoded every Zillow
+  home note as `activity_type='viewed'` (so **saved** homes recorded as **viewed**) — was removed;
+  `lib/fub/sync-lead-record.ts` is the sole, correct writer (derives saved-vs-viewed, stamps `fub_event_id`). 1,318
+  legacy mislabeled rows were cleaned (565 dup deletes + 753 corrected → `saved`).
+- **Inquiries/tours flow like texts.** `fub.events` is now stored **unconditionally** in the webhook router, so a
+  new inquiry/tour always lands and renders forward (the July-7 ingest ceiling is lifted).
+- **Myli's facts are distilled, not dumped.** The extractor locks the slot vocabulary (`canonicalSlot`) so facts
+  can't bloat, and raw house-view lists collapse into ONE synthesized signal ("viewed 32 homes in 2 days → high
+  urgency"). A bloated lead went **55 junk facts → 13** meaningful ones, stable on re-run.
+- **The import wizard is a filter + assign + tag builder.** Select who comes in by FUB **stage** and **tag** (a
+  searchable modal over all ~1,276 live FUB tags, AND'd with stages, with a live match count); **assign** every
+  imported lead to a person (or Myli-AI-only, never ownerless); **apply HouseLoop tags** (pick existing or create
+  new) on top of the origin tag + the lead's own imported FUB tags. One-way, stage-mapped, Rule #0-gated on the full run.
+
 ## Lead-source canonicalization — the six buckets
 
 Follow Up Boss carries **hundreds of messy source strings** ("Zillow Preferred", "Premier Agent", "Trulia.com",
