@@ -111,7 +111,34 @@ The three social actions have deliberately different gates (Zach LOCKED 2026-07-
   shows photo, price, address, beds/baths, timestamp, a repeat-view badge, and a **View Property
   Details** link.
 - **CRM lead detail → Requests tab:** high-intent actions (tour requests, saved searches).
+- **CRM lead detail → Website tab → Saved Searches:** the SearchCard, where the pixel meets the email —
+  see the Email vs Website rows below.
 - **Settings → Website → Pixel Tracking:** live event counts + recent activity across all visitors.
+
+## Channel attribution — the pixel vs the email (the SearchCard rows)
+
+The lead-detail SearchCard (Website tab → Saved Searches) shows an **Email** row and a **Website** row.
+This confuses people because the *website* never sends anything — the **email is the only sender**. The two
+rows are **channels of engagement**, read from two different tables:
+
+| Row · metric | Source table | Means |
+|---|---|---|
+| **Email** · Sent / Opened / Clicked | `hl_email_send_log` + `hl_email_event` (Resend webhooks) | the saved-search email's send + the lead's opens/clicks IN the email |
+| **Website** · Sent | `SavedSearch.lastAlertSentAt` (the alert fired) | a pipeline check — should equal the Email Sent moment |
+| **Website** · Opened / Clicked | `hl_pixel_event` (first-party pixel) | the lead opening the search / clicking a home **on the site** |
+
+**The `ref=email` split (Zach 2026-07-10):** when the lead clicks a house *from the email*, that link is a
+magic-wrapped URL whose destination carries **`?ref=email`** (stamped by the CRM `wrapMagicLinks`). The pixel
+records `event_payload.ref = 'email'`, and the Website query **excludes** `ref = 'email'` — so an email click
+counts under **Email**, never double-counting as **Website** activity. Site-originated visits carry
+`ref=saved_search` (or none) and count under **Website**. This is why the two rows can legitimately differ.
+
+<Note>
+**Time zones:** every time on the lead detail renders in the **lead's** timezone (`hl_leads.timezone`, derived
+from their phone area code), not the business zone. The pixel/email tables are `TIMESTAMPTZ` (absolute instants);
+the website `SavedSearch` columns are naive-UTC and are parsed as UTC by the CRM's `qWeb` pool. See
+[Saved Search Alerts](/guides/saved-search-alerts) Dev Log 2026-07-10.
+</Note>
 
 <Note>
 All behavioral data stays in your HouseLoop database (`hl_pixel_event`). The pixel does
