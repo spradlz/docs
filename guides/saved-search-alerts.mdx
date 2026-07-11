@@ -18,6 +18,32 @@ on the workflow canvas + in the Run Log (see *Inngest or it doesn't exist*).
 
 ## Dev Log
 
+<Update label="2026-07-10 — Caleb" description="Live E2E audit: timezone, lead-tz rendering, Email|Website channel split, the SearchCard, and the one-card hero">
+**A full human-in-the-browser E2E test surfaced and fixed a cluster of display bugs. All deployed + re-verified live.**
+
+- **Timezone double-shift KILLED.** The website DB stores `SavedSearch`/`User` datetimes as `timestamp WITHOUT time zone`
+  (Prisma default) holding UTC. The CRM's cross-DB pool (`apps/houseloop-crm/lib/web-db.ts`) had no pg type parser, so
+  node-postgres re-interpreted the naive value in the server's local zone and `JSON.stringify` re-encoded it with a `Z` —
+  a 9:45 PM ET send rendered "Jul 11 12:46 AM". **Fix:** a pg type parser for OID 1114 on the `qWeb` pool treats naive
+  values as the UTC instant they are — corrects every `qWeb` consumer at once (no migration).
+- **Times render in the LEAD's timezone, not hardcoded Central.** New `hl_leads.timezone` (mig 0375), derived from the
+  lead's phone area code at intake (`leadTimezoneFromPhone`, `lib/datetime.ts`), stamped by both intake writers. The
+  lead-detail formatters (`CenterLane` `fmt*` + `PixelFeedStream` `relTime`) render in it (fallback: business Central).
+- **The SearchCard's Email vs Website rows = CHANNEL, not two senders.** The email is the only thing that sends; the split
+  is *which channel the lead engaged through*. **Website Opened** = opened the search on the site; **Website Clicked** =
+  clicked into a home from the site. Email-originated clicks now carry `ref=email` (the CRM magic-link wrapper stamps the
+  destination) and are EXCLUDED from the Website columns (`app/api/leads/[id]/saved-searches/route.ts`), so an email click
+  never double-counts as website activity. One-search leads also get their on-create/brand email folded onto the sole
+  search (those aren't stamped with a `saved_search_id` at send time yet — durable fix is to stamp it).
+- **ONE hero card per registration door.** A saved-search registration used to render TWO cards ("Registered" + a compact
+  "Saved search"). The All feed now folds the birth-window twin into the single registration hero
+  (`app/api/leads/[id]/activity/route.ts`) and the saved-search kind routes to a real hero card
+  (`PixelFeedStream`/`ActivityHeroCard`): a no-home registration shows the full-bleed brand-blue HouseLoop favicon tile;
+  a home door shows the home photo + price·beds·baths·sqft (no MLS#). Copy comes from `hl_trigger_events.activity`
+  ("just registered via a saved search on HouseLoop.ai"). Spec: `apps/houseloop-crm/docs/wireframes/activity-card-catalog-*`.
+- The website Save-Search success checkmark is brand blue (was green — NO-GREEN law).
+</Update>
+
 <Update label="2026-07-01 — Benji" description="3-origin taxonomy, agent-on-behalf creation, digest cards == count, firstSeenAt newest sort">
 **Four shipped changes to the saved-search system.**
 
