@@ -27,37 +27,49 @@ the **superseded** capture path — this doc's **lead-mint / event-model / card*
 
 # 1. Overview & the one-source map 🔒
 
-There is **one source** (FUB, fed by Zillow), pulled by **two pipes** (webhooks + scraper), into **one store**
-(`fub.*` on Railway), minted into **our own events** (`hl_lead_activity`), read by **many surfaces**.
+There is **one source** (FUB, fed by Zillow). Its signals arrive over **one real-time trigger** (the native
+webhook), with the **scraper as a recovery/history backstop**, land in **one store** (`fub.*` on the Railway
+mirror), get minted **forward-only** into **our own events** (`hl_lead_activity`), and are read by HouseLoop
+surfaces — with **HouseLoop as the sole notifier**. The whole integration is governed by **ONE master switch**.
 
 ```
    Zillow (Preferred · Rentals · RealScout)
-                  │  inquiries · tours · views · saves · ML intent tags
+                  │  inquiries · tours · views · saves · ML intent tags · texts/calls/emails
                   ▼
             FOLLOW UP BOSS              ← the hub. FUB owns the signal first.
                   │
-        ┌─────────┴─────────┐
-   19 WEBHOOKS          SCRAPER (Chrome)
-   real-time signals    only what the API hides:
-   inquiry property     · views/saves (events?hasProperty feed) · msg/email/call bodies · saved searches · browse list
-        └─────────┬─────────┘
-                  ▼
-        fub.* on Railway              ← THE ONE STORE (relay: Camp David → Railway)
-                  │  classifyFubEvent / convert-fub-signal → logActivity()
+   NATIVE WEBHOOK (sole real-time trigger)          SCRAPER (Chrome, Camp David) — BACKSTOP only
+   crm.houseloop.ai/api/fub/webhook → fubWebhookRouter    · Lane-2 masked-body recovery (fub.body_recovery_queue)
+   3 lanes: visible → notify + store ·                    · history/photo/in-app backfill on import
+            masked → recovery queue ·                     (NOT a coequal real-time pipe; the realloop.co
+            record-edit → store only                       dashboard receiver + catch-up pollers are RETIRED)
+        └───────────────────────┬───────────────────────┘
+                  ▼   storeRecord: texts/calls/emails/events stored UNCONDITIONALLY in the mirror
+        fub.* on Railway MIRROR              ← THE ONE STORE (relay: Camp David → Railway)
+                  │  classifyFubEvent / convert-fub-signal → logActivity()   ·   FEED IS FORWARD-ONLY
                   ▼
         hl_lead_activity              ← OUR EVENT STORE (the truth; one run-log, no fork)
                   │
-   ┌──────────────┼───────────────────────────┐
-   ▼              ▼                            ▼
- Telegram     HouseLoop CRM               FUB's own UI
- + SMS alert  (FUB Activity panel,        (followupboss.com)
-              lead import, request cards)
+   ┌──────────────┼───────────────────────────────┐
+   ▼              ▼                                ▼
+ HouseLoop     HouseLoop CRM                   FUB's own UI
+ notifications (feed w/ real timestamps,       (followupboss.com)
+ (sole notifier) import WIZARD, request cards)
 ```
 
 **The principle (LOCKED):** every FUB signal becomes **one of OUR OWN events** — minted via `logActivity()` into
 the one run-log `hl_lead_activity` (no new store, no fork; the `ALL_FEED_IS_EVERYTHING` law). `fub.*` is the raw
-landing zone; our event store is the truth. Once a signal is our event, it renders on our cards and can trigger
-our follow-up. **FUB is lead source #1** — the pattern (acquire → import → live-sync → events) is source-agnostic.
+landing zone; our event store is the truth. **The feed is FORWARD-ONLY** (2026-07-10): a pulled-in lead starts
+clean — pre-import comms stay context-only under the FUB tab; new activity flows into the feed going forward.
+**FUB is lead source #1** — the pattern (acquire → import → live-sync → events) is source-agnostic.
+
+<Note>
+**Capture detail lives in [FUB Trigger Events](/fub/trigger-events)** — the current SSOT for how a signal is
+captured and fires a notification: the **22 trigger events**, the native webhook, the 3 lanes, and the **ONE FUB
+master switch** (`hl_fub_webhook_settings._global.enabled`, which the UI toggle and the notify/process/sync gates
+all read — collapsed from two flags on 2026-07-10 so it can't orphan). This doc owns the **lead-mint → event →
+card → Myli-context → import** flow.
+</Note>
 
 **How to read this doc (the pipeline, in order):** §2 how data physically arrives · §3 how a lead is imported ·
 §4 what each signal becomes · §5 how it renders · §6 Myli's brain on the lead · §7 status + open issues.
