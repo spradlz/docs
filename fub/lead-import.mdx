@@ -232,20 +232,27 @@ A lead's card is born from a **webhook, not a poll**. The chain, grounded on rea
 
 1. **Source** — a Zillow in-app message / inquiry lands in FUB (e.g. "interested in touring 15111 E 44th St S on
    Jun 26 at 12pm", source **Zillow Preferred**, MLS# 2626844). FUB fires an `eventsCreated` webhook.
-2. **Pull-in decision** — `fub-webhooks.ts` `EVENT_IMPORT_TRIGGER` maps the event type
-   (`Property Inquiry → 'inquiry'`, `Virtually Toured Property → 'tour'`, `Seller Inquiry → 'seller'`,
-   `Registration → 'new_lead'`) → `dispatchFubImport(personId, trigger)` → CRM `/api/fub/import` → Inngest
-   **`fub/lead.import`** ([Inngest or it doesn't exist](/guides/inngest)).
+2. **Pull-in decision** — the **native webhook router** (`fub-webhook-router.ts`) classifies the signal
+   (`classifyFubEvent`) and fires Inngest **`fub/lead.import`** ([Inngest or it doesn't exist](/guides/inngest)).
+   (The old dashboard `dispatchFubImport` / `fub-webhooks.ts EVENT_IMPORT_TRIGGER` path is RETIRED — capture is the
+   native webhook now; see [FUB Trigger Events](/fub/trigger-events).)
 3. **The import mints (the key steps):**
    - **2.6 — the canonical request card** — `kind` from `classifyFubEvent(message, source)`,
      `source_table='fub_request'`, `source_id='fubreq|<fub.events.id>'`, ONE per inquiry, home resolved by MLS# →
-     photo + `/home` link. **The card we keep.**
-   - **2.7 — behavior backfill** — `backfillFubBehavior(fubPersonId, leadId)` mints the lead's entire FUB behavior
-     history (views/saves/searches/insights) as first-class events (idempotent).
-   - **2.8 — Myli context** — `buildLeadContext(leadId)` writes `context_built` + `fact_captured` + the dossier (§6).
+     photo + `/home` link. **The card we keep.** (`fub.events` is now stored **unconditionally** by the router's
+     `storeRecord`, so inquiries/tours always land for this step — 2026-07-10.)
+   - **2.7 — behavior + comms backfill** — `backfillFubBehavior` mints the lead's FUB behavior history
+     (views/saves/searches/insights); `backfillFubComms` bridges texts/calls/emails. Both are **watermarked
+     FORWARD-ONLY** (floored at the lead's `created_at`) — a pulled-in lead starts CLEAN, and only new comms flow
+     into the feed; old comms stay context-only under the FUB tab (2026-07-10). Idempotent.
+   - **2.8 — Myli context is NOT built on import.** `buildLeadContext` was removed from the import path (2026-06-29):
+     facts refresh **before Myli communicates** (the conversation path / a pre-outreach workflow step / on-demand
+     when the lead is opened), never on a data pull-in. See §6.
    - **3 — registration door log** — `kind='registration'`, `source_table='fub_lead_import'`, source "VIA HouseLoop".
      **This currently DUPLICATES the request card** (tracked issue I2, §7).
-- **Link + source:** `hl_leads.fub_person_id`; lead source = `Zillow.com`, platform = `follow_up_boss`.
+- **Link + source + owner:** `hl_leads.fub_person_id`; lead source = `Zillow.com`, platform = `follow_up_boss`; a
+  lead is **never ownerless** — `ensureLeadAiOwner` falls back to the platform default AI agent (Myli) when no human
+  owner and no AI agent is resolved (2026-07-10).
 
 <Warning>
 **Lead comms go through workflows ONLY (LOCKED 2026-06-26).** The legacy canned lead-facing ack in
@@ -269,8 +276,9 @@ A FUB lead's activity flows through **two pipes that do not feed each other**:
   Myli's reading context (§6).
 - **Pipe B — our event store** (`hl_lead_activity`, the **All** + **Website Activity** tabs): the lead's activity
   minted as **our own first-class events**. **Originally only tour/contact requests crossed; now behavior events
-  cross too** — backfilled + forward-minted, **scoped to leads already in HouseLoop** (the Landing, §4). Raw FUB
-  texts/calls never cross into Pipe B — they stay in Pipe A.
+  cross too** — backfilled + forward-minted, **scoped to leads already in HouseLoop** (the Landing, §4). FUB
+  texts/calls/emails now ALSO cross into Pipe B, but **FORWARD-ONLY** (CleanSlate, 2026-07-10): only comms after the
+  lead's import land in the feed + Texts/Calls/Emails sub-tabs; pre-import comms stay context-only in Pipe A.
 
 The rules (LOCKED 2026-06-26):
 | Rule | Behavior |
