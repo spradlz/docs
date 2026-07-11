@@ -466,6 +466,53 @@ layout — one card at a time.
 | **I6** | Viewed Repeatedly — photo + sentence label; compact (behaviors are NOT hero). | Compact card, `hero` off. | FeedRow / catalog |
 
 ### Changelog (newest first)
+- **2026-07-10 / 07-11 (Lee)** — **FUB lead-sync hardening sweep + the import wizard's filter/tag/assign build.**
+  A full pass making a HouseLoop lead a faithful, useful mirror of its FUB activity, plus the import-selection UI.
+  - **Feed is forward-only (CleanSlate).** `backfillFubComms` (`lib/fub/backfill-fub-comms.ts`) now FLOORS its
+    watermark at the lead's `created_at`: on a lead's first import it copies **no** pre-import comms into the feed
+    (old texts/calls/emails stay context-only under the FUB tab), while every NEW comm flows forward. Proven on
+    James Ross 50308 (delete + repull: the 3 April "Alisha/EXP" pre-import texts stayed out; post-import comms
+    rebuilt). Commit `b5ecc70e95`.
+  - **ONE FUB master switch (regression fix).** There were secretly **two**: the UI wrote `hl_settings.fub_sync_master`
+    while the fail-closed NOTIFY/PROCESS gate read `hl_fub_webhook_settings._global.enabled`. When the master was
+    rebuilt, `_global.enabled` was orphaned OFF and silently killed **every** FUB notification for hours.
+    `lib/fub/fub-sync-master.ts` now reads/writes `_global.enabled` directly — one flag the UI shows and the code
+    obeys (notify + processing + forward-sync). Can't orphan again. Commit `432da9afe0`. Lesson: a control the user
+    flips must be the SAME flag the runtime reads.
+  - **Real timestamps in the feed.** Property view/save cards were stamped from `activity_date` (a DATE → midnight),
+    so everything read "22 hours ago." `convert-fub-signal.ts` now stamps `occurredAt = scraped_at` (the real trigger
+    time, matches FUB to the minute); `PixelFeedStream.tsx` renders the **actual date + time** (Central business TZ),
+    not a relative "Xh ago". James's 1,004 existing rows corrected from the mirror. Commits `b79c6a9671`, `b269d96901`.
+  - **Ghost writer removed + mislabels cleaned.** `apps/dashboard/server/fub-webhooks.ts` `parseZillowViewNote`
+    hardcoded `activity_type='viewed'` for every Zillow home note (so a **saved** home recorded as **viewed**) and
+    wrote no `fub_event_id`. Deleted — `lib/fub/sync-lead-record.ts` is the sole, correct home-activity writer
+    (derives saved-vs-viewed, stamps `fub_event_id`). Cleaned 1,318 legacy mislabeled rows the safe way: 565 shadowed
+    dups deleted, 753 sole records corrected → `saved` (a blind delete would have lost 753 saves). Dashboard commit
+    `908251512e`; reversal `.claude/reports/ghost-mislabel-reversal-2026-07-10.json`.
+  - **Inquiries/tours flow like texts (July-7 ceiling lifted).** `fub.events` is now stored **unconditionally** in
+    the router's `storeRecord` (`fub-webhook-router.ts`) alongside texts/calls/emails — out of the
+    sync-master/existing-lead gate that was starving it — so a new inquiry always lands and step 2.6 mints the request
+    card forward.
+  - **Myli facts rewrite (55 → ~13).** `lib/ai/fact-taxonomy.ts` `canonicalSlot()` coerces every LLM slot to a
+    LOCKED per-domain vocabulary, so `(lead_id,domain,slot)` dedups and facts can't bloat with wording drift (no
+    migration needed). Raw house-view dumps (the pixel block in `lead-conversation.ts` + the FUB website-activity
+    rollup in `fub-brief.ts`) collapsed into ONE synthesized signal ("viewed 32 homes in 2 days → high urgency"), and
+    the prompt now forbids per-home facts. Verified on James: 55 junk → **13** canonical, meaningful facts, and it
+    **converges** on re-run (13 → 13, no bloat). Runner: `scripts/rebuild-lead-context.ts <leadId>`.
+  - **Never ownerless (routing).** `lib/leads/ensure-lead-owner.ts` falls a lead with no human owner AND no AI agent
+    back to the platform default AI agent (Myli); `seedRecipient` (`lib/notifications/lead-events.ts`) no longer
+    hard-pins the first admin for an ownerless lead's alert.
+  - **The import wizard is now a filter + assign + tag builder** (`components/settings/fub/FubImportWizard.tsx`,
+    `app/api/integrations/fub/import/{preview,run,count}/route.ts`, `fub-import-all.ts`, `import-fub-lead.ts`):
+    - **Assign-to a person** (Step 3): a dropdown of human `hl_users` (or Myli-AI-only, never ownerless); the choice
+      threads through to `assigned_user_id` on the minted lead.
+    - **Import the lead's own FUB tags** — the person's FUB tag list is copied onto the HouseLoop lead (find-or-create).
+    - **Filter by FUB tag** (Step 1) — a searchable, scrollable modal (`HlFormModal`) over ALL live FUB tags
+      (~1,276, most→least by people-count, read from the synced mirror `fub.people.tags`). Facet semantics: OR within
+      stages, OR within tags, **AND** across the two; a live "N match" comes from the `/count` endpoint (validated:
+      Nurture ∩ `buyer` = 6,164). Tag-matched people in an unmapped stage fall back to the source-default stage.
+    - **Apply HouseLoop tags** (Step 2) — pick from the 41 existing `hl_tags` OR type a brand-new name to create it;
+      the chosen tags apply to every imported lead (in addition to the origin tag + the person's FUB tags).
 - **2026-06-28 (late PM)** — **ROOT CAUSE FIXED + all home photos restored.** The blank-photo bug = `require()` in an
   ESM (`mirrorUrl()`) silently nulling the mirror URL on every on-demand scrape. Fixed; mirror sync now sources from
   Camp David, always runs, never shrinks, fails LOUD. Re-scraped + re-imported the 4 HouseLoop leads with home cards
