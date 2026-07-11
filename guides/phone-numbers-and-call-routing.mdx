@@ -9,10 +9,130 @@ description: "The complete SRG/HouseLoop phone system — every line and inbox, 
 **FollowUpBoss — Phone Call Activity** row; THIS page is the authority (how-to reference **and** the porting spec —
 the former PRD is folded in as Section 3). Canonical GT: `GT_HOUSELOOP_MASTER.md`
 §8b + `.claude/checkpoints/srg-twilio-numbers-2026-06-22.md`. Credentials live in the vault / Master Sheet
-(never printed here). **Phase 4 kicked off 2026-07-09** — the Phone Number Management page, routing groups,
-owned-line routing, the Legacy Twilio line, and Ana's first port are LIVE/filed (see the [build log](#2026-07-09-what-shipped-the-phase-4-kickoff-build)).
-The voice agent that *answers* these lines is a separate, later phase — see [Myli Voice](/guides/myli-voice).
+(never printed here). The voice agent that *answers* the front door is Phase D — see [Myli Voice](/guides/myli-voice).
 </Note>
+
+# ═══ WHERE WE ARE — THE ONE FRONT DOOR (status as of 2026-07-11) ═══
+
+**The architecture, locked by Zach 2026-07-11 (his words):** *"we just forward everything to ONE Twilio number
+and have Myli the voice agent filter through what the caller is looking for — 'Spradling Group, this is Myli,
+how can I help you?' — then Myli puts them in the correct disposition. Way more simple."*
+
+**913-675-9877 is THE FRONT DOOR.** Every line funnels into it: Zach's FUB ring, Company + Signs, the 39 legacy
+past-agent numbers (via FUB member ring — no per-number flip needed), and Ana's Google Voice 954-7123. Interim
+behavior: the front door rings Zach's cell for 18s; a miss rolls to OUR voicemail with recording + typed
+notification. Phase D puts Myli on the line.
+
+**Full receipts artifact (screenshots · live call legs · DB rows · the dedup fix):**
+[🚪 THE ONE FRONT DOOR — Phase A+B receipts](https://claude.ai/code/artifact/1d4dd9ba-47aa-4cca-8feb-7198a8ea9f80)
+
+## The checklist — done vs. remaining
+
+**Done (every item live-fired, receipts below + in the artifact):**
+
+- [x] **Voice webhook honors routing groups** — ring targets actually ring; the settings UI is no longer
+  cosmetic (the "Jeremy David" class of miss). *Adam · 2026-07-11*
+- [x] **Carrier-voicemail race killed** — Dial timeout 25→18s so OUR recorder wins, not Zach's cell VM.
+  Found by a live call, not a guess. *Adam · 2026-07-11*
+- [x] **Cold/unknown callers notify** — typed by line ("Front Door", "Company line"…); previously silent.
+  *Adam · 2026-07-11*
+- [x] **Zach's FUB ring → 675-9877** — verified on the FUB settings page + team roster (screenshots below).
+  *Adam via browser automation in Zach's session · 2026-07-11 ~15:30 UTC*
+- [x] **Ana's FUB seat → 675-9877** — kills the old FUB→GV→FUB loop. Roster-verified. *Adam · 2026-07-11*
+- [x] **Ben Froeschl's seat** — already on 675-9877, re-verified. *Adam · 2026-07-11*
+- [x] **End-to-end FUB funnel proof** — real call: FUB line 490-2988 → forwarded (caller ID preserved) →
+  front door → cell → our voicemail + notification. *2026-07-11 15:43 UTC*
+- [x] **Google Voice 954-7123 → 675-9877 ONLY** — 675-9877 linked + code-verified; 453-5505 and 407-403-8088
+  forwarding OFF. Live hop proven with a real call. *Adam · 2026-07-11 15:58–16:01 UTC*
+- [x] **Notification dedup ROOT-FIXED** — dedup keys on the exact call row (signal id), not display text.
+  *Adam · 2026-07-11 · commits `cb56d6a116` + `5e3dadfe0b`*
+
+**Remaining for COMPLETE:**
+
+- [ ] **Company (320-0906) + Signs (354-8600) land in our Twilio** — internal FUB→us transfer, Zach approved
+  "proceed ASAP" 2026-07-10, Twilio ticket `28049501`. Chaser if not landed EOD 07-11. On landing run the
+  landing checklist: A2P pool add → voice/SMS webhooks → front-door routing group → `hl_phone_numbers` rows →
+  test call + SMS.
+- [ ] **Ana's port re-file — Monday 2026-07-14** — 4× rejected `INVALID_ADDRESS` (22154): the GV
+  service-address change takes ~2 business days to propagate to the losing carrier. Address confirmed
+  letter-for-letter on her GV screen 2026-07-11 (2097 Valencia Blossom St, Clermont FL 34711). Re-POST via
+  the Porting API per [the playbook](#port-a-google-voice-workspace-number--twilio-the-913-954-7123-recipe-battle-tested-2026-07-09); ticket `28052075`.
+- [ ] **Phase D — Myli answers the front door** ("Spradling Group, this is Myli — how can I help you?").
+  ONE agent, ONE line, ONE greeting; reuses the in-house LiveKit voice framework with 4 HouseLoop tools
+  (capture caller · triage buyer/seller/vendor/spam → disposition · notify Zach · take message).
+  **GATED — needs Zach's design sign-off before build.** Spec home: [Myli Voice](/guides/myli-voice).
+- [ ] **CNAM registration (optional, Zach undecided)** — outbound shows "Spradling Group" instead of a number.
+
+**Caveats / watch items:**
+
+- ⚠️ **Interim:** calls hopping through Ana's GV show caller ID 954-7123 (new GV has no incoming passthrough
+  setting). Dies when the port lands.
+- ⚠️ **Watch:** Twilio sometimes re-requests the voice webhook (duplicate 0-second dial legs + double
+  recordings). Harmless — the exact-signal dedup absorbs it — but on the watch list.
+
+## Decision log
+
+| When (UTC) | Who | Decision |
+|---|---|---|
+| 2026-07-09 | Zach | Port-vs-Forward locked: we OWN numbers in our Twilio; every number joins the A2P campaign on landing (LAW). |
+| 2026-07-10 | Zach | FUB internal transfer of Company + Signs approved — "proceed ASAP" (ticket 28049501). |
+| 2026-07-11 ~14:30 | Zach | **THE ONE FRONT DOOR locked** — everything forwards to ONE Twilio number (675-9877); Myli answers in Phase D; interim it forwards to Zach's cell with capture + notification. |
+| 2026-07-11 | Zach | Routing calls: his FUB ring → 675-9877 (all-in) · Company + Signs via the front door · Ana → same door · GV 954-7123 → 675-9877. |
+| 2026-07-11 | Zach | Renamed his phone contact for 675-9877 → "Spradling Group Incoming (all calls)". |
+| 2026-07-11 14:5x–16:1x | Adam | Executed Phase A (routing code) + Phase B1 (FUB + GV clicks via browser automation); live-fired every hop; root-fixed notification dedup. |
+
+## The receipts (native)
+
+### FUB — all three seats ring the front door
+
+Executed inside Zach's real FUB session via browser automation, re-verified live at 16:1x UTC when these
+screenshots were taken:
+
+![Zach's FUB Incoming Calls setting — "Ring desktop then forward to (913) 675-9877"](/images/phone/front-door-fub-zach-ring.png)
+
+![FUB team roster — Zach Spradling, Ana Spradling, Ben Froeschl all showing (913) 675-9877](/images/phone/front-door-fub-roster.png)
+
+**End-to-end funnel proof** (test call into Zach's FUB line — the whole chain):
+
+```text
+outbound-api   913-733-3704 → 913-490-2988   (test call into the FUB line)
+inbound        913-733-3704 → 913-675-9877   ← FUB forwarded; REAL caller ID preserved
+outbound-dial  913-675-9877 → 407-403-8088   (front door rang Zach's cell 18s, no answer)
+DB row:        outcome=voicemail · recording=true · subtype=phone_call_past_agent
+NOTIFICATION:  "Missed call — Front Door (legacy pool)"  created 2026-07-11 15:44:07Z
+```
+
+### Google Voice — 954-7123 → the front door
+
+Google refuses to text a verification code to a VoIP line, so we used verify-by-phone — and **the front door
+verified itself**: Google's robot called 675-9877, the call rang Zach 18s, rolled to OUR voicemail, our system
+recorded it, and the 6-digit code was transcribed out of our own recording (Deepgram: *"again your code is
+4 7 7 4 2 5 goodbye"*).
+
+![Google Voice — Your phone number is linked](/images/phone/front-door-gv-verified.png)
+
+![Google Voice settings — 3 linked numbers including 913-675-9877, service address 2097 Valencia Blossom St Clermont FL](/images/phone/front-door-gv-linked.png)
+
+![Google Voice call forwarding — 913-453-5505 OFF, 407-403-8088 OFF, 913-675-9877 ON](/images/phone/front-door-gv-toggles.png)
+
+**Live hop proof** — a real call to 954-7123 immediately after the flip:
+
+```text
+inbound   913-954-7123 → 913-675-9877   2026-07-11 16:00:30Z · 61s  (GV → front door)
+DB row:   outcome=voicemail · recording=true · subtype=phone_call_past_agent
+```
+
+### The dedup fix (found BY these tests)
+
+The GV hop test left a voicemail but no notification — the dedup suppressed it because it keyed on the
+notification's display TITLE in a 5-minute window, so two DIFFERENT missed calls with the same title collapsed
+to one ping. Root fix (2026-07-11): `createNotification` now dedups on the **exact signal** — recipient +
+event + `entityType`/`entityId` (the `hl_calls` row id) — and the title heuristic survives only as a fallback
+for callers that don't pass a signal id yet. Distinct callers always notify; Twilio double-callbacks still
+collapse; card wording no longer affects dedup behavior. Files: `lib/notifications/create.ts` +
+`app/api/phone/webhooks/recording/route.ts`.
+
+---
 
 ## 💸 Why this exists — the money bleeding out of the inbox
 

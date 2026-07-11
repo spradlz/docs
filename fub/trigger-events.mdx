@@ -122,14 +122,34 @@ doors below (mig `0285`). Any doc/code still treating "Property Inquiry" as one 
 
 <Warning>
 **⚠️ Two known catalog quirks (documented, not bugs to "fix" silently):**
-1. **Saves/views arrive as `notesCreated`, not `eventsCreated`.** The `hl_fub_webhook_settings.fub_event` column
-   still says `eventsCreated` for `property_saved`/`property_viewed`, but Caleb's live ground truth (2026-07-09)
-   is that the standalone view/save webhooks died 2026-05-21 and FUB now logs each as a **note** — the live
-   per-event source is `notesCreated`. Reconcile the column when the toggles are re-enabled.
+1. **Saves/views arrive as `notesCreated`, not `eventsCreated`.** The standalone view/save webhooks died
+   2026-05-21 and FUB now logs each as a **note** — the live per-event source is `notesCreated`. The
+   `hl_fub_webhook_settings.fub_event` column (display-only) was corrected to `notesCreated` for
+   `property_saved`/`property_viewed` on 2026-07-11.
 2. **The four typed phone lines (rows 14–17) currently never fire** — the router dispatches only the generic
    `phone_call`; the shared `called# → hl_phone_numbers.category → subtype` resolver is IN BUILD (Zach + Caleb,
    contract locked 2026-07-09). Until it ships, all calls land on row 13.
 </Warning>
+
+## Behavioral signals MINT when Creates Lead is ON
+
+**The `Creates Lead` toggle means the same thing on every row — behavioral events included (Zach 2026-07-11).**
+A `property_saved` / `property_viewed` / `in_app_message` from a person who is **not yet** a HouseLoop lead now
+**mints a new lead when that event's `creates_lead` is ON** (and `_global` on), instead of the old notify-only
+short-circuit. Turned OFF, it stays a lead-less "heads-up" notify. Each behavioral event is independent — Zach
+turns Create-Lead on only for the ones he wants to become leads.
+
+- **What fires on a mint:** a SAVE fires the real **`saved_home_registration`** door (its seat row already lives
+  in `hl_lead_source_events`); a view/in-app has no registration door of its own so it mints via the generic
+  first-touch **`direct_registration`**. Either way `importFubLead` mints/links the `hl_leads` row (source folded
+  to its six-bucket canonical), `backfillFubBehavior` logs the save as a `save_home` feed card, `dispatchDoor`
+  writes the `hl_trigger_fire` ledger row + runs any assigned workflow, and the owner gets a **New-lead** card
+  carrying the saved home.
+- **An EXISTING lead's behavioral signal is unchanged** — activity card + the `FUB_NOTIFY[webhookType]` ping, no
+  registration door (the `NON_DOOR_WEBHOOKS` gate still holds for `created = false`).
+- **Fail-closed preserved:** minting is still gated on `_global` + the row's `creates_lead`; nothing mints
+  without an explicit toggle. Code: `lib/inngest/functions/fub-lead-import.ts` (behavioral fast-path →
+  fall-through to the mint path; `saved_home` trigger/door; `doorEligible` opens only when `created`).
 
 ## ⭐ The Capture Matrix — exposed vs masked, per event (ground truth from the live mirror, 2026-07-09)
 
