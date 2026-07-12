@@ -189,6 +189,21 @@ stable `fub_event_id` into `fub.zillow_home_activity`, then **full-replaces** th
 mirror. On demand, re-run it with **`mcp__fub-scraper__fub_scrape_lead`** or **`mcp__camp-david__fub_scrape_person`**.
 This is the front door for all new lead data — when a lead's cards look wrong, **re-running the scrape is the first move.**
 
+### The real activity time — `activity_at` (2026-07-12)
+
+Each home row carries **`activity_at timestamptz`** — the REAL moment the lead viewed/saved the home, lifted
+from FUB's browse-list `occurred` field. It exists because `activity_date` is **date-only and UTC-sliced**, so
+an evening view (e.g. Jul 11 9:24pm ET) rolled its date forward a day and the CRM feed fell back to
+**scrape-time** for the timestamp (Austin Banh's 6303 N Bellefontaine showed "Jul 12 5:46am" — the scrape — vs
+FUB's Jul 11). The CRM converter (`homeOccurredAt`) now uses `activity_at` first, so the feed + the FUB Context
+view render FUB's real time 1:1.
+
+Two gotchas: **(1)** after scp'ing a new `fub-scraper-lib.mjs`, **pm2-restart the worker** — a running worker
+holds the old lib in memory, so `activity_date` populates while `activity_at` stays NULL (the tell). **(2)** a
+lead minted BEFORE the fix keeps scrape-time `occurred_at` — `logActivity` is `DO NOTHING` on conflict and the
+heal path never touches `occurred_at` (write-once identity), so the per-lead fix is a **re-scrape + purge/re-mint**
+(`scripts/austin-remint-loop.ts`); a fleet-wide `occurred_at` heal needs Zach's sign-off.
+
 ## What it can't recover
 
 **If a FUB user sets their emails private/hidden in the FUB UI, the DOM scraper cannot recover them** — they read
@@ -205,7 +220,7 @@ public-API fetch returns `401`).
 | `fub.people` | leads — `phones`, `tags`, `content_status`, materialized `*_count` |
 | `fub.text_messages` · `fub.emails` · `fub.calls` · `fub.notes` | activity; each carries `content_status` (`hidden` → `visible` once recovered) |
 | `fub.events` | lead events (Property Inquiry / Viewed / Seller) with the clean `property` jsonb |
-| `fub.zillow_home_activity` | every home viewed/saved/shared **with the photo** — off the relay, scraper-mirrored |
+| `fub.zillow_home_activity` | every home viewed/saved/shared **with the photo** + **`activity_at`** (real view time) — off the relay, scraper-mirrored |
 | `fub.saved_searches` | saved searches (scraper-only) |
 | `fub.rehydration_log` | the **backfill** queue (status pending/rehydrated) — 49,059 rehydrated · 0 pending |
 | `fub.rehydration_queue` | the **retired** old "real-time" queue — 49,231 pending graveyard, nothing draining it (see F2) |
