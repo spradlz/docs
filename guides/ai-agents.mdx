@@ -1,0 +1,90 @@
+---
+title: "AI Agents"
+description: "The AI roster (/ai/agents): fixed business cards + the Roles tab, and the Agent Detail page (Overview · Persona · Capabilities · Connections · Assignments). Also the SSOT for the roles/member identity model and task & appointment assignment — folded in from the two retired role docs."
+---
+
+<Info>
+**Two clicks to anything:** nav → AI Agents → card → tab. UI spec:
+`apps/houseloop-crm/docs/wireframes/ai-section-v1-LOCKED.html` screens ③+④ (v15, Zach-locked 2026-07-13).
+</Info>
+
+## The roster (`/ai/agents`)
+
+**THE FIXED CARD LAW:** every agent card is the same 300px box, forever. A blue-tint top band (64px
+headshot + status dot · name with ellipsis · role uppercase), then **four fixed stat slots — always the
+same four, "—" when empty**: Leads assigned · Actions 7d · Capabilities n/26 · Spend MTD. One action:
+**Open Agent** — the card IS the door. No pill, long name, or extra capability can ever reflow a card.
+Data: `/api/ai-follow-up/agent-cards` (leads, 7-day actions, MTD tokens priced at the agent's model rate).
+
+**Roles ride as the second tab** of the same blue header (no second blue header): the `hl_role` table
+straight up — persona · `tools` capability gates · docs · model, with "worn by" from `hl_member_role`.
+Reuses `RolesTable` + `AddRoleModal` verbatim.
+
+## Agent Detail (`/ai/agents/[id]`)
+
+Header = identity (name · role · line · email) + the agent's **own on/off switch** (`hl_users.is_active`)
+— pausing one agent never touches the masters. Five tabs:
+
+1. **Overview** — the week at a glance (`StatStrip`: Actions 7d · Texts · Calls answered · Appts set · Spend MTD).
+2. **Persona** — the composed prompt the agent actually hears; each layer edits at its source
+   (role shell → per-agent override). Reuses `AgentRolePanel`.
+3. **Capabilities** — the 26 gates from `CAPABILITY_TREE`, role-inherited with per-agent overrides
+   highlighted (`AgentRolePanel` permissions tab).
+4. **Connections** — the accounts and lines the agent operates (`MemberConnections`, reused verbatim).
+5. **Assignments** — ONE answer to "what is this agent responsible for": Leads (count + link) ·
+   Voice agent (from real inbox seats — the calls channel) · Inbox manager (per-inbox seats, managed on
+   each inbox) · Pond and Database Manager (honest "Not set up" until C5/C6 ship). Flip a seat here or on
+   the service's page — SAME seat, one truth.
+
+## Roles & team-member identity (the model — folded from the retired doc)
+
+**Roles are reusable system-level shells; members hold MULTIPLE roles.** A role (`hl_role`) carries a
+`persona`, a `tools` capability JSON, a Claude `model`, `workflow_ids`, reference `docs`, and flags
+(`is_system`, `grants_tc`). Seeded: **AI Clone** (ai, system) · **AI ISA** (ai, system — Myli) ·
+**Real Estate Agent** (human) · **Transaction Coordinator** (human, `grants_tc`).
+
+Roles attach many-to-many via **`hl_member_role`**, and configuration **overrides per member on the
+join row** (`persona`, `voice_persona`, `tools`, `docs`, `workflow_ids`) — the shell is the reusable
+default; the join is where one member diverges. The **AI Clone role is configured at assign-time**: the
+clone's tuning lives on that member's override, so every human's clone is independently tuned off one shell.
+
+**Clone vs Myli — two distinct AI actors:**
+
+| | **AI Clone** | **Myli** |
+|---|---|---|
+| `clone_of_user_id` | → a human | NULL (standalone) |
+| Comms identity | none — sends **as the human** | own email / phone / iMessage |
+| Lane | **LEFT** (with the human) | **RIGHT** |
+| Bound to a lead via | `ai_clone_id` + `ai_mode_enabled` | `assigned_ai_agent_id` |
+| Service seats | **never** (clones work their human's leads + inbox backup only) | can hold seats |
+
+A clone acts **as** its human (`COALESCE(clone_of_user_id, …)` in `lib/ai/lead-conversation.ts`) — a
+human's work never routes to Myli.
+
+## Task & appointment assignment (folded from the retired doc)
+
+Leads, tasks, and appointments share **one grouped polymorphic "Assign to"** control — three sections
+with hard dividers: **Agents** (humans holding Real Estate Agent) · **AI Agents** (Myli + each human's
+clone) · **Transaction Coordinators**. The assignee is ONE `hl_users` id; the **lane is derived** from
+`type` + `clone_of_user_id`: human → LEFT lane; clone → acts as its human, LEFT lane + mirrors into
+Next Actions; Myli → RIGHT lane + Next Actions; TC → the TC section.
+
+**The AI-Clone task-level override:** a task assigned directly to a clone fires the clone **without**
+the global AI toggle — two independent paths (global AI mode = everything eligible; a single
+clone-assigned task = just that item). Only AI-capable items are eligible (**text · email ·
+follow-up**); a physical showing can never be handed to AI. Clone-owned items render faint in Tasks &
+Appointments and lit in Next Actions.
+
+<Note>
+**Status.** The grouped 3-section picker and task-level clone delegation remain the intended build
+(the assignee control is human-only today). The roster, Agent Detail, roles model, and per-member
+overrides above are live.
+</Note>
+
+## Related
+
+- [AI Cockpit](/guides/ai-cockpit) — the control room fronting the roster
+- [AI Clone](/guides/ai-clone) — what the clone does on a lead
+- [My Team](/crm/team-settings-my-team) — the human-team admin surface
+- [Inboxes](/guides/inboxes) — where inbox-manager seats are set
+- Internal PRD: `GT/GT - ACTIVE/GT_HOUSELOOP_LEAD_DETAIL_PARITY_AND_ASSIGNMENT_PRD.md`
