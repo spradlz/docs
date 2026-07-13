@@ -1,101 +1,70 @@
 ---
 title: "My Team"
-description: "Manage who has access to the HouseLoop CRM — human teammates and AI agents, their reusable roles, per-task AI models, and the global AI failover engine."
+description: "One team — humans and AI agents as business cards in department bands. The flat member page (Profile · Permissions · Connections · Roles · AI Clone), the clone as a built-in feature, and roles as job hats in one library."
 ---
 
 **In the app:** CRM sidebar → **Team Settings** → **My Team** — [`/settings/team`](https://crm.houseloop.ai/settings/team)
 
-## What it does
+<Info>
+**Rebuilt 2026-07-13 (C7, Zach-locked wireframe `my-team-v1-LOCKED.html`).** FUB-simple: there is no
+"Users" concept — it's My Team, and everyone works here, humans AND AI. My Team is the **HR view**
+(who they are, access, connections); the [AI section](/guides/ai-agents) is the **ops view** (what the
+AI ones are doing). Same people, two lenses, zero duplicate config.
+</Info>
 
-My Team is the CRM's team-administration surface. On one page it lists every active team member (humans and AI agents), the reusable **roles** assigned to them, the **AI model** chosen for each AI task, and the master **AI failover** switch. From here an admin adds and removes members, assigns roles, opens a member's full profile, emulates a member, and configures which Claude model runs each AI task.
+## The roster — business cards in department bands
 
-The page is composed of four stacked sections:
+ONE blue header drives the page: **Members | Roles** tabs. The Members tab renders every non-clone member
+as a **fixed business card** (the same `FixedTeamCard` the AI roster uses — 300px, 64px headshot + status
+dot, four fixed slots: **Leads · Connections dots ✉📅📞💬 · AI Clone ON/OFF · Access**, one button).
+Cards group into **department bands** derived from the roles people wear (Real Estate Agents · Showing
+Partners · AI Agents · …); the "Group by" control flips to a flat Everyone view. Human cards open the
+member page; AI cards open the agent's own `/ai/agents/[id]` page. The Add Member ghost opens the one
+create modal (`InviteMemberModal` — human or AI agent). Global AI policy (`AiFailoverPolicyCard`,
+`AiModelsTable`) stays stacked below — policy, not roster.
 
-1. **AI Failover Engine** — a single card with the global on/off toggle for the warm-handoff + SLA failover engine (ships **off**).
-2. **Members** — the team table, with an **Add Member** button and per-row actions.
-3. **Roles** — the reusable role library, with an **Add Role** button.
-4. **AI Models** — one row per AI task with a model picker, token usage, and estimated cost.
+## The member page — one flat template (the nesting kill)
 
-A secondary **Audit Log** link in the page header points to `/settings/audit`.
+`/settings/team/agents/[id]` — humans only (an AI agent's id redirects to its `/ai/agents/[id]` page:
+one surface per actor). ONE flat row of tabs, deep-linkable with `?tab=`:
 
-### Members
+1. **Profile** — name, email, phone, time zone (debounced auto-save). `/settings/profile` lands here.
+2. **Permissions** — the Access select (owner/admin/member) with the can't-edit-your-own-access guard.
+3. **Connections** — the star: **Email · Google Calendar · Phone · Text**, four flat sections
+   (`MemberConnections`; Phone = the Twilio line + AI-voice line policy; Text = default channel +
+   iMessage handle). "Configure email, text, phone" answered on one screen — for AI members too.
+4. **Roles** — the member's human **job hats** (chips + one add-role picker). AI roles never appear on
+   a human here.
+5. **AI Clone** — see below.
 
-Each member row shows an avatar, name/email, **Access** pill (Owner / Admin / Member), **Type** pill (Human / AI Agent), assigned **Roles**, a **Contacts** count (leads assigned to them), and live connection-status dots for **Email** (Gmail sync), **Calendar**, **Dialer** (off / pending / on), and **iMessage**. AI clones are hidden here — a clone is a backing identity bound to a human (`clone_of_user_id`) and is managed only from that human's profile, never as its own row.
+The header carries the Active toggle and the **Actions** kebab (Emulate User · Delete Member — the
+dependency-aware delete with the reassign flow, now shared via `MemberDeleteFlow`).
 
-Per-row actions (⋮ menu):
+## The AI clone — built in, not a role
 
-- **Configure** — opens the member's unified profile editor at `/settings/team/agents/[id]`.
-- **Emulate User** — sets an emulation session cookie so an admin can view the CRM as that member (admins only; cannot emulate yourself).
-- **Delete** — soft-deactivates the member (dependency-aware; see below).
+**Every human member has an AI clone built in** — off by default, starting from the shared default
+persona. You never "add" a clone and it never appears in a role list. The member page's AI Clone tab
+(`CloneSection`) is the entire surface: **one master toggle** (first enable mints the clone row and seats
+the plumbing silently, all idempotent; OFF = disarm only — nothing is ever deleted), the **takeover
+minutes**, and **"Configure the clone →"** which opens the clone's own agent page.
 
-Members can be bulk-selected for deletion. **Add Member** opens a modal to create a Human or AI Agent; both sign in via Google (Workspace accounts in the DWD allowlist). AI agents also capture a phone number and time zone.
+<Note>
+**One truth under the hood:** a clone's persona/capabilities live on its HUMAN's `hl_member_role` rows —
+the exact rows the runtime reads (`loadCloneContext`). The clone's `/ai/agents/[id]` page reads and
+writes *through* the human (`clone_of_user_id`), and the roster card API resolves the same way, so what
+you see is always what runs.
+</Note>
 
-**Dependency-aware delete.** Deleting a member is a soft-deactivate (`is_active = false`) that preserves history. Two guards run first:
+## Roles — job hats, one library
 
-- **Last-human lock** — you cannot delete the only active human member.
-- **Reassign modal** — if the member is wired into routing (lead-source handoff / default owner / event-rule owner), owns active leads, or holds a phone number, the delete is blocked until you pick another active human to take over. On reassign, routing rules and leads move to that person, the phone number is released to the pool, then the member (and any AI clone) is deactivated. Re-adding the same email later revives the original row and its clone.
+The **Roles tab** is the one role library (AI and human kinds in one table). Roles are JOB HATS — one
+member can wear several (Myli: AI ISA today, Receptionist and Content Manager as those services ship).
+"AI Clone" in the library is the built-in default template every member's clone starts from — edit it to
+change the default; it is not assignable. Role shells (persona · capability gates · docs · model) edit at
+`/settings/team/roles/[id]`; per-member overrides edit on the member/agent pages.
 
-### Roles
+## Related
 
-Roles are **reusable, system-level shells** — a persona, tool/capability permissions, workflows, and reference docs configured once and assigned to one or more members. Each role has a `kind` (`ai` or `human`), an optional Claude `model`, an `is_system` flag (built-in roles cannot be deleted), a `grants_tc` flag (members with it get the Agent⇄TC view toggle), and an assigned-agent count. Rows open the role editor at `/settings/team/roles/[id]`; roles support per-row and bulk delete.
-
-The four seeded roles:
-
-| Role | `kind` | Notes |
-|------|--------|-------|
-| **AI Clone** | ai | `is_system`. A member's autonomous double that acts *as* that human. |
-| **AI ISA** | ai | `is_system`. Myli's role — the standalone inside-sales AI. |
-| **Real Estate Agent** | human | The human agent shell. |
-| **Transaction Coordinator** | human | `grants_tc` — holders get the Agent⇄TC view toggle. |
-
-**A member holds MULTIPLE roles.** Roles attach many-to-many via `hl_member_role`, so one member can hold, e.g., **Real Estate Agent + AI Clone** at once. Config can be **overridden per member** on the join row (`persona` / `tools` / `docs` / `workflow_ids`) — the shell is the shared default; the join is where a specific member diverges. See [Roles & Team-Member Identity](/guides/roles-and-team-member-identity).
-
-### AI Models
-
-One row per AI **task** (e.g. conversation, extraction). Each row has a model dropdown, summed input/output tokens, run count, and estimated cost (tokens × the model's $/M rate). A rate key and an all-time running total sit below the table. Changing a model persists the task→model mapping.
-
-## What you configure
-
-| Setting | Where | Effect |
-|---|---|---|
-| Add member (Human / AI Agent) | **Add Member** modal | Creates an `hl_users` row; both types sign in via Google OAuth |
-| Member type | Add Member modal / profile | `human` or `ai_agent`; AI agents also get phone + time zone |
-| Access level | Add Member modal / profile | Admin (manage team, billing, all settings) or Member |
-| Role assignment | Member profile → roles | Rewrites the member↔role join (`hl_member_role`) |
-| Delete / reassign member | Row ⋮ → Delete | Soft-deactivate with last-human lock + routing/lead/phone reassignment |
-| Emulate member | Row ⋮ → Emulate User | Admin-only view-as session |
-| Add / edit / delete role | Roles section + `/settings/team/roles/[id]` | Reusable role card (persona, tools, workflows, docs, model) |
-| AI model per task | AI Models table | Sets which Claude model runs each AI task |
-| AI failover on/off + windows | AI Failover Engine card | Global toggle + ack-window (minutes) and clone-window (hours) |
-
-## Data source
-
-**APIs (all under `apps/houseloop-crm/app/api/`):**
-
-- `team/users` — `GET` (list active members + roles + connection status + team stats), `POST` (create/revive member)
-- `team/users/[id]` — `GET` (full profile), `PATCH` (identity + role assignment), `DELETE` (dependency-aware soft-delete; `?check=1` dry-run, `?reassign_to=<id>` to reassign)
-- `team/users/[id]/emulate` — `POST` (admin view-as session cookie)
-- `team/roles` — `GET` (role library + agent counts), `POST` (create role)
-- `team/roles/[id]` — role read/update/delete
-- `team/ai-models` — `GET` (per-task model + token usage + cost), `PATCH` (set task model)
-- `settings/agent-sla-policy` — `GET`/`PUT` (AI failover policy for the failover card)
-
-**Tables (CRM Postgres, `HL_CRM_DATABASE_URL`):**
-
-- `hl_users` — team members (human + AI agents + clones via `clone_of_user_id`); columns include `role`, `type`, `phone`, `timezone`, `is_active`
-- `hl_role` — reusable role cards (persona, tools, workflow_ids, docs, kind, model, is_system, grants_tc)
-- `hl_member_role` — member↔role assignment join
-- `hl_leads` — source of each member's Contacts count (`assigned_user_id`) and reassignment on delete
-- `hl_lead_sources`, `hl_lead_source_events` — routing rules scanned/reassigned on member delete (`handoff_user_id`, `default_assigned_user_id`)
-- `hl_dialer_assignments` — dialer/phone status and the number released to the pool on reassignment
-- `hl_oauth_connections` — Gmail (Google) connection → Email status
-- `hl_calendar_connections` — calendar sync → Calendar status
-- `hl_imessage_assignments` — BlueBubbles handle → iMessage status
-- `hl_settings` — per-task AI model map (`key = 'ai_models'`) and the failover policy
-- `hl_lead_activity` — the AI-cost source: token usage is summed from the AI slice (`actor_role = 'ai_agent'`) per the "AI cost lives on the catalog" law; the retired `hl_ai_actions` table is not used
-
-Model ids, labels, pricing, and the task→model catalog live in `apps/houseloop-crm/lib/ai/model-config.ts` (`AI_TASKS`, `MODELS`, `MODEL_PRICING`).
-
-## How it fits
-
-My Team is the identity + access + AI-configuration hub the rest of the CRM reads from. Membership and roles drive lead ownership, routing/handoff, and which members get the Agent⇄TC view. The per-user connection columns reflect the channel integrations wired up elsewhere (Gmail via `/api/email`, phone via `/api/phone/dialers`, iMessage via `/api/team/imessage`) — this page only owns identity and role assignment, not the channel connections themselves. The AI Models table and the AI Failover Engine card govern how the CRM's AI agents and clones run: which model each task uses, and whether an unresponsive agent's clone auto-steps in to keep a lead warm.
+- [AI Agents](/guides/ai-agents) — the ops roster + agent detail
+- [AI Cockpit](/guides/ai-cockpit) — the AI control room
+- [Inboxes](/guides/inboxes) — where inbox-manager seats live
