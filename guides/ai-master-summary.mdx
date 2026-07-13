@@ -1,0 +1,108 @@
+---
+title: "⭐ AI — Master Summary & Build"
+description: "The master summary of HouseLoop's AI: the target of consolidating ALL AI into ONE first-class top-level AI section (Overview + agent business cards + Agent/Voice/Inbox/Pond/Database-Manager surfaces + Roles), the data model behind it, and the top-to-bottom build checklist with checkpoints. The front page of the AI section."
+---
+
+<Info>
+**Start here for anything AI.** This is the single master summary + live build tracker for HouseLoop's AI. Owner:
+**Adam, end-to-end**. Governing plan: `~/.claude/plans/warm-petting-wigderson.md` (approved by Zach 2026-07-13).
+Work top-down, one checkpoint at a time; nothing is "done" until Zach clicks the live surface.
+</Info>
+
+## The vision
+Every AI surface and every AI configuration in **ONE first-class top-level `AI` section** — nothing more than 1–2
+clicks deep. Today AI is sprawled across 7+ nav locations and its config is buried ~5 levels deep
+(Settings → My Team → agent → Roles → Capabilities), with Myli / AI Clone / AI ISA living under **My Team → Members**
+(the wrong home). Competitor **SureSend** ships the consolidated version (an AI Database Manager + an AI ISA). We're
+pulling all of ours into one place.
+
+## What already exists (why we move fast)
+The **data spine is already built** — this is mostly surfacing what's buried, not a rebuild:
+- `hl_users.type='ai_agent'` (Myli, AI Clone, AI ISA) + `clone_of_user_id`
+- `hl_role` — the reusable role/shell: `persona`, `voice_persona`, `tools` (JSONB capability gates), `docs`, `model`, `kind`
+- `hl_member_role` — per-agent overrides
+- `CAPABILITY_TREE` (`lib/agent-runtime/capabilities.ts`) — 6 categories, 26 capabilities (Comms · Search Homes · Appointments · Tasks · CRM · **Calls & Voice** = voice_inbound / capture_caller / set_callback / take_message / flag_spam)
+- Leads carry `ai_agent_user_id` / `ai_role_id` / `ai_clone_id`
+
+**Net-new (the only ground-up builds):** AI Pond, AI Inbox, AI Database Manager.
+
+## The target information architecture — one top-level `AI` section
+- **AI Overview** (`/ai`, evolves today's `/ai-follow-up`): vertical agent **business cards** (Myli · AI Clone · AI
+  ISA — headshot, name, phone, email, one-click Persona / Capabilities / Connections / Assignments) + master toggles +
+  performance KPIs + the AI-Services cards.
+- **AI Services** (each its own first-class page): **Agent · Voice · Inbox · Pond · Database Manager**.
+- **AI Roles**: reusable role/capability configs (today `hl_role` has no nav entry).
+- Myli / AI Clone / AI ISA move **out of My Team → Members** into the AI section.
+
+### The two flavors of AI Voice
+1. **Lead-agent voice** — an AI agent on a *lead* answers → texts back from the **lead's/agent's line**.
+2. **Company-inbox voice** — company numbers (GMB **913-320-0906**, sign, past-agent) route into an **AI Inbox** →
+   per-inbox prompt · lead-source attributed by the dialed number · texts back through the **company inbox line** ·
+   creates-lead toggle · per-bucket spam · caller-ID updates an existing lead instead of duping.
+
+### FROM → TO (move map)
+| Today (scattered) | Goes to |
+|---|---|
+| `/ai-follow-up` | **AI → Overview** |
+| `/ai-cost` | **AI → Cost** |
+| `/settings/team/agents/[id]` (5 deep) | **AI → Agent** (first-class) |
+| `/settings/team/roles/[id]` (no nav) | **AI → Roles** |
+| `/settings/context-blocks` | **AI → Context Blocks** |
+| `/settings/voice-recording` + planned AI Voice | **AI → Voice** |
+| Myli / Clone / ISA under My Team → Members | **AI → Overview** agent cards |
+
+## The build — checkpoints (top to bottom)
+Status: `[ ]` not started · `[~]` in progress · `[x]` shipped + Zach-verified live.
+
+### C1 — IA shell + docs reorg (start here)
+- [ ] Spec the exact nav-row moves (`Sidebar.tsx`) + docs re-grouping via sub-agents
+- [ ] Add the top-level `AI` nav group to `apps/houseloop-crm/app/components/Sidebar/Sidebar.tsx`
+- [ ] Move/route the AI pages under it: Overview `/ai`, Agent, Roles, Voice, Cost `/ai-cost`, Context Blocks (+ redirects)
+- [ ] Reorganize the Mintlify docs into a matching top-level **AI** group (app-nav-first → docs-mirror; pure re-group = no redirects; preserve existing redirect chains into `ai-clone` / `ai-context-blocks` / `myli-system`)
+- [ ] Ship (git push → Railway) + publish docs + **Zach clicks the live nav**
+
+### C2 — Agent business cards + un-bury the config
+- [ ] Build the vertical agent business cards on AI Overview (reads `hl_users` + `hl_role`)
+- [ ] One-click modals: Persona/Prompt · Capabilities (the 26 toggles) · Connections · Assignments
+- [ ] Reuse `hl_role` / `hl_member_role` / `CAPABILITY_TREE` — mostly UI over the existing spine
+- [ ] Ship + Zach-verify
+
+### C3 — AI Voice surface + CRM lead integration
+- [ ] Build the locked wireframe (`docs/wireframes/ai-voice-page-v1-LOCKED.html`) — reuse `AiVoiceMasterToggle`, `StatStrip`, `MenuTable`, `CallsStream`
+- [ ] Wire lead-agent-voice vs company-inbox-voice
+- [ ] Implement the wrap-up POST from `apps/myli-openai-voice` → `/api/phone/myli/wrapup`
+- [ ] Add create-`hl_calls`-row-if-missing + a TEST flag (harness calls never spawn leads/notifications)
+- [ ] Add an AI Voice lead source + dialed-line→source branch + text-back-from-the-dialed-line
+- [ ] Ship + Zach-verify
+
+### C4 — AI Inbox (net-new)
+- [ ] Per-inbox agent (calls + text + email); company-number→inbox mapping; per-source attribution; spam buckets
+- [ ] Ship + Zach-verify
+
+### C5 — AI Pond (net-new)
+- [ ] Unassigned-lead pool + the pond agent that works owner-less leads
+- [ ] Ship + Zach-verify
+
+### C6 — AI Database Manager (net-new)
+- [ ] DB-audit agent (stages / tasks / appointments / dossiers / classification kept in order)
+- [ ] Ship + Zach-verify
+
+### Parallel thread — Myli voice tuning + eval harness (feeds C3)
+- [x] Myli live on OpenAI Realtime over Twilio SIP (test # 913-365-2648, voice `marin`, semantic_vad medium)
+- [x] Per-call transcript capture → `apps/myli-openai-voice/transcripts/<callId>.json`
+- [x] Cold-voice persona retune (Ana handoff, bucket-specific discovery, no hallucination, one question at a time)
+- [ ] Build the eval harness (agent-vs-agent audio sim, 6 personas × tiers, LLM-judge scoring) — model on `tools/myli-cost-harness`
+- [ ] Tune each bucket to passing scores → Zach sign-off → flip the front door
+
+## Number ports (feed C3/C4)
+- **913-320-0906** landed (SMS-capable, `category='company'` = the GMB line) → add to the A2P 10DLC campaign to send.
+- **913-354-8600** did not transfer → reply on FUB thread **1514546** to complete; the port-watcher catches it.
+
+## Already shipped (receipts)
+- **Double-seat `hl_calls` fix** (commit `248eb1442c`) — retell-webhook adopts the Twilio front-door row; wrapup resolves by `call_sid` OR `retell_call_id`.
+- **Resend webhook re-enabled** — the website webhook was disabled since 7/7 (wrong signing secret → 401s); corrected on Railway, verified a signed event → 200, re-enabled.
+
+## Related AI docs (this section)
+The AI Follow-Up section holds the deep docs this summary points at: AI clone, roles & identity, task/appointment
+assignment, care-team routing, the Connecting-With-People framework, closed-loop follow-up, and the API gap audit.
+As checkpoints ship, their surfaces (Agent cards, Voice, Inbox, Pond, Database Manager) each get a doc here.
