@@ -1,0 +1,72 @@
+---
+title: "Inboxes"
+description: "The mailbox layer: phone numbers and email addresses (DOORS) forward into an INBOX; the inbox owns all behavior — the ring rule, the manager (a human or an AI, per channel), spam, and the situational prompt layer. One unified stream per inbox, FUB-style."
+---
+
+<Info>
+**The law:** the inbox ANSWERS it · the DOOR sources it · the LEAD SOURCE works it · the WORKFLOW acts on it.
+Architecture: `GT/GT - ACTIVE/GT_HOUSELOOP_SIGNALS_TO_WORKFLOWS_MASTER_FLOW.md` (Zach-locked 2026-07-13).
+UI spec: `apps/houseloop-crm/docs/wireframes/ai-section-v1-LOCKED.html` §6.
+</Info>
+
+## The model
+
+- **Numbers are a dumb directory** ([Numbers](/guides/phone-numbers-and-call-routing)): a number is four facts —
+  what it is · its label · who carries it · **which inbox it feeds**. No behavior lives on a number.
+- **The inbox owns ALL behavior.** Doors (numbers + email addresses) forward in; one unified stream comes out
+  (texts, calls, email — mixed, time-ordered, the Follow Up Boss My/Company/Past-Agents pattern).
+- **Two kinds, and only two:**
+  - **Personal** — created automatically, one per team member (humans AND AI agents): their line + their email.
+  - **Shared** — created on purpose: Company · Past Agents · Vendor Mail · (any new function, e.g. Transaction
+    Coordination).
+- **The ring rule** — one readable chain per inbox: ① the manager answers (if it's an AI with the Calls channel
+  on) → ② ring humans, in order → ③ voicemail + recording → card on the lead. An **AI backup** is just a
+  ring-chain step on a human's inbox ("Rings Ana → no answer: Myli picks up") — never a manager swap.
+- **The manager** — a human team (they just work the stream) or an AI agent, **per channel** (calls / texts /
+  email each have their own switch). An inbox is fully functional with zero AI.
+- **The laws (not settings):** replies go out the same door they came in · caller/sender-ID matches an existing
+  lead → update their record, never a dupe.
+- **The prompt layer** — the inbox holds ONLY the situational layer ("callers here found us on Google…"). The
+  agent's personality lives on their agent card; the voice engine + phone doctrine live on the Voice page.
+
+## The pages
+
+| Page | Route | What you do there |
+|---|---|---|
+| Inboxes list | `/settings/inboxes` | Personal + shared bands · doors · manager · ring rule · status. `+ New Inbox` creates a shared one. |
+| Inbox detail | `/settings/inboxes/[id]` | The mailbox (doors) · the ring rule chain · the manager + per-channel AI switches · the laws · spam · the prompt layer · the trigger-events lens · **the stream**. |
+| Numbers | `/settings/phone-numbers` | The directory. `Feeds inbox` is the one live control per number; unrouted numbers surface loudly. |
+
+## Data model (mig `0390_inboxes.sql`)
+
+- **`hl_inboxes`** — `kind` (personal/shared) · `owner_user_id` (personal) · `manager_kind` (human/ai) +
+  `manager_user_id` · `ai_channels` jsonb `{calls,texts,email}` · `ring_chain` jsonb (ordered `user` steps;
+  voicemail is the implicit terminal) · `spam_mode` · `prompt_layer` · `is_active`.
+- **Doors:** `hl_phone_numbers.inbox_id` (a number lives in exactly ONE inbox) + `hl_inbox_email_doors`
+  (addresses, e.g. Vendor Mail = `notifications@houseloop.ai`).
+- **Backfill (fail-closed):** personal inboxes auto-provisioned per active team member (AI agents self-manage
+  their own identity lines); shared Company / Past Agents / Vendor Mail seeded **human-managed with every AI
+  channel OFF** — no migration ever turns AI answering on. Doors routed by the old category taxonomy.
+- **Deprecated in place (not dropped):** `hl_routing_groups`, `hl_phone_numbers.answer_mode` /
+  `.routing_group_id` — the voice webhook still reads them until the ring-chain runtime cutover ships.
+
+## API
+
+- `GET /api/inboxes` · `POST /api/inboxes` (shared only) · `GET/PATCH /api/inboxes/[id]`
+  (name, manager, per-channel flags — merged jsonb so one flip can't clobber another —, ring_chain, spam,
+  prompt_layer, is_active). Loader: `lib/inboxes/load.ts`.
+- `GET /api/inboxes/[id]/stream` — the unified feed, read-only over `hl_messages` + `hl_calls`, filtered by the
+  inbox's doors (last-10 phone match / address match).
+- `PUT /api/phone-numbers` accepts `inbox_id` (the directory's Feeds-inbox control).
+
+## Shipped vs in flight
+
+- ✅ Model + migration + both pages + the stream + the directory gut (2026-07-13).
+- 🔨 **Ring-chain runtime** — the voice webhook executing ①→②→③ off the inbox (today it still honors the
+  deprecated `answer_mode`); ships as the next gate after design sign-off. Calls also re-check the AI Voice
+  master + the agent's `voice_inbound` capability live (3-layer gate, [AI Voice](/guides/ai-voice)).
+- 🔨 **Creates-leads** — proxies the `creates_lead` seat flags in Lead Flow's `hl_lead_source_events`
+  (the identity gate; [Trigger Events](/guides/trigger-events)). Lands with the catalog's Inbox section.
+- 🔨 New operational door events (`voicemail_left` · `spam_flagged` · `ai_answered_call` · `call_missed`) —
+  register via `DOOR_EVENT_KEYS` with the runtime cutover; `call_received` / `text_received` / `email_received`
+  are already live doors.
