@@ -1,0 +1,87 @@
+---
+title: "Design-System Migration Log"
+description: "A timestamped, page-by-page audit of the CRM-wide design-system convergence — every surface moved onto the canonical brand-blue-header / StatStrip / MenuTable / SettingSection system, what was rebuilt, and the verification discipline that keeps it from drifting back."
+---
+
+## What this is
+
+A running record of the design-system convergence: the effort to move **every** HouseLoop CRM surface onto the
+closed component set defined in [Overview](/design/overview) — a brand-blue header on every block, `StatStrip` for
+KPIs, `MenuTable`/`SettingsTable` for tabbed/plain tables, `SettingSection` for config, nothing floating, tokens
+only. Entries are newest-first.
+
+<Note>
+**The verification discipline (locked 2026-07-13).** Three gates, in order, every page — **eslint → `tsc --noEmit` →
+actually load the page and look at it.** eslint proves tokens are clean; `tsc` catches undefined-name/prop errors
+eslint can't see; but only a **real screenshot** proves the page has a brand-blue header and the right sections. A
+page can pass eslint and still be structurally wrong (no blue header, floating group labels) — that class of bug is
+invisible to the linter and only a human (or a rendered screenshot) catches it.
+</Note>
+
+## 2026-07-13 — CRM-wide convergence
+
+### Leads page — full rebuild to a locked wireframe
+
+The leads header was rebuilt from a **Zach-locked HTML wireframe** (`docs/wireframes/leads-header-LOCKED-2026-07-13.html`),
+combining the best of Follow Up Boss and Sierra Interactive, per `UI_ITERATION_HTML_FIRST` (build from the pixels,
+verify by overlay). Final layout, top to bottom:
+
+1. **Blue `MenuTable` header** — preset smart-filter pills (saved filters render as pills) + **Advanced Search**
+   pinned far-right on the pill row.
+2. **Advanced Search builder** (white, drops under the pills) — build one criterion at a time: **Field → Operator
+   (Equals / Does Not Equal) → Value (multi-select chips)** → **Add Filter** commits it as a full-width gray band that
+   filters the table → stack bands → **Save as Smart Filter** (name + visibility) → it becomes a pill up top.
+3. **One toolbar bar above the table** — left: **"N of M people"** count (fixed the old "17 of 7" bug) + bulk-action
+   icons; right: **All Statuses · All Agents · Sort · Columns** on one line.
+4. The `DataTable`.
+
+All existing filter-engine / smart-filter / bulk / deep-link logic was reused verbatim — this was a render re-zone,
+not a feature rebuild.
+
+### Trigger Events
+
+- Killed the **floating platform super-heading** ("🌐 HouseLoop.ai Website" / "Follow Up Boss") — the platform name
+  now lives **inside** the brand-blue `SectionBand` title. *(Rule reinforced: a group/platform heading goes in the
+  blue header, never as floating text above it — this passes eslint but is a violation.)*
+- Section header shows the **platform name only** (dropped the source suffix + redundant "Trigger Events").
+- Removed the **Custom Sections / Webinars** group + its floating "Add trigger event to …" footer + the "New Section"
+  button.
+
+### Stages, Relationships
+
+These **passed eslint but were not structurally compliant** — no brand-blue header, floating KPI cards. Rebuilt to
+the tags-page standard: `StageMetricsRow` → `StatStrip`; the shared `StagesPage` table welded under a `MenuTable`
+(stages: entity tabs + pipeline pills) / `SettingsTable` (relationships) blue header. Also fixed a **`NaN%`**
+avg-conversion bug (Postgres returns `numeric` as a string → the average string-concatenated).
+
+### Phone provider, SendBlue/iMessage
+
+- Green-bordered **"Connected / Online" status boxes** → a `SettingSection` blue header + tokenized status pill
+  (a colored border around a box is a violation; green stays for genuine success only).
+- SendBlue floating top tab-strip → `MenuTable`.
+- Shared `DialerNumbersTable` / `ImessageHandlesTable` → `SettingsTable` blue headers (respecting their `bare`/
+  `headless` prop so they stay welded on member-profile pages).
+
+### Settings, TC, standalone — redesigned & screenshot-verified
+
+`calendar-sync`, `integrations/website`, `settings/content/calendar`, `settings/audit`, `website/seo/faq`, the
+standalone Run Log, `tc/configure/tasks`, the 6 TC "Coming soon" stub pages (one shared `TcStub` fix), Systems
+Health, the Seller-Report KPI strip, and the mobile `/m` surface — all moved to canonical sections and verified live.
+
+### SEO Overview — server→client crash fix
+
+`/settings/website/seo` threw a server-side exception because a **server component passed lucide icon functions to a
+`'use client'` StatStrip**. Fixed by moving the icons into a client child (`SeoKpiStrip`) so only serializable data
+crosses the boundary. *(Guardrail: a server page must pass a React element `iconNode={<Icon/>}`, never a function
+`icon={Icon}`, to a client component.)*
+
+### Ownership
+
+The **My Team** section (`/settings/team*`, member editor, roles) was handed to the AI-section rebuild so human team
+members and AI agents share one coherent team model (connections, roles, AI-clone, permissions overlap heavily).
+
+## The convergence in one line
+
+The whole CRM now assembles from the [closed component set](/design/sections-and-tables): a brand-blue header on
+every block, `StatStrip` KPIs, `MenuTable`/`SettingsTable` tables, `SettingSection` config, tokens only — and the
+[linter](/design/enforcement) plus the three-gate discipline above keep it from drifting back.
