@@ -9,37 +9,62 @@ description: "Work-in-progress dossier — Lee · Infra · Pipeline & Workflow �
 
 ## Checklist
 
-_Last updated: 2026-07-13 PM_
+_Last updated: 2026-07-13 NIGHT (end of a marathon lead-flow session)_
 
-### 🗺️ THE MASTER SSOT — Lead-Flow Architecture
-**Artifact:** https://claude.ai/code/artifact/0b65eae5-d1e2-4a15-afb0-973eba93d6fb
-The single source of truth for the whole lead-flow system. Everything below builds to this doc.
+### 🗺️ THE MASTER SSOTs (artifacts Zach locked today)
+- **Master lead-flow architecture:** https://claude.ai/code/artifact/0b65eae5-d1e2-4a15-afb0-973eba93d6fb
+- **Workflow taxonomy (3 axes):** https://claude.ai/code/artifact/4080f692-ab08-4d06-8ce0-5f81a52cb407
+- **Workflows folder view:** https://claude.ai/code/artifact/78dc6927-3730-4bd0-8485-a314f06dd9e1
+- **Create Workflow modal v2:** https://claude.ai/code/artifact/f70490d3-8f11-4753-aa12-7cc9b0426cd5
+- **Section management (both pages):** https://claude.ai/code/artifact/52619da1-f9c4-40ca-b0d2-95623345fce4
 
-**The spine (locked with Zach 2026-07-13):** `Lead Integration → Source → Trigger Event → (fires a Workflow + sends a Notification)`.
-Three shared axes across Trigger Events / Workflows / Notifications:
-- **① Family (Integration):** `houseloop` · `follow_up_boss` · `inbox` (NEW — Company Inbox / GMB + company #s) · `transaction` · `custom`. Source = trigger-event `platform`.
-- **② Lead Stage (arm):** `new_lead` (Registration) · `existing_lead`. = which of the two arm-slots a workflow fills.
-- **③ Type (band):** `activity` · `communication` · `insight`. Source = trigger-event `band`.
-- **Validity matrix:** Insights = Existing-only; Communication mints a new lead ONLY via Company Inbox (through the CRM intake identity gate — Adam's inbox has zero minting, confirmed). TC = existing-only.
+**The spine (LOCKED):** `Lead Integration → Source → Trigger Event → (fires a Workflow + sends a Notification)`.
+- **Family (Integration):** `houseloop` · `follow_up_boss` · `inbox` (Company Inbox) · `transaction` · `manual`. (`custom`/"Other/Custom" KILLED — catch-all is now Manual.)
+- **Lead Stage (arm):** `new_lead` · `existing_lead` (which arm-slot a workflow fills).
+- **Type (band):** `activity` · `communication` · `insight` (trigger-event `band`).
+- **Validity:** Insights = Existing-only (hard-locked); Communication mints only via Company Inbox; TC = existing-only.
+- **Trigger events are NEVER hand-created** — they come from a lead integration (auto-populated) or are Manual. You CONFIGURE them.
 
-### ✅ SHIPPED TO PROD (2026-07-13)
-- Trigger Events **Configure** (two-arm workflow+notification) replacing the Create modal / landing pages / webinars; ⋮ = Configure + Pause (no Delete). Commit `44c003529d`.
-- FUB + TC wired to Configure; **TC single-arm** "Existing Leads Only" (table + modal, primary columns).
-- Wider Configure modal · centered ⚡ counts · TC column aligned to FUB.
-- **Sectioned notification dropdown** (gray band headers, full 10-band catalog) — `lib/notifications/notification-sections.ts`. Commit `27e0f15aca`.
-- Lead Source **Edit-Source / Manage-Routing split** (identity vs routing; Myli/human-owner/Pond/handoff/stage/tags).
-- Dual-notify plumbing (mig 0391) + the existing-lead `lead_activity` silent-notification bug fix (earlier).
+### 🔴 NEXT SESSION — LEAD SOURCES is the unfinished arc (Zach flagged HARD, end of 07-13)
+Lead Sources got the DESIGN LOCK + half the build today; the trigger-events/workflows arc took the rest. Three pieces:
 
-### 🟡 BUILT — GREEN, PENDING DEPLOY
-- **HouseLoop Insights → single-arm existing-only** (`Existing Leads Only` pill + single existing workflow + single notification, like TC). `TriggerEventsBoard.tsx`, tsc+eslint green. Ships next push.
+**LOCKED MODEL (what it SHOULD be):**
+- **Lead Sources = VIEW + ROUTE, never CREATE.** Creating/connecting a source (webhooks, API keys, "how leads arrive: landing page / manual / email forward / website pixel") lives on the **Lead Integration** page (`settings/lead-platform`) — NOT on Lead Sources.
+- **Edit Source** = identity only: name · type · status (connection → Lead Integration). ✅ built.
+- **Manage Routing Rules** = the default rule ONLY: Default AI responder (Myli) · Default human owner or Pond · AI appointment hand-off · Default stage · Default tags.
 
-### 🔵 BUILDING NOW
-- **Workflows taxonomy end-to-end** — the Create Workflow cascade (Family → Lead Stage → Type, validity-matrix-filtered) + grouped trigger/workflow pickers + shared `lib/workflows/workflow-taxonomy.ts` catalog + Company Inbox family in WorkflowsTable + `lead_stage` column. (agent in flight)
+**#1 — Manage Routing Rules BROKEN:** a huge per-event-override table (`SourceLeadSourceEvents`, "Liked Home Intent / Saved Home Intent" noise) got wrongly bolted into `components/settings/lead-sources/ManageRoutingRulesModal.tsx`. RIP it out; keep only the clean default-rule fields above.
+**#2 — "Add New Lead Source" is still the OLD vibe-coded modal** (arrival method + assigned-to + stage + workflow). It should just NAVIGATE to the Lead Integration page. Kill the old create modal.
+**#3 — Build the Lead Integration page** (`settings/lead-platform`) as the CREATE/CONNECT home (identity, API keys, webhooks, name trigger events). Designed, never built — it's the dependency for #2.
 
-### ⚪ NEXT / COORDINATION
-- Company Inbox family: minting via the intake gate (my lane); comms surface = Adam's `hl_inboxes` (coordinated — no parallel mint path).
-- Configure modal workflow pick-existing dropdown → group by Family → Type.
-- Docs reconcile (trigger-events / lead-sources / workflows guides) once the taxonomy ships.
+### ✅ SHIPPED TO PROD (2026-07-13 — the whole lead-flow arc)
+1. **Trigger Events Configure** (two-arm workflow+notification) — replaced Create modal/landing/webinars; ⋮ = Configure + Pause.
+2. **FUB + TC wired to Configure**; TC single-arm "Existing Leads Only"; wider modal; centered ⚡ counts.
+3. **Sectioned notification dropdown** (`lib/notifications/notification-sections.ts`) — 10 gray-band-header catalog.
+4. **Lead Source Edit-Source / Manage-Routing split** (identity vs routing). ⚠️ routing modal now BROKEN — see #1.
+5. **HouseLoop Insights → single-arm** "Existing Leads Only" (like TC). Property Viewed → Insights band (mig 0395).
+6. **Workflows taxonomy** — Create Workflow cascade → collapsed to Family → Lead Stage → Trigger event (Type became the grouping in the trigger dropdown, not a field). `lib/workflows/workflow-taxonomy.ts` + `lead_stage` col (mig 0394).
+7. **Every dropdown = solid-white HlDropdown + light-gray band headers** (killed native OS selects). Wider Create modal, scrollable panels.
+8. **Workflow builder:** inline-expandable step config (shared `StepConfigBody`, chevron per node) + **removed the workflow-level default sender** (sender is per-message now) + Duplicate-as-Custom → thorough `/duplicate`.
+9. **Workflow row kebab:** Open Builder · **Edit Settings** (reopens Create modal in edit mode) · Duplicate · Lock · Delete.
+10. **Trigger resolver fix** — 8 "New Lead —" workflows showed "Choose a trigger" (door-key `*_registration` is inactive in catalog); resolver now strips `_registration` → base intent. DATA was always fine.
+11. **Workflows FOLDER VIEW** — trigger event = gray folder header (once), workflows nested as rows, arm pills (NEW/EXIST/CUSTOM/MANUAL). `WorkflowsTable.tsx` (hand-rolled, NOT DataTable — REUSE departure, Zach-approved via locked wireframe). ⚠️ **bulk-delete checkbox was dropped** (per-row ⋮ delete remains) — open Q whether to re-add.
+12. **Create Workflow modal v2:** Integration (Manual + Company Inbox, NO Other/Custom, defaults houseloop) → required Trigger event → New/Existing toggle (hard-locks Existing on Insights) → Manual hides trigger+arm.
+13. **Manual section** on Workflows (flat rows). **Company Inbox** = first-class blue section on BOTH pages (surfaced 3 real native comms events: Text/Call/Email Received). **Other/Custom KILLED** → Manual catch-all.
+14. **Cross-page section management** (mig 0396 `hl_lead_flow_section_order` + `/api/lead-flow/order`): drag-reorder SECTIONS + trigger EVENTS, one shared order both pages. Routing fix (Direct Registration → HouseLoop.ai, not a dumping ground).
+
+### ⚪ DEFERRED (next slices, after #1)
+- **＋ Add Section picker** (pull in a connected integration as a section / Manual) — the create UI, both pages.
+- **Manual custom folders** (create/rename/delete folders within Manual).
+- **Folder-level drag** on Workflows (reorder gray trigger-folders within a section — needs its own persistence).
+- **Bulk-delete** on Workflows table (re-add multi-select? — Zach open Q).
+- Custom (`other`) sections don't render on the Trigger Events board (pre-existing `platforms` filter `p !== 'custom'`).
+
+### 🤝 COORDINATION
+- **Company Inbox** = Adam's NEXT after My Team (C7 shipped). Seams agreed: minting = MY intake identity gate (Adam's inbox has ZERO minting), his doors carry source via `hl_phone_numbers`, Inbox = a Family in the taxonomy (Communication events that mint via phone-dedupe). Wire the Inbox family end-to-end together when he picks it up.
 
 ### SHARED-TREE NOTE
-Adam active in CRM (inbox/phone lane). Push pattern: commit only my files → stash Adam's uncommitted → standalone `tsc --noEmit` → push → restore. Never ship his WIP.
+Adam active in CRM. Push pattern: verify `tsc --noEmit` 0 → stash Adam's tracked WIP + park untracked (`??`) docs → push → restore + `git stash pop`. Migrations run on deploy (Dockerfile `node db/migrate.mjs && next start`). Never ship Adam's uncommitted WIP.
+
+### KEY FILES (lead-flow)
+`components/settings/trigger-events/{TriggerEventsBoard,ConfigureTriggerEventModal,trigger-row-cells}.tsx` · `components/workflows/{WorkflowsTable,CreateWorkflowModal,WorkflowBuilder}.tsx` · `lib/workflows/{workflow-taxonomy,trigger-catalog}.ts` · `lib/notifications/notification-sections.ts` · `components/settings/lead-sources/{EditSourceModal,ManageRoutingRulesModal}.tsx` · `app/api/lead-flow/{route,order}.ts` · migrations 0391/0394/0395/0396.

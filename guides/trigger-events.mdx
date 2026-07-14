@@ -1,143 +1,123 @@
 ---
 title: "Trigger Events"
-description: "THE trigger events page — v4 flat event model: one event per human action with TWO workflow arms (New/Existing), Activity·Communication·Insights bands, native insights + comms events, the mint gate, and the hl_trigger_fire ledger."
+description: "THE trigger events page — trigger events are CONFIGURED not created (⋮ → Configure), each with a two-arm New Lead / Existing Lead workflow+notification, grouped by integration section with Activity·Communication·Insights bands, plus drag-reorder and the hl_trigger_fire ledger."
 ---
 
 **In the app:** Settings → **Trigger Events** — [`/settings/trigger-events`](https://crm.houseloop.ai/settings/trigger-events)
 
 <Info>
-**This page mirrors what's in code, live** (updated **2026-07-11 night**, lead-flow **v4 flat event model** — by Lee).
-It absorbs the retired Intent Strategy Map page — the strategy ("one workflow per thing a person did") is baked into the board.
+**This page mirrors what's in code, live** (updated **2026-07-13 night**, the lead-flow **Configure model** — by Lee).
+It absorbs the retired Intent Strategy Map + the v3 "Create Trigger Event" flow — the strategy ("one workflow per
+thing a person did") is baked into the board, and trigger events are no longer hand-created.
 </Info>
 
-## 2026-07-11 NIGHT — v4 FLAT EVENT MODEL (supersedes v3 below)
+## 2026-07-13 — SHIPPED: trigger events are CONFIGURED, not created
 
-**The model, in one breath (Zach locked it live):** there is **ONE trigger event per human action**, named
-exactly what it is — Contact Request, Saved Home, Tour Request. The old "New Lead — X" / "Existing Lead — X"
-*event* twins are dead; instead every row carries **TWO WORKFLOW ARMS**: a **New Lead** workflow (the person
-was just minted by this event) and an **Existing Lead** workflow (a known lead did it again). The router picks
-the arm automatically from the created-flag on the dispatch — never a fork inside a canvas. Workflow NAMES
-keep the arm prefix ("New Lead — Contact Request"); event names never do.
+**The model, in one breath (Zach locked it live):** a trigger event is **ONE row per human action**, named exactly
+what it is — Contact Request, Saved Home, Property Viewed. **You never hand-create a trigger event.** Every event
+either comes from a **lead integration** (HouseLoop.ai, Follow Up Boss, Company Inbox, Transaction Coordination
+auto-populate their events) or is **Manual**. What you do to a row is **Configure** it — the ⋮ (kebab) menu on each
+row is **Configure** + **Pause**. There is no "Create Trigger Event" modal anymore.
 
-**The board row:** Trigger Event (icon + name + landing address for API sources) · **Creates Lead** (the
-fail-closed MINT gate, centered) · **Workflow** (two arm rows with hard-coded New Lead / Existing Lead labels
-+ full-name pills) · **Workflow Active** (one toggle per arm) · Notification (dual) · Triggered (the ledger
-count, drill-down click-through). The SYNC column is gone — native sync was a fake "Always", and the **FUB
-Sync master now lives IN the blue Follow Up Boss header, far right** (no banner row).
+### The Configure modal — two arms
 
-**Bands (Zach's taxonomy):** inside each platform's ONE table, Excel-style navy band rows split the events —
-**ACTIVITY** (everything the person DOES: browsing + inquiries + registration), **COMMUNICATION** (an actual
-communication received: Text Received · Phone Call Received · Email Received — all three are LIVE wires fired
-by the inbound writers), **INSIGHTS** (computed patterns). The Workflows page mirrors the same three bands.
+**Configure** opens a modal with up to **two arms**, and each arm is exactly **one workflow + one notification + an
+on/off**:
 
-**Native insights (the final three, Zillow-parity rules):** **Viewed Home 10x in 7 Days** (the SAME home) ·
-**Looking in a New Area** (2+ views in a ZIP never browsed in the prior 60 days) · **Re-Engaged** (active
-after 14+ days of silence). Computed hourly by the registered Inngest fn `insight-engine` over our own pixel
-data — deterministic SQL, receipts in every fire, and a **hard 14-day per-lead-per-insight gate** checked
-against `hl_trigger_fire` (no tags). Native High-Intent Buyer/Seller were **cut** — Zillow's own high-intent
-flags arrive via FUB. Thresholds live in `hl_settings` key `insight_engine`. An insight only ever aggregates
-patterns — it never re-fires a single event that has its own trigger (the pattern law).
+- **New Lead arm** — shows **only when the event can mint a lead** (the identity gate, `target.canMint`). It carries
+  a workflow dropdown (+ *create* jumps to the builder), the automatic **"New Lead" notification class** (fixed),
+  and its on/off. When the event can't mint, this arm is hidden.
+- **Existing Lead arm** — always shows. Workflow dropdown (+ *create* → builder), a **notification dropdown** (the
+  full catalog, see below), and its on/off.
 
-Migrations 0381–0388 · router: `dispatchDoor` arm-pick in `lib/workflows/runtime.ts` · engine:
-`lib/inngest/functions/insight-engine.ts` · comms emitter: `lib/workflows/fire-door.ts`.
+**Single-arm events.** When an event can't mint (`canMint=false`), only ONE arm renders and the modal reads
+**"Existing Leads Only"**:
 
-## 2026-07-11 — Lead-Flow v3 shipped (summary + receipts)
+- **HouseLoop Insights** (the computed-pattern band) is **single-arm "Existing Leads Only"** — an insight is always
+  about a lead we already know (hard-locked existing).
+- **Transaction Coordination** is **single-arm "Existing Leads Only"** — a loop always hangs on an existing lead.
 
-**What changed, in one breath:** the board now reads **Integration → Source → Event**. Registration events
-group in a folder per SOURCE (the source is finally visible); you can create your own **sections** (folders
-like "Webinar Signups") and your own **trigger events**, each with a paste-able **landing-page address**;
-**Creates Lead renders ONLY on registration rows** (existing activity + Transaction Coordination never show
-it); FUB splits into its own registration + existing-activity sections. Built + verified live by **Lee,
-2026-07-11**, from the locked wireframe `lead-sources-builder-v3-LOCKED-2026-07-11.html`.
+The arm's three flags (`creates_lead` / `workflow_active` / the workflow id, and the existing-arm's
+`existing_workflow_*`) are written as a unit through `PATCH /api/trigger-events`. Config lives in
+`components/settings/trigger-events/ConfigureTriggerEventModal.tsx`.
 
-📄 **Full build receipts (prod screenshots · curl proof of every gate · six live-caught bug fixes):**
-[Trigger Events — Build Receipts artifact](https://claude.ai/code/artifact/bd565646-0cfe-4626-9036-fdd1c18f16e2)
+### The notification dropdown is sectioned
 
-![Trigger Events v3 live on prod — the custom Webinar Signups section (source pill, Creates Lead, add-footer) between the Webinars registration folder and Existing Lead Activity with NO Creates Lead column](/images/leadflow-v3/webinar-signups-section.jpg)
+The Existing-Lead arm's notification picker is the **full notification catalog**, grouped into the **same gray band
+headers the Notifications settings page shows, 1:1** (New Lead Activity · Existing Lead Activity · Communications · …)
+— driven by `lib/notifications/notification-sections.ts` and rendered with the sanctioned `HlDropdown` (a bare
+`<select>` can't draw gray dividers). The New-Lead arm's notification is the fixed "New Lead" class.
 
-### The five laws (locked 2026-07-11)
+### Sections = integrations · in-table bands = Activity / Communication / Insights
 
-1. **Integration → Source → Event.** Registration events group under the SOURCE that births the lead.
-2. **Creates Lead exists ONLY on registration rows** — and it is the fail-closed **MINT gate**: OFF on a door
-   means no new lead ever mints through its address (an existing lead still fires the event).
-3. **ONE Existing-Lead-Activity section per integration.** Behavior is branded to the platform it happens on —
-   a Zillow save can never get a HouseLoop-branded message.
-4. **A birth fires only its own door.** A webinar signup runs the webinar workflow, never General Registration.
-5. **Robot actions are silent.** Actions a workflow performs FOR a lead (seeded account, saved search) never
-   fire trigger events; only the lead's own actions fire.
+The board groups every trigger event under its **integration section** (a blue section header), and inside a
+section, Excel-style band rows split the events by TYPE:
 
-### Creating sections + custom events
+| Section (integration) | What it holds |
+|---|---|
+| **HouseLoop.ai Website** | the native website events — browsing, inquiries, registration, and the computed insights |
+| **Follow Up Boss** | FUB webhook signals (see the [FUB master](/fub/trigger-events)) |
+| **Company Inbox** | the three native communications events — **Text Received · Phone Call Received · Email Received** — that mint via phone-dedupe |
+| **Transaction Coordination** | e-sign documents + loop milestones (existing-lead only) |
+| **Manual** | hand-run events with no integration (the catch-all — "Other/Custom" was retired) |
 
-Header buttons **New Section** and **Create Trigger Event** open the same four-question modal: *Name it ·
-Section (a folder is born with its first event; blank = Other) · Which source feeds it · Workflow that runs.*
-Create returns the event's **landing-page address** (`https://crm.houseloop.ai/api/leads/in/<source>/<event>`)
-— paste it into the signup page with the source's secret key (`?key=` or the `x-houseloop-intake-secret`
-header). Monthly-webinar routine: create next month's event in the folder → copy its address → paste into the
-new landing page. Done.
+The in-table **bands** come from the `band` column on `hl_trigger_events`:
 
-![Create Trigger Event — four questions, then the address](/images/leadflow-v3/create-event-modal.jpg)
+- **ACTIVITY** — everything the person DOES (browsing + inquiries + registration).
+- **COMMUNICATION** — an actual communication received (Text / Call / Email Received — LIVE wires fired by the
+  inbound writers, minting through Company Inbox).
+- **INSIGHTS** — computed patterns. **Property Viewed now lives in the Insights band** (moved there in **mig 0395**).
 
-![Create → get its address — the real landing-page address for the July webinar](/images/leadflow-v3/create-event-success.jpg)
+### Drag-reorder persists (sections AND events)
 
-### v3 checklist — everything done / found (2026-07-11 · Lee)
+Both the **integration sections** and the **individual trigger events within them** can be **drag-reordered**, and the
+order **persists to `hl_lead_flow_section_order` (mig 0396)** via **`/api/lead-flow/order`**. The Trigger Events board
+and the Workflows page share ONE order — reorder on either, it holds on both.
 
-- ✅ Mig 0380 `hl_trigger_events.section` — user-created folders
-- ✅ Landing-address intake `/api/leads/in/<source>/<event>` — header OR `?key=` auth, JSON + form bodies,
-  fail-closed seat check (unwired event → 404, wrong key → 401), `creates_lead` mint gate (verified live:
-  OFF → visible skip, zero mint)
-- ✅ Create-event API seats the door (creates_lead=TRUE explicit) + binds the workflow + returns the address
-- ✅ Creates Lead gated to registration sections · FUB split with one sync master · address column with Copy
-- ✅ End-to-end fire on prod: signup POST → lead minted → `door-custom` Inngest run → `hl_trigger_fire` row
-- 🐛 **Found + fixed live (6):** middleware login-wall ate the address route · custom events dispatched into
-  the void (fixed with the shared `door-custom` channel) · the tag-gate landmine (doors only fired if TAGGED —
-  the fire gate is now the SEAT) · a `::uuid` type-inference error in door seeding · half-born sources on seed
-  failure (creates are atomic now) · a Lead Sources builder crash on refresh
-- ⏳ FUB per-bucket registration folders (New Zillow Lead…) — display-only rows planned; per-bucket toggles
-  await Zach's grain decision
+### Native insights (Zillow-parity rules)
+
+The computed insights — **Viewed Home 10x in 7 Days** (the same home) · **Looking in a New Area** (2+ views in a ZIP
+never browsed in the prior 60 days) · **Re-Engaged** (active after 14+ days of silence) — are computed hourly by the
+registered Inngest fn `insight-engine` over our own pixel data (deterministic SQL, receipts in every fire, a hard
+14-day per-lead-per-insight gate checked against `hl_trigger_fire`, no tags). Thresholds live in `hl_settings` key
+`insight_engine`. An insight only ever aggregates patterns — it never re-fires a single event that has its own trigger.
 
 ## What a trigger event is
 
-A thing that happened (someone did something) that can **create a lead** and/or **fire a workflow**. Every
-trigger event is a row on the board with its own switches. The board groups Integration → Source → Event (v3):
-
-| Band | Sections inside | What fires them |
-|---|---|---|
-| **HouseLoop.ai Website** | One **New Lead Registration folder per SOURCE** (HouseLoop.ai Organic's 9 doors · Webinars · any source you create) + your **custom sections** (e.g. Webinar Signups) + ONE **Existing Lead Activity** section (12 events, NO Creates Lead column) | Registration = a brand-new visitor through that source's pipe; existing activity = any known lead acting on the site, regardless of birth source |
-| **Follow Up Boss** | **New Lead Registration · sources pulled from FUB** (Creates Lead + Sync) + **Existing Lead Activity · behavior inside FUB** (no Creates Lead) | FUB webhook signals — see the [FUB master](/fub/trigger-events) |
-| **Transaction Coordination** | One section — no Creates Lead, no source (a loop always hangs on an existing lead) | e-sign documents + loop milestones |
+A thing that happened (someone did something) that can **create a lead** and/or **fire a workflow**. Every trigger
+event is a row on the board with its own arms. It is **auto-populated by its integration or Manual** — you Configure
+it, you don't create it.
 
 ## THE ONE-SWITCH LAW (workflow on/off lives HERE)
 
-**A workflow is turned on or off in exactly one place: its trigger event's `Workflow Active` toggle on this
-board.** Flipping it drives the workflow's real status (`hl_workflows.status`) — the Workflows page shows a
-**read-only** status badge that mirrors this toggle, never an independent switch. Locked infrastructure
-workflows (e.g. saved-search alert delivery) are always-on and exempt.
+**A workflow is turned on or off in exactly one place: its arm's on/off inside the trigger event's Configure modal on
+this board.** Flipping an arm drives that workflow's real status (`hl_workflows.status`) — the Workflows page shows a
+**read-only** status badge that mirrors this toggle, never an independent switch. Locked infrastructure workflows
+(e.g. saved-search alert delivery) are always-on and exempt.
 
-Each row's other switches: **Creates Lead** (does this event mint a lead?) and, for FUB rows, **Sync** +
-**Notify** (see the FUB master). The event itself always fires once it exists — toggles gate the lead and the
-workflow, never the firing.
+The event itself always fires once it exists — the arm toggles gate the lead and the workflow, never the firing.
 
 ## THE FIRE LEDGER — `hl_trigger_fire` (why the count never lies)
 
-Every genuine door dispatch writes **exactly one row** to `hl_trigger_fire` (`lead_id` · `event_key` ·
-`platform` · `matched` · `routed_by`), written by `dispatchDoor` in `lib/workflows/runtime.ts` — the one place
-every `houseloop/door.<key>` flows through.
+Every genuine door dispatch writes **exactly one row** to `hl_trigger_fire` (`lead_id` · `event_key` · `platform` ·
+`matched` · `routed_by`), written by `dispatchDoor` in `lib/workflows/runtime.ts` — the one place every
+`houseloop/door.<key>` flows through.
 
-- The board's **TRIGGERED count** and its **click-through drill-down** ("which leads fired this") read this
-  SAME table — they agree by construction.
-- The native board is scoped `platform <> 'follow_up_boss'` — a FUB-origin fire can never appear on a
-  HouseLoop.ai row (and vice versa).
+- The board's **TRIGGERED count** and its **click-through drill-down** ("which leads fired this") read this SAME table
+  — they agree by construction.
+- The native board is scoped `platform <> 'follow_up_boss'` — a FUB-origin fire can never appear on a HouseLoop.ai row
+  (and vice versa).
 - **Only a dispatch is a fire.** The lead activity feed is history, not a fire source — imported FUB history,
   system-seeded searches, and replayed pre-registration browsing can never masquerade as trigger fires.
-  (This replaced the old two-source scoreboard that once showed "27 triggered, 0 leads.")
 - `lead_id` is `ON DELETE CASCADE` — deleting a lead removes its fires.
 
 ## Routing (what happens when a door fires)
 
-`dispatchDoor` resolves the workflow through strict tiers: the lead's **source × event assignment** first, then
-platform / global fallbacks for system events. **Registration doors route ONLY via their per-source
-assignment** — the fallback tiers carry a `*_registration` guard, so a first-touch outreach workflow can never
-fire from a fallback match (the guard that closed the 1,421-import near-miss, 2026-07-09).
+`dispatchDoor` resolves the workflow through strict tiers and **picks the arm from the dispatch's created-flag**:
+`created=true` reads the New-Lead columns, `created=false` the Existing-Lead columns — fail-closed, so an unbound or
+toggled-off arm is a logged skip, never a fallback guess. **Registration doors route ONLY via their per-source
+assignment** — the fallback tiers carry a `*_registration` guard so a first-touch outreach workflow can never fire
+from a fallback match (the guard that closed the 1,421-import near-miss, 2026-07-09).
 
 ## Where the messaging lives
 
@@ -147,5 +127,5 @@ What each door actually SENDS (the two-beat: brand ack + Myli at 2 minutes) is d
 ## Related
 
 - [HouseLoop.ai integration](/integrations/houseloop-ai) · [Follow Up Boss integration](/integrations/follow-up-boss)
-- [FUB Trigger Events & Notifications](/fub/trigger-events) — the 22-event FUB master
-- [Workflows](/guides/workflows) — the engine · [Website Registration & Lead Intake](/guides/web-registration-and-intake)
+- [FUB Trigger Events & Notifications](/fub/trigger-events) — the FUB master
+- [Workflows](/guides/workflows) — the engine · [Lead Sources](/guides/lead-sources) — view + route
