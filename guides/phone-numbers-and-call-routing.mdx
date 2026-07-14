@@ -71,13 +71,17 @@ notification. Phase D puts Myli on the line.
   lead source (`phone_company` / `phone_signcall`) via `hl_phone_numbers.lead_source_id` — see
   [The ported lines + lead-flow attribution](#-the-ported-lines--lead-flow-attribution-2026-07-14). Twilio ticket `28049501`.
 
-**Remaining for COMPLETE:**
+**Done (cont. — 2026-07-14, Lee · infra):**
 
-- [ ] **Ana's port — LANDS Monday 2026-07-21** — carrier-approved with a firm port date (the earlier
-  `INVALID_ADDRESS` (22154) rejections cleared once the GV service-address change propagated to the losing
-  carrier; address confirmed letter-for-letter on her GV screen: 2097 Valencia Blossom St, Clermont FL 34711).
-  Its source (`phone_analegacy`) is already wired via `hl_phone_numbers.lead_source_id`; it goes live when the
-  number ports. Ticket `28052075`.
+- [x] **Ana's port LANDED EARLY** — 913-954-7123 is now in our Twilio (SID `PN8ff2c539…`), ahead of the 7/21
+  estimate. Source `phone_analegacy` already wired; now A2P-covered. Ticket `28052075`.
+- [x] **A2P 10DLC coverage = 100%** — all 12 account numbers in the sender pool. Closed the 3 gaps (Company
+  320-0906, Sign 354-8600, Ana 954-7123). Brand APPROVED + campaign VERIFIED, coverage instant. See the
+  [A2P section](#a2p-10dlc-already-registered-and-every-number-joins-it-law-zach-2026-07-09).
+- [x] **Front door 675-9877 wired to `phone_pastclient`** — the past-agent aggregation line now carries its
+  lead-flow source. All four per-line phone sources complete.
+
+**Remaining for COMPLETE:**
 - [ ] **Phase D — Myli answers the front door** ("Spradling Group, this is Myli — how can I help you?").
   ONE agent, ONE line, ONE greeting — **BUILT on Retell AI 2026-07-11** (the DIY LiveKit+Gemini stack was cut
   after live-audition failures): test line **913-937-9359** is live on Myli with the Grace voice; the front
@@ -204,8 +208,11 @@ line = a **deterministic** source. A fourth shared Past-Client line is still bei
 
 - **Company (320-0906)** rides Zillow + Homes.com + Google My Business. A forwarded call can't tell those apart at
   the number, so they collapse to the ONE `phone_company` source — one source, not three.
-- **Past Client** is deliberately ONE number: every departed/past agent forwards to it and we **do not distinguish
-  which past agent**. Any inbound to it = `phone_pastclient`.
+- **Past Client** is deliberately ONE number — **913-675-9877, THE FRONT DOOR** — that every departed/past agent
+  forwards into, and we **do not distinguish which past agent**. A direct dial to 675-9877 = `phone_pastclient`.
+  (675-9877 is the shared interim front door; company/sign lines still attribute by the number they were *dialed*
+  on — an inbound to 320-0906 is `phone_company` even though it forwards to 675-9877. Final per-caller disposition
+  lands with Myli in Phase D.)
 
 ## Lead-flow attribution — the number IS the source
 
@@ -222,7 +229,10 @@ line = a **deterministic** source. A fourth shared Past-Client line is still bei
 - **0398** — created the per-line phone lead sources under Company Inbox (and deactivated — not deleted — the old
   generic `phone_call` bucket, so its existing leads keep their attribution).
 - **0399** — reconciled those stubs to the **by-number** model (Company · Sign Call · Past Client · Ana Legacy) and
-  **wired `lead_source_id`** on 320-0906, 354-8600, and 954-7123. Past Client's row gets wired when its number lands.
+  **wired `lead_source_id`** on 320-0906, 354-8600, and 954-7123.
+- **2026-07-14 (direct SQL, `lead_source_id` only — Lee's lead-flow column):** wired the front door **675-9877 →
+  `phone_pastclient`**, completing all four per-line sources. Ana's **954-7123 confirmed LANDED** in Twilio (no
+  longer pending the 7/21 date — it ported early). All four numbers **A2P-registered same day** (below).
 
 ---
 
@@ -415,6 +425,15 @@ it lands in the account — buy or port, BEFORE its first send.** One API call:
 `POST messaging.twilio.com/v1/Services/MG05ab…/PhoneNumbers {PhoneNumberSid}`. Note carrier provisioning takes
 hours after adding — a number can be in the pool and still bounce 30024 briefly; **verify one delivered test
 message before declaring any send-path live.**
+
+<Check>
+**2026-07-14 — A2P coverage is now 100% (Lee).** Audited the account against the sender pool: **12 numbers in the
+account, 12 in the pool.** Three ported lead-flow lines were live for Voice but **missing from the A2P pool** —
+**Company 320-0906**, **Sign Call 354-8600**, and **Ana Legacy 954-7123** (just ported). Added all three to
+`MG05ab6dd6…` via the one-call API. Brand `BNb9246a…` **APPROVED**, campaign `QE2c6890…` **VERIFIED (MIXED)** — no
+re-vetting, coverage is instant. Every number the account owns can now send A2P SMS. (Carrier provisioning caveat
+still applies — confirm one delivered test on 320-0906 / 354-8600 / 954-7123 before first production send.)
+</Check>
 
 <Warning>
 **Why this is law:** on 2026-07-08 the systems-health line sent 21 notification texts before it was on the
