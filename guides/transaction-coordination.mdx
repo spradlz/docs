@@ -234,6 +234,48 @@ always wrong. The extractor writes the field maps in `lib/tc/field-maps/*.json`.
 [`.claude/rules/SIGNATURE_ANCHORING.md`](/guides/esignature) — *"read the box, don't guess it."*
 </Note>
 
+## Waiting on Signatures — the loop's e-sign lifecycle (shipped 2026-07-14)
+
+Once a form is sent, the loop tracks it end-to-end and gives the agent control without leaving the loop.
+
+**Send (one call).** `createFillSend(leadId, formKey, opts)` (`lib/esign/create-fill-send.ts`) is THE call for
+"send this agreement": reuse/create the loop → fill from lead + property → multi-party send → returns
+`{ loopId, docId, esignDocId, signingUrl, sentTo, sentAs }`. For a **Single Property Showing Agreement** pass
+`propertyAddress` — it creates a property-specific loop so the form's Property line fills from `deal.address`:
+
+```ts
+createFillSend(leadId, 'single_property_buyer_rep', { propertyAddress, agentUserId, senderUserId })
+```
+
+The `signingUrl` can be texted from any agent's line (`sendTextAs`) — the doc sends AS that agent. This is Myli's
+/ the AI clone's document tool; no PDF or Documenso handling in the caller.
+
+**Waiting on Signatures.** While a doc is `sent` and unsigned, the loop band (`MilestoneBand`) AND each Loops-list
+card (`TransactionsTable`) show a green **Waiting on Signatures** strip — the doc name, sent date, days-waiting, a
+**reminder toggle**, and **Cancel document**. The stepper's Agreement-Sent node shows the real sent date.
+
+**Reminders are HouseLoop-owned.** Documenso's own auto-reminder is OFF — we own on/off + cadence. The toggle
+writes `hl_tc_loop_document.reminders_enabled`; the Inngest **`esign-reminder-sweep`** re-nudges the unsigned
+signer every ~2 days (Myli's text with the link) while it's on. (Runs event-only until sign-off, then a daily cron.)
+
+**Cancel + void-on-delete.** Cancel document sets the Documenso `Envelope` to `CANCELLED` (the reliable off switch
+— reminders only fire on PENDING docs; clearing reminderSettings does NOT stop them) and marks the loop doc
+`cancelled`. Deleting a lead auto-cancels its outstanding agreements (`purgeLead` → `cancelLeadEsignDocuments`), so
+a dead lead never keeps nagging.
+
+**Signed.** `DOCUMENT_COMPLETED` → `/api/esign/webhook` sets `status='signed'` + `signed_at`, archives the sealed
+PDF to R2 (`file_url`), advances the loop to Agreement Signed, kills the nudge chain, and fires the
+`document_signed` door (+ `document_opened` on open) — the callback other surfaces hook for the thread/context.
+
+### Planned: the Single Property Showing Agreement workflow
+
+A **manually-fired Transaction Coordination workflow** (spec locked at
+`apps/houseloop-crm/docs/wireframes/tc-showing-agreement-workflow-plan-LOCKED.html`): Manual Trigger (property
+input) → **Send Agreement** step (new step type → calls `createFillSend`) → Send Text (the signing link). Fired by
+Myli, the AI clone, or the agent on a lead + a property. Same shape for all three TC agreements (single-property /
+exclusive / non-exclusive) — they differ only in the form the Send step picks. The one new build is the "Send
+Agreement" step type; the form, the engine, and the reminder/signed lifecycle are already live.
+
 ## The 3-layer engine + dynamic dates (A-Frame parity)
 
 The stages, milestones, and tasks are an **EXACT MIRROR of A-Frame** today (names, phases, anchors, offsets,
@@ -332,6 +374,15 @@ API-first Configure builders.
 
 ## Change log
 
+- **2026-07-14** — **Waiting-on-Signatures loop lifecycle shipped.** The loop band + each Loops-list card now show
+  a green **Waiting on Signatures** strip (sent date · days-waiting · reminder toggle · **Cancel document**) while a
+  doc is sent-unsigned; the stepper's Agreement-Sent node carries the real sent date. **HouseLoop owns reminders** —
+  Documenso auto-reminder off, `hl_tc_loop_document.reminders_enabled` toggle drives the Inngest
+  `esign-reminder-sweep` (every ~2 days). **Cancel** voids the Documenso `Envelope` (→ CANCELLED); **deleting a
+  lead auto-cancels its outstanding agreements** (`purgeLead` → `cancelLeadEsignDocuments`). `createFillSend` gained
+  a `propertyAddress` param → true one-call **Single Property Showing Agreement** send (proven live: 14637 Crystal
+  Place, texted from Ana's line, signed end-to-end). Migration 0402 (`reminders_enabled` + `last_reminder_at`). The
+  **Single Property Showing Agreement workflow** is spec-locked (manual trigger → Send Agreement step → text link).
 - **2026-07-09** — **P7 shipped: the dotloop 1:1 UI port + document editing.** Loops home = dotloop card list
   (`LoopCard`, spelled-out name, created date, category badge, house photo); Create Loop wizard (property
   search against houseloop.ai, auto-pulled photo, add-a-lead inline); editable People (`AddPersonModal` +
