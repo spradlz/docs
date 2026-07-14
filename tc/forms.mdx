@@ -1,12 +1,130 @@
 ---
-title: "forms"
-description: "forms — HouseLoop CRM (TC Loop). Documentation stub."
+title: "Forms & E-Sign"
+description: "The TC Loop contract forms — the closed catalog, how a form fills from lead + property data, the one-call send API (createFillSend), the Documenso e-sign flow, and how the AI clone sends a Single Property Showing Agreement."
 ---
 
-<Note>🚧 **Stub — write-up in progress.** This surface is **built and live** in the CRM; the full doc is coming. This page exists so the docs nav matches the app 1:1.</Note>
+**In the app:** TC Loop → **Forms** (on a loop). One loop → attach a property → send an agreement → it goes out
+for e-signature and the loop shows **Waiting on Signatures** until it's signed.
 
-**In the app:** TC Loop → **forms**
+This page is the developer reference for that flow — the contract catalog, how fields auto-fill, the send API
+the AI clone calls, and the e-sign/reminder lifecycle.
 
-For now, see [Transaction Coordination](/guides/transaction-coordination) for how forms fits the loop.
+## The one sentence
 
-_Auto-created by `tools/docs/crm-nav-sync.mjs`. Replace with real docs when written — the generator won't overwrite an existing page._
+A **form** is a real Missouri/eXp PDF whose blanks + signature boxes are mapped once in a catalog
+(`lib/tc/contract-forms.ts`); we **fill** those blanks from the lead + the loop's attached property, **send** it
+to Documenso for multi-party signature, and track it on the loop until it's signed.
+
+## The closed catalog — `lib/tc/contract-forms.ts`
+
+Every sendable agreement is ONE entry in `CONTRACT_FORMS`, resolved by key with `contractFormByKey(key)`. You do
+not hand-build a PDF anywhere else — add a form = add a catalog entry (PDF path + field map + signature boxes).
+
+| Form key | Name | When |
+|---|---|---|
+| `exclusive_buyer_agency` | Exclusive Buyer Agency Agreement | The standard Spradling buyer-rep path |
+| `single_property_buyer_rep` | **Single Property Buyer-Broker Representation Agreement** | The **showing agreement** — one specific house |
+| `non_exclusive_buyer_rep` | Non-Exclusive Buyer-Tenant Broker Rep | Exists; not the standard path |
+
+Each entry carries: `pdfPath`, `pageWidth/Height`, a `fields[]` list (the printed blanks), and `signatureFields[]`
+(the signature/initials/name/date boxes per party).
+
+## How fields fill — source expressions
+
+Each `fields[]` entry has a `source` string that the fill engine (`lib/tc/fill-loop-document.ts`) resolves from
+the lead + the loop. The ones in use:
+
+| `source` | Fills from |
+|---|---|
+| `lead.full_name` | the lead's name (buyer) |
+| `deal.address` | **the loop's attached property** (`hl_transactions.property_address`) |
+| `lead.search.location` | the lead's saved-search area |
+| `lead.budget.low` / `lead.budget.high` | the lead's price range |
+| `today` / `today+90d` | filled at send time (term begin / end) |
+
+So the **Single Property Showing Agreement** puts the specific house on the contract via `deal.address` — which
+means **the loop must have a property attached** before you send it. Attach it in-app with the Property search on
+the loop, or programmatically via `createLoop({ propertyAddress })`.
+
+## Signatures — anchored, never hand-typed
+
+`signatureFields[]` places each party's SIGNATURE / INITIALS / NAME / DATE boxes. Parties are
+`buyer · co_buyer · agent · broker` (broker = Chris Cribb / eXp, pre-printed on these forms). **Coordinates are
+EXTRACTED from the PDF, never eyeballed** — run `tools/houseloop-contracts/anchor-sig-fields.mjs <form.pdf>` and
+paste its output. See the **Signature Anchoring** law (`.claude/rules/SIGNATURE_ANCHORING.md`): a hand-typed
+`yTop` is a bug.
+
+## The send API — what the AI clone calls
+
+`createFillSend(leadId, formKey, opts)` — `lib/esign/create-fill-send.ts` — is the **ONE call** for "send this
+agreement to this lead." It composes the same three engines the TC UI uses (no fork):
+
+```ts
+import { createFillSend } from '@/lib/esign/create-fill-send';
+
+const res = await createFillSend(leadId, 'single_property_buyer_rep', {
+  side: 'purchase',            // buyer agreement (default)
+  agentUserId,                 // the human agent who signs
+  senderUserId: agentUserId,   // whose Documenso account it sends AS (name + headshot on the sign page)
+  includeBroker: false,        // true = full 3-way (adds Chris Cribb)
+  message: 'Please review + sign.',
+});
+// → { loopId, docId, esignDocId, signingUrl, sentTo, sentAs }
+```
+
+It **reuses the lead's newest matching loop or creates one**, fills the form, and multi-party sends. Returns the
+loop, the doc, the Documenso id, and the buyer's `signingUrl`.
+
+<Warning>
+`createFillSend` does NOT set the property. For `single_property_buyer_rep`, `deal.address` must already be on
+the loop — otherwise the Property line fills blank. Attach the house first: create the loop with
+`createLoop({ leadId, side:'purchase', propertyAddress:'14637 Crystal Place, Grandview, MO 64030', ... })`, then
+call `createFillSend` (it reuses that loop), OR fill+send explicitly on that loop:
+`fillLoopDocument({ loopId, formKey })` then `sendLoopDocument(loopId, docId, { senderUserId, agentUserId, includeBroker })`.
+</Warning>
+
+### AI-clone recipe — send a Single Property Showing Agreement
+
+1. Resolve the lead + the house (a HouseLoop `Listing`, e.g. by address/HLID).
+2. `createLoop({ leadId, side:'purchase', propertyAddress: <the house address>, assigneeUserId: <agent> })`.
+3. `createFillSend(leadId, 'single_property_buyer_rep', { agentUserId, senderUserId, includeBroker:false })`.
+4. Deliver the `signingUrl` however the clone communicates — e.g. text it with `sendTextAs(toNumber, msg, leadId, identity)`.
+
+That is the whole tool surface. The clone never touches PDFs, coordinates, or Documenso directly.
+
+## The e-sign lifecycle (Documenso)
+
+We e-sign on **self-hosted Documenso** (`esign.houseloop.ai`, client `lib/esign/documenso.ts`). On send:
+
+- A `hl_tc_loop_document` row is written with `status='sent'` + `esign_doc_id` (the Documenso id), and the loop's
+  stepper reads it as **Agreement Sent**.
+- Documenso emails the branded signing link to each recipient; the buyer's `signingUrl` is returned so you can
+  also text it.
+- Signature events land on **`/api/esign/webhook`** (opened / signed / completed) and advance the loop
+  (`status='signed'`, `signed_at`, the stepper's Agreement Signed node).
+
+### Waiting on Signatures — the loop control
+
+While a doc is `sent` and unsigned, the loop band **and** the Loops list show a green **Waiting on Signatures**
+strip: the sent date, days-waiting, a **reminder toggle**, and **Cancel document**.
+
+- **Reminders** are HouseLoop-owned (Documenso's own auto-reminder is off — we own on/off + cadence). The Inngest
+  `esign-reminder-sweep` re-nudges the unsigned signer every ~2 days while the toggle is on
+  (`hl_tc_loop_document.reminders_enabled`).
+- **Cancel document** voids the agreement (Documenso `Envelope` becomes `CANCELLED`) and reminders stop.
+- Deleting the lead auto-cancels its outstanding agreements (`purgeLead`), so a dead lead never keeps nagging.
+
+## Files
+
+| Piece | Path |
+|---|---|
+| Form catalog (keys, field maps, sig boxes) | `apps/houseloop-crm/lib/tc/contract-forms.ts` |
+| Field-map JSONs (extracted sig coords) | `apps/houseloop-crm/lib/tc/field-maps/*.json` |
+| Fill engine | `apps/houseloop-crm/lib/tc/fill-loop-document.ts` |
+| One-call send | `apps/houseloop-crm/lib/esign/create-fill-send.ts` |
+| Multi-party send | `apps/houseloop-crm/lib/esign/send-loop-document.ts` |
+| Documenso client | `apps/houseloop-crm/lib/esign/documenso.ts` |
+| Sig-coordinate extractor | `tools/houseloop-contracts/anchor-sig-fields.mjs` |
+| E-sign webhook | `apps/houseloop-crm/app/api/esign/webhook/route.ts` |
+
+See also: [Transaction Coordination](/guides/transaction-coordination) for how Forms fits the whole loop.
