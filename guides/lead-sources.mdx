@@ -1,111 +1,120 @@
 ---
 title: "Lead Sources"
-description: "The Lead Sources page — VIEW + ROUTE, never create. Edit Source (identity) is split from Manage Routing Rules (the source-level default rule); per-event routing lives on Trigger Events. Sources come FROM an integration; the Lead Integration create/connect page is WIP."
+description: "The Lead Sources page — one MenuTable, a tab per integration, one row per source. Each integration carries the DEFAULTS every source inherits; a source either follows them or has its own rule, flipped by a non-destructive 'use integration defaults' toggle (per-row + per-tab master). AI responder = the owner's clone (a mode on the human) or an optional standalone AI."
 ---
-
-## 2026-07-13 — SHIPPED: Edit Source split from Manage Routing Rules
-
-**What changed, in one breath:** a source card's actions are now **two clean modals** instead of one conflated
-editor:
-
-- **Edit Source** = **identity only** — name · type · status (the connection lives on its Lead Integration).
-  (`components/settings/lead-sources/EditSourceModal.tsx`.) ✅ shipped.
-- **Manage Routing Rules** = the **source-level DEFAULT rule ONLY**: **Default AI responder** (Myli) · **Default
-  human owner or Pond** · **AI appointment hand-off** · **Default stage** · **Default tags**. This is the rule that
-  catches every lead from this source when nothing more specific overrides it.
-
-**Per-event routing does NOT live here.** Which workflow + notification fires for a given trigger event is set on
-that event's **Configure** modal (⋮ → Configure) on [Trigger Events](/guides/trigger-events) — Manage Routing Rules
-is the source-wide default only, never a per-event override table.
-
-<Warning>
-**WIP — Lead Sources is a partially-shipped arc (flagged HARD by Zach, end of 2026-07-13). Not-yet-built:**
-
-- **Lead Sources = VIEW + ROUTE, never CREATE.** Creating / connecting a source (webhooks, API keys, "how leads
-  arrive: landing page / manual / email forward / website pixel") belongs on the **Lead Integration** page, not here.
-- Sources come **FROM an integration** — a source is what a connected integration surfaces, not something you mint on
-  this page.
-- **The Lead Integration page** (`settings/lead-platform`) — the create/connect home (identity, API keys, webhooks,
-  naming trigger events) — is **designed but not built**.
-- **The old "Add New Lead Source" modal is being retired** — it should navigate to the Lead Integration page, not run
-  its own create flow. (The v3 plain-English Create Source flow described here previously is the modal being retired.)
-- The **Manage Routing Rules** modal still needs the wrongly-added per-event override table (`SourceLeadSourceEvents`)
-  ripped out — keep only the clean default-rule fields above.
-
-Track it in the [Lee WIP dossier](/wip/lee-main).
-</Warning>
 
 ## What this page is
 
-**Settings → Pipeline & Workflow → Lead Sources** is the builder for every marketing source that feeds you
-leads. Cards are **grouped by integration** into the same section bands, in the same order, that the
-[Trigger Events](/guides/trigger-events) and Workflows pages use — **🌐 HouseLoop.ai Website · 🔗 Follow Up
-Boss · 📞 Company Inbox** — so the three pages read as one system. Within each section the sources sit in
-`sort_order`. Deactivated / non-selectable sources are hidden.
+**Settings → Pipeline & Workflow → Lead Sources** shows every marketing source that feeds you leads, as a
+**1:1 mimic of the Trigger Events page**: ONE `MenuTable`, **tabs = integrations** in the fixed order
+**HouseLoop.ai Website · Follow Up Boss · Company Inbox**, an **Integration Defaults** band under the tabs, and
+**one compact table where each source is a ROW** — `icon + name · type · status · leads · last lead · Routing ·
+Manage Rule`. (The old per-source clamshell cards + KPI skyscrapers were retired; per-source performance now
+lives on the source detail page, and the Lead Creation bands live on Trigger Events.)
 
-Each source is one **clamshell card**: a bright-blue header (name, its Lead Integration, type pill, status,
-last lead, Edit Source), a white middle (Lead Source Performance + the Default Routing Rule), and a blue
-**Lead Creation** footer (opening it reveals the lead-creation events table above the band). Cards
-**drag-to-reorder** by the grip handle (persisted), and a source can be paused, archived, or deleted from its
-status menu.
-
-The aggregate KPI row on top is a live sum of every card below — same groups (Leads · Under Contract · Sold ·
-Income), never a separate query.
+`components/settings/lead-sources/LeadSourcesBuilder.tsx` renders it; `app/(crm)/settings/lead-sources/page.tsx`
+feeds it the sources, the integration seats, and each source's resolved defaults.
 
 ## The model — Integration → Source → Lead
 
 | Layer | What it is | Examples |
 |---|---|---|
-| **Lead Integration** (`platform`) | The connector a lead arrives through, and the section it groups under. Carries the platform-wide defaults (AI responder, stage, tags) that sources inherit. | 🌐 HouseLoop.ai Website · 🔗 Follow Up Boss · 📞 Company Inbox |
-| **Lead Source** | The marketing origin. `source_type` is purely the marketing type (Portal / Web / IDX / API / Phone / Email / Pixel). | HouseLoop.ai Organic · HouseLoop PPC · Referral · Sphere of Influence · Zillow · Google PPC · Google Organic · Realtor.com · Phone Call — Google My Business / Past Agents / Sign Call |
-| **Lead** | A person — stamped at creation with its source **and** its integration (`platform`, never NULL). | — |
+| **Lead Integration** (`platform`) | The connector a lead arrives through + the tab it groups under. Its `__platform_<int>__` **seat row** carries the DEFAULTS every source in that tab inherits (owner, AI, stage, tags). | HouseLoop.ai Website · Follow Up Boss · Company Inbox |
+| **Lead Source** | The marketing origin. `source_type` is purely the marketing type (Portal / Web / IDX / API / Phone / Sync). | HouseLoop.ai Organic · Referral · Sphere of Influence · Zillow · Google PPC · Google Organic · Phone Call — Company / Sign Call / Past Client / Ana Legacy |
+| **Lead** | A person — stamped at creation with its source **and** its integration (`hl_leads.platform`, never NULL). | — |
 
-**Manual is an entry *method*, not a source** — it's how a row is typed in, not a marketing origin — so it
-never appears on this page. Likewise **relationships** (Past Client is what a lead *becomes*, managed under
-Relationships) are not sources. Referral and Sphere of Influence are relationship-*origin* sources that group
-under the HouseLoop.ai Website integration.
+**Manual is an entry *method*, not a source**, and **relationships** (Past Client is what a lead *becomes*) are
+not sources — neither appears here. Sources come **FROM an integration** — you don't mint them on this page.
 
-### Company Inbox — the phone NUMBER is the source
+## Integration Defaults — the per-tab band
 
-Inbound calls used to collapse into one generic **Phone Call** source. That's gone (deactivated, not deleted —
-existing leads keep their attribution). Under **📞 Company Inbox**, each company phone **line** is its own lead
-source, and the line's **number carries the attribution**: `hl_phone_numbers.lead_source_id` points at the
-matching source, so a call in on that line attributes to it. Today's per-line sources:
+Under the tabs, the **Integration Defaults** band reads the tab's `__platform_<int>__` seat row and shows the
+four defaults every source in that tab inherits: **Assigned to · AI · Workflow · Set stage**. **Manage Defaults**
+opens the routing editor on the seat itself (the seat is the root — no inherit/custom toggle there, its fields
+*are* the defaults).
 
-- **Phone Call — Google My Business** (`phone_gmb`)
-- **Phone Call — Past Agents** (`phone_past_agents`)
+The seats: `__platform_houseloop__`, `__platform_fub__`, `__platform_inbox__` (`source_type='platform'`,
+`is_selectable=false`, so they never show as pickable sources). Follow Up Boss's seat is set to **owner = Ana +
+her AI clone on, no standalone AI** — so every FUB lead lands on Ana and her clone covers it.
+
+## Routing — inherit vs custom, and the non-destructive toggle
+
+Every source either **follows its integration defaults** or has **its own custom rule**. The **Routing** column
+is a live control that shows and flips this:
+
+- **`use integration defaults` toggle (per row).** ON → the source uses its integration's defaults ("Using
+  integration defaults"). OFF → its own custom rule (blue `↑ Ana Spradling · Attempted Contact`) or, if it never
+  had one, "Inherits integration defaults" (gray).
+- **Per-tab MASTER toggle** in the Integration Defaults band — *"Use these defaults for all N {integration}
+  sources"* — flips **every source in the tab** at once. It reads ON only when all sources in the tab are on the
+  default.
+- **NON-DESTRUCTIVE.** Turning "use integration defaults" ON does **not** delete a source's custom rule — it
+  *suspends* it. The row reads "Using integration defaults · **custom rule saved**", and turning it back OFF
+  **restores the exact last-saved rule.**
+
+**How it's non-destructive (the mechanic):** `hl_lead_sources.use_integration_defaults` (bool, mig **0408**) is a
+suspend flag, separate from the source's `default_*` values. `resolveSourceDefaults()`
+(`lib/lead-sources/resolve-defaults.ts`) reads it via a CTE that NULLs the source's own overrides **only when the
+flag is on**, so the `COALESCE(source, seat)` falls through to the seat — the stored values are untouched and
+resolve again the moment the flag is cleared.
+
+## Manage Rule — a source's own routing rule
+
+**Manage Rule** (`ManageRoutingRulesModal.tsx`) edits one source's rule. It opens with an **inherit vs custom**
+segmented toggle:
+
+- **Use integration defaults** — the fields are greyed + read-only, pre-filled with the **real inherited values**
+  (never blank), so you see exactly what the source follows. Save sets `use_integration_defaults = true`
+  (non-destructive).
+- **Custom rule for this source** — the fields turn on, pre-filled from the inherited values as a starting point;
+  Save un-suspends the source and writes the explicit override. A **↺ Reset to defaults** link flips back.
+
+The fields:
+
+- **Default human owner** — a HUMAN (shown by name, e.g. *Ana Spradling*). Drives the clone below.
+- **Owner's AI clone** — a toggle: *"Let {owner}'s AI clone respond to these leads."* The clone is a **mode on
+  the human** (mig **0392**), never a separate entity — it replies **as** the owner (their name + line). Writes
+  `clone_default_on`; at intake the lead goes into clone mode (`ai_mode_enabled`) and the runtime resolves the
+  owner's clone. See [Myli & AI clones](/guides/myli-system).
+- **Standalone AI responder** — OPTIONAL (None allowed, no forced Myli): a generic AI (Myli) in the lead's right
+  column. Clones are never listed here.
+- **Appointment hand-off · Default stage · Default tags.**
+
+Per-event workflow/notification routing is NOT here — it's set per trigger event on
+[Trigger Events](/guides/trigger-events). Manage Rule is the source-level default rule only.
+
+## The resolver — one hierarchy for every lead-creation path
+
+`resolveSourceDefaults(sourceId)` (`lib/lead-sources/resolve-defaults.ts`) is the ONE resolver every creation
+path uses (FUB import, website intake, manual add, runtime sender rule). It resolves **source override → the
+integration seat** via the real FK `hl_lead_sources.integration_id` (mig 0373) — never CASE-matched text —
+and **suspends the source layer when `use_integration_defaults` is on** (above).
+
+**FUB pull-in applies the resolved owner (fix, 2026-07-14):** `lib/fub-import/import-fub-lead.ts` now sets a new
+lead's owner from the resolved `default_assigned_user_id` (source override → `__platform_fub__` seat = Ana), so a
+FUB pull lands on Ana instead of minting unowned and being grabbed by the Myli ownerless-fallback.
+
+## Company Inbox — the phone NUMBER is the source
+
+Under **Company Inbox**, each company phone **line** is its own lead source, and the line's **number carries the
+attribution** (`hl_phone_numbers.lead_source_id` points at the matching source). The per-line sources
+(`platform='inbox'`, `source_type='phone'`, mig 0398/0399):
+
+- **Phone Call — Company** (`phone_company`)
 - **Phone Call — Sign Call** (`phone_signcall`)
+- **Phone Call — Past Client** (`phone_pastclient`)
+- **Phone Call — Ana Legacy** (`phone_analegacy`)
 
-Seeded by migration `0398_phone_line_sources.sql` (`platform='inbox'`, `source_type='phone'`). The number →
-source mapping is wired with the Company Inbox line work.
+All inbox sources inherit the `__platform_inbox__` seat (mig 0404) like any other tab.
 
 ## The structural guarantees (locked 2026-07-11)
 
-Full law: `GT/GT - ACTIVE/GT_HOUSELOOP_INTEGRATION_SOURCE_MODEL_PRD.md` — "the integration is a relation, not
-a word."
+Full law: `GT/GT - ACTIVE/GT_HOUSELOOP_INTEGRATION_SOURCE_MODEL_PRD.md` — "the integration is a relation, not a
+word."
 
-- **A source's integration is a real FK** (`hl_lead_sources.integration_id` → the integration's config row,
-  mig 0373) — never a text value matched by CASE. The seat-key literals exist in exactly one file
-  (`lib/lead-sources/integrations.ts`); everything else joins the FK.
-- **Every lead has an integration at birth** — `hl_leads.platform` is `NOT NULL DEFAULT 'houseloop'`
-  (mig 0374), and every creation path (website registration, Add-Lead modal, referral-partner insert, FUB
-  import, tools backfill) stamps `platform` + `channel` derived from the source row in SQL.
-- **`is_selectable` separates sources from config seats** (mig 0372) — the integration/global config rows
-  live in the same table but can never appear on this page or be deleted, and editing a source's *type* can
-  never hide its card (visibility never reads `source_type`).
-- **Editing honesty:** the Configure page only shows "Inherit — …" hints when a source actually has an
-  integration to inherit from.
-
-## Per-card anatomy
-
-- **Header (blue):** name · `Lead Integration · <Follow Up Boss | HouseLoop>` · type pill · status dropdown
-  (Active / Pause / Archive… / **Delete source…**) · Last lead · **Edit Source** (identity only — name · type ·
-  status).
-- **Lead Source Performance (white):** Total Leads (deep-links to the filtered Leads list) · Under Contract
-  (units + volume) · Sold (units + volume) · Total Income (HouseLoop + Agent).
-- **Default Routing Rule (white) — Manage Routing Rules:** the source-level DEFAULT rule only — **Default AI
-  responder** (Myli) · **Default human owner or Pond** · **AI appointment hand-off** · **Default stage** ·
-  **Default tags**. It catches every lead from this source and resolves source override → integration default.
-  Per-event workflow/notification routing is set on [Trigger Events](/guides/trigger-events), not here.
-- **Lead Creation (blue footer):** the read-only list of the trigger events that create a lead for this source
-  — event, bound workflow, active, total fired. Which events create a lead is toggled on Trigger Events.
+- **A source's integration is a real FK** (`integration_id` → the seat row, mig 0373) — never text matched by
+  CASE. The seat-key literals live in exactly one file (`lib/lead-sources/integrations.ts`).
+- **Every lead has an integration at birth** — `hl_leads.platform` is `NOT NULL DEFAULT 'houseloop'` (mig 0374);
+  every creation path stamps `platform` + `channel` from the source row.
+- **`is_selectable` separates sources from config seats** (mig 0372) — the seat rows live in the same table but
+  never appear here or get deleted.
