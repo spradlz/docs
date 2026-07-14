@@ -1,17 +1,17 @@
 ---
 title: "Workflows"
-description: "The HouseLoop CRM workflow engine — one intent canvas per thing a person did (New/Existing as a visible branch inside), the ONE on/off switch (the Trigger Events toggle), the sender chain, Assign Lead routing, branches, and the communication-recency condition matrix. Runs on Inngest."
+description: "The HouseLoop CRM workflow engine — the folder view (integration → trigger-event folder → arm workflow rows), the Create Workflow modal (Integration → Trigger event → New/Existing), per-message sender, the row kebab, the inline-expandable builder, and the communication-recency condition matrix. Runs on Inngest."
 ---
 
 <Note>
-**Brought current 2026-07-11 night (Lee) — v4 FLAT EVENT MODEL.** The current model: **one trigger event per
-human action, TWO SEPARATE workflows per event** — a **New Lead** arm and an **Existing Lead** arm — and the
-router picks the arm automatically from the intake's created-flag. **Never a fork inside a canvas** (Zach
-reversed the earlier one-canvas-with-a-branch model on 2026-07-11). Workflow NAMES carry the arm prefix
-("New Lead — Contact Request" / "Existing Lead — Contact Request"); trigger-event names never do. The
-Workflows page groups the pair under ONE trigger label, pair-shaded, inside the same
-**Activity · Communication · Insights** bands as the Trigger Events board. One on/off switch per arm =
-that arm's Workflow Active toggle on the Trigger Events board.
+**Brought current 2026-07-13 night (Lee) — the FOLDER VIEW + taxonomy.** The current model: **one trigger event per
+human action, TWO SEPARATE workflows per event** — a **New Lead** arm and an **Existing Lead** arm — and the router
+picks the arm automatically from the intake's created-flag. **Never a fork inside a canvas.** Every workflow is
+`Family (Integration) × Lead Stage (arm) × Type (band) → a trigger event` (`lib/workflows/workflow-taxonomy.ts`);
+`hl_workflows.folder` holds the Family token, `hl_workflows.lead_stage` (mig 0394) holds the arm, `trigger_type`
+holds the event. The Workflows page renders these as a **folder view** — each trigger event is a gray folder header
+(shown once) with its arm workflows nested as rows. New workflows are built through the **Create Workflow modal**;
+one on/off per arm lives on the [Trigger Events](/guides/trigger-events) board (Configure).
 </Note>
 
 A **workflow** is a trigger + a sequence of steps (send a text, send an email, assign the lead,
@@ -46,15 +46,52 @@ After deploying a new or changed workflow function, **re-sync Inngest**:
 dashboard until you do.
 </Note>
 
-## One trigger event, TWO workflows (the v4 model — locked 2026-07-11)
+## One trigger event, TWO workflows (the taxonomy)
 
 **A workflow is built around a trigger event — a thing a person actually did — and every event carries TWO
 separate workflows:** the **New Lead arm** (this event just minted the person; first-touch copy) and the
 **Existing Lead arm** (a known lead did it again; follow-up copy). The two arms are two REAL workflow rows —
 each with its own canvas, its own name ("New Lead — Saved Home" / "Existing Lead — Saved Home"), and its own
-Workflow Active toggle on the Trigger Events board. The dispatch's created-flag picks the arm at fire time;
-a canvas never forks on new-vs-existing internally (that earlier model is retired — the fork was invisible
-state, and the arm toggles give Zach per-arm control the internal branch never could).
+on/off (the arm toggle in the trigger event's Configure modal). The dispatch's created-flag picks the arm at
+fire time; a canvas never forks on new-vs-existing internally.
+
+Every workflow is `Family (Integration) × Lead Stage (arm) × Type (band)` — the taxonomy in
+`lib/workflows/workflow-taxonomy.ts`, the anti-drift SSOT. Families: **HouseLoop.ai Website · Follow Up Boss ·
+Company Inbox · Transaction Coordination · Manual** ("Other/Custom" was retired — the catch-all is Manual). Lead
+Stages: `new_lead` · `existing_lead`. Types are the Trigger-Events bands: `activity` · `communication` · `insight`.
+Structural hard rules fall out of the `VALIDITY` map: **Insights = Existing-only** (no insight under any new-lead
+arm), **Communication · New exists only for Company Inbox**, and **Transaction Coordination is Existing-only with no
+Type selector**.
+
+### The folder view (how the page renders)
+
+The Workflows page is a **folder view** (`components/workflows/WorkflowsTable.tsx`), not a flat grid: an **integration
+section** contains **trigger-event folders** (a gray folder header, shown **once** per event), and each folder nests
+its **workflow rows**. Every workflow row carries an **arm pill** — **NEW · EXIST · CUSTOM · MANUAL**. A folder is
+**1-to-N** (one trigger event → up to a New arm + an Existing arm + any custom duplicates). **Manual** is its own
+section of flat rows (a Manual workflow IS its own trigger — no event folder, no arm). **Company Inbox** is a
+first-class blue section on both the Workflows page and the Trigger Events board.
+
+### The Create Workflow modal
+
+New workflows are built through the **Create Workflow modal** (`components/workflows/CreateWorkflowModal.tsx`), a
+cascade:
+
+1. **Integration** — Family picker (defaults to HouseLoop.ai; includes Manual + Company Inbox; **no Other/Custom**).
+2. **Trigger event** — required; the dropdown is **grouped by band** (Activity / Communication / Insights) with gray
+   band headers.
+3. **New Lead / Existing Lead toggle** — the arm. **Hard-locked to Existing on Insights** (and any Existing-only
+   validity combo).
+4. **Manual integration hides the trigger + arm** entirely — a Manual workflow is the trigger, so it carries no
+   trigger event and a null `lead_stage`.
+
+On save the modal writes `folder` (the Integration token), `lead_stage` (mig 0394, the arm), and `trigger_type`
+(the event).
+
+### The row kebab
+
+Each workflow row's ⋮ menu: **Open Builder** · **Edit Settings** (reopens the Create Workflow modal in **edit mode**
+— change integration/trigger/arm without leaving the page) · **Duplicate** · **Lock** · **Delete**.
 
 Two kinds of workflow exist in the builder:
 
@@ -69,9 +106,9 @@ A workflow used to have TWO on/off gates that could disagree (`hl_workflows.stat
 dispatcher checks — and the Trigger Events board's "Workflow Active" toggle). General Registration once showed
 "active" on the board while never running. Fixed structurally:
 
-- **The Trigger Events board's Workflow Active toggle IS the control** (`/settings/trigger-events`). Flipping it
-  also drives the bound workflow's `hl_workflows.status` (`PATCH /api/lead-flow`), so the two can never diverge.
-  Locked infrastructure workflows are exempt (always on).
+- **The Trigger Events board is the control** (`/settings/trigger-events`) — each arm's on/off inside the event's
+  **Configure** modal. Flipping it also drives the bound workflow's `hl_workflows.status`, so the two can never
+  diverge. Locked infrastructure workflows are exempt (always on).
 - **The Workflows page status is a READ-ONLY mirror** — a colored-dot badge. You turn a workflow on/off at its
   **trigger event**, not on the Workflows page. Actions on a workflow row still open the Builder.
 - **Every real fire is a ledger row:** `dispatchDoor` writes exactly one per-lead row to `hl_trigger_fire`
