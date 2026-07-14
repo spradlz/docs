@@ -179,6 +179,52 @@ HouseLoop natively and outbound sends AS the line. FUB is Zillow-owned and progr
 
 ---
 
+# ═══ THE PORTED LINES + LEAD-FLOW ATTRIBUTION (2026-07-14) ═══
+
+<Note>
+This block is the **lead-flow layer** that sits UNDER the voice routing above: the routing playbook (who/what
+answers, the one front door, Retell, the port-watch) is unchanged and canonical. What's added here is **which
+lead source a call is filed under** — a distinct, by-number model shipped in mig **0398** + **0399**.
+**Lane split:** comms / provisioning / porting = **Adam** + **Caleb**; the number→source→trigger→routing
+lead-flow mapping (`lead_source_id` / `workflow_id` / `creates_event` / category-as-source) = **Lee**.
+</Note>
+
+## The number roster — what's landed, wired, and live
+
+Three lines are now ported into **OUR Twilio**; each is a **distinct number**, so an inbound call's `To` = the
+line = a **deterministic** source. A fourth shared Past-Client line is still being provisioned.
+
+| Line | Number | Twilio / status | Attributes as | Source key |
+|---|---|---|---|---|
+| **Company Number** | 913-320-0906 | **landed** (SID `PN81286df6…`), SMS-capable, `platform=twilio` — LIVE + wired | **Phone Call — Company** | `phone_company` |
+| **Company LISTINGS / Sign line** | 913-354-8600 | **landed** (SID `PNb49c2582…`), `platform=twilio` — LIVE + wired | **Phone Call — Sign Call** | `phone_signcall` |
+| **Ana legacy** | 913-954-7123 | carrier-approved, **firm port date Mon 2026-07-21** — source wired, live on port | **Phone Call — Ana Legacy** | `phone_analegacy` |
+| **Past Client** | one shared Twilio number ALL past agents forward to | **provisioning pending** (Adam's lane) — source ready | **Phone Call — Past Client** | `phone_pastclient` |
+
+- **Company (320-0906)** rides Zillow + Homes.com + Google My Business. A forwarded call can't tell those apart at
+  the number, so they collapse to the ONE `phone_company` source — one source, not three.
+- **Past Client** is deliberately ONE number: every departed/past agent forwards to it and we **do not distinguish
+  which past agent**. Any inbound to it = `phone_pastclient`.
+
+## Lead-flow attribution — the number IS the source
+
+**The phone NUMBER is the lead source.** Attribution is decided by the line that was dialed:
+
+- Each company line's `hl_phone_numbers.lead_source_id` points to **its own per-line lead source**.
+- An inbound call resolves **by the number it hit** → `lead_source_id` → the lead source → its **Company Inbox**
+  trigger event → routing.
+- The four per-line sources — `phone_company` · `phone_signcall` · `phone_pastclient` · `phone_analegacy` — all
+  live under the **Company Inbox** integration (platform `inbox`) on **both** the **Trigger Events** and the
+  **Lead Sources** pages.
+
+**Migrations:**
+- **0398** — created the per-line phone lead sources under Company Inbox (and deactivated — not deleted — the old
+  generic `phone_call` bucket, so its existing leads keep their attribution).
+- **0399** — reconciled those stubs to the **by-number** model (Company · Sign Call · Past Client · Ana Legacy) and
+  **wired `lead_source_id`** on 320-0906, 354-8600, and 954-7123. Past Client's row gets wired when its number lands.
+
+---
+
 # ═══ SECTION 1 — EVENTS, INBOXES & MYLI'S ROUTING ═══
 
 ## FUB is our phone system today (pre-Twilio)
