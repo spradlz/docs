@@ -176,12 +176,18 @@ A workflow is one `hl_workflows` row:
 
 | Column | Meaning |
 | --- | --- |
-| `trigger_type` | what starts it — e.g. `tag_added`, `tour_request_registration`, `tour_requested` |
+| `trigger_type` | what starts it — e.g. `tag_added`, `tour_request`, `property_saved` |
+| `folder` | the **Family (Integration)** token — `houseloop` / `follow_up_boss` / `inbox` / `transaction` / `manual` |
+| `lead_stage` | the **arm** (mig 0394) — `new_lead` / `existing_lead` (null for Manual) |
 | `trigger_config` | JSONB. For Tag Added: `{ tag_ids: ["…","…"] }` (multi-tag, "is one of") |
 | `workflow_config` | JSONB `{ nodes, connections }` — the steps + connections the canvas draws and the runner walks |
 | `is_system` / `locked_at` | system default — locked in the builder, customized via Duplicate as Custom |
-| `sender_default` | the workflow-level "Sends as" — `lead_owner`, `system`, or a specific user id |
 | `kind` | grouping / category |
+
+<Note>
+**The workflow-level default sender was removed (2026-07-13).** There is no longer a `sender_default` column /
+toolbar "Sends as" — **sender is per-message**, set on each Send step. See [Send steps & the sender chain](#send-steps--the-sender-chain).
+</Note>
 
 The `workflow_config.connections` array is the set of **connections** — `{ source, target }`, plus
 `branch: "true" | "false"` on the two connections leaving a Branch step. Every connection in this
@@ -263,17 +269,15 @@ were added vs already present), so re-applying a tag doesn't re-trigger.
 
 ## Send steps & the sender chain
 
-Each Send Text / Send Email step answers one question: **"Who does this message come from?"** —
-resolved through a three-level chain (`resolveStepSendIdentity()` in `execute-step.ts`):
+Each Send Text / Send Email step answers one question: **"Who does this message come from?"** — and **sender is
+per-message** (the old workflow-level default sender was removed 2026-07-13). Resolved through
+`resolveStepSendIdentity()` in `execute-step.ts`:
 
-1. **Step override** — the step's own "Send as" select: the lead's owner, the system identity,
-   or a **specific member** (pins that one message to that member's line + inbox no matter who
-   owns the lead).
-2. **Workflow default** — the builder toolbar's "Sends as" (`hl_workflows.sender_default`):
-   `lead_owner` (default), `system`, or a specific member. **A step that never touched its
-   sender select follows this.**
-3. **Lead's owner** — `lead_owner` resolves at send time to the lead's AI agent (Myli) or
-   assigned human; the AI-clone rule applies (a clone sends as the human it clones).
+1. **Step "Send as"** — the step's own select: the lead's owner (default), the system identity, or a **specific
+   member** (pins that one message to that member's line + inbox no matter who owns the lead). Each Send step sets
+   its own sender — there is no workflow-wide "Sends as" to inherit.
+2. **Lead's owner** — `lead_owner` resolves at send time to the lead's AI agent (Myli) or assigned human; the
+   AI-clone rule applies (a clone sends as the human it clones).
 
 | Resolved sender | Sends as |
 | --- | --- |
@@ -292,11 +296,11 @@ always hears from a person. System voice is valid only for an **agent-alert** te
 ### "This sends as →" (resolved-sender preview)
 
 The "Send as" dropdown shows the **source** of the choice; right under it the step shows the
-**outcome** the runtime actually computes — encoding the two overrides that would otherwise be
-invisible: the lead-text System→agent coercion above, and "Workflow default" inheriting the
-header's "Sends as." Because the lead's concrete owner resolves per-lead at send time, the preview
-labels it honestly (*"Myli — the lead's owner · resolved when this runs"*) rather than guessing a
-name. If an **Assign Lead** step runs upstream, "the lead's owner" is whoever it set.
+**outcome** the runtime actually computes — encoding the override that would otherwise be
+invisible: the lead-text System→agent coercion above. Because the lead's concrete owner resolves
+per-lead at send time, the preview labels it honestly (*"Myli — the lead's owner · resolved when
+this runs"*) rather than guessing a name. If an **Assign Lead** step runs upstream, "the lead's
+owner" is whoever it set.
 
 ### Assign Lead (lead routing as a canvas step)
 
@@ -404,10 +408,13 @@ Full spec: `GT/GT - ACTIVE/GT_HOUSELOOP_WORKFLOW_CONDITIONS.md`.
 
 ## Editor UX notes
 
+- **Inline-expandable step config (shipped 2026-07-13).** Each node on the canvas has a **chevron**; expand it to
+  configure the step **inline** (a shared `StepConfigBody`) instead of a separate side panel.
 - **Template picker** is collapsible — collapsed shows the selected template + a "Change" link;
   the selected category is pinned to the top; categories use human-readable labels.
 - The workflow canvas + editor live in `apps/houseloop-crm/components/workflows/WorkflowBuilder.tsx`.
-- System workflows show a lock banner with **Duplicate as Custom** in place of Save.
+- System workflows show a lock banner with **Duplicate as Custom** in place of Save. **Duplicate-as-Custom uses the
+  thorough copy** (`/duplicate`) — it clones the full canvas + step config, not a shell.
 
 ## Reference
 
