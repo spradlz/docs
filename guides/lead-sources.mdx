@@ -38,10 +38,16 @@ Track it in the [Lee WIP dossier](/wip/lee-main).
 ## What this page is
 
 **Settings → Pipeline & Workflow → Lead Sources** is the builder for every marketing source that feeds you
-leads. One **clamshell card per source**: a bright-blue header (name, its Lead Integration, type pill, status,
+leads. Cards are **grouped by integration** into the same section bands, in the same order, that the
+[Trigger Events](/guides/trigger-events) and Workflows pages use — **🌐 HouseLoop.ai Website · 🔗 Follow Up
+Boss · 📞 Company Inbox** — so the three pages read as one system. Within each section the sources sit in
+`sort_order`. Deactivated / non-selectable sources are hidden.
+
+Each source is one **clamshell card**: a bright-blue header (name, its Lead Integration, type pill, status,
 last lead, Edit Source), a white middle (Lead Source Performance + the Default Routing Rule), and a blue
-**Registration Doors** footer (opening it reveals the doors table above the band). Cards **drag-to-reorder**
-by the grip handle (persisted), and a source can be paused, archived, or deleted from its status menu.
+**Lead Creation** footer (opening it reveals the lead-creation events table above the band). Cards
+**drag-to-reorder** by the grip handle (persisted), and a source can be paused, archived, or deleted from its
+status menu.
 
 The aggregate KPI row on top is a live sum of every card below — same groups (Leads · Under Contract · Sold ·
 Income), never a separate query.
@@ -50,14 +56,28 @@ Income), never a separate query.
 
 | Layer | What it is | Examples |
 |---|---|---|
-| **Lead Integration** | The connector a lead arrives through. Carries the platform-wide defaults (AI responder, stage, tags) that sources inherit. | Follow Up Boss · HouseLoop |
-| **Lead Source** | The marketing origin. `source_type` is purely the marketing type (Portal / Web / IDX / API / Manual Entry / Email / Pixel). | Zillow · Google PPC · Google Organic · Realtor.com · Other · HouseLoop.ai Organic · HouseLoop PPC · Referral · Sphere of Influence |
+| **Lead Integration** (`platform`) | The connector a lead arrives through, and the section it groups under. Carries the platform-wide defaults (AI responder, stage, tags) that sources inherit. | 🌐 HouseLoop.ai Website · 🔗 Follow Up Boss · 📞 Company Inbox |
+| **Lead Source** | The marketing origin. `source_type` is purely the marketing type (Portal / Web / IDX / API / Phone / Email / Pixel). | HouseLoop.ai Organic · HouseLoop PPC · Referral · Sphere of Influence · Zillow · Google PPC · Google Organic · Realtor.com · Phone Call — Google My Business / Past Agents / Sign Call |
 | **Lead** | A person — stamped at creation with its source **and** its integration (`platform`, never NULL). | — |
 
-Two things are deliberately **not** sources: **relationships** (Past Client is what a lead *becomes*, managed
-under Relationships) and **channels** (Manual Entry is how a row is typed in, not a marketing origin).
-Referral and Sphere of Influence are relationship-*origin* sources with **no integration** — their leads
-default to the HouseLoop platform.
+**Manual is an entry *method*, not a source** — it's how a row is typed in, not a marketing origin — so it
+never appears on this page. Likewise **relationships** (Past Client is what a lead *becomes*, managed under
+Relationships) are not sources. Referral and Sphere of Influence are relationship-*origin* sources that group
+under the HouseLoop.ai Website integration.
+
+### Company Inbox — the phone NUMBER is the source
+
+Inbound calls used to collapse into one generic **Phone Call** source. That's gone (deactivated, not deleted —
+existing leads keep their attribution). Under **📞 Company Inbox**, each company phone **line** is its own lead
+source, and the line's **number carries the attribution**: `hl_phone_numbers.lead_source_id` points at the
+matching source, so a call in on that line attributes to it. Today's per-line sources:
+
+- **Phone Call — Google My Business** (`phone_gmb`)
+- **Phone Call — Past Agents** (`phone_past_agents`)
+- **Phone Call — Sign Call** (`phone_signcall`)
+
+Seeded by migration `0398_phone_line_sources.sql` (`platform='inbox'`, `source_type='phone'`). The number →
+source mapping is wired with the Company Inbox line work.
 
 ## The structural guarantees (locked 2026-07-11)
 
@@ -79,11 +99,13 @@ a word."
 ## Per-card anatomy
 
 - **Header (blue):** name · `Lead Integration · <Follow Up Boss | HouseLoop>` · type pill · status dropdown
-  (Active / Pause / Archive… / **Delete source…**) · Last lead · **Edit Source** (opens the editor modal:
-  name, type, defaults — stage, tags, AI responder, human owner).
+  (Active / Pause / Archive… / **Delete source…**) · Last lead · **Edit Source** (identity only — name · type ·
+  status).
 - **Lead Source Performance (white):** Total Leads (deep-links to the filtered Leads list) · Under Contract
   (units + volume) · Sold (units + volume) · Total Income (HouseLoop + Agent).
-- **Default Routing Rule (white):** assigned-to · collaborators · workflow · set-stage — the rule that
-  catches every lead from this source; resolves source override → integration default.
+- **Default Routing Rule (white) — Manage Routing Rules:** the source-level DEFAULT rule only — **Default AI
+  responder** (Myli) · **Default human owner or Pond** · **AI appointment hand-off** · **Default stage** ·
+  **Default tags**. It catches every lead from this source and resolves source override → integration default.
+  Per-event workflow/notification routing is set on [Trigger Events](/guides/trigger-events), not here.
 - **Registration Doors (blue footer):** the read-only list of what fires when a NEW lead registers from this
   source — trigger event, bound workflow, total leads, last fired. Toggling doors lives under Trigger Events.
