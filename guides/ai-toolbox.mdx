@@ -1,0 +1,87 @@
+---
+title: "AI Toolbox"
+description: "THE one AI Toolbox doc — the HANDS of the AI clone. Every tool the clone can pick up, toggled per role, with a live call ledger + Run Log; and how a TOOL CALL becomes a TRIGGER that fires a workflow (the third trigger family), the two seeded workflows, and the two ledgers that keep counts honest."
+---
+
+<Note>
+**The mental model, one line:** persona = the **BRAIN** (on the role), the **AI Toolbox** = the **HANDS**
+(the tools the clone picks up), workflows = the **MACHINERY** (fired by tool calls). *If it happens IN the
+conversation it's a tool; if it happens BECAUSE of the conversation it's a workflow.*
+</Note>
+
+## What it is
+
+The **AI Toolbox** (`/ai/toolbox`, under **AI** in the sidebar) is the tool-chest: every tool the AI clone can
+pick up in a conversation — search homes, look up a property, send a home, create a saved search, book/reschedule
+an appointment, send a text or email, add a note, move a stage, and so on. Each tool is a block you can toggle on
+or off **per role**, see how hard it's working (a live 7-day call count), and open its **Run Log** — every call,
+who made it (human 👤 or AI 🤖), when, which lead, and the result.
+
+The tools are **catalog-derived** — the one source is `lib/agent-runtime/capabilities.ts` (`CAPABILITY_TREE`).
+Add a tool to the catalog (with its `icon`) and it appears in the Toolbox automatically; there is no parallel list.
+
+## The Toolbox page
+
+| Piece | What it is | Where it reads/writes |
+|---|---|---|
+| **Tool block** | icon · name · `tool_key` · plain-English description · call-count hero · toggle · Run Log ↗ | — |
+| **Per-role toggle** | ON/OFF for the selected role's clones (default role = **AI ISA**). WYSIWYG default-ON: enabled unless the config explicitly stores `false`. | writes `hl_role.tools` JSONB via `PATCH /api/team/roles/[id]` |
+| **Call count (7d)** | how many times the clone picked up that tool | reads the `hl_tool_fire_live` view |
+| **Run Log modal** | who · when · which lead · what happened · result (failures in red) | `GET /api/ai-tools/fires?key=<cap>` |
+| **Header KPIs** | Tools · Enabled · Calls·7d | `GET /api/ai-tools` |
+
+`send_document` and `start_showing_coordination` ship **locked OFF** on the AI ISA role until their workflows
+govern them (never unannounced) — an OFF built tool shows the 🔒 pill.
+
+## AI Tools as the third trigger family
+
+Trigger families are **Lead Sources · Company Inbox · AI Tools**. An AI tool call **is a trigger**: when the clone
+picks up a tool, that call can fire a workflow through the **same engine every other trigger uses** — no hidden
+side-effects (the *workflow canvas is the truth* doctrine: every action is a visible step on a visible path).
+
+- **Every conversation tool is registered as a trigger event** (`hl_trigger_events`, `category = 'ai_tool'`,
+  keys `ai_<capability>`; migrations 0407–0408). All ~20 show up on the **Trigger Events** page under the
+  **🧰 AI Tools** section — each with a workflow slot you wire as you go (the WORKFLOW cell reads "None — set
+  via ⋮" until then), exactly like every other integration. Listing them all keeps every action **trackable and
+  reportable**; voice tools are a separate family (they run in the voice runtime, not `execTool`).
+- **A tool fires its door only when an active workflow is bound to it.** `execTool` (the one choke point every
+  tool call flows through, `lib/ai/lead-conversation.ts`) calls `fireDoor('ai_<cap>', …)` **only if** an active
+  workflow has `trigger_type = ai_<cap>` (checked via a 60-second-cached lookup) — so listing 20 triggers never
+  firehoses no-op dispatches. `dispatchDoor` then routes the door to the workflow and `workflowRunner` executes
+  its canvas, recording a real run in `hl_workflow_runs`.
+
+### The two seeded workflows
+
+| Workflow | Fired by | Today's canvas |
+|---|---|---|
+| **Saved Search Setup** | `create_saved_search` (`ai_create_saved_search`) | a logged note — grows the quiet-account + wrap-up-email steps as they ship |
+| **Appointment Set** | `schedule_appointment` (`ai_schedule_appointment`) | a logged note — grows the partner-brief + prep steps as they ship |
+
+They're real, running canvases (visible on the Workflows builder, real Inngest runs) — a foundation that thickens,
+not a mock. Both appear on the **Workflows** page under the **🧰 AI Tools** integration, folder-per-tool.
+
+## The two ledgers (keep the two counts honest)
+
+Two different questions, two different tables — never conflate them:
+
+- **`hl_tool_fire`** (view `hl_tool_fire_live`, migration 0406) — one row per **tool invocation**. Powers the
+  Toolbox's "Calls · 7d" + Run Log. Written by `logToolFire()` from `execTool`. *Tracking is total* — every tool
+  call is logged here regardless of whether a workflow is bound.
+- **`hl_trigger_fire`** (view `hl_trigger_fire_live`, migration 0355) — one row per **door dispatch**. Powers the
+  Trigger Events ⚡ Triggered count + its drill-down. Written by `dispatchDoor` when a tool's door fires.
+
+## Where the AI Tools family shows up
+
+| Surface | What you see |
+|---|---|
+| **`/ai/toolbox`** | every tool, per-role toggle, call count, Run Log |
+| **`/settings/trigger-events`** → 🧰 AI Tools | every tool as a trigger → its bound workflow → ACTIVE (flips the workflow's status) → ⚡ Triggered |
+| **`/workflows`** → 🧰 AI Tools | the workflows fired by a tool, folder-per-tool |
+
+## The maintenance rule
+
+- **New tool** → add it to `CAPABILITY_TREE` (with `icon`) in `capabilities.ts`. It's in the Toolbox automatically.
+  To make it a trigger too, add `ai_<cap>` to `DOOR_EVENT_KEYS` and seed a `hl_trigger_events` row (`category
+  'ai_tool'`); a workflow binds by `trigger_type = ai_&lt;cap&gt;`.
+- **Wire a workflow to a tool** → create a workflow with `trigger_type = ai_<cap>`, set it active. `execTool` starts
+  firing that tool's door within ~60s (the bound-workflow cache TTL). No code change.
