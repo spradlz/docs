@@ -53,10 +53,17 @@ scoped by **`lead_id` alone** and "cleaned" with subtractive band-aid filters.
 | **4 — "Route to a number" custom-cell** | The call-routing modal (inbox + profile) | ✅ **SHIPPED (2026-07-15)** |
 
 <Info>
-**⚠️ Live data note (2026-07-15):** the audience primitive everywhere is `notif_scope='all' OR access_level='owner'`.
-Zach's `hl_users` row is `access_level='admin'`, `notif_scope=NULL` — so he does **not** currently match the
-super-admin audience. Part 2's "guaranteed" pings can't reach him until his row is set to `notif_scope='all'`
-(or `access_level='owner'`). This is a one-row data fix, surfaced for Zach's decision — not silently flipped.
+**Notification scope — how "All leads / any agent" actually works (corrected 2026-07-15).** There is **no
+"super admin" role** — the tiers are `owner` > `admin` > `member` (`access_level`), resolved by
+`lib/auth/access-tier.ts`. The **"All leads — any agent" toggle** on `/settings/notifications` is shown to any
+admin-tier user and writes the `hl_users.notif_scope` **column** = `'all'`. The fan-out delivers every lead's
+notifications to `notif_scope='all' OR access_level='owner'` (`create.ts:197`, `lead-events.ts:240`,
+`router.ts:176`) — a real, wired path, not a dead toggle. **Zach is `access_level='admin'`, `notif_scope='all'`,
+and IS the sole member of that audience today** — he receives team-wide notifications. (Trap to avoid: there is
+also a dead `data->>'notif_scope'` JSONB field that is always NULL and read by nothing — do not confuse it with
+the real column.) Open cleanups: (1) no user is `access_level='owner'` — consider making Zach owner so the top
+tier is structural, not toggle-dependent; (2) the settings save is fire-and-forget (no `res.ok` check) so a
+failed PUT could show a scope the DB never saved — harden it.
 </Info>
 
 ---
