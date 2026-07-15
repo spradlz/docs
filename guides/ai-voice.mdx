@@ -21,13 +21,52 @@ Transcript pillbar; per-call cost lands with the wrap-up pipeline). The jobs use
 Receptionist toggle on the Cockpit is the same `voice_enabled` wire.
 </Info>
 
-# ═══ WHERE WE ARE (status as of 2026-07-11, late — Adam/Fable 5 closeout) ═══
+# ═══ THE 2026-07-15 STATE — BACK TO LIVEKIT NATIVE S2S (Retell abandoned) — code-audited ═══
 
-**Runtime pivot, locked by Zach 2026-07-11 ~20:30:** the DIY LiveKit + Gemini stack was cut after live-audition
-failures (garbled turn order, dead air, Gemini's industry-wide `1011` mid-call drops). Zach: *"there has to be a
-third party that has cracked this"* — and there is. **Myli now runs on Retell AI** (measured 580–620ms
-voice-to-voice on real phone calls); the entire CRM seam survived the pivot unchanged. The DIY worker
-(`apps/myli-voice-agent`) is STOPPED, kept as reference only.
+<Warning>
+**The current runtime is LiveKit, NOT Retell** (Zach 2026-07-15: *"retell was a shit show… we moved from
+retell… native S2S was working a lot better. we never finished it."*). The Retell pivot below (2026-07-11) was
+tried and then **reverted** — after fanning out GitHub research, the team moved back to a **native
+speech-to-speech** stack. Everything in the Retell sections further down is **HISTORICAL** — kept for the
+receipts, not the truth. This is what the CODE actually shows today:
+
+- **The worker:** `apps/myli-voice-agent/agent.py` — **LiveKit Agents + Gemini native-audio S2S**
+  (`google.realtime.RealtimeModel(model="gemini-2.5-flash-native-audio-latest", voice="Leda")` — the
+  native-audio model, which cleared the old `1011` drops that killed the first Gemini attempt). Framework
+  ported from the proven `apps/lee-voice-agent` skeleton.
+- **Telephony:** the CRM voice webhook (`app/api/phone/webhooks/voice/route.ts`) for an `answer_mode='myli'`
+  line TwiML-dials the **LiveKit SIP trunk** — `<Dial answerOnBridge><Sip>sip:{to}@{livekit_sip_domain}?X-HL-CallSid=…</Sip></Dial>` — reading the domain from `LIVEKIT_SIP_DOMAIN` (env, wins) then
+  `hl_settings.phone_provider.livekit_sip_domain`. The header attrs arrive as `sip.h.*` participant attributes.
+- **The agent's in-call tools:** `capture_caller` · `set_callback` · `take_message` · `flag_spam`. The MVP job
+  is the **receptionist** — "Spradling Group, this is Myli" → who/what → rapport → callback number + time →
+  confirm. **No live transfers.** Spam → polite exit + silent flag.
+- **The CRM seam survives:** on session close the agent POSTs `/api/phone/myli/wrapup` (lead create-or-match,
+  callback task, notify the assigned agent). This is the ONE write.
+
+**⚠️ Stale bits to fix (found in the audit):**
+1. `hl_settings.phone_provider.livekit_sip_domain` still holds **`sip.retellai.com`** — a leftover from the
+   Retell era. It MUST be the real LiveKit SIP domain (or rely on the `LIVEKIT_SIP_DOMAIN` env override). Left
+   as-is, a myli-mode call dials Retell's dead SIP.
+2. The `retell-*` routes (`/api/phone/myli/retell-inbound`, `retell-webhook`, `tool`) are **dead** — the
+   LiveKit path uses `wrapup` + participant attributes, not those webhooks. Candidates for deletion.
+3. `ai_conversations.enabled = false` (the master AI-conversations switch is OFF); `voice_enabled = true`.
+   Only **913-937-9359** ("MYLI GAUNTLET TEST LINE") is `answer_mode='myli'`.
+4. **No OUTBOUND call path exists** — the agent only ANSWERS. The MVP2 voice-elevation (Myli *calls* a lead
+   to verify a text) needs a new outbound leg (LiveKit SIP outbound / a `place_call` tool). Unbuilt.
+
+**Bottom line:** the native-S2S receptionist is wired end-to-end but **UNFINISHED and not carrying live
+traffic** — no calls in the recent window ran through it. This doc's job now is to be the accurate map for
+finishing it.
+</Warning>
+
+# ═══ HISTORICAL — THE RETELL ERA (2026-07-11, reverted) ═══
+
+**Runtime pivot, locked by Zach 2026-07-11 ~20:30 — LATER REVERTED (see the 2026-07-15 state above):** the DIY
+LiveKit + Gemini stack was cut after live-audition failures (garbled turn order, dead air, Gemini's
+industry-wide `1011` mid-call drops). Zach: *"there has to be a third party that has cracked this"*. **Myli ran
+on Retell AI** (measured 580–620ms voice-to-voice); the CRM seam survived the pivot unchanged. **This was then
+undone** — the team moved back to LiveKit with Gemini's newer *native-audio* model, which fixed the `1011`
+cluster. The sections below describe the Retell build for the record.
 
 **Live today:**
 
