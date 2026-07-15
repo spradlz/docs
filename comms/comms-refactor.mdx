@@ -1,0 +1,169 @@
+---
+title: "⭐ Comms Refactor (Caleb)"
+description: "The living work-in-progress plan for untangling HouseLoop comms — calls, text, and emails. ONE place everything about the refactor reads from: the root cause, the four-part plan, what shipped, what hasn't, and the proof each part is done."
+---
+
+<Info>
+**This is a living WIP document — owned by Caleb.** It is the single source of truth for the
+calls / text / emails refactor. Every part below is tracked here as `SHIPPED` / `NOT BUILT`
+until it is live and verified on prod. If a comms change isn't reflected here, it isn't real.
+Last updated: **2026-07-15**.
+</Info>
+
+## Why this exists (the honest status)
+
+Zach was testing notifications and a **"👀 James Ross viewed a home"** alert — texted from the
+913-800-4470 Notifications line to his cell — rendered **inside a lead's Texts thread**. Same thing
+again 2026-07-15: the **daily "🏠 HouseLoop — last 24h" website digest** and a **"Lucy Hartman saved
+a home"** alert both landed in the Zach Spradling test-lead Texts thread, the digest showing "as Ana."
+
+That is not a display glitch. It is one structural root cause, and it hits **all three channels**.
+
+<Warning>
+**A plan was written 2026-07-14 and only PART 1 (these docs) + PART 4 (call-routing modal) shipped.
+PARTS 2 and 3 — the parts that actually stop the contamination — were NEVER built.** This document
+exists so that never happens silently again: the plan lives here, in the open, with a status on every
+part.
+</Warning>
+
+## The root cause (one bug, three channels)
+
+A text / call / email is glued to a lead by **phone- or email-string match**, then every thread is
+scoped by **`lead_id` alone** and "cleaned" with subtractive band-aid filters.
+
+- Every outbound text runs `sendSms` → `logMessage`. `logMessage` decides which lead a message belongs
+  to by matching the **recipient's phone** against every lead (`resolveLeadByContact`,
+  `lib/messages/log-message.ts:181`).
+- Zach's cell (407-403-8088) **is** the phone on the Zach Spradling test lead. So **anything** texted to
+  that number — a digest, a "saved a home" alert, a system report — phone-matches that lead and is
+  written into its Texts thread. It reads "as Ana" because the send physically left Ana's 648-9363 line.
+- The band-aids only *relabel the sender* (`actor='system'`) or *hide the row from the "All" feed*
+  (`isAgentAlert`). They do **not** stop the row from being filed into the lead's Texts thread — and the
+  digest carries **no tag at all**, so not one filter even looks at it.
+- **Emails and calls have the identical flaw** — same string-match, same `lead_id`-only scoping. Texts is
+  just the loudest channel, so it's where it shows first.
+
+## Status board
+
+| Part | What it is | Status |
+|---|---|---|
+| **1 — Docs: Calls / Text / Emails section** | The Comms nav reorg + overview pages | ✅ **SHIPPED** |
+| **2 — Guarantee inbound → super-admin ping** | Every inbound text/email/voicemail/call alerts Zach | ❌ **NOT BUILT** |
+| **3 — One conversation-identity model** | THE fix — kills the contamination on all 3 channels | ❌ **NOT BUILT** |
+| **4 — "Route to a number" custom-cell** | The call-routing modal (inbox + profile) | ✅ **SHIPPED (2026-07-15)** |
+
+---
+
+## PART 1 — Mintlify Comms docs reorg · ✅ SHIPPED
+
+Docs-only, no code. Governed by `DOCS_SECTION_DISCIPLINE` — a Zach-approved section change that
+CONSOLIDATES. One **Comms** group replacing the old separate Email / Inbox / Comms groups:
+
+```
+Comms
+├─ ⭐ Comms Refactor (this doc — the WIP tracker)
+├─ Calls   → comms/calls · guides/ai-voice · crm/phone-voice-voice-recording
+├─ Text    → comms/text  · crm/messaging-imessage · crm/messaging-text-templates
+├─ Emails  → comms/emails · crm/email-campaigns · guides/email-templates · crm/email-lists · guides/email-settings
+├─ Phone Numbers, Call Routing & Number Porting → guides/phone-numbers-and-call-routing · crm/phone-voice-phone-provider
+└─ Inbox   → guides/inboxes
+```
+
+**Done:** the three overview pages (`comms/calls`, `comms/text`, `comms/emails`) exist and are live in
+the nav. Nothing to rewrite — every atomic page already mapped cleanly.
+
+---
+
+## PART 2 — Guarantee the inbound → super-admin ping · ❌ NOT BUILT
+
+Close every hole so Zach's cell gets **every** inbound. No conversation-model change needed — these are
+independent, urgent, and low-risk.
+
+- **Inbound email fires a notification.** `lib/email/gmail-realtime.ts` (Pub/Sub inbound) currently only
+  logs — add `notifyLeadEvent(leadId, 'email_received', …)` when it resolves to a lead, and the leadless
+  owner+all-scope path (shape of `lib/notifications/router.ts:175-194`) when it doesn't.
+- **Stranger / non-lead inbound texts ping.** `app/api/phone/webhooks/sms/route.ts:70-73` and
+  `app/api/bb/inbound/route.ts:184` return without notifying when no `hl_leads` match — add a leadless
+  `new_message` notify to `notif_scope='all'`/owner.
+- **Cold-caller voicemail fans out.** `app/api/phone/webhooks/recording/route.ts:96-127` selects
+  `WHERE role='admin'` — widen to the fan-out predicate (`access_level IN ('owner','admin') OR role='admin'`)
+  / route through `createNotification` so it reaches Zach (owner, `notif_scope='all'`).
+- **Answered-forwarded calls ping.** `app/api/phone/webhooks/voice/route.ts:270-297` bridges via `Dial`
+  with no notify — fire `phone_call_received` on the dial/answer status callback.
+- **`new_message` default + delivery.** Turn on `PREF_DEFAULTS['new_message']` SMS
+  (`lib/notifications/dispatch.ts:155`) and mirror in `app/api/notification-preferences/route.ts` so an
+  un-toggled admin still gets texts.
+- **Silent-drop visibility.** Write a `status='dropped'` run-log row with the reason at the pre-send gates
+  (`dispatch.ts:247/476/502`) so a missing channel/pref/template can't hide. *(Benji finding #3.)*
+
+<Warning>
+**Collision caution:** `lib/inngest/functions/fub-lead-import.ts` already carries Lee's OWNER-fix live on
+origin (HEAD `914ccac048`). Rebase/read before touching it — the leadless-notify wiring must sit on top
+of his. Coordinate with Lee (ping #11864) and Benji (dual-toggle work, ping #11862) — both are live in
+this area right now.
+</Warning>
+
+**Verify:** fire a real inbound of each class (non-lead text, an email reply, a voicemail, a
+forwarded-answered call) → each lands an SMS on Zach's cell **and** leaves a run-log row.
+
+---
+
+## PART 3 — One conversation-identity model · ❌ NOT BUILT · THE REAL FIX
+
+Stop deriving threads with subtractive filters. Give every comms row a **persisted conversation key**, so
+a message's placement is decided by *what it is*, never by whose phone it reached.
+
+- **Write-side:** stamp `our_identity_user_id` (already computed via `resolveActingIdentity` /
+  `resolveAgentSendIdentity` / `resolve-inbound-owner`) + a `conversation_key` of
+  `(channel_family, our_identity, lead_id)` on `hl_messages` (`log-message.ts`), `hl_calls` (voice
+  webhooks), and both email tables. A migration adds the columns + backfills from existing sender/recipient.
+- **Read-side:** every thread reader scopes by the key, per lane — **delete** the band-aids
+  (`recipient_role` not-equal `agent`, `source` not-equal `fub`, the Twilio-only handshake CTE). One
+  reader per channel, one scoping rule — fixing the current 4-readers-4-rules divergence across
+  `app/(crm)/leads/[id]/page.tsx`, `api/bb/thread`, `api/email/thread`, `api/calls/thread`.
+- **Dual-lane by identity, not name-regex.** Split lanes on `our_identity_user_id` (agent line vs Myli
+  line) — kill the `(AI)` name heuristics in `CenterLane.tsx` + `TextThreadStream.tsx`. Cover iMessage
+  (`hl_imessage_assignments.bb_address`, not just dialer digits — the gap in the 2026-07-14 handshake).
+- **Notifications never borrow a lead thread.** A notification / report / agent-alert sent to an agent's
+  number gets its OWN key (or none) — so it *structurally cannot* reappear in a lead thread by
+  recipient-phone match, with no hardcoded line exclusion. **This is the digest / "Lucy Hartman" fix.**
+- **Finish Emails + Calls to the same model.** Calls use `lib/phone/resolve-subtype.ts` so a
+  `company` / `sign_call` / `past_agent` call isn't slotted into the assigned-agent lane.
+- **Lock the model** in `guides/crm-comms.mdx` so it can't drift back to `lead_id`-scoping.
+
+**Verify (test lead):** overlay Texts / Calls / Emails — only the assigned-line↔lead handshake shows; the
+digest and the 800-4470 notification are absent because they have **no key on this lead**, not because
+they're filtered out.
+
+---
+
+## PART 4 — Company Inbox "Route to a number" custom-cell · ✅ SHIPPED (2026-07-15)
+
+The old "Route a number" action dumped you into the Numbers page. Now it's a simple Follow-Up-Boss-style
+Call Routing modal, living in **two** places: the Company Inbox, and each person's Profile. No "desktop"
+option — forward to my cell, or forward to a different number; misses roll to voicemail. Both write what
+the phone system actually reads at call time (`ring_targets` / `call_forwarding`), so the change rings.
+
+---
+
+## Critical files (the map for the build)
+
+- **Part 2 — notify:** `lib/email/gmail-realtime.ts` · `app/api/phone/webhooks/{sms,voice,recording}/route.ts` ·
+  `app/api/bb/inbound/route.ts` · `lib/notifications/{dispatch.ts,create.ts,router.ts}` ·
+  `app/api/notification-preferences/route.ts` · *(coordinate `lib/inngest/functions/fub-lead-import.ts` with Lee)*.
+- **Part 3 — conversation model:** `lib/messages/log-message.ts` · `lib/agent-runtime/resolve-send-identity.ts` ·
+  `lib/comms/resolve-inbound-owner.ts` · readers `app/(crm)/leads/[id]/page.tsx`, `app/api/{bb,email,calls}/thread` ·
+  `components/leads/detail/{CenterLane,TextThreadStream,CallsStream,EmailsStream}.tsx` · a migration adding the key.
+
+## End-to-end verification (the definition of done)
+
+1. Docs publish clean; the Comms tab shows this WIP tracker + Calls / Text / Emails + the Phone Numbers section.
+2. Inbound text (non-lead), email reply, voicemail, forwarded-answered call → each lands an SMS on Zach's cell + a run-log row.
+3. A lead's Texts / Calls / Emails show ONLY that lead's assigned-line↔lead handshake per lane; a notification, digest, or report to the lead's number does **not** appear — on any channel.
+4. "Route to a number" forwards a Twilio line to a custom cell and it rings.
+
+## Related
+
+- **[Calls](/comms/calls)** · **[Text](/comms/text)** · **[Emails](/comms/emails)** — the channel overviews.
+- **[Phone Numbers, Call Routing &amp; Number Porting](/guides/phone-numbers-and-call-routing)** — the telephony plumbing.
+- The comms architecture map (`guides/crm-comms`) — where the conversation-key model gets locked.
