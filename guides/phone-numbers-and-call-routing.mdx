@@ -12,6 +12,75 @@ the former PRD is folded in as Section 3). Canonical GT: `GT_HOUSELOOP_MASTER.md
 (never printed here). The voice agent that *answers* the front door is Phase D — see [AI Voice](/guides/ai-voice).
 </Note>
 
+# ═══ THE 2026-07-14 STATE — EVERYTHING TO VOICEMAIL + AI TRIAGE + THE LOOP LAW ═══
+
+<Warning>
+**Current truth (Adam, 2026-07-14 night, supersedes the routing state below).** We hit a live **call-forward
+loop** — the "Temporary forwarding number" `(913) 675-9877` was doubling as *both* a past-agent line AND the
+"The Front Door" routing-group landing, and it rang Zach's cell **two ways at once** (a ring target + a
+`forwards_to`, both = his mobile). With 38 past-agent numbers funneling in and something dialing down the
+range, every call rang him and never stopped. **It's dead now** — the whole system is set to **voicemail**
+while we build Myli's live voice agent.
+</Warning>
+
+## What's live right now (the safe, correct state)
+
+- **Everything → voicemail.** `0 of 12` owned Twilio lines forward anywhere. Every call terminates in native
+  voicemail (`<Record>` → `/api/phone/webhooks/recording`), which logs it to the lead and (via triage) alerts.
+- **The key lines are wired to US.** `Company (913) 320-0906`, `Sign (913) 354-8600`, and
+  `Ana-old (913) 954-7123` were pointing their Twilio voice + SMS webhooks at **`demo.twilio.com`** (a
+  leftover) — they captured nothing. Repointed to `crm.houseloop.ai/api/phone/webhooks/{voice,sms}`.
+- **The test-stub Front Door is retired.** `675-9877` + the "The Front Door" routing group (`5c6476f0`) are
+  cleared (ring targets emptied, `forwards_to` NULLed, detached) — a harmless voicemail landing now.
+- **A2P is VERIFIED.** Campaign `CA7VR08` (brand registered, "Spradling Realty Group" use case). All 12 owned
+  Twilio lines — incl. company, sign, Ana-old `954-7123`, Ana-pilot `648-9363` — are in the verified campaign,
+  live for SMS.
+
+## THE LOOP-GUARD LAW (constitutional — a forwarding system must not be able to loop)
+
+**Before Myli/forwarding comes back on, the voice webhook MUST carry a hop-count + visited-path and refuse to
+dial any target already in the call's path (or past N hops) → voicemail.** The root cause of the 2026-07-14
+loop was structural: `app/api/phone/webhooks/voice/route.ts` resolves a chain (caller forward-rule → routing
+group `ring_targets` → line `forwards_to` → FUB router → voicemail) with **zero cycle protection** — so one
+number pointing back into the chain loops forever. The band-aids that also enabled it:
+
+1. **One number, two jobs** — a past-agent forward was also the front-door landing. One line = one role.
+2. **Dual-dial to one destination** — ring target *and* `forwards_to` both = the same cell.
+3. **Fan-in with no throttle** — 38 numbers → one front door, re-dialed on every call.
+
+The fix set is: (a) the hop/visited guard; (b) one role per line; (c) one dial path per line, always ending
+in voicemail (a hard stop, never a re-dial); (d) ring targets are real endpoints, never our own pool numbers
+unless the guard covers them.
+
+## AI VOICEMAIL TRIAGE — Myli reads it, alerts only on real callers
+
+While her live voice agent is built, Myli's **first real voice job**: she reads every **cold/unknown-caller**
+voicemail and the team is alerted **only** when it's a real, important caller — spam and vendors are swallowed.
+
+| Step | What happens | Where |
+|---|---|---|
+| Voicemail lands | `<Record>` → recording stored on `hl_calls` | `/api/phone/webhooks/recording` |
+| Transcribe | Deepgram (reuses `transcribeCall`) | `lib/calls/analyze.ts` |
+| Disposition | Claude Haiku → `buyer · seller · client · agent_recruit · important` **vs** `spam · vendor · robocall · unclear` | `lib/calls/voicemail-triage.ts` |
+| Alert / suppress | **important → notify the owner** (enriched with Myli's one-line summary + callback #); **spam/vendor/robocall → suppressed**; **fail-open** (unreadable → still alert) | `lib/calls/voicemail-triage-fn.ts` (Inngest `hl/voicemail.triage`) |
+
+Cold-caller voicemails route through the triage instead of blasting a raw alert on every one (the old spam
+firehose). **Known-lead** voicemails keep their normal owner notification. The disposition is stamped on
+`hl_calls.data` (`vm_category`, `vm_summary`, `vm_callback`, `vm_reason`) and the run shows in the **Run Log**
+(category `ai`). *Rule: when torn between a real human and noise, Myli always picks the human — never miss a
+buyer or seller.*
+
+## The forwarding architecture (roles, not a tangle)
+
+- **Twilio-native lines (we own them):** Company `320-0906` · Sign `354-8600` · Ana-old `954-7123` ·
+  Ana-pilot `648-9363` · Zach `286-1761` · Myli `355-6809` + test · Brand/public `365-2648` · Notifications
+  `800-4470` · Health `298-8778`. Each wired to our webhook → voicemail (Myli answers later per line).
+- **FUB past-agent lines (38):** old agent numbers people still call. They forward out **via FUB**; for now
+  they land in voicemail. **Target (Zach):** once Myli's voice agent ships, she answers these too.
+- **The endgame** (Sections below): port every number out of Google Voice / FUB into our Twilio so HouseLoop
+  owns the number *and* the conversation; each inbound line becomes a **Lead Source + call trigger event**
+  (the same trigger-events / lead-sources / workflows system) so a call fires machinery, and Myli answers.
+
 # ═══ THE 2026-07-13 MODEL — NUMBERS → INBOXES (Zach-locked, supersedes routing groups) ═══
 
 <Warning>
@@ -60,7 +129,7 @@ notification. Phase D puts Myli on the line.
   *Adam · 2026-07-11 · commits `cb56d6a116` + `5e3dadfe0b`*
 - [x] **Gemini brain unblocked for Myli Voice** — old key died with the deleted `zach.relationly@gmail.com`
   account; new key minted under **admin@houseloop.ai / HouseLoop GCP project**, prepay billing configured
-  ($50 · auto-reload < $10 · $250/mo cap), verified live. Details + screenshot: [AI Voice](/guides/ai-voice).
+  ($50 · auto-reload &lt; $10 · $250/mo cap), verified live. Details + screenshot: [AI Voice](/guides/ai-voice).
   *Adam + Zach · 2026-07-11*
 - [x] **Port auto-watch SHIPPED** — Inngest `phone-port-watch` (cron 8am + 4pm CT): detects a pending
   number LANDING in our Twilio (the only signal the FUB internal transfer gives) and Porting-API status
