@@ -117,8 +117,22 @@ already runs on — no new infrastructure:
 Debounced + HouseLoop-leads-only → surgical (a few per minute for active leads), never a 49k re-walk. This one
 bridge keeps every pulled-in lead lock-step with FUB and rides the proven in-app rail.
 
-Companion CRM cleanups on the same pass: surface the `zillow_inapp` message into **All + Messages** (not just the
-FUB tab), and dedup the view that renders twice (from both `zillow_home_activity` and `fub.events`).
+### ⚠️ The re-scrape is necessary but NOT sufficient — mint note-only saves from the note (2026-07-15)
+
+Live-testing on Shamir surfaced a deeper truth: **his 07-14 saves/views were NEVER in FUB's browse feed** (the
+`GET /api/v1/events?hasProperty=true` list the scraper reads) — they existed ONLY as `notesCreated` "Property
+Saved/Viewed: `<bare-zpid>`" notes. So **no re-scrape can ever recover them.** The fix: `convertNote`
+(`lib/fub/convert-fub-signal.ts`) now emits a `save_home`/`property_view` straight from the note, and
+`backfillFubBehavior` resolves the bare zpid → the full home (address/price/photo) from the person's OWN captured
+rows for that zpid. **The scraper stays primary** for any view it has (richer, real photo); **notes fill only the
+gaps** the browse feed misses — so note-only saves land AND a view never renders twice. Proven: Shamir's 07-14
+save (4224 E 104th Ter) + view (10516 Richmond Ave) now mint, zero doubles.
+
+### The double-card dedup + the in-app surfacing
+- **Double view card:** the same view was written to `fub.zillow_home_activity` by two writers (the note-parse id
+  `146xxx` and the scraper browse-feed id `18xxxxx`) — a fub_event_id key double-minted it. Fixed by deduping the
+  mint query on the LOGICAL view identity (home + type + minute), keeping the richer row.
+- **Zillow in-app → All + Messages** (not just the FUB tab): still pending on this pass.
 
 ## Sync control surfaces (reference)
 
