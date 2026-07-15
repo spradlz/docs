@@ -49,8 +49,15 @@ scoped by **`lead_id` alone** and "cleaned" with subtractive band-aid filters.
 |---|---|---|
 | **1 — Docs: Calls / Text / Emails section** | The Comms nav reorg + overview pages | ✅ **SHIPPED** |
 | **2 — Guarantee inbound → super-admin ping** | Every inbound text/email/voicemail/call alerts Zach | ❌ **NOT BUILT** |
-| **3 — One conversation-identity model** | THE fix — kills the contamination on all 3 channels | ❌ **NOT BUILT** |
+| **3 — One conversation-identity model** | THE fix — kills the contamination on all 3 channels | 🟡 **3.1 Texts SHIPPED · Calls/Emails next** |
 | **4 — "Route to a number" custom-cell** | The call-routing modal (inbox + profile) | ✅ **SHIPPED (2026-07-15)** |
+
+<Info>
+**⚠️ Live data note (2026-07-15):** the audience primitive everywhere is `notif_scope='all' OR access_level='owner'`.
+Zach's `hl_users` row is `access_level='admin'`, `notif_scope=NULL` — so he does **not** currently match the
+super-admin audience. Part 2's "guaranteed" pings can't reach him until his row is set to `notif_scope='all'`
+(or `access_level='owner'`). This is a one-row data fix, surfaced for Zach's decision — not silently flipped.
+</Info>
 
 ---
 
@@ -108,7 +115,18 @@ forwarded-answered call) → each lands an SMS on Zach's cell **and** leaves a r
 
 ---
 
-## PART 3 — One conversation-identity model · ❌ NOT BUILT · THE REAL FIX
+## PART 3 — One conversation-identity model · 🟡 THE REAL FIX (3.1 Texts SHIPPED)
+
+<Info>
+**3.1 — Texts: SHIPPED 2026-07-15 (commit `041c345816`).** `hl_messages` now carries `our_identity_user_id`
++ `conversation_key` (migration 0410). A real two-party text is keyed `text:{our_identity_user_id}:{lead_id}`;
+a notification / digest / report / agent-alert / broadcast is keyed **NULL** and the three Texts readers now
+require `conversation_key IS NOT NULL` — so a broadcast structurally cannot appear in a thread. The
+website-activity digest + Myli/partner handoff briefs pass `kind:'notification'`; dispatcher alerts already
+carry `recipient_role='agent'`. Verified on the Zach Spradling test lead: the leaked digest is gone, the real
+conversation still renders. **Calls (3.2) + Emails (3.3) get the same treatment next.**
+</Info>
+
 
 Stop deriving threads with subtractive filters. Give every comms row a **persisted conversation key**, so
 a message's placement is decided by *what it is*, never by whose phone it reached.
