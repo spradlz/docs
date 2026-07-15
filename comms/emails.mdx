@@ -25,3 +25,60 @@ the sending alias, the rail (Gmail for humans, Resend for AI/bulk), the signatur
 
 For the end-to-end architecture (inbound capture, one-writer logging, and how email fits alongside texts and
 calls), see the comms subsystem map: **[CRM Comms — Texts, Calls, iMessage](/guides/crm-comms)**.
+
+## ⭐ Email Engine — the one-sender redesign (Caleb, in progress)
+
+<Info>
+**Living status — last updated 2026-07-15.** Texts have one writer (`logMessage`) — one place the rules live.
+Email did not: a three-agent code audit found the send path shattered. This section is the single record of the
+redesign that makes email as clean as texts, and exactly what has shipped vs. what is still coming.
+</Info>
+
+### Why (the audit)
+
+A file-line-grounded audit of every email path found the subsystem fragmented and, in places, broken:
+
+| Finding | Detail |
+|---|---|
+| **2 transports, 4 senders** | Resend + Gmail, realized as four separate sender implementations. |
+| **3 duplicate Gmail stacks** | The RFC-2822 builder + OAuth token refresh + `messages/send` fetch were copy-pasted in three routes. |
+| **7 hand-rolled log writes** | Each feature wrote its own `INSERT INTO hl_email_send_log` with a different column set; one logged elsewhere, one logged nothing. |
+| **3 merge engines** | `{{token}}` substitution done three different ways (one is inline regex). |
+| **Live bugs** | Open/click tracking silently dead for Gmail-composed + template email; the Gmail marketing path skipped unsubscribe/footer; scheduled campaigns never send (no runner); the Home-Value Report was never logged (threw on a NOT NULL, swallowed). |
+
+The strong parts are kept, not replaced: the send-identity resolver (`resolve-send-identity.ts`), the canonical
+signature system, the branded shell/footer, and the lead-scoped composer from-picker.
+
+### The model — one of everything
+
+Every email flows through one function — the email analogue of `logMessage`. That function owns transport,
+identity, merge, compliance, tracking, and logging, so a rule lives in exactly one place.
+
+**Transport decision (locked, Hybrid B):** system + marketing send via **Resend** (full open/click tracking);
+agent 1-to-1 sends via the agent's **real Gmail** mailbox, with our own open-pixel + click-wrapper so tracking
+is transport-independent. This kills the "tracking only works on Resend" bug at the root.
+
+### Status board
+
+| Phase | What | Status |
+|---|---|---|
+| **1a** | ONE `logEmailSend()` — the single writer; all 7 sites delegate to it. Relaxed `lead_id`/`inbox_used`/`subject` NOT NULLs so system/aggregate sends log (fixes the Home-Value Report never-logged bug). | ✅ **SHIPPED** (`041c… → mig 0412`) |
+| **1b** | ONE Gmail transport — `gmailRawSend` + `buildRfc2822` + `refreshHlOAuthToken` in `lib/email/gmail-send.ts`; the composer + exp-grid delegate to them (~170 lines of duplication deleted). Token *source* left unchanged for safety. | ✅ **SHIPPED** |
+| **1c** | The `sendEmail()` choke point — the one door every path calls: identity → transport → guard (both) → one merge → send → `logEmailSend`. Forces the DWD-vs-stored-OAuth transport decision; unifies the 3 merge engines. | 🔲 **NEXT** (needs live-send verification per caller) |
+| **2** | Provider-id split (`provider` + `provider_message_id`) → fixes open/click tracking on Gmail sends; `conversation_key` on the email tables (email joins the one-conversation model); collapse the 4× engagement storage; drop the 3 dead tables. | 🔲 planned |
+| **3** | Compliance unified — one suppression source, `kind`-based enforcement inside the sender (closes the warmup-path unsubscribe hole); bounce → auto-suppress. | 🔲 planned |
+| **4** | Enterprise features on the clean base — RFC threading (`In-Reply-To`/`References`), attachments, a real scheduling runner. | 🔲 planned |
+
+### Where the code lives
+
+- **The one writer:** `apps/houseloop-crm/lib/email/log-email-send.ts` (`logEmailSend`).
+- **The one Gmail transport:** `apps/houseloop-crm/lib/email/gmail-send.ts` (`sendViaGmail`, `gmailRawSend`, `buildRfc2822`, `refreshHlOAuthToken`).
+- **The Resend transport:** `apps/houseloop-crm/lib/email/resend-send.ts` (`sendViaResend` — the only path with the undeliverable-address guard today; 1c extends the guard to Gmail too).
+- **Identity (kept):** `apps/houseloop-crm/lib/agent-runtime/resolve-send-identity.ts`.
+
+<Warning>
+**1c is load-bearing** — a bug in `sendEmail()` breaks *all* email at once, and it decides the transport-source
+question deferred in 1b. It is built + verified as its own focused pass, with a real test send fired through each
+migrated caller — never rushed. Until 1c lands, the 8 callers still send directly but all log through the one
+`logEmailSend`.
+</Warning>
