@@ -12,7 +12,74 @@ the former PRD is folded in as Section 3). Canonical GT: `GT_HOUSELOOP_MASTER.md
 (never printed here). The voice agent that *answers* the front door is Phase D — see [AI Voice](/guides/ai-voice).
 </Note>
 
-# ═══ THE 2026-07-14 STATE — EVERYTHING TO VOICEMAIL + AI TRIAGE + THE LOOP LAW ═══
+# ═══ THE 2026-07-16 STATE — THE BUCKET MODEL (live, supersedes everything below) ═══
+
+<Check>
+**Current truth (Lee + Zach, 2026-07-16 — every claim below live-verified with real test calls).** The full
+untangle shipped: every inbound line lands in ONE of five buckets, each bucket **forwards to Zach's cell**
+(interim, until Myli voice ships), and the **loop-guard is live** in the voice webhook.
+</Check>
+
+## The five buckets (save these as phone contacts — the caller ID IS the bucket)
+
+| # | Contact name | Line | Who lands here |
+|---|---|---|---|
+| 1 | **SRG Company** | 913-320-0906 (Twilio, ours) | Google Business, portals, cold company calls |
+| 2 | **SRG Sign Call** | 913-354-8600 (Twilio, ours) | Yard-sign + listing callers |
+| 3 | **SRG Past People** | **913-675-9877 "Past Agents Line"** (Twilio, ours) | ALL 37 FUB past-agent numbers + Ben's 379-3429 + Ana's FUB seat 349-5536 + legacy company 270-0645 & 453-5505 + Ana's GV 954-7123 (until port) |
+| 4 | **Ana Line** | 913-954-7123 (porting in, forward pre-staged) | Ana's past clients — goes live the day the port lands |
+| 5 | *(FUB-native)* | 913-490-2988 (Zach's FUB seat) | His assigned leads calling back — rings his cell via FUB |
+
+When a bucket forwards to the cell, the dial leg presents **the LINE as caller ID** (`<Dial callerId={to}>`),
+so the phone shows the bucket contact — the real caller's number is captured on the `hl_calls` row + the notification.
+A miss rolls to OUR voicemail (18s undercut of carrier VM) + recording + typed notification. Nothing can die in FUB voicemail.
+
+## How the funnel is wired (each hop verified 2026-07-16)
+
+- **FUB "Past Agents" team inbox** (37 numbers) → Call Routing: **Ana Spradling, Ring Mobile ☑, Press-1 OFF**;
+  after-hours + no-answer both **Forward → 675-9877**. Ana's FUB profile phone = 675-9877 — **LAW: it stays
+  675-9877 forever** (she works no FUB leads; changing it silently re-routes the whole funnel).
+- **FUB "Company" team inbox** (270-0645 + 453-5505) → identical config.
+- **Ben's kept seat** (379-3429, Zillow binding): Incoming Calls = "Ring 675-9877 + desktop simultaneously".
+- **Ana's Google Voice 954-7123** → linked/forwards **ONLY to 675-9877** (the old 3-way fan to 453-5505 +
+  Zach's cell was cut 2026-07-16). Dies entirely when the port lands.
+- **Live-fire receipts:** test calls to Walter's 724-5810, legacy 270-0645, and GV 954-7123 all landed on
+  675-9877 as `phone_call_past_agent` rows (caller ID preserved on the FUB hops); a test call to 320-0906
+  after the bucket flip came back `outcome=forwarded → Zach's cell, subtype=phone_call_company`.
+
+## The two-numbers-per-FUB-user law (the recurring head-hurter)
+
+Every FUB user has **a seat line** (FUB-owned, what leads dial, shown on Team Members, can never be an outside
+number) and **a ring target** (profile phone — where it actually rings). Zach: seat 490-2988 → rings cell
+407-403-8088. Ana: seat 349-5536 → rings 675-9877. Ben: seat 379-3429 → rings 675-9877. Francela: seat
+270-6213 → rings 210-0181. Editing the ring target never changes what the roster displays — that's the seat line.
+
+## The loop-guard (constitutional law → now CODE, live 2026-07-16)
+
+`app/api/phone/webhooks/voice/route.ts` — three belts before any `<Dial>`, all fail-safe to voicemail:
+1. **Pool guard** — refuses to dial any number we own (`hl_phone_numbers` platform=twilio, dialed line included). Pool→pool re-entry is structurally impossible.
+2. **Echo guard** — refuses to dial the caller back (so a test call **from Zach's own cell** to a bucket goes to voicemail *by design*).
+3. **Hop breaker** — ≥4 webhook entries for the same caller→line pair in 60s (a loop through an external hop we can't see: FUB ring, GV link) → dialing stops, voicemail hard-stop.
+
+## Cleanups shipped 2026-07-16
+
+- 38 FUB past-agent rows carried a bogus `forwards_to → 354-8600` (the SIGN line) — nulled; the dead empty
+  "The Front Door" routing group deleted; `675-9877` renamed **"Past Agents Line"** (DB + Twilio).
+- **Numbers page shows OUR lines only** — the 40 FUB-synced rows collapse to one expander row (they stay in
+  the DB for which-agent attribution).
+- ⚠️ Known FUB quirk (leave it): FUB has **+19139547123 on its blockedIdentifiers list since 2025-10** — it ate
+  GV-hop calls that presented 954-7123 as caller ID while GV still forwarded into FUB. Moot now (GV → 675-9877
+  only, and the port kills GV), but don't "clean it up" into a surprise.
+
+## Still open (Block 1 tail)
+
+- **Ana's port lands (~Mon 2026-07-21):** 954-7123 activates with its forward pre-staged → swap Ana's
+  HouseLoop agent number to it; Myli-always-answers rule ships with AI Voice.
+- **Myli answers the buckets** (AI Voice build) — flip each bucket's line from `forward` to `myli` one at a
+  time; the cell-forward is the rollback.
+- Zach enables **calling** on his FUB seat (Settings → Calling) so he can dial leads out of FUB as 490-2988.
+
+# ═══ THE 2026-07-14 STATE — superseded by the bucket model above ═══
 
 <Warning>
 **Current truth (Adam, 2026-07-14 night, supersedes the routing state below).** We hit a live **call-forward
