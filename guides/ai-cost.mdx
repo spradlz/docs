@@ -3,7 +3,81 @@ title: "AI Cost & Attribution"
 description: "How every Anthropic and OpenAI dollar is split across HouseLoop, PlacedAgent, and Memory OS — and where caching saves money."
 ---
 
-# ═══ 2026-07-16 AUDIT — WHAT'S ACTUALLY DEPLOYED (the reality gap) ═══
+# ═══ 2026-07-16 PM — THE FORENSIC AUDIT (the $106.74 mystery SOLVED + the kills) ═══
+
+<Check>
+**The "PlacedAgent" spend was never PlacedAgent.** Anthropic's per-key/per-hour usage API + Railway env
+forensics traced the $106.74/wk on the `placedagent-app` key to ONE caller: **the FUB Widget**
+(`apps/dashboard/server/fub-widget.ts`, served at realloop.co/fub-widget, embedded in every FUB person page).
+It **auto-fired 2 Haiku calls per page load** (line 453 `loadAI(false)`) on `ANTHROPIC_API_KEY_PLACEDAGENT`
+(line 26) — and the **Camp David FUB scraper** loads that iframe on every person page it visits, so the
+scraper paid an AI-summary tax nobody read, thousands of times a day. The Jul 12–13 explosion (14.8M + 22.9M
+input tokens) = the `fub-backfill-a/b` sweeps running all weekend. SEO articles were checked and are clean —
+the HouseLoop workspace key, pennies, delta-gated. Memory hooks were on the shared default key.
+</Check>
+
+## Executed 2026-07-16 (Zach's kill orders)
+
+1. ☠️ **`placedagent-app` Anthropic key → INACTIVE** (admin API, reversible). Every legacy-dashboard AI caller
+   (~40 call sites: widget, recruiting brains, whatsapp comms brain, shadow inference) is dark.
+2. ☠️ **FUB Widget KILLED in code** — `registerFubWidget` is a tombstone (410s + "moved to crm.houseloop.ai"),
+   deployed to realloop.co and live-verified. FUB-side embedded-app deregistration = a Zach admin click (cosmetic).
+3. 🏷️ **Anthropic workspace "Memory OS" → renamed "BossLoop Infra"** (Zach: "there is no more personLI — it's
+   BossLoop infrastructure"). Local `.env` now carries `ANTHROPIC_API_KEY_MEMORY` (the BossLoop Infra key), so
+   the memory hooks/tools (`_MEMORY || shared` chain) attribute there from their next run.
+4. 🔑 **Both provider ADMIN keys wired onto the CRM's Railway env** (`ANTHROPIC_ADMIN_API_KEY` +
+   `OPENAI_ADMIN_API_KEY`) — the `/ai-cost` page's real-billing reads can populate.
+
+## The verified runtime spend map (what ACTUALLY spends, post-kill)
+
+| Runtime | What calls AI | Provider · key → bucket | Metered internally? |
+|---|---|---|---|
+| **houseloop-crm (Railway)** | Myli conversations, extraction, rollups, call analyze/VM triage, search smart-features | Anthropic `_HOUSELOOP` → **HouseLoop** ✓ | ✅ callModel/logAiCost |
+| **houseloop-web (Railway)** | Monday SEO/geo article cluster (5 crons) · AI search/NLP · **AI Vision (gpt-4o)** · defork | Anthropic+OpenAI `_HOUSELOOP` → **HouseLoop** ✓ | partial (run-log) |
+| **placedagent.com (Railway)** | Myli recruiting brains (event-driven) + `pa-daily-etl` 7am narrations (gpt-4o) | Anthropic **bare shared → DEFAULT bucket ⚠** · OpenAI `_PLACEDAGENT` ✓ | ✅ pa_llm_call_log (the ONLY per-call $ ledger) |
+| **realloop dashboard (Railway)** | was: widget + recruiting brains + whatsapp | PA key → **DEAD as of today** ☠️ | never metered |
+| **THIS Mac (launchd)** | local dashboard :5173 (agent-ops analyzers) · brainstem daemon (mostly local Ollama, Claude on COMPLEX) · nightly `claude -p` stabilize 01:00 | shared/`_MEMORY` → **BossLoop Infra / default** | ❌ |
+| **Claude Code hooks** | PreCompact summarizer + per-edit Haiku one-liner (default ON) | `_MEMORY` → **BossLoop Infra** (post-rename) | ❌ |
+| **Camp David** | fub scraper structure-extraction (Haiku), dossier/cards harvests | `_HOUSELOOP` → HouseLoop ✓ | partial (some print $) |
+| **LiveKit Cloud** | 🔴 **the DEPLOYED voice agent is `agent.py` on Gemini native-audio** (`GEMINI_API_KEY`) — a THIRD provider bill, attributed nowhere | Gemini → **invisible** ⚠ | ❌ |
+| **tools/scribe (memory engine)** | summaries gpt-4o-mini + embeddings text-embedding-3-small | OpenAI bare shared → **Default project ⚠** | ❌ |
+| **AI Titans** | content pipelines (Haiku/Sonnet + ElevenLabs + FAL) | bare shared keys → **default buckets ⚠** | ❌ |
+
+## 🔴 Flags raised by the full-tree sweep (196 call sites inventoried)
+
+- **Client-exposed OpenAI keys:** `VITE_OPENAI_API_KEY` ships in realloop.co's browser bundle
+  (`myliService.ts`, `pillTransform.ts`) and `NEXT_PUBLIC_OPENAI_API_KEY` in the placedagent admin bundle —
+  anyone can lift them from the JS. **Rotate + rip.**
+- **PA-nextjs reads the BARE shared Anthropic key** (`config.ts:55 required('ANTHROPIC_API_KEY')`) while the
+  correct `_PLACEDAGENT` key sits unused in its env — its Myli brains bill to the default bucket.
+- **3 bare `new Anthropic()` clients** in the legacy dashboard (dossier-generator, fact-extractor,
+  conversation-intelligence) — no fallback chain at all.
+- **The deployed voice = Gemini on LiveKit Cloud**, not the Pipecat/Claude bot the phone docs describe —
+  Google spend is a fourth, totally untracked bill.
+- Zero internal metering in: the entire legacy dashboard, apps/lee, apps/sms, myli-openai-voice, both Python
+  voice agents, all of tools/ (except a few stdout printers), all of AI Titans.
+
+## The remaining wire-up plan (Block 2 tail)
+
+1. **Verify `/ai-cost` renders the real bills** (admin keys just wired; page reachable from the AI Cockpit's
+   "Full cost breakdown →" link per the locked C1 IA — no nav entry, that's intentional).
+2. **THE ATTRIBUTION LAW:** any spend in the DEFAULT workspace / Default project = a breach. Re-key:
+   PA-nextjs → its `_PLACEDAGENT` values (one env var name fix) *if the product lives* — Zach deciding
+   PlacedAgent's fate; scribe/tools OpenAI → the Memory-OS/BossLoop-Infra project svc key; AI Titans → own
+   workspace or BossLoop Infra (Zach call); then **retire the shared "personLI" + "BossLoop Master" keys.**
+3. **The sentinel** (Inngest): every 6h read both admin billing APIs → default-bucket breach, spend flatline,
+   negative/unfunded balance, new invoices → SMS Zach via 913-800-4470 + Run Log rows.
+4. **ONE-PROVIDER consolidation (Claude)** — pending Zach's formal go: AI Vision gpt-4o→Claude vision ·
+   lee/sms gpt→Claude · scribe summaries→Claude (embeddings stay OpenAI-tiny or move to Voyage) ·
+   myli-openai-voice experiment → kill · Whisper→Deepgram. Gemini voice = Block 3 decision.
+
+<Warning>
+**The section below is the pre-forensic morning audit (same day) — superseded where it conflicts.** Its
+"segmentation effectively undeployed" claim was HALF right: the workspace keys exist and the big products DO
+carry them; the rot was the widget + the default-bucket stragglers above.
+</Warning>
+
+# ═══ 2026-07-16 AM — WHAT'S ACTUALLY DEPLOYED (the reality gap) ═══
 
 <Warning>
 **The architecture described below this section is the DESIGN. As of 2026-07-16 it is largely NOT wired up.** A
