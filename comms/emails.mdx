@@ -26,6 +26,36 @@ the sending alias, the rail (Gmail for humans, Resend for AI/bulk), the signatur
 For the end-to-end architecture (inbound capture, one-writer logging, and how email fits alongside texts and
 calls), see the comms subsystem map: **[CRM Comms — Texts, Calls, iMessage](/guides/crm-comms)**.
 
+## Sending identity — who an email goes out AS (verified 2026-07-16)
+
+A live audit (Caleb) confirmed exactly how each send resolves its **from** identity, the real addresses, and
+what works today. The rule holds: **the from-identity decides the rail, the signature, and where replies land.**
+
+| What you send | Goes out AS | Rail | Working today |
+|---|---|---|---|
+| **Composer** — an agent typing a 1:1 to a lead | the agent's **real Gmail**: `ana@` / `myli@` / `zach@houseloop.ai` | Gmail | ✅ **live-tested** |
+| **Workflow "send as Ana / Myli / Zach"** | `ana@` / `myli@` / `zach@houseloop.ai` | Resend (houseloop.ai is a verified domain) | ✅ resolves + Resend live |
+| **Workflow with no assigned agent · system alerts** | **`notifications@houseloop.ai`** | Resend | ✅ |
+| **Home-Value Report** | `notifications@houseloop.ai` | Resend | ✅ |
+| **Campaign / branded / home-search** (the "warmup pool") | `recommendations@` / `my-listing@` / `my-saved-home@` / `instant-updates@` (`@mail.houseloop.ai`) | Gmail pool | ❌ **pool not OAuth-connected — dormant by design** |
+
+**The facts, confirmed live:**
+- **The system / notifications sender is `notifications@houseloop.ai`** (SMS system line `913-800-4470`). Resolved
+  from `hl_settings.notification_sender.email_from`.
+- **Three team mailboxes are connected + signed** — `ana@`, `myli@`, `zach@houseloop.ai` (`hl_oauth_connections`).
+  A workflow set to any of them sends as that identity; a 1:1 composer send uses that person's real Gmail.
+- **The identity resolver never returns a null sender** — `resolveAgentSendIdentity` (`lib/agent-runtime/resolve-send-identity.ts`)
+  resolves the assigned agent, else falls back to the system sender.
+- **The warmup pool (`@mail.houseloop.ai` / `@email.houseloop.ai`) is deliberately NOT connected** (all 8 inboxes
+  `oauth_connected=false`). Branded / marketing / home-search email does **not** send yet — this is the intended
+  "warming up, no mass sends yet" state, **not a bug.** Connecting the pool (or the DWD alternative) is a future
+  decision, gated on being ready to send mass email.
+- **Reality check:** in the trailing 30 days the only sends were 2 manual composer tests. Automated volume is
+  effectively zero today.
+
+The deep how-to (the three-sender model, signatures, reply-routing, the four Settings → Email tabs) lives in
+**[Email Settings](/guides/email-settings)**.
+
 ## ⭐ Email Engine — the one-sender redesign (Caleb, in progress)
 
 <Info>
