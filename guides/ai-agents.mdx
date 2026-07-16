@@ -48,26 +48,29 @@ join row** (`persona`, `voice_persona`, `tools`, `docs`, `workflow_ids`) — the
 default; the join is where one member diverges. The **AI Clone role is configured at assign-time**: the
 clone's tuning lives on that member's override, so every human's clone is independently tuned off one shell.
 
-**Clone vs Myli — two distinct AI actors:**
+**Clone vs Myli — the clone is a STATE of the employee, Myli is her own actor:**
 
 | | **AI Clone** | **Myli** |
 |---|---|---|
-| `clone_of_user_id` | → a human | NULL (standalone) |
-| Comms identity | none — sends **as the human** | own email / phone / iMessage |
-| Lane | **LEFT** (with the human) | **RIGHT** |
-| Bound to a lead via | `ai_clone_id` + `ai_mode_enabled` | `assigned_ai_agent_id` |
-| Service seats | **never** (clones work their human's leads + inbox backup only) | can hold seats |
+| What it is | the **same human, in an AI state** — not a user row (mode-on-human, mig `0392`; 0 clone rows) | a standalone `type='ai_agent'` user |
+| Comms identity | none of its own — the human's number/email/calendar, always | own email / phone / iMessage |
+| Lane | **LEFT** (it IS the human) | **RIGHT** |
+| Enabled via | `hl_agent_clone_config.enabled` + per-lead `ai_mode_enabled` | `assigned_ai_agent_id` |
+| Attribution | `actor` = the human's id, `actor_role='ai_agent'`, **`actor_kind='clone'`** (mig `0413`) | `actor` = Myli's id, `actor_kind='myli'` |
+| Performance card | **yes — an attribution card** ("Ana's Clone", next to Myli on `/ai`) counting only the AI-state rows (Zach 2026-07-16, reversing the earlier no-card rule) | yes |
+| Service seats | **never** (a card ≠ a seat — clones work their human's leads + inbox backup only) | can hold seats |
 
-A clone acts **as** its human (`COALESCE(clone_of_user_id, …)` in `lib/ai/lead-conversation.ts`) — a
-human's work never routes to Myli.
+A clone acts **as** its human — a human's work never routes to Myli. Its card is a **tracking
+surface, not an actor**: nothing sends or books "as the card", and the same person's manual work
+(`actor_role='human'`) is never counted as the clone's.
 
 ## Task & appointment assignment (folded from the retired doc)
 
 Leads, tasks, and appointments share **one grouped polymorphic "Assign to"** control — three sections
 with hard dividers: **Agents** (humans holding Real Estate Agent) · **AI Agents** (Myli + each human's
 clone) · **Transaction Coordinators**. The assignee is ONE `hl_users` id; the **lane is derived** from
-`type` + `clone_of_user_id`: human → LEFT lane; clone → acts as its human, LEFT lane + mirrors into
-Next Actions; Myli → RIGHT lane + Next Actions; TC → the TC section.
+`type` (+ whether the human has clone config): human → LEFT lane; clone → acts as its human, LEFT lane
++ mirrors into Next Actions; Myli → RIGHT lane + Next Actions; TC → the TC section.
 
 **The AI-Clone task-level override:** a task assigned directly to a clone fires the clone **without**
 the global AI toggle — two independent paths (global AI mode = everything eligible; a single

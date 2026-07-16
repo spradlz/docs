@@ -275,42 +275,43 @@ lift, after the facts engine).
 ## Attribution &amp; clone performance tracking
 
 Every action the clone takes is credited in the canonical run-log (`hl_lead_activity`) and
-on the message/appointment rows — so "the clone did this" is separable from a human doing it
-by hand and from Myli doing it, **today, with one caveat.**
+on the message/appointment rows — "the clone did this" is fully separable from a human doing
+it by hand and from Myli doing it.
 
-**How a clone action is stamped today.** Because the clone acts AS the human, an action it
-performs records `actor` = **the human's user id** and `actor_role` = **`'ai_agent'`**
-(vs `actor_role='human'` for the same person clicking the button manually). Outbound texts
-(`hl_messages`), emails, and the activity rows for appointments / notes / stage moves all
-follow this shape (`lib/ai/lead-conversation.ts`, `lib/leads/log-message.ts`,
-`lib/ai/ai-actions.ts`). AI token cost rides those same rows.
+**How a clone action is stamped.** Because the clone acts AS the human, an action it
+performs records `actor` = **the human's user id**, `actor_role` = **`'ai_agent'`**
+(vs `actor_role='human'` for the same person clicking the button manually), and — the
+first-class marker — **`actor_kind = 'clone'`** (migration `0413`, shipped 2026-07-16).
+Outbound texts (`hl_messages`), emails, and the activity rows for appointments / notes /
+stage moves all follow this shape. AI token cost rides those same rows.
 
-| Compared to | Distinguishable today? | How |
+| Compared to | Distinguishable? | How |
 |---|---|---|
-| The human acting **manually** | Yes | same `actor` (the human), different `actor_role` (`ai_agent` vs `human`) |
-| **Myli** (the standalone AI) | Only indirectly | both are `actor_role='ai_agent'`; the difference is whether `actor` is a `type='human'` user (clone) or a `type='ai_agent'` user (Myli) |
+| The human acting **manually** | Yes | same `actor` (the human), `actor_kind` `'clone'` vs `'human'` |
+| **Myli** (the standalone AI) | Yes | `actor_kind` `'clone'` vs `'myli'` |
 
-<Warning>
-**Known bug — the clone/Myli labeler is stale for the new model.** The helper that tags an
-action `meta.actor_type = 'clone'` vs `'myli'` derives it from
-`acting_user_id !== ai_agent_user_id` (`lib/ai/lead-conversation.ts`). In the retired
-clone-user model those ids differed; in the **mode-on-human** model they are now the **same
-id**, so every clone action currently mislabels itself as **`'myli'`**. This must be fixed
-before any clone-performance surface can be trusted. The reliable signal meanwhile is
-`actor_role='ai_agent'` **AND** `actor` resolves to a `type='human'` user.
-</Warning>
+**`actor_kind` — how it stays trustworthy.** It is stamped at the ONE writer seam:
+`logActivity` (`lib/activity/log-activity.ts`) self-derives it when the caller doesn't pass
+it (`actor_role='human'` → `'human'`; `actor_role='ai_agent'` → the actor's `hl_users.type`
+decides `'clone'` vs `'myli'`), so every write path — texts via `logMessage`, tool actions
+via `logAiAction`, workflows, dispatchers, backfills — carries it without per-path plumbing.
+The AI runtime also stamps `ctx.actor_kind` at its context loaders (`loadLeadContext` →
+`'myli'` lane, `loadCloneContext` → `'clone'`), and a clone-scheduled follow-up writes
+`hl_scheduled_actions.actor_type='clone'` so it fires the clone at dispatch time, not Myli.
+`system`/`lead` rows stay NULL — `actor_role` already covers them.
 
-**There is no clone performance card today — by prior design.** The AI-agent roster that
-powers the persona cards (`/api/ai-follow-up/agent-cards`) **explicitly excludes clones**
-(`WHERE u.type='ai_agent' AND clone_of_user_id IS NULL`, migration `0392`). A clone's work
-is counted on **no** card. That same endpoint already computes exactly the metrics a clone
-card would need — Actions 7d, Texts, Calls, Appts, Spend MTD — from
-`hl_lead_activity WHERE actor = u.id AND actor_role='ai_agent'`.
+<Note>
+**The old bug, for history:** the previous labeler derived clone-vs-Myli from
+`acting_user_id !== ai_agent_user_id` — ids that became EQUAL under mode-on-human, so every
+clone action mislabeled as `'myli'` (and clone texts carried no label at all). Fixed
+2026-07-16 with the `actor_kind` model above; pre-0413 rows were backfilled in the same
+migration.
+</Note>
 
-### Planned — the clone performance card (Zach directive, 2026-07-16)
+### The clone performance card (Zach directive, 2026-07-16 — SHIPPED)
 
-**This reverses the "clones never get a card" rule — but it does NOT create a new role or a
-new identity.** Frame it exactly as Zach does:
+**This reversed the earlier "clones never get a card" rule (mig `0392` era) — but it does
+NOT create a new role or a new identity.** Frame it exactly as Zach does:
 
 > The AI clone is **not a role separate from the employee — it IS the employee**, the same
 > human, just in an **AI state** instead of a human state. It has **no number, email, text
@@ -328,22 +329,31 @@ So the clone card is a **tracking / attribution surface, not an actor**:
   themselves). The card counts **only the AI-state actions** — the same person's manual work
   stays their human activity, not the clone's.
 - **The card = credit for the AI-state work**, using the same metric block Myli's card shows
-  (Actions 7d, Texts, Appts, Spend MTD).
+  (Status, Duties, Leads, Actions today, Appts 7d, Spend month).
 
-Foundation already exists; the build (detailed in the Fable 5 handoff) is:
+**How it ships (live since 2026-07-16):**
 
-1. **A trustworthy clone marker** — fix the stale `meta.actor_type` derivation, or add a
-   first-class `actor_kind` / `is_clone` signal on `hl_lead_activity`, so a clone action is
-   reliably tagged as the clone (not Myli, not the human's manual work).
-2. **Emit a clone card** — relax the `clone_of_user_id IS NULL` exclusion in
-   `agent-cards/route.ts` (and reconcile the role lookup) so agents whose
-   `hl_agent_clone_config.enabled` is on surface as a card driven by their already-distinct
-   `actor` rows. **No new card component** needed — reuse `AgentDutyCard`.
-3. **Performance = the same metric block** Myli's card uses, filtered to the clone's rows.
+1. **The marker** — `hl_lead_activity.actor_kind` (above) is the queryable clone signal.
+2. **The card data** — `/api/ai-follow-up/agent-cards` emits one clone card per human with
+   `hl_agent_clone_config.enabled = true` (NOT from clone user rows — those are retired, 0
+   exist). Metrics come from that human's `actor_kind='clone'` rows only; their manual work
+   never counts. Rendered by the **existing `AgentDutyCard`** on `/ai`, next to Myli, titled
+   **"&lt;First&gt;'s Clone"** with subtitle "AI state of &lt;name&gt;".
+3. **Spend** — separate per clone: `/api/ai-follow-up/spend` labels a human-type actor's AI
+   spend row "&lt;First&gt;'s Clone", and it rolls into the same cockpit month total as the
+   rest of the AI team (Myli + every enabled clone). The Run Log labels clone rows
+   "&lt;Name&gt; · AI Clone".
+4. **Open Agent** on a clone card opens `/ai/agents/&lt;the human's id&gt;` in **clone view**
+   — "&lt;First&gt;'s Clone · AI STATE OF &lt;NAME&gt;" — where persona/capabilities edit the
+   human's own AI-role rows (the same rows the runtime reads). The clone's on/off lives on
+   the member page's AI Clone tab (`hl_agent_clone_config`), never `hl_users.is_active`.
 
 ## Status — done vs left
 
 **Shipped (recent):**
+- **Clone attribution + performance card** (2026-07-16): `actor_kind` on the run-log (mig
+  `0413`), the labeler fix, one clone card per enabled agent next to Myli, per-clone spend in
+  the cockpit rollup, and the `/ai/agents/[id]` clone view — the build above.
 - The clone identity is the **mode-on-human** model above — old clone-user rows retired
   (mig `0392`).
 - Lead-detail **Email "From"** is lead-scoped: it lists only the people ON the lead
