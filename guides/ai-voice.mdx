@@ -21,6 +21,47 @@ Transcript pillbar; per-call cost lands with the wrap-up pipeline). The jobs use
 Receptionist toggle on the Cockpit is the same `voice_enabled` wire.
 </Info>
 
+# ═══ THE 2026-07-16 STATE — PIPECAT CASCADE (LiveKit + Gemini abandoned) — LIVE, code-audited ═══
+
+<Warning>
+**The current runtime is a PIPECAT CASCADE, not LiveKit/Gemini and not Retell.** The LiveKit + Gemini
+`native-audio` speech-to-speech stack (the 2026-07-15 state below) **crashed on real phone audio** — Gemini
+error `1007`/`1011`, mid-call drops, ~10s dead air. That is a documented failure mode of *raw speech-to-speech*
+on 8 kHz telephony. After a research pass (managed platforms + open source), Zach chose **turnkey audio INFRA +
+our own logic → Pipecat**. Retell was evaluated and rejected ("terrible"); raw S2S is banned on phone. This is
+what the code + a live audition show today:
+
+- **The engine — a CASCADE (STT → LLM → TTS), telephony-robust:** `apps/myli-voice-agent/pipecat_bot.py`
+  (Pipecat 1.5). **Deepgram** STT → **Claude Haiku 4.5** (`claude-haiku-4-5-20251001`, Anthropic) →
+  **ElevenLabs "Jessica"** TTS (`eleven_turbo_v2_5`). Silero VAD + Pipecat Smart-Turn handle barge-in /
+  turn-taking as framework defaults — the audio infra we no longer hand-tune. Model + voice are env-overridable
+  (`MYLI_LLM_MODEL`, `MYLI_ELEVEN_VOICE`).
+- **Telephony:** the CRM voice webhook (`app/api/phone/webhooks/voice/route.ts`) for an `answer_mode='myli'`
+  line returns `<Connect><Stream url="wss://{pipecat_ws_host}/ws"/></Connect>` — bridging Twilio Media Streams
+  to the bot's WebSocket. The host lives in `hl_settings.phone_provider.pipecat_ws_host` (env `PIPECAT_WS_HOST`
+  wins), so the tunnel/host can be repointed with **no redeploy**. Falls through to the `<Record>` voicemail if
+  the bot is down (instant rollback = clear the host / flip `answer_mode` to `forward`).
+- **The CRM seam is UNCHANGED** — the bot fetches `GET /api/phone/myli/persona` (the composed receptionist
+  persona, with the cold-receptionist gating) at call start, prepends the **real current Central date/time**, and
+  on hangup POSTs `/api/phone/myli/wrapup` (the one write: lead create/match + transcript).
+- **The persona is GOAL-DRIVEN, not scripted** (a scripted version sounded robotic — reverted). Lives on the
+  **AI Receptionist** role (`hl_role`): personality dialed up (warm, excited, casual, witty), **one question per
+  turn (hard rule)**, a **triage gate** (buy vs sell vs other) that fixes the "sell → your current home" drift, a
+  **seller goal** (natural discovery → an in-person listing appointment), **company knowledge** (she IS the
+  Spradling Group), and **date grounding**. Design source of truth: the receptionist playbook artifact
+  (Connecting-With-People across every caller bucket).
+
+**Live status (2026-07-16):** audited GREEN in a live audition — quality + latency **"amazing,"** the seller
+discovery flow landed an in-person appointment. **NOT production-hosted yet** — the bot runs as a local process
+on Zach's Mac via an ngrok tunnel; the #1 remaining task is persistent hosting (Pipecat Cloud or a Railway
+worker). Full state of the union, the numbers/routing, and the remaining punch list:
+`.claude/state/lee-to-fable-ai-voice-and-ai-cost-2026-07-16.md`.
+
+**Superseded / dead:** the LiveKit Cloud agent (`CA_F3gSn3cSFrEF`, us-east) + `agent.py` (LiveKit+Gemini) + the
+`/api/phone/myli/retell-*` routes are all abandoned (deletion candidates). `livekit_sip_domain` in
+`phone_provider` is now unused. Everything below this section is HISTORICAL.
+</Warning>
+
 # ═══ THE 2026-07-15 STATE — BACK TO LIVEKIT NATIVE S2S (Retell abandoned) — code-audited ═══
 
 <Warning>

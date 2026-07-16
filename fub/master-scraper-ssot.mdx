@@ -18,6 +18,32 @@ does in FUB after pull-in appears in HouseLoop. There is no reason not to.**
 
 If a pulled-in lead's HouseLoop activity is behind what FUB shows, that is a bug — every time.
 
+## 🎯 THE TRIGGER-EVENT DOCTRINE (Zach, 2026-07-16 — the target architecture)
+
+This is the north star for the whole FUB pipeline. The current code does **not** fully match it yet (see the
+honest status + the audit checklist at the bottom) — this section is the TARGET we are hardening toward.
+
+1. **A trigger event fires EVERY time something happens.** View a home 50 times in a day = **50 trigger events.**
+   Not gated, not deduped, not sampled. Every single thing FUB gives us is one trigger event.
+2. **The trigger event is the ONE spine — everything is downhill from it:**
+   `TRIGGER EVENT → notification · workflows · the re-scrape · the activity/website-activity feed`.
+   Today these are three decoupled systems (the `hl_trigger_fire` ledger, the `hl_lead_activity` feed, the
+   `hl_notification` card). The target is **one thing**: the trigger event is what fires, and the notification,
+   the feed, the workflow, and the scraper all hang off it.
+3. **Workflows attach to trigger events; rules attach to workflows.** That is the dependency chain.
+4. **A trigger event is NOT the same as "Creates Lead."** Creates-Lead is a **separate** toggle, currently OFF on
+   purpose (we do not want FUB auto-creating leads). **Trigger events still fire when Creates-Lead is off.**
+   Creates-Lead decides only whether a *lead is born* — never whether the *trigger fires*. When Creates-Lead IS on
+   for an event (e.g. "viewed a home"), the FIRST house they view creates the lead and HouseLoop backfills the
+   person's ENTIRE FUB history.
+5. **The comms policy (intentional, locked):** website activity (views/saves/shares/searches/inquiries/in-app/
+   insights) is backfilled in full AND kept lock-step forever. **Texts, calls, and emails are deliberately NOT
+   backfilled into the lead-detail activity feed, and new ones are not leaked into it either** — HouseLoop's
+   lead-detail stays clean of raw comms. **The FUB Context section on the lead shows ALL comms** (backfilled +
+   forward). One line: *activity feed = website activity, lock-step; FUB Context section = all comms.*
+6. **~23–24 trigger events, one per FUB signal**, each driving the notification + the scraper + the feed + any
+   attached workflow from the ONE trigger event.
+
 ## The pipeline in one picture
 
 ```
