@@ -9,20 +9,42 @@ reads the thread, replies in the agent's voice, and takes real actions on the ag
 behalf. It is **not** Myli — Myli is her own standalone identity; a clone always acts
 *as the human it clones*.
 
-## Identity — "acting as" the human
+## Identity — a MODE on the human, not a separate account
 
-A clone is an `hl_users` row with `clone_of_user_id` set to the human it clones. Its
-**acting identity** is `COALESCE(clone_of_user_id, ai_agent_user_id)` — so for Zach's
-clone, that resolves to **Zach**. Everything the clone does uses the human's identity:
+<Note>
+**Model change (retired 2026-07-14).** The clone is no longer a separate `hl_users` row.
+The old "clone user" rows (e.g. "Zach Spradling (AI)") were retired — migration
+`0392_no_clone_inboxes.sql`, and there are **0 clone rows on prod**. A clone is now purely
+**a mode on the real human agent**: same account, same email, same number, just answering
+in AI mode. Any doc or code still describing a clone as its own user row / a
+`COALESCE(clone_of_user_id, …)` acting identity is describing the retired model.
+</Note>
+
+A clone is expressed by two live switches on the HUMAN — never a separate identity:
+
+- **`hl_agent_clone_config`** (`agent_user_id`, `enabled`, `takeover_minutes`) — the
+  per-agent default: may this human's clone act, and after how many minutes of silence
+  does it take over. Opt-in (absent row = off). Read by `getAgentCloneConfig`
+  (`lib/coordination/clone-config.ts`).
+- **`hl_leads.ai_mode_enabled`** — the per-lead override: is the clone active on THIS lead
+  right now (the lead-detail **AI Mode** toggle).
+
+Because the clone **is** the human, everything it does uses the human's identity:
 
 - **Texts** send from the human's dialer/iMessage number.
 - **Emails** send from the human's connected Gmail.
-- **Calendar** events are organized on the acting identity's Google Calendar — for a
-  **clone** that's the human it clones; for a **standalone AI** (Myli) that's the AI's
-  own calendar. This distinction drives who gets an email invite (see Appointments).
+- **Calendar** events are organized on the human's Google Calendar — which changes who
+  gets an emailed invite vs. a standalone AI like Myli (see Appointments).
 
-The clone is assigned to a lead via the lead's `ai_agent_user_id` + `ai_role_id`. The
-clone acts on **two independent paths** — a global toggle **or** a single assigned item.
+The lead carries three identity slots (`hl_leads`, migration `0095`): **`assigned_user_id`**
+(the human, LEFT lane), **`ai_clone_id`** (the human's clone — what AI-Mode / SLA failover
+flips, LEFT lane), and **`assigned_ai_agent_id`** (Myli, the standalone AI, RIGHT lane).
+`lib/agent-runtime/resolve-send-identity.ts` resolves which line a message sends from.
+*(The legacy `hl_users.clone_of_user_id` and `hl_leads.ai_agent_user_id` columns still
+exist as dead backward-compat and are being removed — see [Status](#status--done-vs-left).)*
+
+The clone acts on **two independent paths** — a global per-lead toggle **or** a single
+assigned item (below).
 
 ## When the clone acts (two paths)
 
@@ -68,9 +90,11 @@ explicitly sets it `false`; a `built:false` capability shows "Coming soon" and i
 grantable. Turning **Text messages** off, for example, makes the clone go silent (no
 reply, no typing) — the toggle truly gates the tool (`toolEnabled` → `TOOL_TO_CAPABILITY`).
 
-**Wired today: 20 capabilities are `built:true`** across five categories. The only
-capability still `built:false` is **`call`** (outbound voice — voice isn't wired). Source
-of truth: `apps/houseloop-crm/lib/agent-runtime/capabilities.ts`.
+**Wired today** across Communication, Search Homes, Appointments, Tasks & Follow-up, CRM,
+and — since the Myli Voice MVP — **inbound voice** (`voice_inbound` + the caller-capture
+tools are now `built:true`). The only capability still `built:false` is **`call`**
+(outbound voice — placing a call isn't wired; honest "Coming soon" copy in the tree).
+Source of truth: `apps/houseloop-crm/lib/agent-runtime/capabilities.ts`.
 
 ## What the clone can do (the capability tree)
 
@@ -247,6 +271,84 @@ constellation of everything Myli knows — the visual, explorable version of the
 **Inspiration:** PlacedAgent's `BrainMapView` (study for UX only — HouseLoop is
 PlacedAgent-free; rebuild native, no PA imports). **Build order:** B4 (the big visual
 lift, after the facts engine).
+
+## Attribution &amp; clone performance tracking
+
+Every action the clone takes is credited in the canonical run-log (`hl_lead_activity`) and
+on the message/appointment rows — so "the clone did this" is separable from a human doing it
+by hand and from Myli doing it, **today, with one caveat.**
+
+**How a clone action is stamped today.** Because the clone acts AS the human, an action it
+performs records `actor` = **the human's user id** and `actor_role` = **`'ai_agent'`**
+(vs `actor_role='human'` for the same person clicking the button manually). Outbound texts
+(`hl_messages`), emails, and the activity rows for appointments / notes / stage moves all
+follow this shape (`lib/ai/lead-conversation.ts`, `lib/leads/log-message.ts`,
+`lib/ai/ai-actions.ts`). AI token cost rides those same rows.
+
+| Compared to | Distinguishable today? | How |
+|---|---|---|
+| The human acting **manually** | Yes | same `actor` (the human), different `actor_role` (`ai_agent` vs `human`) |
+| **Myli** (the standalone AI) | Only indirectly | both are `actor_role='ai_agent'`; the difference is whether `actor` is a `type='human'` user (clone) or a `type='ai_agent'` user (Myli) |
+
+<Warning>
+**Known bug — the clone/Myli labeler is stale for the new model.** The helper that tags an
+action `meta.actor_type = 'clone'` vs `'myli'` derives it from
+`acting_user_id !== ai_agent_user_id` (`lib/ai/lead-conversation.ts`). In the retired
+clone-user model those ids differed; in the **mode-on-human** model they are now the **same
+id**, so every clone action currently mislabels itself as **`'myli'`**. This must be fixed
+before any clone-performance surface can be trusted. The reliable signal meanwhile is
+`actor_role='ai_agent'` **AND** `actor` resolves to a `type='human'` user.
+</Warning>
+
+**There is no clone performance card today — by prior design.** The AI-agent roster that
+powers the persona cards (`/api/ai-follow-up/agent-cards`) **explicitly excludes clones**
+(`WHERE u.type='ai_agent' AND clone_of_user_id IS NULL`, migration `0392`). A clone's work
+is counted on **no** card. That same endpoint already computes exactly the metrics a clone
+card would need — Actions 7d, Texts, Calls, Appts, Spend MTD — from
+`hl_lead_activity WHERE actor = u.id AND actor_role='ai_agent'`.
+
+### Planned — the clone performance card (Zach directive, 2026-07-16)
+
+**This reverses the "clones never get a card" rule.** The clone gets its **own persona card
+in the AI Agents section**, like Myli's — a place to see what the clone is doing and how it
+is performing. It is **still not a separate role**: the clone remains a mode / attribution
+on its human. The card is simply *the credit for what clone mode did*.
+
+Foundation already exists; the build (detailed in the Fable 5 handoff) is:
+
+1. **A trustworthy clone marker** — fix the stale `meta.actor_type` derivation, or add a
+   first-class `actor_kind` / `is_clone` signal on `hl_lead_activity`, so a clone action is
+   reliably tagged as the clone (not Myli, not the human's manual work).
+2. **Emit a clone card** — relax the `clone_of_user_id IS NULL` exclusion in
+   `agent-cards/route.ts` (and reconcile the role lookup) so agents whose
+   `hl_agent_clone_config.enabled` is on surface as a card driven by their already-distinct
+   `actor` rows. **No new card component** needed — reuse `AgentDutyCard`.
+3. **Performance = the same metric block** Myli's card uses, filtered to the clone's rows.
+
+## Status — done vs left
+
+**Shipped (recent):**
+- The clone identity is the **mode-on-human** model above — old clone-user rows retired
+  (mig `0392`).
+- Lead-detail **Email "From"** is lead-scoped: it lists only the people ON the lead
+  (assigned agent + collaborators + assigned AI agent) who have a connected mailbox, default
+  the assigned agent (`app/api/leads/[id]/email-senders/route.ts`). **Roles no longer gate
+  email.**
+- The AI cockpit's unbuilt services (Pond agent, Database Manager, Transaction Coordinator,
+  Content Manager) read an honest **"Coming soon"** instead of "Not set up".
+
+**Left:**
+- **Clone attribution + performance card** — the planned build above (fix the labeler, emit
+  the card). Handed to Fable 5.
+- **Remove dead `clone_of_user_id` scaffolding** from the send-identity paths now that clone
+  rows = 0 (`resolve-send-identity.ts`, `lead-conversation.ts`, `enqueue-clone-task.ts`,
+  `log-message.ts`, + a few callers). Behavior-preserving (the COALESCE already collapses to
+  the human).
+- **Retire the orphaned `hl_leads.ai_agent_user_id` column** (unread except one vestigial
+  workflow fallback) — repoint then drop under the destructive-SQL rule.
+- **`role` → `access_level`** is largely done (access_level is live); finish scrubbing any
+  stray raw-`role` gate. *(Voice honesty is already resolved — inbound voice is wired; only
+  outbound `call` stays `built:false` with honest copy.)*
 
 ## Known limits / roadmap
 

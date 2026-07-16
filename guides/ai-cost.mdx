@@ -3,6 +3,71 @@ title: "AI Cost & Attribution"
 description: "How every Anthropic and OpenAI dollar is split across HouseLoop, PlacedAgent, and Memory OS — and where caching saves money."
 ---
 
+# ═══ 2026-07-16 AUDIT — WHAT'S ACTUALLY DEPLOYED (the reality gap) ═══
+
+<Warning>
+**The architecture described below this section is the DESIGN. As of 2026-07-16 it is largely NOT wired up.** A
+full read-only audit (triggered when Zach's OpenAI account went negative and nothing alerted him) found:
+
+1. **Where the `/ai-cost` page "went":** it was never deleted. `app/(crm)/ai-cost/page.tsx` still exists and
+   deploys (`crm.houseloop.ai/ai-cost` returns auth, not 404) — but **its nav link was dropped** in the
+   "C1 AI-section" rework (Sidebar comment: *"AI Cost + Run Log moved to the top-level AI section — 2026-07-13"*;
+   the actual `href` to `/ai-cost` is gone). So it's an **orphaned page** you can only reach by typing the URL.
+2. **The segmentation is DEFINED but effectively UNDEPLOYED.** **No runtime caller anywhere** references
+   `ANTHROPIC_WS_*`, `OPENAI_PROJ_*`, `ANTHROPIC_API_KEY_HOUSELOOP`, `OPENAI_API_KEY_HOUSELOOP`,
+   `ANTHROPIC_ADMIN_API_KEY`, or `OPENAI_ADMIN_API_KEY` **except the billing-readback in
+   `lib/ai-cost/workspace-costs.ts`.** Every actual AI call falls back to the **shared** `ANTHROPIC_API_KEY` /
+   `OPENAI_API_KEY`. So spend cannot attribute — it all lands "unattributed."
+3. **The admin keys aren't mapped.** They exist in the credential vault as `CRED_ANTHROPIC_ADMIN_API_*` /
+   `CRED_OPENAI_ADMIN_API_*` but were never set as the env-var NAMES the dashboard reads
+   (`OPENAI_ADMIN_API_KEY` / `ANTHROPIC_ADMIN_API_KEY`). So the provider-admin reads return nothing and the
+   dashboard shows blank. Keys were provided; they were never wired.
+4. **Cost logging is partial.** ONLY `apps/houseloop-crm` routes through `logAiCost`/`callModel`. The **website**
+   (except search), the **dashboard**, **placedagent-nextjs**, **all three voice agents**, and **every tool**
+   bypass the ledger — real spend, no `hl_run_log` row.
+5. **No alerting exists** for a negative/unfunded balance or a provider invoice. This is the gap that let the
+   OpenAI balance run to -$0.09 silently.
+</Warning>
+
+## The full spend map — every AI caller (2026-07-16)
+
+| Surface | Caller(s) | Provider / model | Key used | Logged? |
+|---|---|---|---|---|
+| **CRM — Myli conversation** | `lib/ai/lead-conversation.ts` | Anthropic `claude-sonnet-4-6` | shared (falls back) | ✅ |
+| **CRM — extraction / dossier** | `lib/ai/extract-context.ts`, `call-model.ts` | Anthropic `claude-haiku-4-5` | shared | ✅ |
+| **CRM — coordination** | `lib/coordination/mediation.ts` | Anthropic | shared | ✅ |
+| **CRM — call analyze / voicemail triage** | `lib/calls/analyze.ts`, `voicemail-triage.ts` | Deepgram + Claude | **DB `ai_keys` table** (3rd key source!) | ✅ |
+| **CRM — AI vision tagging** | vision pipeline | OpenAI `gpt-4o` | shared OpenAI ⚠️ (now dead) | ✅ |
+| **Website — AI search** | `app/api/search/nlp`, `classify`, `lib/search/smart-features.ts` | Anthropic Haiku | shared | search only ✅ / features ❌ |
+| **Website — SEO / narrative / defork** | `lib/seo/*`, `market-narrative-generate.ts`, `lib/listings/defork*.ts` | Anthropic | shared | ❌ |
+| **VOICE — Pipecat cascade (live)** | `apps/myli-voice-agent/pipecat_bot.py` | Deepgram + Claude Haiku 4.5 + ElevenLabs | **shared** `ANTHROPIC_API_KEY` ⚠️ | ❌ |
+| **VOICE — LiveKit worker (dead)** | `apps/myli-voice-agent/agent.py` | Gemini native-audio | `GEMINI_API_KEY` | ❌ |
+| **VOICE — OpenAI Realtime (experiment)** | `apps/myli-openai-voice/server.ts` | OpenAI `gpt-realtime-2.1` | **bare shared OpenAI** ⚠️ | ❌ |
+| **Lee text agent / SMS** | `apps/lee`, `apps/sms` | OpenAI `gpt-5.2` / `gpt-4.1` | `OPENAI_API_KEY_DIRECT` / shared | ❌ |
+| **PlacedAgent (legacy Express)** | `apps/dashboard/server/ai-recruiting/*` (~40 callsites) | Anthropic + OpenAI + Deepgram/Cartesia/ElevenLabs | `_PLACEDAGENT \|\| shared`; 3 files bare-`new Anthropic()` ⚠️ | ❌ |
+| **PlacedAgent (nextjs)** | `products/placedagent/.../config.ts` → all PA brains | Anthropic | **bare shared, NO `_PLACEDAGENT`** ⚠️ (whole product) | ❌ |
+| **Memory / tools** | `tools/scribe/*`, `tools/pa/*`, `tools/cheplak-*` (Whisper), `tools/hive`, MCP | OpenAI embeddings/transcription + Anthropic | mostly **bare shared** ⚠️ | ❌ |
+
+**Biggest un-attributed offenders to repoint first:** `products/placedagent/.../config.ts` (an entire product on
+the shared key) · `pipecat_bot.py` (voice) · `myli-openai-voice` · the 3 dashboard bare-`new Anthropic()` files ·
+the `tools/scribe` + `tools/pa` OpenAI paths.
+
+## The fix plan (for the wire-up)
+
+1. **Un-orphan the page** — restore the `/ai-cost` nav link (and the AI Run Log link) in the Sidebar AI section.
+2. **Wire the admin keys** — map the vault super-admin keys → `OPENAI_ADMIN_API_KEY` + `ANTHROPIC_ADMIN_API_KEY`
+   on **Railway** (the CRM's real env), so the provider-admin reads populate real spend.
+3. **Deploy the segmentation** — actually set `ANTHROPIC_API_KEY_HOUSELOOP` / `OPENAI_API_KEY_HOUSELOOP` (+ the
+   `_PLACEDAGENT` / `_MEMORY` variants) on each service, and repoint the bare-shared-key offenders above so spend
+   attributes. Until then the "Unattributed (legacy)" bucket is ~everything.
+4. **Close the logging gaps** — route the website/dashboard/PA/voice/tool callers through the cost ledger (or at
+   minimum stamp the voice line, since Zach wants "every penny including AI voice").
+5. **Build the alerting** (Inngest — *Inngest or it doesn't exist*): a scheduled function reads each provider's
+   admin API for balance / credit-grant / recharge status + new invoices, and NOTIFIES Zach via the **HouseLoop
+   alerts number 913-800-4470** on a negative / unfunded / failed-recharge / new-invoice event.
+
+---
+
 ## The problem this solves
 
 Every AI call across the company used to run on **one shared API key** billing to a single default

@@ -23,6 +23,29 @@ the **superseded** capture path — this doc's **lead-mint / event-model / card*
 *acquisition-plumbing* details are being brought in line with the FUB master.
 </Warning>
 
+<Warning>
+**⚠️ LOCK-STEP SYNC + COMMS POLICY (audited/updated 2026-07-16) — supersedes the "Gate C / not built" notes below.**
+
+**Ongoing sync is BUILT (not the unbuilt "Gate C" this doc's changelog describes).** After pull-in, an existing
+lead is kept current by **`fub-activity-sweep-tick`** (Inngest): it polls the `GET /v1/people?sort=-updated`
+heartbeat, filters to HouseLoop leads active in a ~15-min window, and enqueues a `person_rescrape` into
+`fub.body_recovery_queue` → the live `fub-body-recovery` consumer flips the person to `pending` →
+`fub-parallel-scraper` re-walks that one person → POSTs `/api/fub/rebackfill` → `backfillFubBehavior` mints the
+new activity into the feed. The old import path only scraped fresh data **at mint** (the `created` gate,
+`fub-lead-import.ts:730 && created`); the sweep is what closes that gap for existing leads. ⚠️ **Caveat (verify
+first):** the `person_rescrape` queue CHECK constraint has no committed migration — if it was never widened, every
+tick INSERT fails and this loop is dead. See the ⭐ [Master FUB Scraper SSOT](/fub/master-scraper-ssot) status.
+
+**The comms policy (Zach, locked 2026-07-16):** on the sweep, **only website activity** (views/saves/shares/
+searches/inquiries/in-app/insights) is re-scraped + kept lock-step. **Texts, calls, and emails are deliberately
+NOT backfilled into the lead-detail activity feed, and new ones are not leaked into it** — the lead-detail stays
+clean of raw comms. **All comms (backfill + forward) live in the FUB Context section** on the lead instead. So:
+*activity feed = website activity, lock-step; FUB Context section = all comms.*
+
+**Trigger events ≠ Creates-Lead:** a trigger event must fire on every FUB signal regardless of the Creates-Lead
+toggle (see the [Trigger Events](/fub/trigger-events) doctrine banner). This is a pending Fable-5 hardening item.
+</Warning>
+
 ---
 
 # 1. Overview & the one-source map 🔒

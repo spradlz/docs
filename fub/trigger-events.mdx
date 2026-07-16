@@ -15,6 +15,23 @@ system → [Messages & Notifications](/platform/message-catalog); how a FUB sign
 **Lee** · scraper owner: **Caleb**. SSOT table: `hl_fub_webhook_settings`.
 </Info>
 
+<Warning>
+**⚠️ CURRENT STATE vs DOCTRINE (audited 2026-07-16).** A code-grounded audit found the LEDGER does not yet match
+the doctrine below. **The doctrine (Zach, 2026-07-16):** a **trigger event fires on EVERY FUB signal** — view a
+home 50 times = 50 trigger events — **regardless of the Creates-Lead toggle.** The trigger event is the ONE spine;
+the notification, the workflow, the re-scrape, and the activity feed are all *downhill* from it. Creates-Lead
+decides only whether a *lead is born*, never whether the *trigger fires*.
+
+**The code today is backwards:** the `hl_trigger_fire` ledger is written ONLY by `dispatchDoor` on a Creates-Lead
+**mint** (`fub-lead-import.ts` step `fire-registration`). With Creates-Lead OFF (its intended state), **no ledger
+row fires** — the event only produces a notification + a feed card. So "trigger event" today means three decoupled
+systems (ledger `hl_trigger_fire` / feed `hl_lead_activity` / notification `hl_notification`), not one. Also: an
+attached workflow *bypasses* the ledger (`!fubWorkflow.ran`). **Fable 5 is hardening this** — see the ⭐ [Master
+FUB Scraper SSOT](/fub/master-scraper-ssot) doctrine + status and the audit checklist in the Adam handoff. Treat
+the per-row matrix below as the *target*; the "fires `hl_trigger_fire`" column is not yet true for the
+existing-lead / Creates-Lead-off case.
+</Warning>
+
 ## The principle (LOCKED 2026-07-09 by Zach)
 
 **Notifications are the source of truth. The scraper is a dumb, on-demand grabber of HIDDEN content only.**
@@ -127,8 +144,11 @@ doors below (mig `0285`). Any doc/code still treating "Property Inquiry" as one 
    `hl_fub_webhook_settings.fub_event` column (display-only) was corrected to `notesCreated` for
    `property_saved`/`property_viewed` on 2026-07-11.
 2. **The four typed phone lines (rows 14–17) currently never fire** — the router dispatches only the generic
-   `phone_call`; the shared `called# → hl_phone_numbers.category → subtype` resolver is IN BUILD (Zach + Caleb,
-   contract locked 2026-07-09). Until it ships, all calls land on row 13.
+   `phone_call`; all calls land on row 13. **UPDATE (Zach, 2026-07-16): the fix is a TWILIO build, NOT a
+   `fub-webhook-router.ts` branch.** Zach ported all the numbers OUT of FUB into Twilio and is forwarding each
+   past-agent FUB number to a HouseLoop Twilio number that becomes the **past-agents line**. So the typing comes
+   from the Twilio side (which line received the call), not a FUB called-number resolver. Coordinate with the
+   Twilio lane (Lee); do not build this as a FUB router change.
 </Warning>
 
 ## Behavioral signals MINT when Creates Lead is ON

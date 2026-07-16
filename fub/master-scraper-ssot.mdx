@@ -171,16 +171,33 @@ save (4224 E 104th Ter) + view (10516 Richmond Ave) now mint, zero doubles.
 - **The per-event toggles:** `hl_fub_webhook_settings` (Sync · Creates Lead · Workflow · Notify) — deep law in
   [Trigger Events](/fub/trigger-events).
 
-## Status (2026-07-15)
+## Status — HONEST (2026-07-16, after a full 4-doc code audit)
+
+⚠️ **This replaces the earlier optimistic status.** A code-grounded audit (2026-07-16) found several pieces the
+prior status marked "🟢 proven end-to-end" are actually **unverified or not matching the doctrine.** The truth:
 
 | Piece | State |
 |---|---|
 | 20 FUB webhooks → `crm.houseloop.ai`, all Active | 🟢 Live |
-| Scraper (backfill-a, body-recovery consumer, relay, watchdog) | 🟢 Alive + beating |
-| `_global` master switch | 🟢 ON |
+| Scraper live procs (backfill-a **+ backfill-b** on 2 Chromes, body-recovery, watchdog, **chrome-guard**, relay) | 🟢 Alive (verify with `pm2 list`) |
+| `_global` master switch mechanism | 🟢 Live |
 | Real-time NOTIFICATIONS (saves/views/inquiries/in-app) | 🟢 Firing |
-| **Existing-lead activity → feed (lock-step sync)** | 🟢 **Built + deployed** — `fub-activity-sweep-tick` (event-only until cron sign-off) → `person_rescrape` → consumer re-scrapes → rebackfill. Proven end-to-end. |
-| Note-only saves/views (not in the browse feed) → feed | 🟢 **Built + deployed** — `convertNote` mints them, zpid→home resolved. Proven on Shamir 07-14. |
-| Duplicate view card (two sources) | 🟢 **Fixed** — mint dedups on logical view identity; notes fill gaps only. |
-| In-app message → All + Messages (not just FUB tab) | 🟡 Surfacing fix pending |
-| Saved searches (scraper-DOM-only) captured on re-scrape | 🟡 Depends on `scrapeSavedSearches` coverage — the scrape isn't picking up Shamir's newest 5 (separate scraper item). |
+| Note-only saves/views (not in the browse feed) → feed | 🟢 Built — `convertNote` mints them, zpid→home resolved. |
+| Duplicate view card (two sources) | 🟢 Fixed — mint dedups on logical view identity. |
+| In-app message → All + Website Activity | 🟢 **Shipped 2026-07-16** — its own `in_app_message` kind, hero card with the message, In-App filter pill (commit `8d829ac255`). |
+| **Existing-lead activity → feed (lock-step sync)** | 🔴 **UNVERIFIED — may be DEAD in prod.** `fub-activity-sweep-tick` enqueues `person_rescrape`, but the queue CHECK constraint has **no committed migration** (`person_rescrape_queue_widen.sql` does not exist; the tick returns sentinel `-1` if the constraint is not widened). Must be verified live + committed. |
+| **A FUB event fires a trigger (`hl_trigger_fire`)** | 🔴 **BACKWARDS vs doctrine.** Today the ledger fires ONLY on a Creates-Lead mint — so with Creates-Lead off, **nothing fires.** Per the doctrine a trigger must fire on EVERY signal regardless of Creates-Lead. Core fix pending. |
+| Every documented trigger event actually works | 🔴 Several BROKEN — `insight_re_engaged` (Zillow's #1 by volume) unmapped, `virtually_toured` notify-suppressed, `property_shared` uncwired, generic note has no feed card. See [Trigger Events](/fub/trigger-events). |
+| Typed phone lines (company/sign/past-agent/Ana) | 🟡 **Twilio build** (ported numbers → past-agent line) — NOT a FUB-router fix. |
+| Saved searches captured on re-scrape | 🟡 Depends on `scrapeSavedSearches` coverage. |
+
+### ✅ The Fable 5 audit checklist (make current == doctrine)
+The full fix list lives in the handoff (`.claude/state/adam-handoff-fub-trigger-audit.md`). Headlines:
+1. **Verify the sync is alive** — the `person_rescrape` queue constraint + the parallel-scraper→rebackfill hop.
+   Commit the missing migration.
+2. **Decouple trigger-fire from Creates-Lead** — a trigger fires on every FUB signal; Creates-Lead only decides
+   if a lead is born. Existing-lead activity must write the ledger.
+3. **Collapse the 3 systems toward one** — the trigger event is the spine; notification + feed + workflow +
+   scraper hang off it; one canonical "triggered" count.
+4. **Fix the broken events** — re_engaged, virtually_toured, property_shared, generic-note feed card.
+5. **Honor the comms policy** — website activity lock-step; comms never in the feed but ALL in the FUB Context section.

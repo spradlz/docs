@@ -11,6 +11,28 @@ this mirrors: `GT_FUB_SCRAPER.md` (the one canonical scraper doc). Owner: **Cale
 David infra: **David**.
 </Info>
 
+<Warning>
+**⚠️ CORRECTIONS (audited 2026-07-16 vs the live code — apply before trusting the sections below):**
+- **It's TWO Chromes, not one.** `ecosystem.config.cjs` runs `fub-backfill-a` (Chrome A :18800) **and**
+  `fub-backfill-b` (Chrome B :18802), `FUB_WORKERS=5` each (~6 workers) — the "one Chrome / backfill-b retired /
+  FUB_WORKERS=3" prose is stale (reversed by the 2026-07-11 two-Chrome revival).
+- **`fub-chrome-guard` is a live pm2 proc** (the OOM cap, `MAX_CHROME`/`MAX_TABS`, ports 18800/18802) — add it to
+  the process roster. Real deploy set = `fub-backfill-a, fub-body-recovery, fub-watchdog, fub-chrome-guard`
+  (+ `fub-relay` from `tools/fub-sync`). Verify with `pm2 list` on Camp David.
+- **The body-recovery consumer LISTENs, it does not poll** — `LISTEN body_recovery_new` + a 5-min fallback sweep
+  (the no-polling law), not tight polling.
+- **`fub.body_recovery_queue` carries FIVE resource types:** `text`, `call_note`, `email` (→ immediate error,
+  recovery DISABLED since the 2026-06-23 compose incident — NOT "served on demand"), `inbox_sweep`, and
+  `person_rescrape` (the lock-step re-scrape, Adam 2026-07-15). Its CHECK constraint may not be widened for
+  `person_rescrape` — verify live (no committed migration).
+- **`fub.saved_searches` IS on the relay** (`fub-relay.mjs`); only `zillow_home_activity` bypasses the relay
+  (per-person full-replace). Don't group saved_searches as off-relay.
+- **Dead login click still live:** `scrapePersonFull` (`fub-scraper-lib.mjs:844-869`) still clicks the retired
+  `u-bigBlueButton` on session expiry (the 2026-07-08 incident) — the fix landed in the consumer/parallel/watchdog
+  paths but not here, and the in-app sweep calls `scrapePersonFull` directly. Migrate it to `fub-login-bot.mjs`.
+Full audit + fix checklist: the ⭐ [Master FUB Scraper SSOT](/fub/master-scraper-ssot) + the Adam handoff.
+</Warning>
+
 ## One-line truth
 
 Follow Up Boss's **public API masks** message/email/call bodies and never exposes the full historical browse
