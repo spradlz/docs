@@ -1,13 +1,13 @@
 ---
 title: "FUB Trigger Events & Notifications"
-description: "The ONE master for the Follow Up Boss trigger-event + notification system: all 22 trigger events — how each is created from a FUB signal and which notification each fires — the four toggles (Sync · Creates Lead · Workflow · Notify), the exposed-vs-masked CAPTURE MATRIX (from live data), the locked 3-lane architecture (notifications are the source of truth; the scraper is a dumb on-demand grabber of hidden content only), the native webhook that severs realloop.co, the recency gate, and the live build status. Managed at Settings → Trigger Events → Follow Up Boss. hl_fub_webhook_settings is the source of truth."
+description: "The ONE master for the Follow Up Boss trigger-event + notification system: the FUB trigger events (19 live rows post-mig-0415 — phone triggers moved to the inbox lane) — how each is created from a FUB signal and which notification each fires — the four toggles (Sync · Creates Lead · Workflow · Notify), the exposed-vs-masked CAPTURE MATRIX (from live data), the locked 3-lane architecture (notifications are the source of truth; the scraper is a dumb on-demand grabber of hidden content only), the native webhook that severs realloop.co, the recency gate, and the live build status. Managed at Settings → Trigger Events → Follow Up Boss. hl_fub_webhook_settings is the source of truth."
 ---
 
 <Info>
 **This is THE single master for the Follow Up Boss trigger-event + notification system.** Consolidated
 **2026-07-09** (Zach directive — "one FUB trigger events doc, period"): it absorbed the retired
 `fub/notification-architecture` (the dead "5-layer differential reconciler" design), `fub/native-capture-prd`,
-and `fub/zillow-signal-gaps`. It answers **what the 22 FUB trigger events are**, **how each is created from a
+and `fub/zillow-signal-gaps`. It answers **what the FUB trigger events are (19 live rows — phone moved to the inbox lane 2026-07-16)**, **how each is created from a
 FUB signal**, **whether that signal's content is exposed or masked**, **how we capture it natively**, and
 **which HouseLoop notification each one fires.** Companion masters: the notification
 system → [Messages & Notifications](/platform/message-catalog); how a FUB signal becomes a lead →
@@ -77,18 +77,20 @@ This is the go-live switch. **Flipped ON 2026-07-09 night → the pipeline is LI
 [Where the build stands](#where-the-build-stands)).
 </Note>
 
-## ⭐ THE 22 TRIGGER EVENTS — how each is created, and which notification it fires
+## ⭐ THE FUB TRIGGER EVENTS — how each is created, and which notification it fires
 
-**This is the master map.** One row per live `hl_fub_webhook_settings` row (22, verified against the table
-2026-07-09). Read a row left→right and you have the whole story: *the door → the FUB signal that creates it →
-the notification class it rolls up to → the card the agent sees.* Every event carries the **four toggles**
-(Sync · Creates Lead · Workflow · Notify) — ✅ **LIVE as of 2026-07-09 night**: `_global` master ON, **22 of 23
-events notifying** (Zach muted `property_viewed`, the firehose, right after go-live). **Creates Lead governs PER
-EVENT (Zach 2026-07-11 — no hardcoded never-mint list):** a behavioral signal (save/view/in-app) MINTS a new
-HouseLoop lead when its own `creates_lead` is ON, exactly like the inquiry rows — see
-[Behavioral signals can mint](#behavioral-signals-mint-when-creates-lead-is-on) below. A 23rd row,
-`insight_re_engaged` ("Insight: Buyer Re-Engaged"), was boarded 2026-07-09 (mig 0361). See
-[Where the build stands](#where-the-build-stands).
+> Count, honestly (2026-07-16): **19 FUB rows live** — the original 23 minus the 4 phone subtypes deleted by
+> mig 0415 (phone triggers moved to the board's inbox lane; the generic `phone_call` row survives as hidden
+> notify plumbing and renders nowhere). Earlier copies of this doc said "22" and "23" in the same breath —
+> that drift dies here: the table below is one row per live `hl_fub_webhook_settings` row.
+
+**This is the master map.** One row per live `hl_fub_webhook_settings` row. Read a row left→right and you
+have the whole story: *the door → the FUB signal that creates it → the notification class it rolls up to →
+the card the agent sees.* Every event carries the **four toggles** (Sync · Creates Lead · Workflow · Notify)
+— ✅ **LIVE since 2026-07-09 night**: `_global` master ON; `property_viewed` notify muted by Zach (the
+firehose). **Creates Lead governs PER EVENT (Zach 2026-07-11 — no hardcoded never-mint list):** a behavioral
+signal (save/view/in-app) MINTS a new HouseLoop lead when its own `creates_lead` is ON, exactly like the
+inquiry rows — see [Behavioral signals can mint](#behavioral-signals-mint-when-creates-lead-is-on) below.
 
 ### How a row becomes a card (the chain every event follows)
 
@@ -138,12 +140,11 @@ doors below (mig `0285`). Any doc/code still treating "Property Inquiry" as one 
    2026-05-21 and FUB now logs each as a **note** — the live per-event source is `notesCreated`. The
    `hl_fub_webhook_settings.fub_event` column (display-only) was corrected to `notesCreated` for
    `property_saved`/`property_viewed` on 2026-07-11.
-2. **The four typed phone lines (rows 14–17) currently never fire** — the router dispatches only the generic
-   `phone_call`; all calls land on row 13. **UPDATE (Zach, 2026-07-16): the fix is a TWILIO build, NOT a
-   `fub-webhook-router.ts` branch.** Zach ported all the numbers OUT of FUB into Twilio and is forwarding each
-   past-agent FUB number to a HouseLoop Twilio number that becomes the **past-agents line**. So the typing comes
-   from the Twilio side (which line received the call), not a FUB called-number resolver. Coordinate with the
-   Twilio lane (Lee); do not build this as a FUB router change.
+2. **Phone triggers left the FUB board entirely (SHIPPED 2026-07-16).** The Twilio build landed: calls to
+   our owned lines fire per-line inbox trigger events (lead-less included, mint-at-ring via creates_lead),
+   and the FUB router resolves the CALLED number — Twilio-landed calls are skipped (our webhook owns them),
+   Zach's FUB-native seat fires into the inbox lane. See [the board SSOT](/guides/trigger-events) §THE INBOX
+   LANE for the full pipeline. The 3 dead subtype rows were deleted (mig 0415).
 </Warning>
 
 ## Behavioral signals MINT when Creates Lead is ON
