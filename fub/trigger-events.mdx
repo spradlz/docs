@@ -15,22 +15,21 @@ system → [Messages & Notifications](/platform/message-catalog); how a FUB sign
 **Lee** · scraper owner: **Caleb**. SSOT table: `hl_fub_webhook_settings`.
 </Info>
 
-<Warning>
-**⚠️ CURRENT STATE vs DOCTRINE (audited 2026-07-16).** A code-grounded audit found the LEDGER does not yet match
-the doctrine below. **The doctrine (Zach, 2026-07-16):** a **trigger event fires on EVERY FUB signal** — view a
+<Note>
+**✅ THE DOCTRINE IS BUILT (2026-07-16, mig 0413).** A **trigger event fires on EVERY FUB signal** — view a
 home 50 times = 50 trigger events — **regardless of the Creates-Lead toggle.** The trigger event is the ONE spine;
 the notification, the workflow, the re-scrape, and the activity feed are all *downhill* from it. Creates-Lead
 decides only whether a *lead is born*, never whether the *trigger fires*.
 
-**The code today is backwards:** the `hl_trigger_fire` ledger is written ONLY by `dispatchDoor` on a Creates-Lead
-**mint** (`fub-lead-import.ts` step `fire-registration`). With Creates-Lead OFF (its intended state), **no ledger
-row fires** — the event only produces a notification + a feed card. So "trigger event" today means three decoupled
-systems (ledger `hl_trigger_fire` / feed `hl_lead_activity` / notification `hl_notification`), not one. Also: an
-attached workflow *bypasses* the ledger (`!fubWorkflow.ran`). **Fable 5 is hardening this** — see the ⭐ [Master
-FUB Scraper SSOT](/fub/master-scraper-ssot) doctrine + status and the audit checklist in the Adam handoff. Treat
-the per-row matrix below as the *target*; the "fires `hl_trigger_fire`" column is not yet true for the
-existing-lead / Creates-Lead-off case.
-</Warning>
+**How the code does it:** `recordFubTriggerFire` (`fub-lead-import.ts`) writes an `hl_trigger_fire` row for every
+serviced live FUB event — existing-lead activity, lead-less signals (lead_id NULL + `fub_person_id`, mig 0413),
+and events whose attached fub-settings workflow ran (previously those bypassed the ledger via `!fubWorkflow.ran`).
+`matched` = a workflow was actually dispatched. `dispatchDoor` remains the writer for native door dispatches
+(door-keyed rows) — different key, so neither board double-counts. **One spine for counting:** this board's FUB
+Triggered column and its drill-down both read `hl_trigger_fire_live` (`/api/fub/fire-counts` +
+`/api/trigger-events/fires`) — counts reset 2026-07-16 and grow forward as real fires land. Backfills never write
+the ledger (history replays into the feed, not the trigger log).
+</Note>
 
 ## The principle (LOCKED 2026-07-09 by Zach)
 
