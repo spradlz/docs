@@ -34,7 +34,7 @@ UI spec: `apps/houseloop-crm/docs/wireframes/ai-section-v1-LOCKED.html` §6.
 | Page | Route | What you do there |
 |---|---|---|
 | Inboxes list | `/inbox` | Personal + shared bands · doors · manager · ring rule · status. `+ New Inbox` creates a shared one. |
-| Inbox detail | `/inbox/[id]` (+ `/inbox/my` · `/inbox/company`) | The mailbox (doors) · the ring rule chain · the manager + per-channel AI switches · the laws · spam · the prompt layer · **the stream**. Trigger events do NOT live here — ONE home: the [Trigger Events](/guides/trigger-events) page's **Inbox** section. |
+| Inbox detail | `/inbox/[id]` (+ `/inbox/my` · `/inbox/company`) | The mailbox (doors) · the ring rule chain · the manager + per-channel AI switches · the laws · spam · the prompt layer · **the stream**. Trigger events do NOT live here — ONE home: the [Trigger Events](/guides/trigger-events) page's per-inbox sections (Company · Past Agents · personals, 2026-07-16). |
 | Numbers | `/settings/phone-numbers` | The directory. `Feeds inbox` is the one live control per number; unrouted numbers surface loudly. |
 
 ## Data model (mig `0390_inboxes.sql`)
@@ -59,14 +59,28 @@ UI spec: `apps/houseloop-crm/docs/wireframes/ai-section-v1-LOCKED.html` §6.
   inbox's doors (last-10 phone match / address match).
 - `PUT /api/phone-numbers` accepts `inbox_id` (the directory's Feeds-inbox control).
 
+## The door → inbox map (live 2026-07-16)
+
+| Door | Line | Feeds inbox | Origin |
+|---|---|---|---|
+| 913-320-0906 | Company | **Company** | Twilio (ours) |
+| 913-354-8600 | Sign / Listings | **Company** | Twilio (ours) |
+| 913-675-9877 | Past Agents front door (the 37-number FUB pool forwards here; `ForwardedFrom` says WHOSE old line was dialed) | **Past Agents** | Twilio (ours) |
+| 913-490-2988 | Zach's FUB seat (never porting — fires via the FUB router into the inbox lane) | **Zach (personal)** | FUB |
+| 913-954-7123 | Ana legacy (port lands ~2026-07-21) | **Ana (personal)** | porting → Twilio |
+| notifications@houseloop.ai | vendor mail door | **Vendor Mail** | Gmail |
+
 ## Shipped vs in flight
 
 - ✅ Model + migration + both pages + the stream + the directory gut (2026-07-13).
+- ✅ **Trigger events fire per door, lead-less included** (2026-07-16): every call/text to an owned line
+  writes the ledger stamped with its line's source; the board's per-inbox sections count them live.
+- ✅ **Creates-leads is REAL** (2026-07-16): the seat's `creates_lead` toggle mints the lead AT RING
+  (`lib/leads/mint-phone-lead.ts`; caller name from the FUB mirror; source owner/stage defaults, mig 0416).
+  Live-proven on an organic Zillow caller the day it shipped.
 - 🔨 **Ring-chain runtime** — the voice webhook executing ①→②→③ off the inbox (today it still honors the
   deprecated `answer_mode`); ships as the next gate after design sign-off. Calls also re-check the AI Voice
   master + the agent's `voice_inbound` capability live (3-layer gate, [AI Voice](/guides/ai-voice)).
-- 🔨 **Creates-leads** — proxies the `creates_lead` seat flags in Lead Flow's `hl_lead_source_events`
-  (the identity gate; [Trigger Events](/guides/trigger-events)). Lands with the catalog's Inbox section.
 - 🔨 New operational door events (`voicemail_left` · `spam_flagged` · `ai_answered_call` · `call_missed`) —
   register via `DOOR_EVENT_KEYS` with the runtime cutover; `call_received` / `text_received` / `email_received`
-  are already live doors.
+  are already live doors (email fires for matched leads; per-address lead-less email seats = next build).

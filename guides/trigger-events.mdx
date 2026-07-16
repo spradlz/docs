@@ -111,6 +111,33 @@ Every genuine door dispatch writes **exactly one row** to `hl_trigger_fire` (`le
   system-seeded searches, and replayed pre-registration browsing can never masquerade as trigger fires.
 - `lead_id` is `ON DELETE CASCADE` — deleting a lead removes its fires.
 
+## THE INBOX LANE — every call/text to an owned line FIRES, and creates-lead MINTS AT RING (2026-07-16)
+
+Live-proven the day it shipped on an organic Zillow caller (Sachind Jamesh → Alisha Hanks' old number).
+
+- **Every inbound call/text to an owned line writes a trigger event — lead-less included** (50 calls = 50
+  fires; a spam-gated call still fires with `routed_by='spam-gate'`; our own pool/dialer numbers are plumbing
+  and never fire). Fired by the voice/sms webhooks via `fireInboxDoor` (`lib/workflows/fire-door.ts`):
+  lead-bearing fires ride the door → `dispatchDoor`; lead-less fires write `hl_trigger_fire` directly
+  (lead_id NULL), stamped `source = the line's lead-source key` — which is exactly what each per-line board
+  count keys on (`event_key × source`).
+- **Creates-Lead is real**: unknown caller + the line's toggle ON → the lead is minted DURING the ring
+  (`lib/leads/mint-phone-lead.ts` — one writer, shared with Myli's wrapup; the caller's NAME resolves from
+  the FUB people mirror at ring time via `lib/phone/caller-context.ts`). Minted → the door fires
+  `created:true` (New-Lead arm); matched → `created:false`. Phone sources carry owner + stage defaults
+  (mig 0416) — a phone-minted lead is never ownerless.
+- **`seatSource` tier-0**: the door dispatch resolves the LINE's seat (`hl_lead_source_events` by source
+  key), so a website-born lead calling the company line routes the company line's workflow arm — not its
+  birth source's. Fail-closed like every other tier.
+- **ONE call = ONE trigger event — the lane that ANSWERS the number fires it.** Calls landing on our Twilio
+  (company / sign / past-agent pool / Ana) fire from OUR voice webhook; FUB's `callsCreated` echo of those
+  calls is skipped entirely. FUB-native lines (Zach's seat 913-490-2988, never porting) fire from the FUB
+  router into the inbox lane (`suppressLedger` keeps the import from writing a second row).
+- **Which past agent's line**: Twilio `ForwardedFrom` rides the FUB forward hop — the fire payload, the
+  call row, and the notification all know "past client calling Alisha Hanks' old number."
+- **Email**: `email_received` fires for matched leads from BOTH the Gmail realtime path and the inbound-sync
+  poller. Per-address lead-less email seats are the documented next build (the board says so honestly).
+
 ## Routing (what happens when a door fires)
 
 `dispatchDoor` resolves the workflow through strict tiers and **picks the arm from the dispatch's created-flag**:
