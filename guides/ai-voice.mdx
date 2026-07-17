@@ -1,7 +1,39 @@
 ---
 title: "AI Voice"
-description: "THE one AI Voice doc — Myli answers the phone. CURRENT runtime (2026-07-16) = a PIPECAT CASCADE — Deepgram STT → Claude Haiku 4.5 → ElevenLabs 'Jessica' TTS (apps/myli-voice-agent/pipecat_bot.py). LiveKit+Gemini raw speech-to-speech (crashed on phone audio) and Retell were both abandoned. The architecture (Twilio number → CRM webhook → <Connect><Stream> to the bot → wrap-up seam), the answer gate, the goal-driven receptionist persona, and the remaining punch list. Everything below the 2026-07-16 section is HISTORICAL."
+description: "THE one AI Voice doc — Myli answers the phone. CURRENT runtime (2026-07-17) = a PIPECAT CASCADE: Deepgram STT → an LLM brain (TODAY = OpenAI gpt-4o-mini, NOT Claude — a one-provider violation to resolve) → ElevenLabs TTS (apps/myli-voice-agent/pipecat_bot.py). NOT FINALIZED — still testing. LiveKit+Gemini raw speech-to-speech (crashed on phone audio) and Retell were both abandoned. This page: the NEED-TO-DO-NEXT cost map, the architecture (Twilio number → CRM webhook → <Connect><Stream> → wrap-up seam), the answer gate, the persona, and the punch list. Everything below the 2026-07-16 section is HISTORICAL."
 ---
+
+# ═══ ⚠️ NEED TO DO NEXT — MAP AI COST FOR AI VOICE ═══
+
+<Warning>
+**Voice cost is 100% invisible today, and it's the hardest cost to track in the whole platform because it's
+THREE separate vendors on THREE different billing models — not one token count.** When the voice stack is
+finalized (see status below — we're still testing), the first work is instrumenting all three under ONE
+dedicated **`ai_voice`** cost category. See [AI Cost](/guides/ai-cost) for the logging spine this plugs into.
+
+**The three costs of one voice call (the gotchas):**
+
+| Leg | Vendor (today) | Billed by | The gotcha |
+|---|---|---|---|
+| **Ears (STT)** | **Deepgram** (`nova`) | **per audio-minute** | No token count exists — cost = call-recording **duration × per-minute rate**. Not in `MODEL_PRICING` (that table is per-token). Same shape as the CRM Deepgram STT hole (call/voicemail transcription). |
+| **Brain (LLM)** | **OpenAI gpt-4o-mini** ⚠️ | **per token** | This IS token-based — but the bot runs **OpenAI, not Claude** (docs long claimed Haiku; the code says gpt-4o-mini). A one-provider violation to resolve when we lock the stack. Turn-by-turn, so tokens accrue across the whole call. |
+| **Mouth (TTS)** | **ElevenLabs** | **per character** | Cost = characters spoken × per-char rate. Another non-token model. |
+
+**The requirements when we build it:**
+1. A dedicated **`ai_voice`** category — voice must NOT land in `follow_up` (that's Myli's TEXT conversations;
+   Zach's confusion: "AI Follow-Up says 429 calls" = text, not voice). Add `ai_voice` to `KNOWN_AI_CATEGORIES`
+   + the Run Log pills + the cost-page.
+2. **Emit at the wrap-up seam** — the bot already posts a wrap-up (transcript + summary + callback task) on
+   hangup. That is the ONE place that knows the call's duration (Deepgram), the turn tokens (LLM), and the
+   characters spoken (ElevenLabs). Emit a single aggregated `houseloop/ai.call` `{category:'ai_voice'}` row
+   there — OR three sub-rows if we want per-leg breakdown.
+3. **Per-minute / per-character pricing** must live in the categorizer's price map alongside the per-token
+   models (a small extension — the emitter takes a pre-computed `costUsd`, so voice can pass its own math).
+
+**Blocked on:** finalizing the voice stack. We do NOT instrument a bot we might replace — the moment the
+architecture is locked (Pipecat cascade vs. something else, and Claude vs. gpt-4o-mini brain), this becomes
+the first task. Everything below is the current state that feeds that decision.
+</Warning>
 
 <Note>
 **Internal command surface — the single doc for everything AI Voice.** The telephony half (which numbers exist,
@@ -24,12 +56,20 @@ Receptionist toggle on the Cockpit is the same `voice_enabled` wire.
 # ═══ 2026-07-16 EVE — LIVE-VERIFIED STATUS (test-called, DB-read, process-checked) ═══
 
 <Check>
-**The Pipecat cascade IS the runtime and it IS answering — on ONE line.** Live-verified 2026-07-16 ~19:05Z:
-a test call to **913-937-9359** connected `<Connect><Stream>` → the bot and held the full 25s (`hl_calls`
-outcome `forwarded → myli`; a real caller at 18:08Z stamped **`answered_by_ai`**). Every gate is open:
-`ai_conversations.voice_enabled=true` · AI Receptionist `voice_inbound=true` · the line's
+**The Pipecat cascade IS the runtime and it IS answering — on ONE line. NOT finalized — still testing.**
+Live-verified 2026-07-16 ~19:05Z: a test call to **913-937-9359** connected `<Connect><Stream>` → the bot and
+held the full 25s (`hl_calls` outcome `forwarded → myli`; a real caller at 18:08Z stamped **`answered_by_ai`**).
+Every gate is open: `ai_conversations.voice_enabled=true` · AI Receptionist `voice_inbound=true` · the line's
 `answer_mode='myli'` · `pipecat_ws_host` set.
 </Check>
+
+<Warning>
+**⚠️ THE BRAIN IS gpt-4o-mini (OpenAI), NOT Claude (corrected 2026-07-17).** `pipecat_bot.py:130` is
+`OpenAILLMService(model="gpt-4o-mini")` — earlier versions of this doc (and the description) claimed the brain
+was Claude Haiku 4.5. It is not. This is a **one-provider violation** (everything else on HouseLoop runs
+Claude) to resolve when the stack is locked. STT = Deepgram, TTS = ElevenLabs (those are correct). None of the
+three legs' cost is metered — see the NEED-TO-DO-NEXT block at the top.
+</Warning>
 
 <Warning>
 **But the HOSTING is the problem — this is why "it doesn't work" some of the time.** The bot is a Python
