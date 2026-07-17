@@ -4,26 +4,29 @@ description: "THE ONE document for the Spradling Realty Group past-client reconc
 ---
 
 <Warning>
-**⭐ THIS IS THE ONE DOC · Last updated 2026-07-03 (late).** The former WIP page (`wip/caleb-resolver`)
-is **collapsed into this master** (Zach directive 2026-07-03) — its old URL redirects here. The live
-status/checklist below is the "(Caleb WIP)" part and is kept current as the work moves. Rules unchanged:
-prove on the **first 20 (Nations first)** before anything touches 1,780; **"done" = the correct data
-VERIFIED IN THE TABLE by query** — never "the script exited 0." Every count below is a **live query as of
-2026-07-03 late PM**. Private contracts (not duplicated here — pointers only):
-`GT/GT - Pending/GT_SRG_RECONCILIATION_ENGINE_WIP.md` (the PRD) ·
-`.claude/state/session-scope-pastclient-reconciliation-promote.lock` (the promote scope) ·
-`.claude/state/session-scope-deal-ledger.lock` (the ledger build contract).
+**⭐ THIS IS THE ONE DOC · Last updated 2026-07-17.** The former WIP page (`wip/caleb-resolver`) is
+**collapsed into this master** (Zach directive 2026-07-03) — its old URL redirects here. **The canonical map
+of where every table/fact lives is the [🗺️ WHERE EVERYTHING LIVES](#🗺️-where-everything-lives-the-canonical-map)
+section below — that is the SSOT; if any number here disagrees with it, that section wins.** Rules unchanged:
+**"done" = the correct data VERIFIED IN THE TABLE by query** — never "the script exited 0." Private contracts
+(pointers only): `GT/GT - Pending/GT_SRG_RECONCILIATION_ENGINE_WIP.md` (the PRD).
 </Warning>
 
-## 🏆 THE SCOREBOARD (live 2026-07-07 — refreshed from build-master-houses.mjs, Fable 5 audit crm--4)
+## 🏆 THE SCOREBOARD (live 2026-07-17 — full 4-agent DB audit)
 
-> **`hl_srg_master_houses`: 1,847 houses · 1,847 FULLY RESOLVED (100%) · 0 named gaps · 0 unplaced deals ·
-> 0 houses missing a GT address** (builder run 2026-07-07; CSV: `.claude/reports/master-house-list-2026-07-06.csv`).
+> **The current canonical layer (2026-07-16): `hl_srg_canonical` = 1,932 resolved deals, MLS#-anchored,
+> disposition 0-null** (still_owns 1,323 · sale_side 418 · lost_opportunity 149 · sold_repped_by_us 42).
+> Built by `resolve-from-mls.mjs`; pushed onto the child by `regenerate-notes-from-canonical.mjs`.
 >
-> **The ledger:** 1,934 included deal rows / 1,697 clients — **GREEN 1,697 · YELLOW 120 · RED 117** · **142
-> evidence-stamped overrides** (every one a Zach receipt; they survive every rebuild).
-> **The book:** 1,779 past clients · 1,671 identity-VERIFIED · 1,670 final dossier cards
-> (grade now stamped on the parent: `dossier_json->>'grade'` — GREEN 1,600 · YELLOW 58 · RED 12).
+> **The ledger (`hl_srg_deal_ledger`): 1,946 deals** across 1,844 houses (`hl_srg_master_houses` VIEW) — 88
+> houses carry >1 transaction (one-house-many-transactions). **143 evidence-stamped overrides** (Zach receipts,
+> survive every rebuild). MLS coverage: 1,861 deals carry an MLS# (96.2%); the rest are honest off-market/dotloop.
+> **The book:** 1,779 past clients · 2,106 child homes.
+>
+> **The WEB cards (`hl_pastclient_resolved` VIEW): 1,949 cards · 1,814 FULLY LOADED (92.5%)** — photos + value +
+> price history + value history + tax. 1,941 have photos. **The open work is STALENESS, not missing cards:** 35
+> cards point off the keeper listing + ~149 (pre-2020 tail) need the recent sale ingested. See the card-freshness
+> plan in the running log.
 
 ## ✅ STATUS + CHECKLIST (the live WIP — formerly the wip/caleb-resolver page)
 
@@ -303,44 +306,92 @@ nothing about the client.
 
 ---
 
-## 🗺️ WHERE EVERYTHING LIVES (live counts 2026-07-03 late)
+## 🗺️ WHERE EVERYTHING LIVES — THE CANONICAL MAP (SSOT, live counts 2026-07-17)
 
+This section is the **single source of truth for where every past-client fact lives.** It is rebuilt from a
+full read-only audit of both databases + the code, not from memory. If a number or table name anywhere else
+disagrees with this section, THIS section wins. Re-audit and update it here; never fork a second map.
+
+### The two databases (+ the FUB mirror)
 | DB | Env var | Host | Holds |
 |---|---|---|---|
-| **CRM** | `HL_CRM_DATABASE_URL` | autorack (Railway) | PEOPLE + DEALS + ledger + all harvest/reconcile tables |
-| **WEB** | `HOUSELOOP_DATABASE_URL` | centerbeam (Railway) | `Listing`, `hl_property`, `hl_value_history`, `hl_pastclient_resolved` VIEW |
+| **CRM** | `HL_CRM_DATABASE_URL` | autorack (Railway) | PEOPLE + DEALS + ledger + canonical + all harvest/reconcile tables |
+| **WEB** | `HOUSELOOP_DATABASE_URL` | centerbeam (Railway) | `Listing`, `hl_property`, `hl_value_history`, the card tables |
 | **FUB mirror (dev)** | `DATABASE_URL` | 192.168.1.211 Camp David (no SSL) | `fub.*` raw comms |
 | **FUB mirror (Railway)** | `FUB_RAILWAY_DATABASE_URL` | yamabiko (Railway) | `fub.*` synced copy |
 
 > **⚠️ `DATABASE_URL` is NOT the website DB** — it's the Camp David FUB mirror. The website is
 > `HOUSELOOP_DATABASE_URL`. Confirm the host before you connect.
 
-### CRM DB — `autorack`
-| Table | Rows (live) | Grain / what it holds |
+### THE PIPELINE — 3 stacked layers (newest is canonical)
+The reconciliation runs as three layers, built in this order. **Read top-down: Layer 1 is the head.**
+
+1. **Layer 1 — the canonical MLS#-anchored resolver (2026-07-16).** `resolve-from-mls.mjs` keys every deal on
+   its **MLS#** (not the typed address) → MLS# → HLID → the WEB `Listing` rooftop life → disposition vs the SRG
+   roster. Writes **`hl_srg_canonical`**. Then `regenerate-notes-from-canonical.mjs` pushes that resolved
+   disposition/value onto the child (`hl_srg_past_client_homes`) so the audit cards + FUB notes render the truth.
+2. **Layer 2 — the deal ledger (2026-07-03).** `build-deal-ledger.mjs` materializes **`hl_srg_deal_ledger`** (the
+   deterministic client×deal match, 5 edges, GREEN/YELLOW/RED tiers, `verified_sources[]`). `build-master-houses.mjs`
+   rolls it into the **`hl_srg_master_houses`** VIEW (one row/house + nested transactions = the Zillow-style history).
+3. **Layer 3 — the WEB cards.** `sync-pastclient-worklist.mjs` mirrors the child → WEB `hl_past_client_homes`;
+   `enrich-pastclient-listing.mjs` (OpenWeb Ninja) + `hl-photo-engine.mjs` fill the WEB `Listing` (value/schools/tax/
+   photos/priceHistory); `build-resolution-table.mjs` rebuilds the **`hl_pastclient_resolved`** VIEW (coverage flags).
+
+### THE IDENTITY MODEL — one home, one ID, many transactions
+```
+identity_key = "<street>::<zip5>"          ← the ADDRESS is the home key
+      │ (one row per key)
+      ▼
+hl_property.hl_property_id = HLID######     ← THE canonical, permanent home id (in the /home URL)
+      │  .active_listing_hlid ───────────►  names the KEEPER Listing row
+      ▼
+"Listing"  (MANY rows per home — one per sale)
+      .hlPropertyId = HLID######            ← back-link every listing → its home
+      .hlid = hl_<source>_<slug>            ← the per-LISTING id (NOT the home id)
+```
+Card table join: **`hl_pastclient_resolved.mls_hlid = "Listing".hlid`** (1:1). `hl_pastclient_resolved.hlid` =
+the HLID (home). A person points at their current home via `hl_srg_past_clients.website_hlid`; the child
+`hl_srg_past_client_homes` holds every home, pinned by both `hl_property_id` (HLID) and `website_hlid`.
+
+### CRM DB — `autorack` (the canonical/live spine)
+| Table | Rows | Class | Grain / what it holds |
+|---|---|---|---|
+| **`hl_srg_canonical`** | **1,932** | ⭐ CANONICAL | THE resolved output (Layer 1) — 1 row/deal (`ledger_key`), MLS#-anchored, with `disposition` (**0 null**) + `current_value` + `verdict`. Built by `resolve-from-mls.mjs`. |
+| **`hl_srg_deal_ledger`** | **1,946** | CANONICAL | THE deterministic client×deal match — mls#, HLID, side, price, date, agent, method, tier, `verified_sources[]` + `contradiction`. Rebuilt by `build-deal-ledger.mjs` (UPSERT-only). |
+| **`hl_srg_master_houses`** (VIEW) | **1,844** | CANONICAL (view) | 🏠 one row/house + nested ledger transactions + `fully_resolved` — the one-house-many-transactions surface. 88 houses carry >1 transaction. |
+| **`hl_srg_past_clients`** | **1,779** | CANONICAL | PARENT — person, bucket, `closings`, `website_hlid` (current-home pin). The people SSOT. |
+| **`hl_srg_past_client_homes`** | **2,106** | CANONICAL | CHILD — 1 row/home, `hl_property_id` (HLID) + `website_hlid`. ⚠️ its own `disposition` column is DEAD (2,071 null) — **disposition truth is `hl_srg_canonical`**, pushed here by `regenerate-notes-from-canonical.mjs`. |
+| **`hl_srg_deal_overrides`** | **143** | CANONICAL | human verdicts — fields WIN on rebuild; `excluded` non-deals; `verify_status` drives the verify queue. |
+| **`hl_srg_mls_deals`** | **2,042** | CANONICAL | our downloaded Heartland MLS (unit-bearing address + agents + status). |
+| **`hl_srg_dotloop_contracts`** | **13,257** | EVIDENCE | contract close_price/date/parties/licensees harvested from dotloop — the source-of-record for OFF-MARKET deals with no MLS#. |
+| **`hl_srg_dotloop_loops`** | **17,455** | EVIDENCE (raw) | thin raw dotloop loop index (name/status/`raw` jsonb). |
+| `hl_srg_agent_roster` | 136 | DIMENSION | every agent who was ever ours (canonical name/aliases/departed). |
+| `sisu_transactions` | 11,636 | UPSTREAM (frozen) | SISU closing spine (agent of record). Frozen — SISU shut down 2026-06. |
+| `hl_srg_fub_note_quarantine` | 654 | LOG (undo) | the injected-note quarantine (2026-07-03 dogfood cleanup) — intel only, never client history. |
+
+### WEB DB — `centerbeam` (homes + cards + value)
+| Table | Rows | Class | Grain / what it holds |
+|---|---|---|---|
+| **`hl_pastclient_resolved`** (VIEW) | **1,949** | ⭐ CANONICAL (view) | THE card-coverage truth — 1 row/past-client home + `has_photos`/`has_hlvalue`/`has_pricehistory`/`has_valuehistory`/`has_taxhistory` + value_bucket. **1,814 fully loaded (92.5%) · 1,941 with photos.** Rebuilt by `build-resolution-table.mjs`. |
+| **`Listing`** | **368,564** | CANONICAL | the home record the card renders — MANY rows per home (one per sale). Value/photos/priceHistory/taxHistory live here. |
+| **`hl_property`** | **358,387** | CANONICAL | the HOME identity SSOT — 1 row/`identity_key`, names the keeper (`active_listing_hlid`). |
+| `hl_past_client_homes` | 1,949 | CACHE | CRM→home worklist (client_name + source_address) that the monthly value jobs iterate. ⚠️ `last_cached_at` lags ~2 wks. |
+| `hl_pastclient_card_audit` | 1,951 | AUDIT | per-card QA verdict (clean/hard_broken/fixes). ⚠️ `signed_off_at` NULL for ALL rows (sign-off half never run). |
+| `hl_value_history` | 345,153 | CANONICAL | the monthly value-history series (the graph). |
+| `hl_hlid_alias` | 364,561 | MAP | rename-forward (old HLP→HLID, superseded listing→keeper) — no URL break. |
+
+**Disposition census (from `hl_srg_canonical`, 0 null):** still_owns 1,323 · sale_side 418 · lost_opportunity 149 · sold_repped_by_us 42.
+
+### 🗄️ DRIFT / ARCHIVE LEDGER — do NOT query these as truth
+| Table / thing | Why it's not truth | Use instead |
 |---|---|---|
-| **`hl_srg_deal_ledger`** | **1,908** | ⭐ THE deterministic client×deal match table — mls#, HLID, side, price, date, agent, method, tier, evidence, **`verified_sources[]` + `contradiction`** (the verification engine). GREEN 1,594 · YELLOW 130 · RED 184. Rebuilt by `build-deal-ledger.mjs` (UPSERT-only). |
-| **`hl_srg_deal_overrides`** | **55** | human verdicts (the receipts) — fields WIN on rebuild; `excluded` audited non-deals; `verify_status` pending/verified drives the verify queue |
-| **`hl_srg_master_houses`** (VIEW) | **1,824** | 🏠 THE MASTER HOUSE LIST — 1 row/house + nested ledger transactions + `fully_resolved` + `contradiction_count`. **Scoreboard: 1,824/1,824 · 0 gaps · 1 unplaced.** |
-| **`hl_srg_past_clients`** | **1,780** | PARENT — person, bucket, `dossier_json` (2 paragraphs + facts + contacts + `zach_notes`), `website_hlid`. 13 signed off. |
-| **`hl_srg_past_client_homes`** | **2,168** | CHILD SSOT — ⚠️ still STALE/thin (`determined_agent` 21 · `disposition` 19) until the Rule #0 PROMOTE runs |
-| **`hl_srg_pch_staging`** | **70** (label `2026-07-04`) | the **FUB Notes Pending** audit tab — 23 clients, **transactions sourced from THE LEDGER** (2026-07-04 rewrite of `persist-reconcile.mjs`), lost/disposition from raw harvests |
-| `hl_srg_pastclient_gt` | 1,950 | GT address table (CASS street/city/zip + `/home` URL + value per HLID) — the display authority the VIEW joins |
-| `hl_srg_resolver_stage2` | 26 | stage2 dossier staging (re-runs pending under the no-dogfood contract) |
-| `hl_srg_resolver_quarantine` / `hl_srg_pch_quarantine` | 1,473 / 2,168 | prior-work quarantines — **provenance/undo ONLY, never resolver inputs**. `hl_srg_resolver_quarantine` = **the full 24-hour Sonnet run over the book** (1,458 rich `resolver_block`s: transactions, lost listings, dispositions, contacts, summaries, note markdown) — the "$200 harvest"; mine its INTEL as raw leads, never its identity conclusions. |
-| **`hl_srg_fub_note_quarantine`** | **654** | 🧯 **THE INJECTED-NOTE QUARANTINE (2026-07-03).** Full copies of every resolver-card note WE injected into FUB in June 2026 (subjects "HouseLoop — Spradling Group Past Client" · "HouseLoop current home" · "dotloop verification" · "Past Client Dossier" · etc.) across ~490 people — the notes the Bazalgette dogfood incident traced to. All **deleted from live FUB via API** (101 live-deleted + 553 already gone; per-note `delete_status` + API response logged; 100-person random sample verified ZERO residual). Kept here because the cards contain genuinely useful intel — read as raw leads only, NEVER as client history. |
-| `sisu_transactions` | 11,636 | the closing spine (agent of record) — includes the dirty classes the engine catches |
-| `hl_mls_property_history` | 7,765 | rooftop history (HLID stamps) |
-| `hl_srg_mls_deals` | 1,971 | our downloaded Heartland MLS (the unit-bearing address source) |
-| `hl_srg_loop` / `hl_srg_dotloop_contracts` | 13,449 / 13,257 | dotloop facts + contract licensees |
-| `hl_fub_person_facts` / `hl_fub_sisu_link` | 5,694 / 4,442 | brain facts · FUB↔SISU person link (ledger edge 4) |
-| `hl_srg_agent_roster` | 136 | every agent who was ever ours |
-
-### WEB DB — `centerbeam`
-`hl_pastclient_resolved` VIEW (1,951/1,951 HLID — Adam's address/value spine) · `Listing` ~354K ·
-`hl_property` ~356K (the HLID authority) · `hl_value_history`.
-
-### FUB mirror
-`fub.*` — people ~49K · texts ~445K · notes ~140K · calls ~40K · events ~146K. The dossier's raw-comms leg.
+| `hl_transactions` (CRM) | EMPTY (0 rows) — the future native-TC table, not wired | `hl_srg_deal_ledger` |
+| `hl_srg_pch_staging` / `hl_srg_pch_quarantine` | scratch clones of the child (staging + rejected) | `hl_srg_past_client_homes` |
+| `hl_srg_resolver_stage2` / `hl_srg_resolver_quarantine` / `_s2` | old LLM resolver run-logs + quarantine | `hl_srg_canonical` |
+| `hl_srg_loop` | interim LLM loop-enrichment (superseded) | `hl_srg_dotloop_contracts` |
+| `hl_srg_pastclient_gt` | address-correction feed (pre-canonical) | fold into the child; read `hl_srg_past_client_homes` |
+| `hl_srg_past_client_homes.disposition` (column) | DEAD (2,071 null) | `hl_srg_canonical.disposition` |
+| tools `_`-prefixed + `_ARCHIVE_BULK_2026-06-28/` + `deterministic-resolve.mjs` / `build-pastclient-canonical-gt.mjs` / `build-pastclient-ssot.mjs` | superseded resolvers/scratch | Layer 1: `resolve-from-mls.mjs` |
 
 ---
 
