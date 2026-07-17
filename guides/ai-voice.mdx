@@ -1,436 +1,209 @@
 ---
 title: "AI Voice"
-description: "THE one AI Voice doc — Myli answers the phone. CURRENT runtime (2026-07-17) = a PIPECAT CASCADE: Deepgram STT → an LLM brain (TODAY = OpenAI gpt-4o-mini, NOT Claude — a one-provider violation to resolve) → ElevenLabs TTS (apps/myli-voice-agent/pipecat_bot.py). NOT FINALIZED — still testing. LiveKit+Gemini raw speech-to-speech (crashed on phone audio) and Retell were both abandoned. This page: the NEED-TO-DO-NEXT cost map, the architecture (Twilio number → CRM webhook → <Connect><Stream> → wrap-up seam), the answer gate, the persona, and the punch list. Everything below the 2026-07-16 section is HISTORICAL."
+description: "THE one AI Voice doc — Myli answers the phone. CURRENT runtime (2026-07-17) = a PIPECAT CASCADE: Deepgram STT → Claude Haiku 4.5 brain → Cartesia Sonic-3 TTS (apps/myli-voice-agent/pipecat_bot.py). The stack is chosen and wired; the one thing gating 'she answers' is a running HOST (nothing has run since July 11). This page reads top-to-bottom: the infra stack, the lines she covers + their buckets, her persona, the CRM seam, the cost wire, then the go-live blocker. Retell / LiveKit+Gemini / the OpenAI-brain build are quarantined in HISTORY."
 ---
 
 <Info>
 **Running-document law (Zach 2026-07-17).** The UPDATE LOG below is newest-first; every change stamps an
 entry AND re-edits the body to current truth — no stacked "superseded STATE" blocks (git history holds the
-past). Everything under "HISTORY" at the bottom is quarantined dead eras, not current.
+past). Everything under **HISTORY** at the bottom is quarantined dead eras, not current.
 </Info>
 
 ## Update log
 
-- **2026-07-17** — Corrected the brain lie: voice LLM is **gpt-4o-mini (OpenAI)**, not Claude Haiku (code:
-  `pipecat_bot.py:130`). Added the **NEED-TO-DO-NEXT: map AI voice cost** block (3-vendor cost model).
-  Reconciled the `/ai/voice` cockpit Info block off the stale `gpt-realtime-2.1/marin` engine. Retell +
-  LiveKit-native eras quarantined into one HISTORY section.
-- **2026-07-16 eve** — Pipecat cascade live-verified answering on the test line 913-937-9359; hosting hole
-  flagged (laptop + free ngrok); LiveKit/Gemini `agent.py` identified as a deployed zombie.
-- **2026-07-15** — LiveKit+Gemini native S2S abandoned (crashed on 8kHz phone audio) → Pipecat cascade built.
+- **2026-07-17 (PM)** — **Operation One Provider, voice edition.** Swapped Myli's brain OpenAI `gpt-4o-mini`
+  → **Claude Haiku 4.5** and her mouth ElevenLabs → **Cartesia Sonic-3** in `pipecat_bot.py` (the one-provider
+  violation is resolved — she's all-Claude now). Built the missing Pipecat runtime (`requirements-pipecat.txt`
+  + a py3.12 venv; imports verified). **Wired voice cost end-to-end** — the bot meters real usage and the
+  wrap-up fires `logAiCost({category:'ai_voice'})`, so a live call finally lands on `/ai-cost` (it never did
+  before). Rebuilt this doc infra-at-top; quarantined Retell/LiveKit/Gemini/OpenAI-brain into HISTORY.
+  **Buildout artifact:** [Myli AI Voice Buildout](https://claude.ai/code/artifact/2b13f6d6-70c2-4cf8-a8a6-ec0495f45f5e).
+- **2026-07-17 (AM)** — Corrected the brain lie (was documented as Claude, code was `gpt-4o-mini`); added the
+  voice-cost map; found the deploy truth: the Pipecat bot was never hosted, the LiveKit/Gemini `agent.py` was
+  the last thing with a deploy path, and the last real call was **July 11**.
+- **2026-07-16 eve** — Pipecat cascade (OpenAI brain) demoed on the test line; hosting hole flagged.
+- **2026-07-15** — LiveKit+Gemini native S2S abandoned (crashed on 8 kHz phone audio) → Pipecat cascade built.
 - **2026-07-11** — Retell era (built, then reverted).
 
-# ═══ ⚠️ NEED TO DO NEXT — MAP AI COST FOR AI VOICE ═══
-
-<Warning>
-**Voice cost is 100% invisible today, and it's the hardest cost to track in the whole platform because it's
-THREE separate vendors on THREE different billing models — not one token count.** When the voice stack is
-finalized (see status below — we're still testing), the first work is instrumenting all three under ONE
-dedicated **`ai_voice`** cost category. See [AI Cost](/guides/ai-cost) for the logging spine this plugs into.
-
-**The three costs of one voice call (the gotchas):**
-
-| Leg | Vendor (today) | Billed by | The gotcha |
-|---|---|---|---|
-| **Ears (STT)** | **Deepgram** (`nova`) | **per audio-minute** | No token count exists — cost = call-recording **duration × per-minute rate**. Not in `MODEL_PRICING` (that table is per-token). Same shape as the CRM Deepgram STT hole (call/voicemail transcription). |
-| **Brain (LLM)** | **OpenAI gpt-4o-mini** ⚠️ | **per token** | This IS token-based — but the bot runs **OpenAI, not Claude** (docs long claimed Haiku; the code says gpt-4o-mini). A one-provider violation to resolve when we lock the stack. Turn-by-turn, so tokens accrue across the whole call. |
-| **Mouth (TTS)** | **ElevenLabs** | **per character** | Cost = characters spoken × per-char rate. Another non-token model. |
-
-**The requirements when we build it:**
-1. A dedicated **`ai_voice`** category — voice must NOT land in `follow_up` (that's Myli's TEXT conversations;
-   Zach's confusion: "AI Follow-Up says 429 calls" = text, not voice). Add `ai_voice` to `KNOWN_AI_CATEGORIES`
-   + the Run Log pills + the cost-page.
-2. **Emit at the wrap-up seam** — the bot already posts a wrap-up (transcript + summary + callback task) on
-   hangup. That is the ONE place that knows the call's duration (Deepgram), the turn tokens (LLM), and the
-   characters spoken (ElevenLabs). Emit a single aggregated `houseloop/ai.call` `{category:'ai_voice'}` row
-   there — OR three sub-rows if we want per-leg breakdown.
-3. **Per-minute / per-character pricing** must live in the categorizer's price map alongside the per-token
-   models (a small extension — the emitter takes a pre-computed `costUsd`, so voice can pass its own math).
-
-**Blocked on:** finalizing the voice stack. We do NOT instrument a bot we might replace — the moment the
-architecture is locked (Pipecat cascade vs. something else, and Claude vs. gpt-4o-mini brain), this becomes
-the first task. Everything below is the current state that feeds that decision.
-</Warning>
-
 <Note>
-**Internal command surface — the single doc for everything AI Voice.** The telephony half (which numbers exist,
-porting, forwarding, routing groups, A2P) lives in
-[Phone Numbers, Call Routing & Number Porting](/guides/phone-numbers-and-call-routing) — this page is the
-*agent that answers*. The old `guides/myli-voice` page is merged into this one and redirects here.
+**The single doc for the agent that answers.** The telephony half — which numbers exist, porting, forwarding,
+routing groups, A2P — lives in [Phone Numbers, Call Routing & Number Porting](/guides/phone-numbers-and-call-routing).
+Person-to-person call *records* live in [Calls & Comms](/guides/comms-calls). This page is **Myli, the voice agent**.
 </Note>
 
-<Info>
-**The CRM surface shipped (C4, 2026-07-13): `/ai/voice` — Voice as EQUIPMENT** (wireframe v15 screen ⑤;
-nav: AI → Equipment → AI Voice). Sections: **Who works it** (the `voice_enabled` master + Agent: Myli) ·
-**Performance** (live KPIs from `hl_calls`: calls / AI answered / voicemail / forwarded, Today·7d·30d) ·
-**Engine** (the runtime's REAL values — the Pipecat cascade: **Deepgram** STT · **gpt-4o-mini** LLM ⚠️
-(one-provider violation, see top) · **ElevenLabs** TTS — shown read-only until the worker reads CRM config;
-"Where she answers" = the inboxes where she manages the Calls channel) · **Run log** (call cards off
-`/api/ai-voice/overview`: outcome pill · ▶ recording · Summary/Transcript pillbar; **per-call cost is NOT yet
-wired** — see NEED-TO-DO-NEXT). The jobs use this instrument — the Receptionist toggle on the Cockpit is the
-same `voice_enabled` wire. (Correction 2026-07-17: the old copy claimed a `gpt-realtime-2.1 · marin` engine —
-that was the abandoned OpenAI-Realtime experiment, never the live cascade.)
-</Info>
+# ═══ 01 · THE STACK (one call, three senses) ═══
 
-# ═══ 2026-07-16 EVE — LIVE-VERIFIED STATUS (test-called, DB-read, process-checked) ═══
+Myli is built on **Pipecat** (~11.9k★, Daily.co) — the industry-standard voice framework that solves the hard
+audio problems (barge-in, turn-taking, VAD, low-latency streaming, the Twilio transport) as defaults. We bring
+only the logic: her persona and the CRM wrap-up. The engine is a **cascade** (separate STT → LLM → TTS), which
+is what the whole industry runs for telephony — raw speech-to-speech is banned here after Gemini crashed on
+8 kHz phone audio (see HISTORY).
 
-<Check>
-**The Pipecat cascade IS the runtime and it IS answering — on ONE line. NOT finalized — still testing.**
-Live-verified 2026-07-16 ~19:05Z: a test call to **913-937-9359** connected `<Connect><Stream>` → the bot and
-held the full 25s (`hl_calls` outcome `forwarded → myli`; a real caller at 18:08Z stamped **`answered_by_ai`**).
-Every gate is open: `ai_conversations.voice_enabled=true` · AI Receptionist `voice_inbound=true` · the line's
-`answer_mode='myli'` · `pipecat_ws_host` set.
-</Check>
+The signal flows top → bottom:
 
-<Warning>
-**⚠️ THE BRAIN IS gpt-4o-mini (OpenAI), NOT Claude (corrected 2026-07-17).** `pipecat_bot.py:130` is
-`OpenAILLMService(model="gpt-4o-mini")` — earlier versions of this doc (and the description) claimed the brain
-was Claude Haiku 4.5. It is not. This is a **one-provider violation** (everything else on HouseLoop runs
-Claude) to resolve when the stack is locked. STT = Deepgram, TTS = ElevenLabs (those are correct). None of the
-three legs' cost is metered — see the NEED-TO-DO-NEXT block at the top.
-</Warning>
+| Layer | Choice | Billed by | Notes |
+|---|---|---|---|
+| **Transport** | Twilio Media Streams → `<Connect><Stream>` | per-minute | Live audio WebSocket to the bot; no SIP. |
+| **Ears (STT)** | **Deepgram** (`nova`) | per audio-minute | Top-tier; unchanged. `DEEPGRAM_API_KEY`. |
+| **Brain (LLM)** | **Claude Haiku 4.5** (`claude-haiku-4-5-20251001`) | per token | Funded, fast (= low phone latency), one-provider. `ANTHROPIC_API_KEY`. |
+| **Mouth (TTS)** | **Cartesia Sonic-3** (voice *Skylar*, `db6b0ed5…`) | per character | ~40 ms TTFA latency leader + wins blind naturalism. `CARTESIA_API_KEY`. |
+| **Seam** | CRM `persona` + `wrapup` | — | Persona in at call start; the one write out at hangup. |
 
-<Warning>
-**But the HOSTING is the problem — this is why "it doesn't work" some of the time.** The bot is a Python
-process **on Zach's Mac** (`pipecat_bot.py`, relaunched 10:47 AM today) behind a **free ngrok tunnel**
-(`…ngrok-free.dev`). Laptop sleeps, process dies, tunnel rotates → calls fall to voicemail until someone
-relaunches it. There is no launchd/pm2/Railway home, no auto-restart, no uptime monitor. **A call that fails
-= the tunnel was down at that moment, not a wrong engine.**
+**The runtime files** (`apps/myli-voice-agent/`): `pipecat_bot.py` (the bot) · `requirements-pipecat.txt`
+(the deps — Pipecat 0.0.108 on Python 3.12) · `.venv-pipecat/` (the local venv). Every model/voice value is
+env-overridable (`MYLI_LLM_MODEL`, `MYLI_CARTESIA_VOICE`, `MYLI_CARTESIA_MODEL`) so we retune without a code change.
 
-Also true (from the 2026-07-16 full AI audit):
-- **A ZOMBIE Gemini agent is still DEPLOYED on LiveKit Cloud** (`agent.py`, project `houseloop`, the
-  abandoned raw-S2S stack) — it answers nothing (the webhook prefers Pipecat) but it idles deployed with a
-  `GEMINI_API_KEY`, a fourth provider bill attributed nowhere. Tear-down is on the Block-3 list.
-- `apps/myli-openai-voice` (OpenAI Realtime experiment) is dead code — never the runtime; kill in cleanup.
-- The bot's Anthropic/Deepgram/ElevenLabs keys are BARE single-env (no workspace attribution) and **none of
-  its cost is metered** — voice minutes are invisible on the cost sheet until the wrap-up cost stamp ships.
-- Only the TEST line answers as Myli. The four production buckets (Company · Sign · Past Agents · Ana) are
-  parked on cell-forward/voicemail per the 2026-07-16 routing untangle.
+<Card title="Buildout artifact (the visual, top-to-bottom)" href="https://claude.ai/code/artifact/2b13f6d6-70c2-4cf8-a8a6-ec0495f45f5e">
+The infra stack → the lines she covers → the buckets → her prompt → the dated build checklist. The HTML source
+is pinned in the repo at `apps/houseloop-crm/docs/wireframes/myli-voice-buildout-2026-07-17.html`.
+</Card>
 
-**Block 3 punch list (the AI Voice build-out):** (1) give the bot a PERMANENT home (Railway service or a
-supervised daemon + stable wss host — kill the free-ngrok dependency); (2) tear down the LiveKit/Gemini
-zombie + the OpenAI Realtime experiment; (3) re-key + meter the bot (attribution + per-call cost on the
-wrap-up); (4) gauntlet receipts on the test line; (5) Zach sign-off → flip the four bucket lines to
-`answer_mode='myli'` one at a time (cell-forward = instant rollback).
-</Warning>
+# ═══ 02 · THE LINES SHE COVERS + THEIR BUCKETS ═══
 
-# ═══ THE 2026-07-16 STATE — PIPECAT CASCADE (LiveKit + Gemini abandoned) — LIVE, code-audited ═══
+Myli is the **AI Receptionist**. The number a caller dials **is** the intent — each line is a bucket that feeds
+one CRM inbox and gives Myli her job for that call:
 
-<Warning>
-**The current runtime is a PIPECAT CASCADE, not LiveKit/Gemini and not Retell.** The LiveKit + Gemini
-`native-audio` speech-to-speech stack (the 2026-07-15 state below) **crashed on real phone audio** — Gemini
-error `1007`/`1011`, mid-call drops, ~10s dead air. That is a documented failure mode of *raw speech-to-speech*
-on 8 kHz telephony. After a research pass (managed platforms + open source), Zach chose **turnkey audio INFRA +
-our own logic → Pipecat**. Retell was evaluated and rejected ("terrible"); raw S2S is banned on phone. This is
-what the code + a live audition show today:
+| Bucket | Number | Feeds inbox | `answer_mode` today | Myli's job |
+|---|---|---|---|---|
+| **Test line** | 913-937-9359 | — | `myli` (armed) | The gauntlet line — where we prove her before going live. |
+| **Past Agents** | 913-675-9877 | Past Agents | `forward` | ⬅️ **first to flip** — reactivation: name the departed agent, take a callback. |
+| **Company** | 913-320-0906 | Company | `forward` | Speed-to-lead: buyer/seller triage, capture + route. |
+| **Sign Call** | 913-354-8600 | Company | `forward` | High-intent: "which property are you standing at?" |
+| **Ana's line** | 913-954-7123 | Ana | `forward` | Ana's past clients — always AI: "I'll have Ana call you right back." |
 
-- **The engine — a CASCADE (STT → LLM → TTS), telephony-robust:** `apps/myli-voice-agent/pipecat_bot.py`
-  (Pipecat 1.5). **Deepgram** STT → **Claude Haiku 4.5** (`claude-haiku-4-5-20251001`, Anthropic) →
-  **ElevenLabs "Jessica"** TTS (`eleven_turbo_v2_5`). Silero VAD + Pipecat Smart-Turn handle barge-in /
-  turn-taking as framework defaults — the audio infra we no longer hand-tune. Model + voice are env-overridable
-  (`MYLI_LLM_MODEL`, `MYLI_ELEVEN_VOICE`).
-- **Telephony:** the CRM voice webhook (`app/api/phone/webhooks/voice/route.ts`) for an `answer_mode='myli'`
-  line returns `<Connect><Stream url="wss://{pipecat_ws_host}/ws"/></Connect>` — bridging Twilio Media Streams
-  to the bot's WebSocket. The host lives in `hl_settings.phone_provider.pipecat_ws_host` (env `PIPECAT_WS_HOST`
-  wins), so the tunnel/host can be repointed with **no redeploy**. Falls through to the `<Record>` voicemail if
-  the bot is down (instant rollback = clear the host / flip `answer_mode` to `forward`).
-- **The CRM seam is UNCHANGED** — the bot fetches `GET /api/phone/myli/persona` (the composed receptionist
-  persona, with the cold-receptionist gating) at call start, prepends the **real current Central date/time**, and
-  on hangup POSTs `/api/phone/myli/wrapup` (the one write: lead create/match + transcript).
-- **The persona is GOAL-DRIVEN, not scripted** (a scripted version sounded robotic — reverted). Lives on the
-  **AI Receptionist** role (`hl_role`): personality dialed up (warm, excited, casual, witty), **one question per
-  turn (hard rule)**, a **triage gate** (buy vs sell vs other) that fixes the "sell → your current home" drift, a
-  **seller goal** (natural discovery → an in-person listing appointment), **company knowledge** (she IS the
-  Spradling Group), and **date grounding**. Design source of truth: the receptionist playbook artifact
-  (Connecting-With-People across every caller bucket).
+Each line stays on cell-forward until Myli passes the gauntlet on that bucket **and** Zach signs off — then it
+flips to `answer_mode='myli'` one at a time. Cell-forward is the instant rollback. The four production buckets
+are parked per the [routing untangle](/guides/phone-numbers-and-call-routing).
 
-**Live status (2026-07-16):** audited GREEN in a live audition — quality + latency **"amazing,"** the seller
-discovery flow landed an in-person appointment. **NOT production-hosted yet** — the bot runs as a local process
-on Zach's Mac via an ngrok tunnel; the #1 remaining task is persistent hosting (Pipecat Cloud or a Railway
-worker). Full state of the union, the numbers/routing, and the remaining punch list:
-`.claude/state/lee-to-fable-ai-voice-and-ai-cost-2026-07-16.md`.
+# ═══ 03 · HER PERSONA (config, not code) ═══
 
-**Superseded / dead:** the LiveKit Cloud agent (`CA_F3gSn3cSFrEF`, us-east) + `agent.py` (LiveKit+Gemini) + the
-`/api/phone/myli/retell-*` routes are all abandoned (deletion candidates). `livekit_sip_domain` in
-`phone_provider` is now unused. Everything below this section is HISTORICAL.
-</Warning>
+Composed at `GET /api/phone/myli/persona` — `hl_role.persona` (who she is everywhere) + `hl_role.voice_persona`
+(phone behavior) + the `agent.*` / `team.*` merge tokens, with the current Central date/time prepended. Edited
+in the CRM (**My Team → AI Receptionist** role + the AI Voice persona layer), never in the bot. It is
+**goal-driven, not scripted** (a scripted version sounded robotic and was reverted):
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# HISTORY — DEAD ERAS (NOT current; kept for the record, git holds the rest)
-# ═══════════════════════════════════════════════════════════════════════════════
+- **Identity** — Myli, Spradling Group's front desk. Warm, upbeat, casual, quick — never a stiff IVR.
+- **One hard rule** — one question per turn. She listens; she doesn't monologue.
+- **Triage gate** — buyer / seller / something else, first move (fixes the "sell → your current home" drift).
+- **Past-agent line** — names the departed agent the caller was reaching (reactivation gold).
+- **Goal** — capture who + what, take a callback time, hand off clean. Never fakes being human. Never live-transfers.
+- **On hangup** — writes the lead + transcript + a callback task automatically.
 
-<Warning>
-**Everything below is a QUARANTINED dead era, in reverse-chronological order — NONE of it is the current
-runtime.** The live truth is the top of this page (Pipecat cascade: Deepgram → gpt-4o-mini → ElevenLabs, still
-testing). These sections describe the LiveKit-native S2S era (2026-07-15, crashed on phone audio → replaced by
-Pipecat) and the Retell era (2026-07-11, reverted). The ARCHITECTURE / CRM-SEAM / CONFIG sections further down
-still reference **Retell SIP + `answer_mode` dropdowns** — those are the Retell-era mechanics, NOT how Pipecat
-works today (Pipecat = `<Connect><Stream>` to a WebSocket, not a SIP dial). Read them only for history. When
-the stack is finalized, the current mechanics get promoted into the top sections and this whole block shrinks.
-</Warning>
+# ═══ 04 · THE CRM SEAM (Pipecat, all on prod) ═══
 
-## THE 2026-07-15 ERA — LiveKit native S2S (Retell abandoned, then this crashed too)
-
-<Warning>
-**\[HISTORY]** The runtime at the time was LiveKit, NOT Retell (Zach 2026-07-15: *"retell was a shit show… we
-moved from retell… native S2S was working a lot better. we never finished it."*). The Retell pivot below
-(2026-07-11) was tried and then **reverted** — after fanning out GitHub research, the team moved back to a **native
-speech-to-speech** stack. Everything in the Retell sections further down is **HISTORICAL** — kept for the
-receipts, not the truth. This is what the CODE actually shows today:
-
-- **The worker:** `apps/myli-voice-agent/agent.py` — **LiveKit Agents + Gemini native-audio S2S**
-  (`google.realtime.RealtimeModel(model="gemini-2.5-flash-native-audio-latest", voice="Leda")` — the
-  native-audio model, which cleared the old `1011` drops that killed the first Gemini attempt). Framework
-  ported from the proven `apps/lee-voice-agent` skeleton.
-- **Telephony:** the CRM voice webhook (`app/api/phone/webhooks/voice/route.ts`) for an `answer_mode='myli'`
-  line TwiML-dials the **LiveKit SIP trunk** — `<Dial answerOnBridge><Sip>sip:{to}@{livekit_sip_domain}?X-HL-CallSid=…</Sip></Dial>` — reading the domain from `LIVEKIT_SIP_DOMAIN` (env, wins) then
-  `hl_settings.phone_provider.livekit_sip_domain`. The header attrs arrive as `sip.h.*` participant attributes.
-- **The agent's in-call tools:** `capture_caller` · `set_callback` · `take_message` · `flag_spam`. The MVP job
-  is the **receptionist** — "Spradling Group, this is Myli" → who/what → rapport → callback number + time →
-  confirm. **No live transfers.** Spam → polite exit + silent flag.
-- **The CRM seam survives:** on session close the agent POSTs `/api/phone/myli/wrapup` (lead create-or-match,
-  callback task, notify the assigned agent). This is the ONE write.
-
-**⚠️ Stale bits to fix (found in the audit):**
-1. `hl_settings.phone_provider.livekit_sip_domain` still holds **`sip.retellai.com`** — a leftover from the
-   Retell era. It MUST be the real LiveKit SIP domain (or rely on the `LIVEKIT_SIP_DOMAIN` env override). Left
-   as-is, a myli-mode call dials Retell's dead SIP.
-2. The `retell-*` routes (`/api/phone/myli/retell-inbound`, `retell-webhook`, `tool`) are **dead** — the
-   LiveKit path uses `wrapup` + participant attributes, not those webhooks. Candidates for deletion.
-3. `ai_conversations.enabled = false` (the master AI-conversations switch is OFF); `voice_enabled = true`.
-   Only **913-937-9359** ("MYLI GAUNTLET TEST LINE") is `answer_mode='myli'`.
-4. **No OUTBOUND call path exists** — the agent only ANSWERS. The MVP2 voice-elevation (Myli *calls* a lead
-   to verify a text) needs a new outbound leg (LiveKit SIP outbound / a `place_call` tool). Unbuilt.
-
-**Bottom line:** the native-S2S receptionist is wired end-to-end but **UNFINISHED and not carrying live
-traffic** — no calls in the recent window ran through it. This doc's job now is to be the accurate map for
-finishing it.
-</Warning>
-
-# ═══ HISTORICAL — THE RETELL ERA (2026-07-11, reverted) ═══
-
-**Runtime pivot, locked by Zach 2026-07-11 ~20:30 — LATER REVERTED (see the 2026-07-15 state above):** the DIY
-LiveKit + Gemini stack was cut after live-audition failures (garbled turn order, dead air, Gemini's
-industry-wide `1011` mid-call drops). Zach: *"there has to be a third party that has cracked this"*. **Myli ran
-on Retell AI** (measured 580–620ms voice-to-voice); the CRM seam survived the pivot unchanged. **This was then
-undone** — the team moved back to LiveKit with Gemini's newer *native-audio* model, which fixed the `1011`
-cluster. The sections below describe the Retell build for the record.
-
-**Live today:**
-
-- **The front door (913-675-9877) is still `answer_mode='forward'`** — rings Zach's cell 18s → OUR voicemail
-  with recording → typed notification. Myli does NOT answer the front door yet.
-- **The TEST line (913-937-9359) is `answer_mode='myli'`** — imported into Retell as OUR Twilio number,
-  answered by the "Myli Front Door" agent with the **11labs-Grace** voice (Zach: "use Grace").
-- **All six CRM bridge routes deployed on prod** (`/api/phone/myli/*`, below) · migrations 0381–0383 run on
-  prod · all config surfaces shipped (master toggle, ANSWERED BY column, role capability tree, persona layers).
-
-## The checklist — done vs. remaining
-
-**Done (2026-07-11, Adam):**
-
-- [x] Retell account + agent + LLM + tools + inbound webhook + post-call webhook — full build with ids (§ The Retell build)
-- [x] Test line 913-937-9359 imported to Retell (OUR number; SMS stays ours) + agent binding confirmed
-- [x] The ONE write seam `/api/phone/myli/wrapup` deployed — lead create/match, callback task, care team, agent notification, cost stamp, AI Follow-Up feed row
-- [x] 3-layer answer gate live (org master fail-closed · per-line ANSWERED BY · role capability)
-- [x] Config surfaces shipped: `/ai-follow-up` master toggle · `/settings/phone-numbers` ANSWERED BY · My Team "Calls & Voice" capability tree · AI Voice persona layer · Connections voice card
-- [x] Migs 0381 (port watch) · 0382 (`phone_call` source + `answer_mode`) · 0383 (voice persona + ISA de-name) run on prod
-
-**Remaining before the front door flips:**
-
-- [x] **Final gauntlet receipts — GREEN 2026-07-11 21:23** — live test call end-to-end on prod: Myli answered on Retell (`outcome: answered_by_ai`, `runtime: retell`), extracted `role: buyer` + callback `"tomorrow after 3"`, 723-char transcript stored on `hl_calls`, lead + callback task written, notification "📞 Myli took a call — (buyer)" delivered. *Adam · 2026-07-11*
-- [ ] **Zach's audition** — call **913-937-9359** (Grace voice); receipts are green, the line is live
-- [ ] **Zach sign-off** 🔒 — THE FRONT DOOR flips to `answer_mode='myli'` ONLY after the audition + explicit sign-off. Until then it forwards.
-- [ ] **The AI Voice page build — NOT BUILT YET.** The spec is locked in two places: the pinned wireframe `apps/houseloop-crm/docs/wireframes/ai-voice-page-v1-LOCKED.html` (THE build spec) + the [Zach-approved design artifact](https://claude.ai/code/artifact/6aa63244-3ff2-40ab-9094-15f2c39e1a96). Full outline: § The build outline.
-
-# ═══ THE ARCHITECTURE ═══
+The CRM voice webhook (`app/api/phone/webhooks/voice/route.ts`) is the front door. For an `answer_mode='myli'`
+line it returns:
 
 ```
-Any funnel line (Zach FUB ring · Company · Signs · 39 legacy · Ana GV 954-7123)
-  → THE FRONT DOOR 913-675-9877  (Twilio, OUR account)        🔒 one-door model
-  → CRM voice webhook  app/api/phone/webhooks/voice/route.ts
-      · seats hl_calls (idempotent on CallSid)
-      · routing groups honored (Dial timeout 18s beats carrier voicemail)
-      · answer_mode column decides the path:
-          'forward'  (TODAY) → rings Zach 18s → OUR voicemail → typed notification
-          'myli'             → dials sip:{number}@sip.retellai.com → RETELL answers
-  → RETELL (while RINGING) → POST /api/phone/myli/retell-inbound
-      · CRM last-10 caller lookup → returns dynamic variables
-        (caller_context / known_name / caller_number) BEFORE Myli speaks
-  → mid-call tools (log_callback · take_message) → POST /api/phone/myli/tool
-  → post-call: Retell agent webhook → POST /api/phone/myli/retell-webhook
-      · call_started  → seats hl_calls (runtime='retell')
-      · call_analyzed → custom analysis + transcript + recording
-                        → forwards to POST /api/phone/myli/wrapup  (THE ONE WRITE SEAM)
+<Connect><Stream url="wss://{pipecat_ws_host}/ws" /></Connect>
 ```
 
-**The Myli-answer gate — 3 layers, ALL must pass before she picks up:**
-
-1. **Org master (FAIL-CLOSED):** `hl_settings('ai_conversations').voice_enabled === true` — the
-   "AI Voice — Myli Answers Calls" toggle on `/ai-follow-up`. Missing/false = she never answers, anywhere.
-2. **Per-line:** `hl_phone_numbers.answer_mode = 'myli'` — the **ANSWERED BY** column on
-   `/settings/phone-numbers` (Forward / Myli select). This is the per-line flip.
-3. **Role capability:** `voice_inbound` in the **Calls & Voice** tree
-   (`lib/agent-runtime/capabilities.ts`), configured in the My Team role editor.
-
-The SIP domain is read from `hl_settings('phone_provider').livekit_sip_domain` = **sip.retellai.com** today
-(the key name is legacy from the DIY stack — rename queued in cleanup).
-
-# ═══ THE RETELL BUILD (the runtime) ═══
-
-- **Account:** `admin@houseloop.ai` (Google SSO; MFA = SMS to our Twilio 913-733-3704 — codes readable via the
-  Twilio API). Master Sheet row added. API key `houseloop-crm` → `.env RETELL_API_KEY`.
-- **Agent:** `agent_e4122038db8ee5aa3a68032181` "Myli Front Door" · **LLM:** `llm_78205c68eff1c32f2c6d2faa4290`
-  (gpt-4.1) · **Voice:** `11labs-Grace` 🔒 (was cartesia-Evie; Zach: "use Grace") · `begin_message` = the
-  greeting. Ids stored in `hl_settings('myli_voice')`.
-- **The prompt** = a `caller_context` dynamic variable (injected per-call by the inbound webhook) + OUR
-  composed persona (`GET /api/phone/myli/persona` = role persona + AI-Voice doctrine + per-agent overrides,
-  merge-resolved) + the MVP flow 🔒: name → what's going on → rapport → confirm number → callback window →
-  confirm. **NEVER live-transfer** 🔒 (spam + Ana-askers would blast Zach); spam = polite exit, silently flagged.
-- **Mid-call tools** (headers carry `x-myli-voice-secret`): `log_callback` · `take_message` →
-  `POST /api/phone/myli/tool`.
-- **Inbound webhook** on the number → `POST /api/phone/myli/retell-inbound` — fires while the call is RINGING;
-  returns `call_inbound.dynamic_variables` (`caller_context`, `known_name`, `caller_number`) from the CRM
-  last-10 lookup, so Myli knows a past client before she says a word.
-- **Post-call:** agent `webhook_url` → `/api/phone/myli/retell-webhook`. `call_started` seats `hl_calls`
-  (runtime='retell'); `call_analyzed` maps `custom_analysis_data` (`caller_name`, `role_label`, `situation`,
-  `callback_window`, `message`, `is_spam`) + transcript + recording → forwards it all to the wrap-up seam.
-- **The number stays OURS** 🔒 ("we have to use our own Twilio"): imported into Retell as a custom SIP number
-  with `custom_sms_enabled:false` — **SMS stays on our side, on our A2P campaign.** Twilio elastic SIP trunk
-  `TKcbf1059757e933db02a7ec05f0f7371b` (`hl-myli.pstn.twilio.com`, credential user `retellmyli`; ⚠️ password
-  still in a scratchpad file — MOVE to `.env` + Sheet, queued in cleanup). Agent binding =
-  `inbound_agents:[{agent_id, weight:1}]` (the 2026 API shape — `inbound_agent_id` is DEAD/deprecated 03/2026).
-- **Card on file:** NOT added — only needed for *buying* Retell numbers; imports are free.
-
-## The research verdict (3 parallel agents, 2026-07-11 — why Retell)
-
-- **NOW: Retell AI.** 580–620ms measured voice-to-voice on real phone calls, Twilio number import, inbound
-  webhook = caller-lookup-before-she-speaks, `call_analyzed` = our wrapup POST, recordings + transcripts API,
-  ~7–10¢/min, SOC2. On 8kHz phone audio the tuned cascade FEELS more human than raw speech-to-speech.
-- **AT SCALE (v2 graduation path): OpenAI gpt-realtime on LiveKit + SIP trunk** — sub-300ms true S2S; budget
-  for SIP scar tissue + weak multi-turn tool calling. LiveKit project rebuilt under admin@houseloop.ai
-  (`p_mk0zneefhs2`) and parked for this. Retell can also flip to OpenAI Realtime as a model choice without
-  re-platforming.
-- **NEVER: Gemini Live on phone audio** — industry-wide unresolved `1011` mid-call-drop cluster
-  (livekit/agents #2274 #1679 #5096, google adk #3918, python-genai #985). Our crashes were not our bug alone.
-- Fallback #2: Vapi ($0.18–0.22/min real). Wildcard: Phonely (~350ms, ~5¢, thin track record).
-
-# ═══ THE CRM SEAM (all deployed on prod) ═══
-
-Six routes under `apps/houseloop-crm/app/api/phone/myli/`:
+bridging Twilio Media Streams to the bot's WebSocket. The host lives in
+`hl_settings.phone_provider.pipecat_ws_host` (env `PIPECAT_WS_HOST` wins), so it repoints with **no redeploy**.
+If `<Connect>` ends (bot down / no host) the call falls through to the same `<Record>` voicemail — **instant
+rollback is clearing the host**. The bot then talks to two endpoints only:
 
 | Route | Method | One line |
 |---|---|---|
-| `/api/phone/myli/persona` | GET | The composed prompt (role persona + AI-Voice doctrine + overrides, merge-resolved) + `voice_enabled` + `tools_enabled` + `voice_config`. |
-| `/api/phone/myli/caller` | GET | Last-10 phone lookup → the lead, for caller context. |
-| `/api/phone/myli/wrapup` | POST | **THE ONE WRITE SEAM** — every post-call CRM effect (receipts below). |
-| `/api/phone/myli/retell-inbound` | POST | Retell's ringing-time webhook → returns `dynamic_variables` (caller context) before Myli speaks. |
-| `/api/phone/myli/retell-webhook` | POST | Retell post-call events: `call_started` seats `hl_calls` (runtime='retell'); `call_analyzed` → forwards to wrapup. |
-| `/api/phone/myli/tool` | POST | Mid-call tool executor (`log_callback` · `take_message`). |
+| `/api/phone/myli/persona` | GET | The composed receptionist persona (cold-receptionist gating is server-side). |
+| `/api/phone/myli/wrapup` | POST | **THE ONE WRITE SEAM** — every post-call CRM effect. |
 
-**The wrap-up seam receipts — one POST, every CRM effect:**
+**The wrap-up receipts (one POST, every effect):** spam → silent flag (no lead, no ping) · find-or-**create**
+the lead (door law: source `phone_call`, assignment/stage from the source defaults, never hardcoded) · Myli
+joins the care team · `hl_calls` gets transcript/summary/role/callback · a callback task on the assigned agent ·
+`logActivity` `call_logged` (the All-feed + AI Follow-Up row) · `notifyLeadEvent` → the assigned agent · **the
+cost writes (below)**.
 
-- **Spam** → silent flag; no lead, no notification (Zach's law — spam never pings a human).
-- **Find-or-CREATE the lead** — door law: source `phone_call` (mig 0382); assignment + stage come from the
-  **source defaults** (today: Zach + New Lead) 🔒 — **never hardcoded**.
-- **Myli joins the care team** on the lead.
-- **`hl_calls` update** — transcript, summary, role, callback window (params CAST `::text` — the 42P18 lesson).
-- **Callback task** — worded "call back FROM `{line}`" per the `callback_line_policy` 🔒 (default: the dialed line).
-- **`logActivity` kind `call_logged`, actorRole `ai_agent`** — this IS the AI Follow-Up feed row + the
-  lead-detail All-feed row, automatically (ALL_FEED law: the writer calls logActivity, the feed follows).
-- **`notifyLeadEvent` → the ASSIGNED AGENT** 🔒 — never a hardcoded person.
-- **Cost stamp** — duration estimate ~$0.045/min, `cost_source='estimate'`, stamped via `stampActivityTokens`
-  onto the activity row (exact Retell per-call cost replaces the estimate — build queue #5).
+**The answer gate — 3 layers, all must pass:** (1) org master `hl_settings('ai_conversations').voice_enabled`
+(fail-closed) · (2) per-line `hl_phone_numbers.answer_mode='myli'` · (3) role capability `voice_inbound`.
 
-**Auth:** `/api/phone/myli/` is in the middleware `PUBLIC_PREFIXES`; each route self-authenticates against env
-`HL_INTERNAL_SECRET` OR the DB secret `hl_settings('myli_voice').secret` via the `x-myli-voice-secret` header.
-⚠️ Railway's edge 403s the `Python-urllib` user agent — any client must send a real User-Agent.
+# ═══ 05 · THE COST WIRE — nothing unattributed ═══
 
-**Migrations run on prod:** `0381` (`hl_number_ports.provider_ref` + `last_checked_at` — port watch) ·
-`0382` (`phone_call` lead source + `hl_phone_numbers.answer_mode`) · `0383` (`hl_role`/`hl_member_role`
-`voice_persona` columns + the ISA persona de-named to the `{{agent.full_name}}` merge field 🔒 — the "Bertalk"
-fix — + the voice doctrine seeded). Bonus root fix in the same pass: `resolveSmartFields` now resolves
-`agent.*` fields (they were silently unresolved when inserted from the UI picker).
+<Check>
+**A live Myli call now lands on `/ai-cost` under its own `ai_voice` lane** (wired 2026-07-17). Before today the
+voice call never fired the cost choke point, so voice minutes were invisible on the sheet. Fixed.
+</Check>
 
-# ═══ CONFIG SURFACES — where every toggle & persona lives ═══
+One voice call = **three vendors on three billing models**, so it can't be a single token count. The bot meters
+the real usage during the call and the wrap-up bills it once:
 
-| Surface | Where | What it controls |
-|---|---|---|
-| **AI Voice master toggle** | `/ai-follow-up` → "AI Voice — Myli Answers Calls" (`AiVoiceMasterToggle`) | The org master, `hl_settings('ai_conversations').voice_enabled`. **FAIL-CLOSED** 🔒 — missing/false = Myli answers nothing. Currently ON for the test line. |
-| **ANSWERED BY column** | `/settings/phone-numbers` | Per-line Forward / Myli select → `hl_phone_numbers.answer_mode`. This is THE per-line flip (and the eventual front-door flip). |
-| **Calls & Voice capability tree** | My Team → role editor (+ AgentRolePanel) | `voice_inbound` master + `voice_capture_caller` / `voice_set_callback` / `voice_take_message` / `voice_flag_spam` (+ an outbound-call stub, not wired). Defined in `lib/agent-runtime/capabilities.ts` — renders in both surfaces automatically. |
-| **AI Voice persona layer** | Role editor section + per-agent override textarea | The persona layers that `/api/phone/myli/persona` merge-resolves into the composed prompt. Save chains wired end-to-end. |
-| **Voice line settings card** | Connections → Phone & Text → `VoiceLineSettings` | Lines answered + outbound-from + callback-line policy → `hl_users.data.voice_config`. |
-| **Engine ids/config** | `hl_settings('myli_voice')` | Retell agent/LLM ids, secret; the model/voice/temperature picker moves here when the AI Voice page ships (synced to Retell via update-agent / update-retell-llm). |
+- **The bot** (`pipecat_bot.py`, `MyliUsageObserver`) sums Pipecat's `MetricsFrame`s — LLM prompt/completion
+  tokens + TTS characters — and reports call wall-clock seconds, in the wrap-up payload's `usage` object.
+- **The wrap-up route** computes the blended cost from real usage: Haiku tokens priced from `MODEL_PRICING`
+  ($1/$5 per M) + **Deepgram** ≈ $0.0058/audio-min + **Cartesia** ≈ $22/M chars + **Twilio** ≈ $0.0125/min.
+- It writes cost **two ways, no double-count** (different surfaces): (a) `stampActivityTokens` on the `hl_calls`
+  row = the per-lead activity view; (b) `logAiCost({category:'ai_voice', costUsd})` = the ONE choke point that
+  fires `houseloop/ai.call` → `hl_run_log` → the global `/ai-cost` page. `cost_source='metered'` when the bot
+  sent real usage (`'estimate'` for the legacy fallback).
+- `ai_voice` is registered once in the shared categorizer (`lib/ai-cost/ai-category.ts` `KNOWN_AI_CATEGORIES`
+  + `lib/ai/log-ai-cost.ts` `AiCostCategory`), so the AI Cost page and the Run Log agree — the Run Log renders
+  its pill from `r.ai_cat` via the same categorizer (Benji, 2026-07-17). See [AI Cost](/guides/ai-cost).
 
-**Run-log / AI Follow-Up integration (no new tables):** every answered call lands as canonical rows only —
-one `hl_calls` row (transcript / summary / recording_url / lead_id are dedicated columns) + one
-`hl_lead_activity` row (`kind=call_logged`, `actorRole=ai_agent`, cost stamped via `stampActivityTokens`).
-The AI Follow-Up cockpit, the coming AI Voice page run log, and the lead-detail All feed all READ those same
-rows — a view over canon, never a parallel store. Notifications got `port_update` + exact-signal dedup
-(`entityType`/`entityId` — the title-window dedup was vibe-coded, Zach called it 🔒).
+<Warning>
+The cost numbers are **wired but unverified** until the first live call produces real metrics — the per-minute /
+per-char rates are approximate public list. Confirm the first `ai_voice` row against the vendor bills, then
+tighten the rate constants in the wrap-up route if needed.
+</Warning>
 
-# ═══ THE BUILD OUTLINE (the queue, in order) ═══
+# ═══ 06 · GO-LIVE — the one blocker + the checklist ═══
 
-⚠️ **The AI Voice page is NOT BUILT yet** — item #1 below. The spec is fully locked and lives in TWO places:
+<Warning>
+**The one thing gating "she answers" is a running HOST.** The stack is chosen, the code is written, the CRM side
+is safe — but **nothing has run the bot since July 11**, so `pipecat_ws_host` points at nothing and every myli
+line safely falls to voicemail. To make her answer, the Pipecat bot has to run somewhere reachable at
+`wss://…/ws`:
 
-| The spec | Where |
-|---|---|
-| **The build spec (THE truth)** | `apps/houseloop-crm/docs/wireframes/ai-voice-page-v1-LOCKED.html` — the exact HTML Zach approved, version-pinned in the repo. The React build is a node-by-node port of THIS file (UI_ITERATION_HTML_FIRST). |
-| **The design artifact (visual reference)** | [AI Voice page wireframe — Zach-approved artifact](https://claude.ai/code/artifact/6aa63244-3ff2-40ab-9094-15f2c39e1a96) — the same pixels, viewable in the browser. If it ever goes stale, the pinned repo file above wins. |
+- **Fastest today** — run `pipecat_bot.py` on the Mac behind a stable tunnel and set `pipecat_ws_host` to it.
+  Laptop-bound: she dies on sleep. Good enough to prove her on the gauntlet line.
+- **Durable** — a cloud host (Railway service / Pipecat Cloud / a supervised always-on Mac). No laptop
+  dependency, an uptime monitor, auto-restart.
 
-**LOCKED by Zach 2026-07-11 ("that looks good dude. Build it").** Port per UI_ITERATION_HTML_FIRST: node-by-node
-from the HTML, brand-blue SectionBand headers, full `var(--hl-*)` tokens, REUSE_NOT_RECREATE.
+This is Zach's call. It's the difference between "answers when the laptop is awake" and "answers, period."
+</Warning>
 
-1. **The AI Voice page** 🔒 — standalone `/settings/ai-voice`, nav = **FIRST item under PHONE & VOICE, named
-   "AI Voice"** 🔒. Content: master-toggle mirror · KPIs (calls / answered / spam / callbacks / MTD spend) ·
-   Engine card (MODEL picker — move model/voice/temp into `hl_settings('myli_voice')`, sync to Retell via
-   update-agent / update-retell-llm) · composed-prompt view with links to edit each layer · RUN LOG =
-   full-width white cards: "`{name}` → Myli voice" · ▶ play (recording) · cost chip · **Summary/Transcript
-   PILLS (Summary default, NO modal, NO chevron** 🔒**)** — the transcript clamshells open inline · spam rows dimmed.
-2. **Myli-config wireframe** 🔒 LOCKED — `apps/houseloop-crm/docs/wireframes/myli-voice-config-v1-LOCKED.html`
-   (mostly built; remaining: role-page agents-list polish).
-3. **Lead-detail call card** 🔒 spec'd (FUB-style) — an activity-card CATALOG entry (ALL_FEED law,
-   `lib/leads/activity-badges.ts`): "Myli → `{lead}`" direction header, time right, tokenized summary,
-   Transcript pill (same inline clamshell), ▶ play. All data already on `hl_calls`.
-4. **AI Follow-Up voice lane** 🔒 — voice rows in the cockpit (the same `hl_lead_activity` `call_logged` rows;
-   they already flow).
-5. **Exact cost wire** — Retell returns per-call cost in the call data; use theirs + the Twilio leg price,
-   replace the $0.045/min estimate.
-6. **Cleanup:** dedupe double-seated `hl_calls` rows (the Twilio-sid row + the Retell-id row per call — merge
-   by to+time, or pass the CallSid to Retell via SIP header) · Retell trunk creds → `.env`/Sheet · rename the
-   `livekit_sip_domain` key.
+**Build checklist — 2026-07-17** (live tracker: the [buildout artifact](https://claude.ai/code/artifact/2b13f6d6-70c2-4cf8-a8a6-ec0495f45f5e)):
 
-# ═══ MODEL-LAYER BILLING — the Gemini key + prepay (LIVE 2026-07-11) ═══
+- [x] Stack chosen: Pipecat · Deepgram · Haiku · Cartesia (latency-optimized end to end).
+- [x] CRM side wired + safe (`<Connect><Stream>` → voicemail fallback → instant rollback).
+- [x] Brain swapped to Claude Haiku 4.5 (`pipecat_bot.py`).
+- [x] Voice swapped to Cartesia Sonic-3 (voice *Skylar*).
+- [x] Pipecat runtime built + imports verified (`requirements-pipecat.txt`, py3.12 venv).
+- [x] `ai_voice` cost lane wired (bot meters → wrap-up `logAiCost` → `/ai-cost`).
+- [ ] **Stand up a host** for the bot — the blocker above (Zach's call).
+- [ ] Test-call the gauntlet line **913-937-9359** — she greets + holds a snappy back-and-forth.
+- [ ] Confirm the `ai_voice` cost row after the call; tighten rates vs. the real bill.
+- [ ] Tear down the LiveKit/Gemini zombie (`agent.py` on LiveKit Cloud) + the dead OpenAI-Realtime experiment.
+- [ ] Zach sign-off → flip the four buckets to `answer_mode='myli'` one at a time (cell-forward = rollback).
 
-Gemini no longer powers the voice call (see the research verdict — never Gemini Live on phone), but the key
-still powers **non-voice AI** and stays documented here:
+# ═══════════════════════════════════════════════════════════════════════════════
+# HISTORY — DEAD ERAS (not current; git holds the rest)
+# ═══════════════════════════════════════════════════════════════════════════════
 
-The old Gemini key died with the deleted `zach.relationly@gmail.com` account (minted there, owner never
-recorded). Rebuilt properly 2026-07-11:
+<Warning>
+**Everything below is quarantined, reverse-chronological — none of it is the current runtime** (top of page:
+Pipecat cascade, Deepgram → Claude Haiku → Cartesia). Kept for receipts only.
+</Warning>
 
-- **Key:** new `AQ.`-format key, minted in AI Studio under **admin@houseloop.ai**, attached to the **HouseLoop
-  GCP project (`houseloop-496200`)**. Stored in `.env` (`GEMINI_API_KEY`) + the Master Credentials sheet
-  (owner recorded this time).
-- **Billing (Google's Prepay model, Zach configured 2026-07-11):** **$50 prepaid credits · auto-reload when
-  the balance falls below $10 · $250/month cap** · Visa •0900. Auto-reload is the fail-safe against a $0
-  balance mid-task; the monthly cap bounds any runaway.
-- **Verified live:** `generateContent` on `gemini-flash-latest` answered. Note: new keys must use the
-  `-latest` model aliases (Google retired the pinned names for new users).
+- **Pipecat + OpenAI brain (2026-07-16, never hosted).** The first Pipecat cascade used `OpenAILLMService(gpt-4o-mini)`
+  as the brain + ElevenLabs "Jessica" TTS. It was demoed on the test line but **never given a host**, and its
+  OpenAI brain died when the OpenAI account hit $0 on 2026-07-16 (the same balance-death that took search +
+  vision). Replaced 2026-07-17 by the Claude/Cartesia stack above.
+- **LiveKit + Gemini native S2S (2026-07-15, crashed).** `agent.py` — LiveKit Agents + Gemini
+  `gemini-2.5-flash-native-audio-latest` (voice Leda), deployed to **LiveKit Cloud** (agent `CA_PCXvBdEGhXgZ`,
+  project `houseloop`). **Crashed on real 8 kHz phone audio** (Gemini `1007`/`1011`, ~10s dead air) — a
+  documented failure mode of *raw speech-to-speech* on telephony. This is the last era with a real deploy path,
+  so **its zombie is still deployed on LiveKit Cloud** with a `GEMINI_API_KEY` — tear-down is on the go-live
+  checklist. The `deploy-livekit.sh` / `requirements.txt` / `Dockerfile` in `apps/myli-voice-agent/` still
+  target this era.
+- **Retell AI (2026-07-11, reverted).** Myli briefly ran on Retell (agent `agent_e4122038…`, 11labs-Grace voice,
+  measured 580–620 ms), our Twilio number imported with SMS kept on our side. Zach: *"retell was a shit show."*
+  Reverted to native S2S, then to Pipecat. The `/api/phone/myli/retell-*` routes and the
+  `phone_provider.livekit_sip_domain` key (`sip.retellai.com`) are dead leftovers — deletion candidates. The
+  Retell-era `<Dial><Sip>` mechanics and `answer_mode` dropdowns described in old revisions are **not** how
+  Pipecat works today (Pipecat = `<Connect><Stream>` to a WebSocket).
 
-![Gemini API prepay setup — $50 credits, auto-reload below $10, $250 monthly cap](/images/phone/myli-voice-gemini-prepay.png)
-
----
-
-## Standing items
-
-- **The flip is gated** 🔒 — the front door goes `answer_mode='myli'` ONLY after the gauntlet receipts + Zach's
-  sign-off. Zach's audition line: **913-937-9359** (Grace voice).
-- **Ports (verified 2026-07-16, Caleb) — 2 of 3 done, A2P campaign VERIFIED.** **Sign 913-354-8600** and
-  **Company 913-320-0906** are `in-use` in our Twilio + A2P-compliant on the **VERIFIED** campaign `CA7VR08`
-  (brand `BNb9246…` APPROVED). **Ana 913-954-7123 (the Google-Voice line) is still `porting-in`** — port order
-  `KW46bd06bb…` = "In Progress", number `port_pending`, no rejection; Twilio shows "message disabled" because a
-  porting-in number can't send until the port finalizes to `in-use`. A2P is already pre-attached to it (it's in
-  the campaign MS), so it enables automatically on port completion — A2P is not the blocker. The Myli front-door
-  flip is gated on the routing-group wiring + audition + sign-off (and, for Ana specifically, her port finishing).
-  Detail: [Phone Numbers, Call Routing & Number Porting](/guides/phone-numbers-and-call-routing).
+**Config surfaces (unchanged across eras):** the AI Voice master toggle (`/ai-follow-up` →
+`hl_settings('ai_conversations').voice_enabled`, fail-closed) · the **ANSWERED BY** per-line select
+(`/settings/phone-numbers` → `answer_mode`) · the **Calls & Voice** capability tree (My Team role editor →
+`voice_inbound`) · the persona layers (role editor + per-agent override) · the `/ai/voice` equipment page
+(AI → Equipment → AI Voice: who works it, live KPIs from `hl_calls`, the engine read-out, the call run-log).
