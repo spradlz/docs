@@ -1,7 +1,27 @@
 ---
-title: "⭐ Master FUB Scraper SSOT"
-description: "The one overview + index for the entire FUB → HouseLoop pipeline: how a Zillow lead's activity reaches HouseLoop, the webhook-vs-scraper split, the ONE law (a pulled-in lead stays LOCK-STEP in sync with FUB activity forever), the exact per-activity signals FUB gives us, the sync gap found 2026-07-15, and the activity-sweep fix. Read this first; it references every other FUB doc."
+title: "⭐ FUB — Scraper & Lead Intake — Single Source of Truth"
+description: "THE one document for the entire Follow Up Boss pipeline: how a Zillow lead's signal reaches HouseLoop, lead import & minting, the lock-step activity sync, signal capture + the four toggles, the Camp David scraper runbook, the FUB follow-up widget, and the departed-agent Zillow binding. Consolidated from six docs 2026-07-17 so it can never drift. The FUB trigger-event CATALOG lives on the canonical Trigger Events page."
 ---
+
+<Info>
+**THE ONE FUB DOC (consolidated 2026-07-17, Zach directive: "compose those into one document… so it can
+never drift").** This page absorbed and retired `fub/lead-import`, `fub/trigger-events`, `fub/scraper`,
+`fub/follow-up-widget`, and `fub/departed-agent-zillow-binding` (their URLs redirect here).
+**The FUB trigger-event CATALOG (every event, one table) lives on [Trigger Events](/guides/trigger-events)**
+— the canonical catalog for ALL families; this doc owns the FUB *pipeline* (capture → import → sync →
+scraper). **Running-document law:** the UPDATE LOG below is newest-first; every change stamps an entry AND
+re-edits the body to current truth — no stacked superseded blocks, ever (git history holds the past).
+</Info>
+
+## Update log
+
+- **2026-07-17** — Consolidated into THE one FUB doc (6 docs → 1). Event catalog moved to Trigger Events.
+- **2026-07-16** — Lock-step sync PROVEN live (95s chain on Shamir; pm2-env root cause fixed) · trigger-fire
+  decoupled from Creates-Lead (mig 0414) · broken events wired (re_engaged, high-intent, virtually_toured;
+  property_shared extinct) · FUB phone rows retired to the inbox lane (mig 0415) · one-call-one-fire.
+- **2026-07-15** — The stale-lead gap root-caused on Shamir; the activity-sweep designed; note-only
+  saves/views minted from notes.
+
 
 <Info>
 **This is THE master index for the FUB pipeline.** Zach 2026-07-15: *"I'm sick of 13 SSOTs for the FUB scraper."*
@@ -23,7 +43,7 @@ If a pulled-in lead's HouseLoop activity is behind what FUB shows, that is a bug
 Zach's 2026-07-16 doctrine (a trigger fires on EVERY signal, 50 views = 50 fires; the trigger is the ONE
 spine; Creates-Lead decides only whether a lead is born; the comms policy — *feed = website activity
 lock-step, FUB Context = all comms*) is **shipped** (mig 0414 + the inbox lane). The full law lives in ONE
-place — **[FUB Trigger Events & Notifications](/fub/trigger-events)** (FUB side) and
+place — **[FUB Trigger Events & Notifications](/guides/trigger-events)** (FUB side) and
 **[the board SSOT](/guides/trigger-events)** (native + inbox lane). This index does not restate it.
 
 ## The pipeline in one picture
@@ -52,16 +72,6 @@ Zillow (Preferred · Rentals · RealScout)
 **The split, in one line:** the **webhook** is the real-time source of truth for *what happened*; the **scraper**
 is a **dumb helper** our system calls to fetch the few things FUB's API hides. The scraper never decides what's new.
 
-## The subordinate docs (the index — read the deep law here)
-
-| Doc | What it owns |
-|---|---|
-| [FUB → HouseLoop: Lead Import](/fub/lead-import) | How a FUB signal becomes a HouseLoop lead: the import flow, the signal→event matrix, the card system, Myli context, the two pipes (raw FUB history vs our event store). |
-| [FUB Trigger Events & Notifications](/fub/trigger-events) | The 22 trigger events, the four toggles (Sync · Creates Lead · Workflow · Notify), the `_global` master breaker, the 3-lane model, and **how an in-app message becomes a trigger event**. `hl_fub_webhook_settings` = SSOT. |
-| [FUB Scraper (Camp David)](/fub/scraper) | The dumb-helper itself: the login, the pm2 processes, the two databases, `zillow_home_activity` off-the-relay single-writer rule, health + runbook. |
-| [Departed-Agent Zillow Binding](/fub/departed-agent-zillow-binding) | Why Ben Froeschl's FUB seat is kept alive (Zillow Tech Connect binding) + the `info@houseloop.ai` capture inbox. |
-| [FUB Follow-Up Widget](/fub/follow-up-widget) | The reverse direction — the AI clone embedded *inside* FUB (RealLoop infra). |
-
 ## What FUB actually gives us, per activity (verified live 2026-07-15)
 
 The core question for lock-step sync: for each thing a lead does, **what signal do we get, and where does the data
@@ -73,7 +83,7 @@ live?**
 | **Saved a home** | ✅ `notesCreated` webhook — "Property Saved: `<zpid-url>`" | authoritative list = scraper's `fub.zillow_home_activity` | The **note is lossy** — a bare zpid URL, **no address/price/photo**. The note is a *"go re-scrape"* trigger; the real row comes from the scraper's `GET /api/v1/events?hasProperty=true` intercept. |
 | **Viewed a home** | ✅ `notesCreated` webhook — "Property Viewed: `<zpid-url>`" | same as above | Same lossy-note rule. |
 | **Saved search** | ❌ **no dedicated webhook** (its `eventsCreated` died Apr 23) | scraper-only → `fub.saved_searches` (read off the FUB activity timeline) | Detect that it happened via the **person activity heartbeat** below. |
-| **Zillow in-app message** | ❌ not in the API/webhooks at all | inbox-app sweep → `fub.text_messages` (`zillow_inapp`) | Captured by `fub-inapp-sweep` → `/api/fub/body-recovered`. Full flow in [Trigger Events](/fub/trigger-events). |
+| **Zillow in-app message** | ❌ not in the API/webhooks at all | inbox-app sweep → `fub.text_messages` (`zillow_inapp`) | Captured by `fub-inapp-sweep` → `/api/fub/body-recovered`. Full flow in [Trigger Events](/guides/trigger-events). |
 | **Text / email / call — that it happened** | ✅ `textMessagesCreated` / `emailsCreated` / `callsCreated` | `fub.text_messages/emails/calls` | Bodies masked (~7% SMS, most email, call notes) → Lane-2 recovery. |
 | **ANY activity, per person** | ✅ **`GET /v1/people?sort=-updated`** — the activity heartbeat | — | Every person ordered by most-recent activity, timestamps to the second, cursor-pageable. This is the *"something happened to person X"* signal for anything without its own webhook (e.g. saved search). Proven: 48,962 people, newest-first. Mirrors the in-app sweep's `sort=-lastInboxAppMessage`. |
 
@@ -93,7 +103,7 @@ consumer flips Camp David `rehydration_log` → the parallel scraper's priority 
 person (browse feed + saved searches) → `POST /api/fub/rebackfill` → `backfillFubBehavior` mints into
 `hl_lead_activity`, idempotent. Note-only saves/views (never in the browse feed) mint straight from the
 `convertNote` path with zpid→home resolution; double cards dedup on logical view identity. The deep
-import + sync flow is documented in ONE place: **[FUB → HouseLoop: Lead Import](/fub/lead-import)**.
+import + sync flow is documented in ONE place: **[FUB → HouseLoop: Lead Import](/fub/master-scraper-ssot)**.
 
 ## Sync control surfaces (reference)
 
@@ -104,7 +114,7 @@ import + sync flow is documented in ONE place: **[FUB → HouseLoop: Lead Import
 - **Per-lead re-mint:** `POST /api/fub/rebackfill` (shared-secret gated) — re-runs `backfillFubBehavior` for a lead;
   idempotent, de-duped, never mints. This is the callback the scraper fires when a re-scrape finishes.
 - **The per-event toggles:** `hl_fub_webhook_settings` (Sync · Creates Lead · Workflow · Notify) — deep law in
-  [Trigger Events](/fub/trigger-events).
+  [Trigger Events](/guides/trigger-events).
 
 ## Status — HONEST (2026-07-16, after a full 4-doc code audit)
 
@@ -136,3 +146,1619 @@ The full fix list lives in the handoff (`.claude/state/adam-handoff-fub-trigger-
    scraper hang off it; one canonical "triggered" count.
 4. **Fix the broken events** — re_engaged, virtually_toured, property_shared, generic-note feed card.
 5. **Honor the comms policy** — website activity lock-step; comms never in the feed but ALL in the FUB Context section.
+
+---
+
+# ═ LEAD IMPORT & MINT (absorbed from fub/lead-import, 2026-07-17) ═
+
+
+<Info>
+**This is THE master doc for FUB → HouseLoop lead import.** Everything about how a Follow Up Boss lead reaches
+HouseLoop lives here, top to bottom: **acquisition → import → event model → cards → Myli context**. The only
+separate FUB page is the [Follow-Up Widget](/fub/master-scraper-ssot) (the reverse direction — the AI clone *inside*
+FUB). Owner: **Lee**. Public mirror of the private GT SSOTs: `GT_HOUSELOOP_FUB_EVENTS_AND_REQUEST_CARD_SSOT.md`,
+`GT_HOUSELOOP_FUB_LEAD_IMPORT_PRD.md`, `GT_HOUSELOOP_FUB_BEHAVIOR_EVENTS_PRD.md`, `GT_HOUSELOOP_FUB_REQUEST_ACTIVITY_PRD.md`.
+Each section is tagged **🔒 LOCKED** (settled) or **🚧 WIP** (in-flight). Living document — amended as we go.
+</Info>
+
+<Warning>
+**The CAPTURE / trigger architecture moved (2026-07-09) — see the FUB master.** How a FUB signal is *captured* and
+fires a notification now lives in [Follow Up Boss Trigger Events](/guides/trigger-events): the native webhook
+`crm.houseloop.ai/api/fub/webhook` is the **sole** real-time trigger (no realloop.co dashboard receiver, no
+catch-up pollers), sorted into the **3 lanes** (visible → notify direct · masked bodies → `fub.body_recovery_queue`
+→ scraper recovers → notify · record edits → no scrape). Older references below to
+`apps/dashboard/server/fub-webhooks.ts`, `dispatchFubImport`, "catch-up pollers," and `fub.rehydration_queue` are
+the **superseded** capture path — this doc's **lead-mint / event-model / card** content is still current; its
+*acquisition-plumbing* details are being brought in line with the FUB master.
+</Warning>
+
+<Warning>
+**⚠️ LOCK-STEP SYNC + COMMS POLICY (audited/updated 2026-07-16) — supersedes the "Gate C / not built" notes below.**
+
+**Ongoing sync is BUILT (not the unbuilt "Gate C" this doc's changelog describes).** After pull-in, an existing
+lead is kept current by **`fub-activity-sweep-tick`** (Inngest): it polls the `GET /v1/people?sort=-updated`
+heartbeat, filters to HouseLoop leads active in a ~15-min window, and enqueues a `person_rescrape` into
+`fub.body_recovery_queue` → the live `fub-body-recovery` consumer flips the person to `pending` →
+`fub-parallel-scraper` re-walks that one person → POSTs `/api/fub/rebackfill` → `backfillFubBehavior` mints the
+new activity into the feed. The old import path only scraped fresh data **at mint** (the `created` gate,
+`fub-lead-import.ts:730 && created`); the sweep is what closes that gap for existing leads. ✅ **Proven live
+2026-07-16** — the full chain ran in ~95s on a real lead (Shamir, FUB 50442); the queue CHECK migration is
+committed (`tools/fub-sync/sql/person_rescrape_queue_widen.sql`) and the cron is armed (`*/3`). See the
+⭐ [Master FUB Scraper SSOT](/fub/master-scraper-ssot) status table for the proof trail.
+
+**The comms policy (Zach, locked 2026-07-16):** on the sweep, **only website activity** (views/saves/shares/
+searches/inquiries/in-app/insights) is re-scraped + kept lock-step. **Texts, calls, and emails are deliberately
+NOT backfilled into the lead-detail activity feed, and new ones are not leaked into it** — the lead-detail stays
+clean of raw comms. **All comms (backfill + forward) live in the FUB Context section** on the lead instead. So:
+*activity feed = website activity, lock-step; FUB Context section = all comms.*
+
+**Trigger events ≠ Creates-Lead — SHIPPED (2026-07-16, mig 0414):** a trigger event fires on every serviced
+FUB signal regardless of the Creates-Lead toggle (lead-less rows carry `fub_person_id`); Creates-Lead decides
+only whether a lead is born. The law lives in the [Trigger Events](/guides/trigger-events) doctrine banner.
+</Warning>
+
+---
+
+## 1. Overview & the one-source map 🔒
+
+There is **one source** (FUB, fed by Zillow). Its signals arrive over **one real-time trigger** (the native
+webhook), with the **scraper as a recovery/history backstop**, land in **one store** (`fub.*` on the Railway
+mirror), get minted **forward-only** into **our own events** (`hl_lead_activity`), and are read by HouseLoop
+surfaces — with **HouseLoop as the sole notifier**. The whole integration is governed by **ONE master switch**.
+
+```
+   Zillow (Preferred · Rentals · RealScout)
+                  │  inquiries · tours · views · saves · ML intent tags · texts/calls/emails
+                  ▼
+            FOLLOW UP BOSS              ← the hub. FUB owns the signal first.
+                  │
+   NATIVE WEBHOOK (sole real-time trigger)          SCRAPER (Chrome, Camp David) — BACKSTOP only
+   crm.houseloop.ai/api/fub/webhook → fubWebhookRouter    · Lane-2 masked-body recovery (fub.body_recovery_queue)
+   3 lanes: visible → notify + store ·                    · history/photo/in-app backfill on import
+            masked → recovery queue ·                     (NOT a coequal real-time pipe; the realloop.co
+            record-edit → store only                       dashboard receiver + catch-up pollers are RETIRED)
+        └───────────────────────┬───────────────────────┘
+                  ▼   storeRecord: texts/calls/emails/events stored UNCONDITIONALLY in the mirror
+        fub.* on Railway MIRROR              ← THE ONE STORE (relay: Camp David → Railway)
+                  │  classifyFubEvent / convert-fub-signal → logActivity()   ·   FEED IS FORWARD-ONLY
+                  ▼
+        hl_lead_activity              ← OUR EVENT STORE (the truth; one run-log, no fork)
+                  │
+   ┌──────────────┼───────────────────────────────┐
+   ▼              ▼                                ▼
+ HouseLoop     HouseLoop CRM                   FUB's own UI
+ notifications (feed w/ real timestamps,       (followupboss.com)
+ (sole notifier) import WIZARD, request cards)
+```
+
+**The principle (LOCKED):** every FUB signal becomes **one of OUR OWN events** — minted via `logActivity()` into
+the one run-log `hl_lead_activity` (no new store, no fork; the `ALL_FEED_IS_EVERYTHING` law). `fub.*` is the raw
+landing zone; our event store is the truth. **The feed is FORWARD-ONLY** (2026-07-10): a pulled-in lead starts
+clean — pre-import comms stay context-only under the FUB tab; new activity flows into the feed going forward.
+**FUB is lead source #1** — the pattern (acquire → import → live-sync → events) is source-agnostic.
+
+<Note>
+**Capture detail lives in [FUB Trigger Events](/guides/trigger-events)** — the current SSOT for how a signal is
+captured and fires a notification: the **22 trigger events**, the native webhook, the 3 lanes, and the **ONE FUB
+master switch** (`hl_fub_webhook_settings._global.enabled`, which the UI toggle and the notify/process/sync gates
+all read — collapsed from two flags on 2026-07-10 so it can't orphan). This doc owns the **lead-mint → event →
+card → Myli-context → import** flow.
+</Note>
+
+**How to read this doc (the pipeline, in order):** §2 how data physically arrives · §3 how a lead is imported ·
+§4 what each signal becomes · §5 how it renders · §6 Myli's brain on the lead · §7 status + open issues.
+
+---
+
+## 2. Data acquisition — webhooks + scraper 🔒 *(the photo "race" fix = 🚧, see §7/I1)*
+
+Two acquisition paths, one destination. *"It's all webhooks"* and *"we're still scraping"* are **both true** —
+they cover different gaps.
+
+```
+                ┌─ 19 LIVE WEBHOOKS ─ signals + inquiry property (real-time)┐
+FUB  ──────────►│                                                          ├─► Camp David fub.*  ─► [RELAY] ─► Railway fub.*  ─► HouseLoop FUB Activity panel
+                └─ SCRAPER (Chrome) ─ recovers ONLY what the API hides ─────┘                       (fub-relay.mjs)               (lead detail → "Follow Up Boss Activity")
+```
+
+- **Webhooks** = FUB pings us instantly with clean structured data for most things.
+- **Scraper** = logs into FUB as a human to grab the **two things the API hides**: masked message/email/call
+  **bodies**, and the **deep historical Zillow browse list** (incl. photos).
+- **Relay** (`tools/fub-sync/fub-relay.mjs`, pm2 `fub-relay`) mirrors Camp David `fub.*` → Railway `fub.*`.
+- **HouseLoop panel** = `apps/houseloop-crm/components/leads/detail/LeadContextPanel.tsx` — reads Railway `fub.*`
+  by `hl_leads.fub_person_id`.
+
+### What comes from where (the canonical table)
+| Data | Webhook / API delivers it? | Needs the scraper? |
+|---|---|---|
+| **Property inquiries** | ✅ `eventsCreated` — full clean property (street, MLS, price, beds/baths) | ❌ |
+| **Viewed homes** | ❌ **FUB no longer emits a view webhook** (Zach LOCKED 2026-07-01) | ✅ **scraper reads the ENTIRE view history + backfills it at lead-import** |
+| **Saved homes** | ❌ **no save webhook** (Zach LOCKED 2026-07-01) | ✅ **scraper reads the full saved list + backfills at lead-import** |
+| **Lead notes** | ✅ `notesCreated` (body included) | ❌ |
+| **Lead / contact / stage / tags / deals** | ✅ `peopleCreated/Updated/StageUpdated`, `peopleTagsCreated`, `dealsCreated/Updated` | ❌ |
+| **Text — that one happened** | ✅ `textMessagesCreated` (to/from/time) | — |
+| **Text/email *body*** | ❌ masked ("hidden for privacy") | ✅ scraper recovers it |
+| **Call AI summary / transcript** | ❌ not in API | ✅ scraper |
+| **Deep historical browse list** | ❌ not in the API at all | ✅ scrape-only |
+
+### Webhooks (the real-time signal feed)
+**19 active subscriptions**, system `BossLoop` (`X-System` + `FUB_SYSTEM_KEY`), all pointed at
+`apps/dashboard/server/fub-webhooks.ts` (`POST /api/fub/webhook`).
+
+<Warning>
+`GET /v1/webhooks` returns **0 unless you send `X-System: BossLoop`** — webhooks are system-scoped. They are
+live; a bare GET just can't see them.
+</Warning>
+
+- **Lean payload** `{ eventId, event, resourceIds[], uri }` — the handler **fetches back** the full resource from
+  `uri` (Basic auth + `X-System`/`X-System-Key`). A **`Property Inquiry`** fetch-back returns the
+  full `property` object (street/city/zip/MLS/price/beds/baths — **no lat/lng**, geocode ourselves). ⚠️ There is
+  **no `Viewed Property` webhook** — that public event type **died May 21** (see the 🔑 note in §2). Views/saves do
+  NOT come from a webhook fetch-back; they come from the scraper intercept below.
+- **The handler** `handleEvent()` → `fub.events`; `parseZillowViewNote()` parses "Property Viewed" automation notes
+  → `fub.zillow_home_activity` **as a re-scrape TRIGGER only** — the note lags & misses, so it just says "go
+  re-scrape"; the authoritative, complete view list is the **`GET /api/v1/events?hasProperty=true` intercept**.
+  The handler also handles texts/emails/calls/notes/deals/tasks/appts; queues masked-body items for the scraper;
+  fires Twilio/Telegram alerts; has **catch-up pollers** (2–5 min) as a webhook-drop backstop.
+- **Signature** `FUB-Signature` = `HMAC-SHA256( base64(rawBody), X-System-Key )` (hex) — verify on the RAW body.
+- **Limits** events GET 20/10s; return 2xx within 10s; FUB retries up to ~8h.
+
+### Scraper (recovers what the API hides)
+FUB masks bodies in its public API. The scraper logs in via a real CDP Chrome and recovers the bodies a human
+sees (`content_status` `hidden` → `visible`). Repo SSOT `tools/fub-scraper/`; deploy `tools/fub-scraper/deploy.sh`
+— **never hand-edit files on the box.**
+
+| pm2 name | script | role |
+|---|---|---|
+| **fub-backfill-a / -b** | `fub-parallel-scraper.mjs` | Master scraper, pending-first from `fub.rehydration_log`. `-a`=Chrome A (CDP `:18800`), `-b`=Chrome B (CDP `:18802`) |
+| **fub-webhook-scraper** | `fub-webhook-scraper.mjs` | Real-time — polls `fub.rehydration_queue` (`FOR UPDATE SKIP LOCKED`) |
+| **fub-watchdog** | `fub-backfill-watchdog.mjs` | Self-healing — every 60s relaunches a dead/wedged Chrome (A **and** B), auto-logs-in via Google SSO, restarts a stalled worker |
+| **fub-relay** | `tools/fub-sync/fub-relay.mjs` | Camp David `fub.*` → Railway `fub.*` mirror |
+
+<Warning>
+`fub-webhook-sink` and `fub-sync` are **deliberately-stopped dead duplicates** — reading their "down" status as a
+live failure is a known trap. The live procs are `fub-backfill-a/b` + `fub-webhook-scraper` + `fub-relay` + `fub-watchdog`.
+</Warning>
+
+**Self-healing watchdog (the two Chromes):** A `:18800` (`/Users/lee/.chrome-fub-profile`) + B `:18802`
+(`/Users/lee/.chrome-fub-profile-2`). Every 60s, per Chrome: (1) liveness + un-wedge via a real `connectOverCDP`
+probe (HTTP 200 can hide a wedged websocket); (2) **auto-login** — the real FUB login is "Log in with Google"
+(`zach@spradlingrealtygroup.com`); the persistent profile holds a live Google session so navigating to the app
+auto-completes SSO, falling back to `FUB_WEB_GOOGLE_PASSWORD` then `FUB_WEB_PASSWORD`; a 2FA challenge alerts via
+`notify.sh`; (3) worker freshness — restart a worker whose log is stale >5 min. **Body recovery:** DOM extraction
+(`scrapeEmailCards`) + intercepting the SPA's own `GET /api/v1/timeline?...types=ThreadNew`
+(`lastEmail.bodyHtmlVisibleClean`; a direct fetch is `401`). **UI-hidden emails are unrecoverable** — if a FUB
+user sets an email private, the body shows `[CONTENT HIDDEN]` in the UI itself (`content_status='hidden'`, permanent).
+
+### ⭐ The scrape-on-entry doctrine — the real-time per-lead intercept (THE entry mechanism) 🔒
+**This is how every new lead's full history reaches us, in ~half a second.** The moment a new Zillow inquiry fires
+the FUB `eventsCreated` webhook, the handler **spins up a per-lead scrape on Camp David** that intercepts FUB's own
+authenticated SPA call `GET /api/v1/events?hasProperty=true` and walks the lead's **entire** timeline — grabbing
+**every home the lead ever touched: the Zillow URL, zpid, MLS, price, and the photo** — in one shot (242 → 534 homes
+on the test lead James Ross). It writes each home keyed by FUB's stable `fub_event_id` into `fub.zillow_home_activity`
+via `saveZillowHomeActivity` (`tools/fub-scraper/fub-scraper-lib.mjs`). Trigger paths: the webhook auto-enqueues it
+(`fub.rehydration_queue` → `fub-webhook-scraper`); on demand, **`mcp__fub-scraper__fub_scrape_lead` /
+`mcp__camp-david__fub_scrape_person`** re-run the full intercept for one person. **It is deployed + LIVE.** This
+scraper is the front door for ALL new lead data — when a lead's cards look wrong, re-running it is the first move.
+
+### 🗄️ TWO databases — and `zillow_home_activity` is OFF the relay (read this before any photo/home-card debugging) 🔒
+There are **two** FUB stores, and they are NOT kept in sync the same way for every table:
+- **Camp David `fub.*`** (`DATABASE_URL` on the box) — where the scraper WRITES. Ground truth for scraped data.
+- **Railway mirror `fub.*`** (`FUB_RAILWAY_DATABASE_URL`) — **what the HouseLoop CRM READS** (`fubQuery`,
+  `LeadContextPanel`, the import, the card minter). The CRM never reads Camp David directly.
+
+Most tables reach the mirror via the **relay** (`fub-relay`, upsert-by-id). **`fub.zillow_home_activity` is the
+exception — it is OFF the relay (Zach 2026-06-27).** The **scraper is its SINGLE WRITER to the mirror**: right after
+`saveZillowHomeActivity` writes Camp David, it does a **per-person FULL REPLACE to the mirror**
+(`syncPersonHomeActivityToMirror` — `DELETE person rows + INSERT the fresh set`). So a home's photo reaches the CRM
+**only when the scraper runs for that person.** If the scraper hasn't re-run since the photos were captured, **Camp
+David has the photos but the mirror does not** — and the CRM, reading the mirror, shows blank.
+
+### ✅ The blank-photo bug — ROOT CAUSE FOUND + FIXED (2026-06-28)
+Every blank photo + stale lead traced to **ONE bug**: `mirrorUrl()` in `fub-scraper-lib.mjs` resolved its `~/.env`
+fallback with **`require('node:fs')` — but that file is an ES module, so `require` is undefined and threw**, silently
+returning `null`. The per-person mirror sync then no-op'd on **every on-demand scrape** (which doesn't set
+`RAILWAY_DATABASE_URL`). pm2 scrapers "worked" only because their env sets the var. So a scrape wrote Camp David
+perfectly but **never updated the Railway mirror the CRM reads** → blank. *Proven:* Alberto Camp David **199/199**
+photos, mirror **829 rows / 0 photos** — until the fix flipped it to **207/207**.
+
+**Fixed (shipped):**
+- `mirrorUrl()` uses the ESM-imported `fs` (no `require`).
+- `syncPersonHomeActivityToMirror` now **sources the FULL set from Camp David** (not the flaky in-memory scrape
+  result, which the intercept returns non-deterministically — 0/4/199 on the same lead), **always runs**, **never
+  shrinks** the mirror below Camp David, and **fails LOUD** (`✅ mirror replaced: N` / `❌ mirror sync FAILED` — never
+  silent). The loud log is what surfaced the `require` bug on the first run.
+- **Card heal:** `resyncHomePhotos` + `stampActivityPhoto` (the sanctioned append-only exception) stamp photos onto
+  already-minted cards (all `evt`/`zpid`/slug source_id variants); for leads minted from the old broken mirror,
+  **re-import** (`fub/lead.import {backfill}`) mints clean `evt`-keyed cards, then a Rule#0-approved delete removes the
+  stale `fub_home:` non-evt duplicates. **Junk guard** in `convertHomeActivity`: an address that is a URL / agent-page
+  (`realscout.com/users/...`) / doesn't start with a street number **never mints a card**.
+
+> **One-line debug rule:** blank home card → check the **Railway mirror** (`FUB_RAILWAY_DATABASE_URL`), not Camp
+> David. 0 photos there → re-run `fub_scrape_lead` (now mirrors loud); cards stale → re-import the lead.
+
+### 🔑 Where property VIEWS actually come from — the internal feed, NOT the notes (Zach 2026-06-28)
+FUB has **no property-view webhook** (the public "Viewed Property" event died May 21). Your **"Property Viewed" note
+automation** fires `notesCreated` — but it **lags and misses** (proven: James had 6 views, Alberto 5, newer than their
+newest note; rentals/heavy browsers fall behind). The **complete, ordered, current** view list lives ONLY in FUB's
+**internal `GET /api/v1/events?hasProperty=true` feed**, which the scraper intercepts. So: **source views from the
+intercept, never the notes.** The note webhook is fine as a *trigger* ("go re-scrape"), but the data is the feed.
+
+### Data model
+| Table | Holds |
+|---|---|
+| `fub.people` | Leads — `phones`, `tags`, `content_status`, materialized `*_count` |
+| `fub.text_messages` · `fub.emails` · `fub.calls` · `fub.notes` | Activity, each with `content_status` (`hidden`→`visible`) |
+| `fub.events` | Lead events — Property Inquiry / Viewed / Seller Inquiry, with the clean `property` jsonb |
+| `fub.zillow_home_activity` | Homes viewed/saved/shared (note-parsed + scraped) **with the photo** — the panel's homes tab + the card photo source |
+| `fub.saved_searches` | Saved searches (scraper) |
+| `fub.rehydration_log` / `fub.rehydration_queue` | Backfill queue / real-time webhook queue |
+
+**Health:** `mcp__camp-david__fub_backfill_status` (per-scraper health verdict + heartbeat) and
+`mcp__camp-david__fub_chrome_restart` are the fast path; full runbook below in the changelog history.
+
+---
+
+## 3. The import workflow 🔒
+
+A lead's card is born from a **webhook, not a poll**. The chain, grounded on real leads (Juan Martín Munguía
+42729, James Ross 50308):
+
+1. **Source** — a Zillow in-app message / inquiry lands in FUB (e.g. "interested in touring 15111 E 44th St S on
+   Jun 26 at 12pm", source **Zillow Preferred**, MLS# 2626844). FUB fires an `eventsCreated` webhook.
+2. **Pull-in decision** — the **native webhook router** (`fub-webhook-router.ts`) classifies the signal
+   (`classifyFubEvent`) and fires Inngest **`fub/lead.import`** ([Inngest or it doesn't exist](/guides/inngest)).
+   (The old dashboard `dispatchFubImport` / `fub-webhooks.ts EVENT_IMPORT_TRIGGER` path is RETIRED — capture is the
+   native webhook now; see [FUB Trigger Events](/guides/trigger-events).)
+3. **The import mints (the key steps):**
+   - **2.6 — the canonical request card** — `kind` from `classifyFubEvent(message, source)`,
+     `source_table='fub_request'`, `source_id='fubreq|<fub.events.id>'`, ONE per inquiry, home resolved by MLS# →
+     photo + `/home` link. **The card we keep.** (`fub.events` is now stored **unconditionally** by the router's
+     `storeRecord`, so inquiries/tours always land for this step — 2026-07-10.)
+   - **2.7 — behavior + comms backfill** — `backfillFubBehavior` mints the lead's FUB behavior history
+     (views/saves/searches/insights); `backfillFubComms` bridges texts/calls/emails. Both are **watermarked
+     FORWARD-ONLY** (floored at the lead's `created_at`) — a pulled-in lead starts CLEAN, and only new comms flow
+     into the feed; old comms stay context-only under the FUB tab (2026-07-10). Idempotent.
+   - **2.8 — Myli context is NOT built on import.** `buildLeadContext` was removed from the import path (2026-06-29):
+     facts refresh **before Myli communicates** (the conversation path / a pre-outreach workflow step / on-demand
+     when the lead is opened), never on a data pull-in. See §6.
+   - **3 — registration door log** — `kind='registration'`, `source_table='fub_lead_import'`, source "VIA HouseLoop".
+     **This currently DUPLICATES the request card** (tracked issue I2, §7).
+- **Link + source + owner:** `hl_leads.fub_person_id`; lead source = `Zillow.com`, platform = `follow_up_boss`; a
+  lead is **never ownerless** — `ensureLeadAiOwner` falls back to the platform default AI agent (Myli) when no human
+  owner and no AI agent is resolved (2026-07-10).
+
+<Warning>
+**Lead comms go through workflows ONLY (LOCKED 2026-06-26).** The legacy canned lead-facing ack in
+`request-alerts.ts` is removed — a FUB lead's tour/contact acknowledgement is the job of the **Lead Flow workflow**
+bound to that door, never a hidden canned send. Agent-facing alerts remain.
+</Warning>
+
+### The bulk import wizard — select → assign → tag (Settings → Integrations → Follow Up Boss → Import) 🔒
+The webhook path above imports ONE lead on a live signal. The **wizard** (`FubImportWizard.tsx`) is the operator
+tool to pull people in **in bulk**, all decided on-screen (never hardcoded). It reads live from the synced mirror
+and dispatches the same `fub/lead.import` per person via `fub/import-all.run` (the SILENT path — no doors, no
+workflows, no notifications). Four steps:
+
+1. **WHO — filter who comes in.** Pick FUB **stages** (with live people-counts + a per-stage → HouseLoop-stage
+   mapping) and, optionally, narrow by **FUB tags**: a searchable, scrollable modal over **all live FUB tags**
+   (~1,276, most→least by count, from `fub.people.tags`). Facet logic: OR within stages, OR within tags, **AND**
+   across the two — a live "N match" comes from `/api/integrations/fub/import/count`.
+2. **HOW — depth + tags to apply.** Light-seed (default) vs full-history; silent claimable accounts; and the
+   **HouseLoop tags to apply to every imported lead** — pick from existing `hl_tags` OR type a **new** name to
+   create it (`ensureTag` find-or-creates). These apply on top of the origin tag + the person's own imported FUB tags.
+3. **OWNERSHIP — assign to a person.** A dropdown of human `hl_users` (or **Myli-AI-only**, never ownerless);
+   the pick threads to `assigned_user_id` on every minted lead.
+4. **REVIEW — the Rule #0 gate.** Dry runs + test batches (≤100) are open; the **full run stays disabled** until
+   Zach types the Rule #0 approval (`approval:'ZACH-TYPED-OK'`) — a bulk write to `hl_leads` never fires from the browser.
+
+Stage mapping is applied one-shot at import (`opts.stageId ?? source default`); the flow is **one-way** — FUB → HouseLoop, no stage sync-back. Files: `components/settings/fub/FubImportWizard.tsx`, `app/api/integrations/fub/import/{preview,run,count}/route.ts`, `lib/inngest/functions/fub-import-all.ts`, `lib/fub-import/import-fub-lead.ts`.
+
+### Layer 1 — real-time sync (event-driven, NO polling) 🔒
+```
+Camp David fub.*  →  relay  →  Railway fub.*  ──NOTIFY fub_lead_changed(fub_person_id)──►
+   HouseLoop fubListener  →  lead-detail SSE (/api/leads/[id]/stream)  →  card updates instantly
+```
+The relay fires a Postgres `NOTIFY` on each write; `fubListener` + the lead-detail SSE push it to any open card —
+**no polling** (HouseLoop law). The FUB Activity panel reads **real counts** from `fub.*` (e.g. Website **3,923**),
+never FUB's display number (capped at 100).
+
+### The two pipes 🔒 — *(scope evolved: behaviors are now first-class events too)*
+A FUB lead's activity flows through **two pipes that do not feed each other**:
+- **Pipe A — the raw FUB history** (the **Follow Up Boss Activity** panel, `LeadContextPanel.tsx`): the lead's FULL
+  FUB history — texts, calls, notes, every inquiry, Zillow views — read **live from `fub.*` by link**. This is
+  Myli's reading context (§6).
+- **Pipe B — our event store** (`hl_lead_activity`, the **All** + **Website Activity** tabs): the lead's activity
+  minted as **our own first-class events**. **Originally only tour/contact requests crossed; now behavior events
+  cross too** — backfilled + forward-minted, **scoped to leads already in HouseLoop** (the Landing, §4). FUB
+  texts/calls/emails now ALSO cross into Pipe B, but **FORWARD-ONLY** (CleanSlate, 2026-07-10): only comms after the
+  lead's import land in the feed + Texts/Calls/Emails sub-tabs; pre-import comms stay context-only in Pipe A.
+
+The rules (LOCKED 2026-06-26):
+| Rule | Behavior |
+|---|---|
+| **One event per inquiry** | Each FUB tour/contact request = its own HouseLoop event (keyed per property) — 4 tour requests → 4 request cards. |
+| **First touch vs request** | First touch = a `registration`; every request after = `tour_request` / `contact_request` → Website Activity → Requests + All. |
+| **Request SOURCE = the portal** | Each request carries the portal it came FROM (`fub.events.source`: Zillow Preferred, Homes.com…) as a badge — **separate** from the LEAD source. |
+| **Watermark (no blind backfill)** | Only activity from the lead's HouseLoop engagement window (`synced_at` ≥ when WE ingested) is minted — see the Watermark Law (§6). |
+
+---
+
+## 4. The event model & Data & Signals Matrix 🔒
+
+### The coarse-type problem
+FUB stores **all** lead-initiated property contact under one `type = "Property Inquiry"`. The real intent lives
+**only in the message + `source`**. One classifier — `classifyFubEvent({type, message, source})`
+(`apps/houseloop-crm/lib/fub/classify-fub-event.ts`) — resolves it; every surface uses that one verdict. The ONE
+import gate is `SERVICED_FUB_EVENT_TYPES` in that file (replaces the old hardcoded `type IN (...)` SQL — adding a
+type is now ONE place).
+
+### The three request types (derived from the message, never the FUB type)
+| Request type | Message signal | Our event |
+|---|---|---|
+| **Contact request** | *reach out · call me · like to talk* | `contact_request` |
+| **Property inquiry** | *interested in &lt;addr&gt;* (no tour/callback) | `property_inquiry` |
+| **Property tour request** | *tour · showing · seeing &lt;addr&gt; on &lt;date&gt;* | `tour_request` |
+
+<Warning>
+**FUB's `General Inquiry` (~4,088) is a junk bucket** — 86% blank, rest mostly phone-call notices + Zillow system
+messages. Parsed: real questions → `contact_request`, phone notices → calls feed, noise → dropped (`null`).
+</Warning>
+
+### The event-conversion matrix — every signal → our event
+| FUB signal | Arrives via | → Our event |
+|---|---|---|
+| Property Inquiry (tour language) | `eventsCreated` | `tour_request` |
+| Property Inquiry ("interested in") | `eventsCreated` | `property_inquiry` |
+| Property Inquiry ("reach out / talk") | `eventsCreated` | `contact_request` |
+| Property Inquiry (`source = Zillow Rentals`) | `eventsCreated` | `rental_inquiry` |
+| Seller Inquiry | `eventsCreated` | `seller_inquiry` |
+| General Inquiry (real question) | `eventsCreated` | `contact_request` (filtered) |
+| **Virtually Toured Property** | `eventsCreated` | **`virtually_toured`** *(own first-class kind — Zach LOCKED 2026-06-28; NOT folded into tour_request)* |
+| ⭐ Property VIEWED (note) | `notesCreated` "Property Viewed: &lt;url&gt;" | `property_view` |
+| ⭐ Property SAVED (note) | `notesCreated` "Property Saved: &lt;url&gt;" | `save_home` |
+| ⭐ Property SHARED (scraper) | scraper → `fub.zillow_home_activity` | `share_home` |
+| Registration | `eventsCreated` | `registration` |
+| Pre-Approval | `eventsCreated` | `pre_approval` |
+| Saved Property Search | scraper → `fub.saved_searches` | `saved_search` |
+| note "viewed N× in 7 days" | `notesCreated` (raw) | `behavior_repeat_views` |
+| note "now looking in &lt;ZIP&gt;" | `notesCreated` (raw) | `behavior_area_interest` |
+| Zillow ML tags (High-Intent, Reengaged…) | `peopleUpdated` / `peopleTagsCreated` | `behavior_*` |
+
+<Warning>
+**Views & saves arrive ONLY as `notesCreated` notes now.** The `Viewed Property` / `Saved Property` **event
+types died May 21** (Premier Agent change — rows frozen at that date). So `property_view` / `save_home` are minted
+from the NOTE path, never the dead event type.
+</Warning>
+
+### One-to-one parity — Zillow ↔ HouseLoop (LOCKED 2026-06-26)
+Same event catalog on both platforms; only the **source badge** differs (`Zillow.com` vs `HouseLoop.ai`). A home
+viewed on Zillow and on houseloop.ai are the same `kind` (`property_view`). The one asymmetry: **liked home is
+HouseLoop-only** (Zillow has no "like"). Pre-qualified is the same kind, branded **ZHL** (Zillow) vs **Lending
+Loop** (HouseLoop). Add an event to the catalog (`activity-badges.ts` / `BEHAVIOR_BADGES`) → it gets a card on
+every surface automatically (no per-type hardcoding — the `ALL_FEED_IS_EVERYTHING` law).
+
+The Zillow side is minted from: views/saves → `notesCreated` → `fub.zillow_home_activity`; shared → scraper;
+repeat-views/area → the raw note; tour/inquiry/contact → `fub.events` → `classifyFubEvent`; saved search → scraper;
+high-intent/reengaged/specific-home/pre-qual → the Zillow tags. **`Zillow Smart List` = the 13-day "active now"
+window** (add → `behavior_active`, remove → `behavior_window_closed`) — not itself a behavior.
+
+### 🛬 The Landing — ship it without boiling the ocean (LOCKED)
+1. **Only a request creates a NEW lead.** A lead is pulled in **only** by a property inquiry / tour request.
+   **Behavior events NEVER create a lead** (that would flood HouseLoop with events for leads we have no workflows for).
+2. **Behavior events are first-class — but only for leads already in HouseLoop.** Once a request pulls a lead in:
+   **(a) backfill** its whole FUB behavior history into `hl_lead_activity`; **(b) forward**-mint every new behavior
+   in real-time; **(c) scope** — a behavior for a FUB lead NOT in HouseLoop is ignored. No flood, no orphans.
+3. **Pre-seed every trigger token → a "Coming Soon — Not Built Yet" stub** in the Workflows list. The trigger is
+   visible, the event flows first-class, **nothing fires** until a real workflow replaces the stub.
+
+Each conversion runs through ONE converter writing via `logActivity()` (events → `classifyFubEvent`; notes →
+view/save + the insight parsers; home activity → view/save/share deduped per home **with the photo**; saved
+searches → `saved_search`; tags → the `behavior_*` events + Smart-List window). Each fires at webhook-time +
+a per-lead backfill (gated to leads already in HouseLoop).
+
+---
+
+## 5. The card system 🔒 *(per-card design checklist = 🚧, §7)*
+
+`FeedRow` (exported from `components/leads/detail/PixelFeedStream.tsx`, reused by `CenterLane.tsx`) draws every
+card from the one `activity-badges.ts` catalog. **No new components** — exactly two shapes:
+
+- **HERO** — `ActivityHeroCard.tsx`. Accent border · actor pill · title · "via" source badge · time · photo/icon
+  tile · address + facts (`$price · bd · ba · MLS#`) · `View on HouseLoop │ View on Zillow` · quote/message ·
+  calendar chip. Fired by `request:true`, `registration`, `hero:true`.
+- **COMPACT** — the row card. Thumbnail (80×80) · actor pill · label+icon · "via" badge · time · address · facts ·
+  View links. Fired by everything else.
+
+**HERO is ONLY property tours, inquiries, and registrations (Zach LOCKED 2026-06-28).** All other behaviors/
+signals/searches/comms = COMPACT. (The earlier "all behaviors are hero" call was reversed.)
+
+### The canonical request card (Zach LOCKED 2026-06-28)
+**Every request/registration HERO card looks IDENTICAL** — modeled on Zillow's card. The ONLY difference is a
+**Tour Request shows the date as a calendar chip.** It is display-only (no accept/decline — acting on a request is
+a [workflow](/guides/workflows), not a button).
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ ① Tour Request   VIA Zillow Preferred          Jun 25    │  type (classified) + source pill + timestamp
+│ ② [PHOTO]   ③ 📅 Jun 26, 6:30 pm                          │  photo (far left) + calendar chip (TOUR ONLY)
+│             ④ 2324 SW 34th St, Topeka, KS 66611          │  FULL address (city+state+zip), blue link
+│             ⑤ MLS #165929 · $260,000 · 3bd/3ba           │  MLS + price + beds/baths
+│ ⑥ "I'm interested in 2324 SW 34th St… seeing Jun 26…"     │  full message line (Zillow-style)
+│ ⑧ View all tour requests                                  │  per-person link (tour cards only)
+└─────────────────────────────────────────────────────────┘
+```
+| Field | Source |
+|---|---|
+| ① type | `classifyFubEvent(message, source)` |
+| ② photo | our `Listing` (in-market) → the home's Zillow photo from `fub.zillow_home_activity` (out-of-market). **No Street View.** |
+| ③ calendar chip | parsed showing date/time from the message (tour cards only) |
+| ④ full address · ⑤ MLS·price·bd/ba | `fub.events.property` jsonb (street + city + state + zip, MLS, price, beds/baths, lat/lng, Zillow URL+zpid) |
+| ⑥ message | `event.message` |
+
+| Card | Source | Calendar chip? |
+|---|---|---|
+| **Tour Request** | Zillow Preferred | ✅ YES |
+| **Property / Virtually Toured / Contact / Rental / Seller** | Zillow | ❌ |
+
+**Why the data is all there:** every `eventsCreated` fetch-back stores the full clean `property` object — so a
+missing city/zip/MLS on a card is a **render bug, not a data gap**. The only field not in the row is the **photo**
+(Listing → captured Zillow photo).
+
+### Behavior Trigger Matrix (the canonical list — every behavior → a card → a follow-up)
+> Each behavior is a **trigger token** → a card → a **behavior workflow**, bound to a "Coming Soon" stub until built.
+
+**Group 1 — Home actions:** `property_view` · `save_home` · `like_home` *(HL-only)* · `share_home` ·
+`unsave_home`/`hide_home` — home + photo.
+**Group 2 — Zillow Insights (carry a home/area):** `behavior_repeat_views` (viewed 10× in 7d) ·
+`behavior_area_interest` (now looking in &lt;City&gt;) · `behavior_specific_home_interest`.
+**Group 3 — Zillow ML flags (no home → body = the meaning note):** `behavior_high_intent_buyer` ("5× as likely to
+transact in 3 months") · `behavior_high_intent_seller` · `behavior_reengaged_buyer` · `behavior_active` ·
+`behavior_window_closed` · `pre_approval` (ZHL / Lending Loop).
+**Group 4 — Requests (explicit asks):** `tour_request` · `property_inquiry` · `contact_request` · `rental_inquiry`
+· `seller_inquiry` · `virtually_toured`.
+**Group 5 — Search:** `saved_search` (criteria + matched homes) · `search` (noise — open Q: keep?).
+
+---
+
+## 6. Myli context 🔒
+
+One lead, three layers:
+```
+FUB lead (fub.* on Railway)
+   ├─ Layer 1  REAL-TIME SYNC ........ live counts + activity on the lead card (§3)
+   ├─ Layer 2  FACTS (deterministic) . the 12-domain fact store — structured, no LLM
+   └─ Layer 3  DOSSIER (on-demand LLM) . one Lead Context = [FUB section] + [HouseLoop section]
+```
+- **UI** — the lead-detail `[Lead Context] / [Follow Up Boss Activity]` toggle + the FUB Activity panel
+  (`LeadContextPanel.tsx`), reading the full FUB history live by `fub_person_id` (**Pipe A**, §3).
+- **Layer 2 — Facts** — on first pull, `buildLeadContext` structures every FUB fact into the **12-domain fact
+  store** (name, source, timeframe, price range, views/saves/searches, Zillow Insights). No LLM, fully structured.
+  Built on every pull-in as import step 2.8.
+- **Layer 3 — Dossier** — ONE Lead Context = a **Follow Up Boss** section (imported FUB history via `loadFubBrief`,
+  Sonnet, on-demand `POST /api/leads/[id]/context`) + a **HouseLoop** section (live). Not two dossiers. Sonnet once
+  on import · Haiku delta on update · never auto-per-fact.
+
+### ⭐ The Watermark Law — read-once, merge-forward (universal) 🔒
+Governs **every** LLM rollup (dossier, facts, Hot Buyers, any summary): **never re-process data already consumed.**
+The dossier stores its text + a `source_cursor` (high-water mark). Each regen: read only the delta
+(`WHERE synced_at > source_cursor`) → merge into the existing dossier (don't re-summarize) → advance
+`source_cursor = max(synced_at)`. First pull = full history (Sonnet, cursor = now); every pull after = the delta,
+merged with Haiku. **Tokens paid once per row, ever.**
+
+<Warning>
+**The gotcha:** watermark on **`synced_at` (when WE ingested the row), NOT the event's own date.** A 2-year-old
+home view the scraper *just* backfilled is **new to us** — `synced_at > cursor` catches it. Watermark on the event
+date and you'd silently skip every freshly-backfilled historical row.
+</Warning>
+
+---
+
+## 7. Status · open issues · changelog 🚧
+
+**Phase:** event servicing is LIVE + proven on real leads. Now hardening **card rendering** — photos + per-card
+layout — one card at a time.
+
+| Layer | State |
+|---|---|
+| Acquisition (19 webhooks + scraper + relay), complete-home scrape-on-entry | ✅ LIVE |
+| `classifyFubEvent` + `SERVICED_FUB_EVENT_TYPES` import gate (whack-a-mole dead) | ✅ deployed (`f680de5e31`) |
+| `virtually_toured` = first-class kind (own home) | ✅ PROVEN (Alberto → 3331 Benton) |
+| Behavior backfill + Myli context on every pull-in | ✅ PROVEN (Alberto: 9 facts; James no regression) |
+| ONE `FeedRow` card (HERO/COMPACT), dual View links, tokenized + ESLint | ✅ deployed |
+| **Card photos — the "race"** | 🔴 ROOT CAUSE FOUND — see I1 |
+| Per-card design checklist (area card, viewed-repeatedly, etc.) | 🚧 one at a time |
+
+### Open issues — TRACKED (resolve, then check off)
+| # | Issue | Fix | Where |
+|---|---|---|---|
+| **I1** | **Photo "race" + mirror lag** (§2). The CRM reads the **Railway mirror**; `zillow_home_activity` is OFF the relay, so a lead's photos reach the mirror ONLY when the **scraper** runs for that person. Alberto: Camp David 199/199 photos+event_ids, **mirror 829 rows / 0 photos / 0 event_ids** → CRM blank. Plus the insert-only minter can't backfill a card minted before its photo (James 432/442 vs Alberto 0/113). | **Two steps:** (1) **re-run the scraper** for the lead (`fub_scrape_lead` / `fub_scrape_person`) → the per-person full-replace pushes photos+event_ids to the mirror; (2) **`fub/home-photos.resync`** Inngest fn / import step 2.7b → `resyncHomePhotos` stamps the photo onto existing cards (`stampActivityPhoto`, all source_id variants evt/zpid/slug). **NO Street View.** | scraper → mirror; `backfill-fub-behavior.ts` resync; `fub-home-photo-resync.ts` |
+| **I2** | Duplicate registration card — step-3 door duplicates the step-2.6 request card. | Kill the door for FUB inquiries (the inquiry IS the entry). | `fub-lead-import.ts` step 3 |
+| **I3** | Property Inquiry address has no commas + thin subline. | Comma the address; fill `$price · ba · MLS#`. | card address build |
+| **I4** | Per-inquiry duplication (2 inquiries same home/day → 2 cards). | Decide keep-per-inquiry vs dedupe. | step 2.6 |
+| **I5** | New Area of Interest layout — compact, location as a text-note sentence, no wrapping pill. | Compact card, `hero` off. | FeedRow / catalog |
+| **I6** | Viewed Repeatedly — photo + sentence label; compact (behaviors are NOT hero). | Compact card, `hero` off. | FeedRow / catalog |
+
+### Changelog (newest first)
+- **2026-07-10 / 07-11 (Lee)** — **FUB lead-sync hardening sweep + the import wizard's filter/tag/assign build.**
+  A full pass making a HouseLoop lead a faithful, useful mirror of its FUB activity, plus the import-selection UI.
+  - **Feed is forward-only (CleanSlate).** `backfillFubComms` (`lib/fub/backfill-fub-comms.ts`) now FLOORS its
+    watermark at the lead's `created_at`: on a lead's first import it copies **no** pre-import comms into the feed
+    (old texts/calls/emails stay context-only under the FUB tab), while every NEW comm flows forward. Proven on
+    James Ross 50308 (delete + repull: the 3 April "Alisha/EXP" pre-import texts stayed out; post-import comms
+    rebuilt). Commit `b5ecc70e95`.
+  - **ONE FUB master switch (regression fix).** There were secretly **two**: the UI wrote `hl_settings.fub_sync_master`
+    while the fail-closed NOTIFY/PROCESS gate read `hl_fub_webhook_settings._global.enabled`. When the master was
+    rebuilt, `_global.enabled` was orphaned OFF and silently killed **every** FUB notification for hours.
+    `lib/fub/fub-sync-master.ts` now reads/writes `_global.enabled` directly — one flag the UI shows and the code
+    obeys (notify + processing + forward-sync). Can't orphan again. Commit `432da9afe0`. Lesson: a control the user
+    flips must be the SAME flag the runtime reads.
+  - **Real timestamps in the feed.** Property view/save cards were stamped from `activity_date` (a DATE → midnight),
+    so everything read "22 hours ago." `convert-fub-signal.ts` now stamps `occurredAt = scraped_at` (the real trigger
+    time, matches FUB to the minute); `PixelFeedStream.tsx` renders the **actual date + time** (Central business TZ),
+    not a relative "Xh ago". James's 1,004 existing rows corrected from the mirror. Commits `b79c6a9671`, `b269d96901`.
+  - **Ghost writer removed + mislabels cleaned.** `apps/dashboard/server/fub-webhooks.ts` `parseZillowViewNote`
+    hardcoded `activity_type='viewed'` for every Zillow home note (so a **saved** home recorded as **viewed**) and
+    wrote no `fub_event_id`. Deleted — `lib/fub/sync-lead-record.ts` is the sole, correct home-activity writer
+    (derives saved-vs-viewed, stamps `fub_event_id`). Cleaned 1,318 legacy mislabeled rows the safe way: 565 shadowed
+    dups deleted, 753 sole records corrected → `saved` (a blind delete would have lost 753 saves). Dashboard commit
+    `908251512e`; reversal `.claude/reports/ghost-mislabel-reversal-2026-07-10.json`.
+  - **Inquiries/tours flow like texts (July-7 ceiling lifted).** `fub.events` is now stored **unconditionally** in
+    the router's `storeRecord` (`fub-webhook-router.ts`) alongside texts/calls/emails — out of the
+    sync-master/existing-lead gate that was starving it — so a new inquiry always lands and step 2.6 mints the request
+    card forward.
+  - **Myli facts rewrite (55 → ~13).** `lib/ai/fact-taxonomy.ts` `canonicalSlot()` coerces every LLM slot to a
+    LOCKED per-domain vocabulary, so `(lead_id,domain,slot)` dedups and facts can't bloat with wording drift (no
+    migration needed). Raw house-view dumps (the pixel block in `lead-conversation.ts` + the FUB website-activity
+    rollup in `fub-brief.ts`) collapsed into ONE synthesized signal ("viewed 32 homes in 2 days → high urgency"), and
+    the prompt now forbids per-home facts. Verified on James: 55 junk → **13** canonical, meaningful facts, and it
+    **converges** on re-run (13 → 13, no bloat). Runner: `scripts/rebuild-lead-context.ts <leadId>`.
+  - **Never ownerless (routing).** `lib/leads/ensure-lead-owner.ts` falls a lead with no human owner AND no AI agent
+    back to the platform default AI agent (Myli); `seedRecipient` (`lib/notifications/lead-events.ts`) no longer
+    hard-pins the first admin for an ownerless lead's alert.
+  - **The import wizard is now a filter + assign + tag builder** (`components/settings/fub/FubImportWizard.tsx`,
+    `app/api/integrations/fub/import/{preview,run,count}/route.ts`, `fub-import-all.ts`, `import-fub-lead.ts`):
+    - **Assign-to a person** (Step 3): a dropdown of human `hl_users` (or Myli-AI-only, never ownerless); the choice
+      threads through to `assigned_user_id` on the minted lead.
+    - **Import the lead's own FUB tags** — the person's FUB tag list is copied onto the HouseLoop lead (find-or-create).
+    - **Filter by FUB tag** (Step 1) — a searchable, scrollable modal (`HlFormModal`) over ALL live FUB tags
+      (~1,276, most→least by people-count, read from the synced mirror `fub.people.tags`). Facet semantics: OR within
+      stages, OR within tags, **AND** across the two; a live "N match" comes from the `/count` endpoint (validated:
+      Nurture ∩ `buyer` = 6,164). Tag-matched people in an unmapped stage fall back to the source-default stage.
+    - **Apply HouseLoop tags** (Step 2) — pick from the 41 existing `hl_tags` OR type a brand-new name to create it;
+      the chosen tags apply to every imported lead (in addition to the origin tag + the person's FUB tags).
+- **2026-06-28 (late PM)** — **ROOT CAUSE FIXED + all home photos restored.** The blank-photo bug = `require()` in an
+  ESM (`mirrorUrl()`) silently nulling the mirror URL on every on-demand scrape. Fixed; mirror sync now sources from
+  Camp David, always runs, never shrinks, fails LOUD. Re-scraped + re-imported the 4 HouseLoop leads with home cards
+  (Alberto 207/207, James 673/673, Jo 178/178, Jessica 164/164 photos); Rule#0-approved delete of 190 stale/dup/junk
+  cards (0 junk remaining). Added `convertHomeActivity` junk-address guard. Fixed viewed-homes ordering: `activity_date`
+  is a DATE column (midnight) → order by `fub_event_id DESC` (chronological). LOCKED: property views are sourced from
+  FUB's internal `hasProperty=true` feed (the scraper intercept), NOT the lossy note automation. **NEXT: Gate C real-time
+  — the doorbell wiring exists (peopleUpdated/notesCreated/eventsCreated → `rehydration_queue` → `fub-webhook-scraper`),
+  unblocked by the mirror fix; the only blocker is the queue is ~49,000 deep with no HouseLoop prioritization. Build =
+  enqueue only HouseLoop leads (debounced) + a high-priority lane so an active lead scrapes in seconds.**
+- **2026-06-28 (PM)** — **Corrected the photo-race root cause + documented the real mechanism (Zach).** The deeper
+  cause is **mirror lag**, not just the mint race: `zillow_home_activity` is OFF the relay, so a lead's photos reach
+  the Railway mirror (what the CRM reads) ONLY via the **scraper's per-person full-replace** — Alberto's mirror had
+  0 photos while Camp David had 199. Documented §2's **real-time per-lead webhook scraper** (the `/api/v1/events?hasProperty=true`
+  intercept, ~½s) and the **two-DB / off-the-relay / single-writer** architecture. Shipped the CRM-side heal:
+  `stampActivityPhoto` + `resyncHomePhotos` (all source_id variants) + import step 2.7b + the `fub/home-photos.resync`
+  Inngest fn. Heal sequence = re-run the scraper → mirror gets photos → `fub/home-photos.resync` stamps the cards.
+- **2026-06-28** — **Consolidated all FUB lead-import docs into this one master.** Documented the **photo "race"**
+  root cause (insert-only minter beats the scrape → blank cards). Locked: every request/registration HERO card =
+  the canonical Tour Request (calendar chip the only diff); HERO is tours/inquiries/registrations only (behaviors
+  → compact). `virtually_toured` is its own first-class kind. Traced the trigger path on Juan; opened I1–I6.
+- **2026-06-28** — Servicing LIVE + proven on real leads. `SERVICED_FUB_EVENT_TYPES` catalog gate replaces the
+  hardcoded `type IN (...)` SQL (`f680de5e31`). `virtually_toured` proven on Alberto (3331 Benton). Myli context on
+  every pull-in (`buildLeadContext` step 2.8): Alberto 0→1 `context_built` + 9 facts; James unchanged.
+- **2026-06-27** — The one sourced card, tokenized + verified: unified All + Website Activity onto `FeedRow`; dual
+  `View on HouseLoop │ View on Zillow` + coverage modal; `card-tokens.ts` + the `hl/no-raw-card-token` ESLint rule.
+- **2026-06-26** — Direction locked: FUB behavior becomes first-class HouseLoop events, sourced per event
+  (`GT_HOUSELOOP_FUB_BEHAVIOR_EVENTS_PRD.md`). Backfill proven on James (52→397, idempotent, zero dupes,
+  `f46f88bf69`). Lead comms go through workflows ONLY (canned ack removed). Layer-1 real-time sync locked
+  (relay `pg_notify` → `fubListener` → SSE). Dossier reads FUB on-demand; Watermark Law locked.
+- **2026-06-22** — FUB import workflow + enriched registration card verified on James Ross 50308. Documented the
+  full acquisition system; rebuilt + backfilled the Camp David → Railway relay; Myli-context UI shipped.
+- **2026-06-02 / 06-01** — UI-hidden-emails truth established; `fub-webhook-sink` OOM loop stopped; email scraping
+  re-enabled with timeline-API `bodyHtmlVisibleClean` interception.
+
+---
+
+# ═ SIGNAL CAPTURE + THE TOGGLES (absorbed from fub/trigger-events, 2026-07-17 — the EVENT CATALOG moved to /guides/trigger-events) ═
+
+## The principle (LOCKED 2026-07-09 by Zach)
+
+**Notifications are the source of truth. The scraper is a dumb, on-demand grabber of HIDDEN content only.**
+
+The native HouseLoop webhook is what decides *what happened*; when the thing that happened has content FUB hides
+(a masked message body), the notification layer *tells the scraper* to go recover exactly that one body — nothing
+else. The scraper never decides what's new, never crawls, never re-scrapes on a record edit. This replaces the
+old "push for speed, pull for truth" dual-path / differential-reconciler design, which is **dead** (it read the
+lagging mirror and flooded Zach with 2022-era activity — see the post-mortem below).
+
+## Vocabulary (LOCKED 2026-07-07)
+
+- **Integration** = the *pipe* a lead flows through — **HouseLoop.ai** (our website pixel) or **Follow Up Boss**
+  (the Zillow-connected CRM). Managed at **Settings → Lead Integrations** (`/settings/lead-platform`).
+- **Lead Source** = the *brand* on the lead — Zillow, Referral, etc. A source lives *under* an integration.
+- **Trigger Event** = a *door* — a thing that can happen (a tour request, an inbound text, a property save) that
+  can start a lead, run a workflow, and/or fire a notification. One row in **`hl_fub_webhook_settings`**,
+  configured at `crm.houseloop.ai/settings/trigger-events`.
+
+## The four independent toggles (this is the model)
+
+Each FUB trigger event carries **four independent switches** — none implies another:
+
+| Toggle | Column | What it controls |
+|---|---|---|
+| **Sync** | `enabled` | Do we ingest/process this FUB signal at all. Off = we don't even mirror it. |
+| **Creates Lead** | `creates_lead` | Does firing this door mint (or match) a HouseLoop lead. |
+| **Workflow** | `workflow_id` + `workflow_active` | Which workflow the door runs, and whether it runs. |
+| **Notify** | `notify` | Fire an owner-only HouseLoop notification when this door fires — **independent of Creates Lead.** |
+
+<Note>
+**Notify is decoupled from Creates Lead (Zach 2026-07-08).** You can turn ON a notification for a FUB trigger
+event **even if you do not create a lead** — a "heads-up, this happened" ping with no lead minted. The card then
+renders "**HouseLoop — no lead created**" (no HouseLoop link) alongside the always-present FUB person link. The
+gate is two-tier: the per-event row toggles over a `_global` master row (`webhook_type='_global'`).
+
+**The `_global` master now has a switch on the wall (Lee, 2026-07-09 night).** It was the ONE breaker for the
+whole FUB pipeline — every per-row Sync/Creates-Lead/Notify toggle is gated behind `_global.enabled` on the
+server (`fub-body-recovered.ts`, `fub-lead-import.ts`) — but its only UI lived in the never-mounted
+`FubChannelBoard`, so with `_global` OFF, flipping the 23 per-row toggles did nothing and there was no control
+to fix it. Fixed: `FubChannelRows` now renders a **master-breaker banner** above the FUB rows on the Trigger
+Events board (red "OFF — nothing below runs" / blue "ON — the pipeline is live"), writing `_global.enabled`.
+This is the go-live switch. **Flipped ON 2026-07-09 night → the pipeline is LIVE** (see
+[Where the build stands](#where-the-build-stands)).
+</Note>
+
+## ⭐ The Capture Matrix — exposed vs masked, per event (ground truth from the live mirror, 2026-07-09)
+
+**The one question that was never written down: for each FUB webhook, is the content exposed in the API, or does
+FUB hide it (needing the scraper)?** Verified against the live Railway mirror by Caleb — not from memory.
+
+| FUB webhook event | Content it carries | Exposed or masked? | Lane | Scraper needed? | HouseLoop notification |
+|---|---|---|---|---|---|
+| `peopleCreated` | new person | **Exposed** | 1 | No | New lead |
+| `peopleUpdated` | field/stage/tag edit | n/a (metadata) | **3** | **No** | none by default (update person only) |
+| `peopleStageUpdated` | stage change | **Exposed** | 3 | No | `stage_changed` if Notify on |
+| `peopleTagsCreated` | tag added | **Exposed** | 3 | No | none by default |
+| `peopleDeleted` | person removed | **Exposed** | 3 | No | none (mark/remove) |
+| `notesCreated` | **Property Saved / Viewed** + insights (address in body) | **Exposed** | **1** | No | Home saved / viewed |
+| `notesUpdated` | note edit | Exposed | 1/3 | No | rare |
+| `eventsCreated` | inquiries: tour / contact / seller / rental / virtually-toured (message + source) | **Exposed** | **1** | No | the matching request card |
+| **Inbox-app sweep** (NOT a webhook) — `zillow_inapp` | Zillow in-app (Zillow Messages) chat body | **NOT in the FUB API/webhooks** — lives only in the "Zillow Messages" inbox app; the `fub-inapp-sweep` scraper reads it (see the section below). Born-visible once scraped | **In-app sweep** | **YES (this is its whole point)** | In-app message **with body** — gated to existing leads |
+| `textMessagesCreated` — `sms` | SMS body | **~7% masked** (21,288 of 288k = "Body is hidden for privacy reasons") | 1 visible · **2 masked** | only the masked ~7% | Text **with body** |
+| `emailsCreated` | email body | **Mostly masked** (173,824 hidden vs 28,870 visible) | **2** (metadata Lane 1) | Yes (body) | Email **with body** once recovered |
+| `callsCreated` | duration · direction · outcome · `recording_url` | **Exposed** | **1** | No | Call received |
+| `callsCreated` — call note | the call's masked note/body (5,690 rows) | **Masked** | 2 | Yes (note only) | note filled once recovered |
+| `appointmentsCreated/Updated` | appointment | **Exposed** | 1 | No | Appointment set |
+| `tasksCreated/Updated` | task | **Exposed** | 1/3 | No | task (optional) |
+| `dealsCreated/Updated` | deal | **Exposed** | 1 | No | TC loop notifications |
+
+**FUB masks exactly THREE things** — SMS bodies (~7%), **most** email bodies, and 5,690 call notes. Everything
+else (people, notes/saves/views, inquiries, in-app messages, call metadata + `recording_url`, appointments,
+tasks, deals) is **exposed**. **Transcripts do not exist anywhere** (0 rows — FUB doesn't expose them; a real
+transcript would require us to transcribe `recording_url` ourselves, a separate future build).
+
+<Note>
+**Two things that surprised us (and correct older docs):**
+1. **Property saves/views are Lane 1, live.** The standalone view/save webhooks *did* die 2026-05-21 — but FUB
+   now logs each save/view as a **note** (`notesCreated`, exposed body with the address). That is the live
+   per-event source `classifyFubEvent`/the note parser reads. The scraper's `/v1/events?hasProperty=true`
+   intercept is a *different* thing — the one-time deep historical browse-list backfill, **not** the live source.
+2. **In-app is captured by the scraper, not the API.** Zillow `zillow_inapp` chat is NOT in FUB's API or
+   webhooks (proven 2026-07-09) — it lives only in the "Zillow Messages" inbox app, and the `fub-inapp-sweep`
+   scraper reads it (see "How an in-app message becomes a trigger event" below). Once a sweep writes it to the
+   mirror it is born-visible (never masked) and notifies via the native card, gated to existing leads. Only
+   **SMS** ever masks a body.
+</Note>
+
+## The 3-lane architecture
+
+Every FUB event enters the native webhook and `fubWebhookRouter` sorts it into exactly one lane:
+
+### Lane 1 — Visible activity (~95%): router notifies directly, scraper never touches
+Home saved/viewed (`notesCreated`), inquiries (`eventsCreated`), visible SMS, call metadata, appointments,
+tasks, deals. (In-app messages are NOT here — they are the inbox-app sweep lane below.) The API hands us clean
+content → the router classifies it and fires
+the owner-only notification immediately.
+
+### Lane 2 — Masked comms: the ONLY thing that wakes the scraper
+The three masked cases — masked SMS bodies, email bodies, and call notes. The flow is a **surgical body-fetch**,
+never a re-scrape:
+
+```
+masked textMessagesCreated / emailsCreated  →  fubWebhookRouter writes metadata + enqueues ONE job
+      ↓ fub.body_recovery_queue (on Camp David — the relay is CD→Railway one-way, so the job lives CD-side)
+      { person_id, resource_type: 'text' | 'email', resource_id, requested_at }
+      ↓ the scraper drains the queue — reads THAT ONE body from the FUB UI
+      ↓ writes the recovered body → flips content_status  hidden → visible
+      ↓ trg_fub_new_message fires  (now AFTER INSERT OR UPDATE, transition-guarded, text + email)
+      ↓ pg_notify('fub_new_message') → the native notify path
+   →  HouseLoop notification fires WITH the body
+```
+
+**No metadata-only notify for a masked body** — a card with no message is useless, so we hold the notify until
+the body is recovered. Born-visible content (in-app, visible SMS) is Lane 1 and notifies on the INSERT.
+
+### Lane 3 — Record edits: update the person, never scrape
+`peopleUpdated` / `peopleStageUpdated` / `peopleTagsCreated` / `peopleDeleted`. These update the person record
+only. **They never enqueue a scrape.** (A stage change may fire `stage_changed` if the Notify toggle is on; that
+is a notification, not a scrape.)
+
+## ⭐ How an in-app (Zillow Messages) message becomes a trigger event
+
+Zillow in-app chat is the ONE signal FUB does **not** expose through its API or webhooks (proven 2026-07-09 on
+James Ross: his in-app messages carry synthetic ids and never appear in `GET /v1/textMessages`; no
+`textMessagesCreated` fires). They live in FUB's **"Zillow Messages" inbox app** (`inboxApp id 1`, created by
+the original account owner's seat — `createdById 1`, which is why a departed owner's Zillow connection still
+fronts these leads). So capture is: find the people via the REST API, scrape their pages for the bodies — all
+lawful, gated, and Inngest-visible:
+
+1. **Detect — the REST API, not the inbox SPA (proven 2026-07-09):** message BODIES aren't in the API, but WHO
+   has in-app activity IS: **`GET /v1/people?sort=-lastInboxAppMessage&fields=id,lastInboxAppMessage`** returns
+   every person ordered by their last in-app message, with the timestamp. Reliable, no browser, cursor-pageable.
+   (The FUB inbox web endpoint `/api/v1/inbox/…/conversations` **hangs** on any direct/replay fetch and its
+   virtualized list won't page on scroll — only the app's own live XHR ever fires; the people-sort is the robust
+   surface.) Incremental takes only people newer than our mirror's newest `zillow_inapp`; backfill takes all.
+   The registered Inngest cron **`fub-inapp-sweep-tick`** (Run Log `comms` lane; cron `*/3` ARMED since
+   2026-07-09 sign-off) enqueues one sentinel `inbox_sweep` job into the Railway FUB mirror queue —
+   `UNIQUE(resource_type,resource_id)` = at most one sweep pending (no pile-up).
+2. **Extract (reuse, never reinvent):** the Camp David `fub-body-recovery` consumer claims the job and runs
+   **`tools/fub-scraper/fub-inapp-sweep.mjs`**, which — for each discovered person — reuses the proven extractor
+   in `fub-scraper-lib.mjs` (`scrapePersonFull` + `matchAndUpdateMessages`: `scrapeTextContainers` classifies a
+   timeline row `zillow_inapp` by its **`zillow.png`** circle-icon; the synthetic id
+   **`900000000 + personId*1000 + seq`** dedupes against the existing rows, `ON CONFLICT (id) DO NOTHING`). The
+   relay carries the new born-visible rows Camp David → Railway.
+3. **Notify (native, gated — one notifier):** for each NEW inbound in-app message the sweep POSTs
+   `/api/fub/body-recovered`; **`fub-body-recovered`** maps `message_type='zillow_inapp'` → `in_app_message` →
+   a card, through the gate stack: **existing-lead gate** (no HouseLoop lead ⇒ store-only, NO card, NO mint) +
+   `_global` on + `in_app_message` Notify on + recency. The legacy realloop `notify-scraper` Twilio path is
+   retired (behind `REALLOOP_SCRAPER_NOTIFY`, off) so there is exactly ONE notification per message.
+4. **Backfill is silent:** `fub-inapp-sweep.mjs --backfill` pulls every in-app message into the mirror + All
+   feed with **zero** notifications (no 1,198-card flood). `--measure` prints the FUB-vs-mirror gap.
+
+<Note>
+**Live proof (2026-07-09, dark run).** `--measure`: FUB **1,303** in-app people vs our mirror **2,464** people /
+**10,588** messages (coverage gap 0). Incremental sweep: discovered 1 person newer than the cursor → reused
+extractor scraped → **2 new in-app messages stored** → POSTed body-recovered → **notified: 0** (gate held:
+`_global` + `in_app_message` Notify both off) → `hl_notification` new_message = 0. Discover → scrape → store →
+gate, proven end-to-end, zero cards. In-app messages are **buyer-initiated** (an agent can't originate one), so
+the only remaining live event is a real buyer message once the toggles flip.
+</Note>
+
+**Why not a webhook:** in-app *inquiries* do fire an `eventsCreated` (Property Inquiry) our native router
+already receives — but pure-conversation messages ("What's up with this place?") fire nothing. So the sweep is
+the mandatory floor that catches every message. **Never** set `REALLOOP_FUB_AUTONOMY=1` — that
+revives the poller + FUB-write-autoreply flood stack retired in the one-writer lockdown.
+
+## Native capture — the webhook that severs realloop.co
+
+**The native CRM webhook `crm.houseloop.ai/api/fub/webhook` is the SOLE real-time trigger.** FUB posts
+`{ event, resourceIds[] }`; the receiver responds 2xx immediately (FUB's 10s SLA), then fans out one
+`fub/webhook.received` Inngest event per resource → `fubWebhookRouter` fetches the record (native `lib/fub/fub-api.ts`,
+Basic-auth `FUB_API_KEY`), classifies it into a lane, reads `hl_fub_webhook_settings` directly, and dispatches the
+existing `fub/lead.import` → `fubLeadImport` → `createNotification` chain. Reuse targets (no re-invention):
+`fubWebhookRouter`, `classifyFubEvent`, `SERVICED_FUB_EVENT_TYPES`, `hl_fub_webhook_settings`, `createNotification`.
+
+**Zero realloop.co in the path.** The old realloop.co dashboard receiver + `dispatchFubImport` forwarder is the
+contamination this severs — realloop.co could be deleted tomorrow and notifications would not flinch. There is no
+mirror-reading poller and no differential reconciler; those are dead.
+
+<Warning>
+**Repoint pending.** FUB's 20 webhooks currently still point at `camp-zach.taila5bfe9.ts.net/api/fub/webhook`.
+The cutover (FUB API `PUT /v1/webhooks` → `crm.houseloop.ai/api/fub/webhook`) happens **after** the recency gate
+is verified and the Notify toggles are re-enabled — everything is intentionally OFF until then (see below).
+</Warning>
+
+## The recency gate + the flood post-mortem
+
+**Recency gate:** a `fub_created` gate on the notify path — **old activity never notifies**, even during a
+one-off catch-up. A signal whose FUB activity date is old is captured/stored but does not fire a card.
+
+**Why (2026-07-09 flood):** the retired realloop.co handler re-queued a person for a **full re-scrape on every
+`peopleUpdated`** — and FUB fires that on any tag/stage/field edit. It reset already-captured people to "pending,"
+so the scraper re-walked the entire 49K book, re-inserting **old** activity with a **fresh** `synced_at` + new
+ids. The mirror-reading pollers then treated those old rows as new and flooded Zach with 2022–2023 activity as if
+it were live (e.g. Lucy Hartman "viewed" from 2026-07-03 written to the mirror on 2026-07-09; Jessica Marroquin
+in-app from 2023-12-09). **Root cause: record edits re-scraping (Lane 3 violation) + the mirror deciding what's
+"new."** Fix: retire the re-scrape loop, correct the **25,626** people the bug had wrongly reset to `pending`
+(flipped back to done), rip the mirror-reading pollers, and make the webhook the sole trigger + the recency gate
+the backstop. The backfill is done — **49,059** people carry `fub.rehydration_log.status = 'rehydrated'` (the
+terminal "done" state; there is no separate `fully_scraped` flag), 0 pending, forward-only.
+
+## Known gaps / recon (harvested from the retired signal-gap doc — still true)
+
+Not every signal is purely a webhook problem; these are the non-architecture breaks worth watching:
+
+- **`sales@spradlingrealtygroup.com` mailbox deleted** → Zillow emails to it are black-holed. Recreate + parse.
+- **Lead-merge contamination** — merges left people with multiple `isPrimary` emails, cross-wiring identity.
+  Audit for multiple-primary-email people.
+- **Masked in-app was the historical pain** — that is exactly what Lane 2 solves now (for SMS/email; in-app
+  itself is exposed).
+
+## How a FUB trigger event fires end-to-end
+
+```
+FUB signal → POST crm.houseloop.ai/api/fub/webhook (native receiver, 2xx immediately)
+          → fub/webhook.received (Inngest, per resourceId)
+          → fubWebhookRouter: fetch record → classify → sort into a lane
+              Lane 1 (visible):  read hl_fub_webhook_settings → if notify: createNotification (owner-only, deduped, recency-gated)
+                                                              → if creates_lead: fub/lead.import → mint/match HL lead
+              Lane 2 (masked):   write metadata + enqueue fub.body_recovery_queue → scraper recovers body
+                                                              → content_status flip → trg_fub_new_message → notify WITH body
+              Lane 3 (record):   update the person record only (no scrape)
+```
+
+Cross-links: the notification contract (owner-only · one-card · deduped · dual-link) →
+[Messages & Notifications](/platform/message-catalog); the lead-mint mechanics →
+[FUB → HouseLoop Lead Import](/fub/master-scraper-ssot); the scraper's Lane-2 role →
+[FUB Scraper](/fub/master-scraper-ssot).
+
+## Where the build stands (live status — updated 2026-07-09, verified against code + DB)
+
+**One-line verdict: LIVE — Zach is receiving FUB + Zillow in-app notifications on-device (2026-07-09 night).** The
+flood is dead at the root, the architecture is locked, the native webhook + recency gate + Lane-2 enqueue are live,
+the pollers are gone (flatline PROVEN: 227 junk ledger rows/30min → **0**), and the `_global` master breaker was
+flipped ON — Zach watched real notifications land ("first two are in", a lead "viewed a home") and self-served the
+`property_viewed` mute. Existing-lead-only, zero minting. Remaining cleanup: retire the legacy realloop.co notifier
+(one notifier), and the FUB webhook repoint housekeeping.
+
+### At a glance
+
+| Piece | State |
+|---|---|
+| Native webhook receiver (`crm.houseloop.ai/api/fub/webhook`) | 🟢 **Live** (returns 2xx; FUB repoint pending) |
+| Lane 1 — visible activity (saves/views/inquiries/in-app) | 🟢 **Built** — waiting on the flip-on |
+| Lane 2 — masked bodies | 🟡 **Router enqueue LIVE** (masked sms/email → queue, card held for the body); Caleb's queue DDL + consumer in build (C1) |
+| Lane 3 — record edits (the flood loop) | 🟢 **Done** — loop killed, 49,059 rehydrated, forward-only |
+| Recency gate | 🟢 **LIVE** (2026-07-09 eve) — records older than `FUB_NOTIFY_RECENCY_HOURS` (48h) dispatch `stale` → stored, never notified |
+| The toggles (`hl_fub_webhook_settings`, 23 rows) | 🟢 **LIVE** (2026-07-09 night) — `_global` master ON, 22/23 Notify ON (`property_viewed` muted by Zach), 0 Creates-Lead. Master breaker now has a UI banner on the Trigger Events board. |
+| Mirror-reading pollers (the flood anti-pattern) | 🟢 **RIPPED + verified** (2026-07-09 eve) — deleted from code, unregistered from Inngest; junk-ledger flatline 227/30min → 0 |
+| Door hygiene | 🟢 **LIVE** — existing-person re-imports + behavioral/comms events never fire native registration doors (closed the 1,421-row + near-miss audit find; verified on live traffic) |
+
+### What's left, by owner
+
+**Lee (notifications / router):**
+1. ~~Rip the 4 mirror-reading pollers~~ ✅ **DONE + verified 2026-07-09 eve** (deleted, unregistered, flatline
+   proven 227→0 junk rows/30min). The webhook is the sole trigger.
+2. ~~Wire the Lane-2 enqueue~~ ✅ **DONE** — masked sms/email → `fub.body_recovery_queue` (**Railway mirror** —
+   relocated from Camp David: the Railway CRM can't reach LAN postgres; Caleb's consumer polls it from CD),
+   `ON CONFLICT DO NOTHING`, soft-skip until Caleb's C1 DDL lands. The card is HELD (`maskedBody`) until the
+   recovered-body trigger fires it WITH the body.
+3. ~~Add the recency gate~~ ✅ **DONE** — `FUB_NOTIFY_RECENCY_HOURS` (48h default) in the router; stale dispatches
+   store/match but never notify; suppression visible in run outputs (`notifySuppressed`).
+4. **Repoint FUB's 20 webhooks** — `camp-zach.taila5bfe9.ts.net` → `crm.houseloop.ai/api/fub/webhook`. The actual
+   cutover; script staged; runs after Caleb's C1 → then the DARK VERIFY (toggles off, watch real traffic flow).
+5. ~~Surface the `_global` master + go live~~ ✅ **DONE 2026-07-09 night** — added the master-breaker banner to
+   `FubChannelRows` (Trigger Events board), flipped `_global` ON, Zach confirmed notifications landing on-device.
+   The Email/SMS **global delivery masters** also shipped this pass (see
+   [message-catalog → delivery](/platform/message-catalog#the-bell-spine--delivery-how-a-notification-flows)).
+
+**Caleb (scraper):**
+1. **Build the Lane-2-only consumer** (C1, in build) — create the Railway queue DDL (`CHECK IN
+   ('text','email','call_note')`) + drain it: claim → read that ONE body in the FUB UI → upsert the COMPLETE
+   row+body on Camp David (lossless relay round-trip) → `content_status` flips → the notify trigger fires.
+2. **Retire the old full-person claim path** (C2) — the old real-time path has been dead fiction since ~May 30
+   (49,231 queued, zero drained; wedged worker). Retiring it loses nothing.
+
+**Zach + Caleb (phones — porting parked by Zach; resolver in scope):**
+1. Ship the shared `called# → hl_phone_numbers.category → subtype` resolver (Caleb places the CRM lib, the router
+   consumes it) + FUB call storage so the 4 typed phone cards (rows 14–17) stop showing 0.
+
+### The flip-it-back-on sequence
+
+1. ~~**Lee:** rip pollers + Lane-2 enqueue + recency gate → deploy.~~ ✅ **DONE + verified 2026-07-09 eve.**
+2. **Caleb:** the Lane-2 consumer goes live → masked bodies recover on demand. *(in build — C1)*
+3. **Lee:** repoint the FUB webhooks → FUB pushes straight to HouseLoop; then DARK VERIFY (toggles still off:
+   watch real webhooks arrive → classify → store → enqueue → recover, ZERO notifications).
+4. **Gate:** turn ON saves/views/inquiries only → verify on REAL activity (a real save lands with name, address,
+   link, right number; old data stays silent behind the recency gate).
+5. **Gate:** expand to in-app → texts/emails → calls/deals as each is verified. No blanket flip.
+
+## Reference
+
+- **Table (SSOT):** `hl_fub_webhook_settings` — one row per FUB trigger event (`enabled`, `creates_lead`,
+  `workflow_id` + `workflow_active`, `notify`, `notify_class`, `category`, `fub_event`).
+- **Migrations:** `0267` (base + `notify`), `0285` (atomic inquiry split), `0289` (`workflow_active`), `0290`
+  (`category`), `0292` (`notify_class`), `0293` (registration rollup).
+- **Native capture:** `app/api/fub/webhook/route.ts` (receiver) · `lib/inngest/functions/fub-webhook-router.ts`
+  (`fubWebhookRouter`) · `lib/fub/fub-api.ts` (FUB API client) · `lib/fub/classify-fub-event.ts` (`classifyFubEvent`).
+- **Lane 2:** `fub.body_recovery_queue` (Camp David) · `trg_fub_new_message` (AFTER INSERT OR UPDATE, gated
+  `content_status='visible' AND is_incoming`).
+- **Fire path:** `lib/inngest/functions/fub-lead-import.ts` (mint + native notify).
+- **UI:** `components/settings/fub/FubChannelRows.tsx` (Trigger Events board) + `FubChannelBoard.tsx` (FUB cockpit).
+- **API:** `PATCH/PUT /api/fub/webhook-settings`.
+
+---
+
+# ═ THE SCRAPER RUNBOOK — CAMP DAVID (absorbed from fub/scraper, 2026-07-17) ═
+
+
+<Info>
+**This is the first-class reference for the FUB scraper itself** — the process, not the lead-import it feeds.
+For how a scraped lead *becomes a HouseLoop lead*, see [FUB → HouseLoop: Lead Import](/fub/master-scraper-ssot) (the
+master). The 3-lane notification contract is [Follow Up Boss Trigger Events](/guides/trigger-events). Private SSOT
+this mirrors: `GT_FUB_SCRAPER.md` (the one canonical scraper doc). Owner: **Caleb** (data / intel lane) · Camp
+David infra: **David**.
+</Info>
+
+<Warning>
+**⚠️ CORRECTIONS (audited 2026-07-16 vs the live code — apply before trusting the sections below):**
+- **It's TWO Chromes, not one.** `ecosystem.config.cjs` runs `fub-backfill-a` (Chrome A :18800) **and**
+  `fub-backfill-b` (Chrome B :18802), `FUB_WORKERS=5` each (~6 workers) — the "one Chrome / backfill-b retired /
+  FUB_WORKERS=3" prose is stale (reversed by the 2026-07-11 two-Chrome revival).
+- **`fub-chrome-guard` is a live pm2 proc** (the OOM cap, `MAX_CHROME`/`MAX_TABS`, ports 18800/18802) — add it to
+  the process roster. Real deploy set = `fub-backfill-a, fub-body-recovery, fub-watchdog, fub-chrome-guard`
+  (+ `fub-relay` from `tools/fub-sync`). Verify with `pm2 list` on Camp David.
+- **The body-recovery consumer LISTENs, it does not poll** — `LISTEN body_recovery_new` + a 5-min fallback sweep
+  (the no-polling law), not tight polling.
+- **`fub.body_recovery_queue` carries FIVE resource types:** `text`, `call_note`, `email` (→ immediate error,
+  recovery DISABLED since the 2026-06-23 compose incident — NOT "served on demand"), `inbox_sweep`, and
+  `person_rescrape` (the lock-step re-scrape, Adam 2026-07-15). The CHECK-widen migration is committed
+  (`tools/fub-sync/sql/person_rescrape_queue_widen.sql`) and verified live on the mirror (2026-07-16).
+  ⚠️ pm2 env drift: the consumer's `DATABASE_URL` MUST be Camp David (its "writes" side) — `pm2 reload` keeps
+  the first-registration env, which once silently pointed it at Railway and stalled the rescrape hop; after any
+  env-relevant change, `pm2 delete` + `pm2 start ecosystem.config.cjs --only fub-body-recovery` and check `pm2 env`.
+- **`fub.saved_searches` IS on the relay** (`fub-relay.mjs`); only `zillow_home_activity` bypasses the relay
+  (per-person full-replace). Don't group saved_searches as off-relay.
+- **Dead login click: FIXED 2026-07-16** — `scrapePersonFull`'s inline `u-bigBlueButton` click (the last
+  un-migrated caller; the in-app sweep hits it directly) now delegates to `fub-login-bot.mjs` (Google SSO),
+  the same one path the parallel scraper and watchdog use.
+Full audit + fix checklist: the ⭐ [Master FUB Scraper SSOT](/fub/master-scraper-ssot) + the Adam handoff.
+</Warning>
+
+## One-line truth
+
+Follow Up Boss's **public API masks** message/email/call bodies and never exposes the full historical browse
+list. The scraper **logs into FUB as Zach in a real Chrome (CDP)**, reads what a human sees, and writes it to
+`fub.*` — the store the CRM reads. **If the FUB UI itself hides something, the scraper cannot recover it. That is
+not a bug** (see [Hidden emails](#what-it-can-t-recover)).
+
+## Why it exists — what the API hides
+
+| Data | API/webhook gives it? | Needs the scraper? |
+|---|---|---|
+| Property inquiries, viewed/saved (single events), notes, stage, tags, deals | ✅ clean, real-time | ❌ |
+| Text / email **that one happened** | ✅ (to/from/time) | — |
+| Text / email **body** (masked ~7% SMS · most email) + masked **call note** (5,690) | ❌ masked "hidden for privacy" | ✅ recovers it (Lane 2) |
+| Call **transcript** | ❌ doesn't exist anywhere (0 rows; FUB has none) | ❌ would need our own transcription of `recording_url` |
+| **Deep historical Zillow browse list** (every home ever touched + photo) | ❌ not in the API at all | ✅ scrape-only |
+
+The webhooks (covered in [Lead Import §2](/fub/master-scraper-ssot)) carry the real-time signals; the scraper fills the
+two gaps the API can't: **masked bodies** and the **full browse history**.
+
+## Role in the notification architecture (LOCKED 2026-07-09 — the scraper is a dumb Lane-2 grabber)
+
+Under the 3-lane model (full detail: [Follow Up Boss Trigger Events](/guides/trigger-events)), **notifications are
+the source of truth and the scraper is a dumb, on-demand grabber of HIDDEN content only.** It does not decide
+what's new, does not crawl, and **never re-scrapes on a record edit.**
+
+- **The only thing that wakes it is Lane 2** — a masked body. The native webhook writes a targeted job to the
+  **`fub.body_recovery_queue` on the Railway mirror** (relocated there 2026-07-09 — the original Camp David copy
+  was unreachable from the CRM; see the audit F1 below) `{ person_id, resource_type:'text'|'email'|'call_note', resource_id }`;
+  the consumer polls it from Camp David, scrapes **that one body**, writes it back, and flips `content_status`
+  hidden→visible (which fires `trg_fub_new_message` → the notification, now with the body). A surgical fetch, not
+  a re-walk.
+- **Masked = exactly three things:** SMS bodies (~7%), most email bodies, and 5,690 call notes. Saves/views,
+  inquiries, and call metadata are **exposed** (API) and never touch the scraper (Lane 1).
+- **In-app (Zillow Messages) chat is a scraper job** (corrected 2026-07-09 — bodies are NOT API-exposed). WHO
+  has in-app activity IS in the REST API (`GET /v1/people?sort=-lastInboxAppMessage`), so `fub-inapp-sweep.mjs`
+  (driven by the `fub-inapp-sweep-tick` Inngest cron → the `inbox_sweep` queue job) discovers the people that
+  way — reliable, no browser (the inbox web endpoint hangs) — then reuses `scrapePersonFull` +
+  `scrapeTextContainers` (the **`zillow.png`** icon classifier) + `matchAndUpdateMessages` (synthetic id
+  `900000000+personId*1000+seq`) to mint `message_type='zillow_inapp'` rows. Notify is native + gated to
+  existing leads. Full flow: `fub/trigger-events` → "How an in-app message becomes a trigger event".
+- **The lock (precise mechanism):** the one-time 49K backfill is done — **49,059 people carry
+  `fub.rehydration_log.status = 'rehydrated'`** (the terminal "done" state; there is **no** separate
+  `fully_scraped` flag/status), **0 pending**, forward-only. The 2026-07-09 fix corrected **25,626** people that
+  a `peopleUpdated` bug had wrongly reset to `pending` (flipped them back to `rehydrated`). A record edit
+  (`peopleUpdated`/stage/tag) **never** re-queues a scrape.
+
+<Warning>
+**The flood loop is killed, but the strict Lane-2-only consumer is still in build (honest status 2026-07-09).**
+The backfill scraper is **idle** (0 pending, all locked) and record-edits no longer re-scrape — the
+`peopleUpdated` re-scrape loop that caused the 2026-07-09 flood is retired. The Lane-2 body-recovery consumer
+(`fub-body-recovery-consumer.mjs`) shipped C1 (see the audit below); the old full-person claim path is retired
+in the same pass. This doc + the FUB master flip to "Lane-2-only" once that finishes.
+</Warning>
+
+## Architecture
+
+```
+FUB (logged in as Zach, real Chrome via CDP)
+   │  DOM extraction + intercept of FUB's OWN authenticated SPA calls
+   │  (GET /api/v1/timeline?…ThreadNew  ·  GET /api/v1/events?hasProperty=true)
+   ▼
+Camp David Postgres  fub.*   ── MASTER (host 192.168.1.211, db bossloop)
+   │
+   ├─ most tables ─ relay (fub-relay, upsert-by-id) ─────────────┐
+   └─ fub.zillow_home_activity ─ OFF the relay; the SCRAPER is    │
+      its single writer to the mirror (per-person FULL REPLACE)   ▼
+                                              Railway  fub.*  ── MIRROR (what the CRM READS)
+                                                 │  fubQuery / LeadContextPanel / lead import
+                                                 ▼
+                                              HouseLoop CRM
+```
+
+**Two databases (memorize this before any photo/blank-card debugging):**
+- **Camp David `fub.*`** — where the scraper **writes**. Ground truth for scraped data.
+- **Railway `fub.*`** (`FUB_RAILWAY_DATABASE_URL`) — what the **CRM reads**. The CRM never reads Camp David directly. Railway (the CRM) has **no route to LAN postgres** — this is why the Lane-2 queue had to live on the mirror.
+- Most tables sync via the **relay** (`fub-relay`), a 30s one-way CD→Railway loop over a 16-table allowlist, **upsert-only, never deletes** (by design, Rule #0). Measured lag: **milliseconds**. **`fub.zillow_home_activity` is OFF the relay** — the scraper is its **single writer to the mirror** (a per-person full-replace right after it scrapes). So a home's photo reaches the CRM **only when the scraper runs for that person**. Blank photo in the CRM → check the **mirror**, then re-run the scraper for that lead.
+
+**ONE Chrome (Zach LOCKED 2026-07-08 — "go down to one chrome, harden it up").** A single persistent Chrome —
+**Chrome A** on CDP port **18800** (`~/.chrome-fub-profile`), holding a live Google session — runs the scrape.
+`fub-parallel-scraper.mjs` fans out `FUB_WORKERS` (default 3) worker *pages* inside that one Chrome. The old
+second Chrome (B, `:18802`) + its `fub-backfill-b` worker are **retired**: two Chromes plus a watchdog meant
+multiple processes reaching into shared browsers over CDP and closing each other's pages — the exact contention
+that crash-looped the scraper. One browser, one boss. (The watchdog runs with `FUB_SINGLE_CHROME=1`, which skips
+all Chrome-B logic.)
+
+## The login (this is what "stuck / can't log in" means)
+
+FUB's real login is **"Log in with Google"** as `zach@spradlingrealtygroup.com`. The persistent Chrome profile
+holds a live Google session, so navigating to the app **auto-completes SSO** — no password prompt in the normal
+case. If the Google session itself has lapsed, `fub-login-bot.mjs` drives the SSO by hand: **email → password →
+account-chooser → consent**, in that order, using `FUB_WEB_GOOGLE_PASSWORD` (→ `FUB_WEB_PASSWORD` fallback). Only a
+**genuine 2FA challenge** — a real code box or a phone push, with nothing else the bot can fill — alerts a human via
+`notify.sh`. **Option text alone ("Try another way", "use a passkey", "verify it's you") is NOT a 2FA wall** — those
+appear next to the normal password field and the bot must ignore them (see the 2026-07-08 incident below).
+
+When the session expires, the scraper's **startup session-check** navigates fresh to `/2/people`; if it lands on
+the login page it **delegates to `fub-login-bot.mjs` (Google SSO)** and re-verifies. (Before 2026-07-08 it clicked
+a `input[type=submit].u-bigBlueButton` — the DEAD legacy FUB email/password form button. FUB is Google SSO now, so
+that click always failed → an instant 10-minute cooldown → the "scraper down / won't log back in" symptom. The
+delegation to the real login bot fixed it.)
+
+**The `fub-watchdog` self-heals a real logout AUTONOMOUSLY — a human should almost never touch it.** Every 60s it
+checks Chrome A (18800). If a login tab is up, it runs the login-bot; on a persistent real logout it does a HARD
+relaunch (kill + fresh-profile launch + re-login), same as `fub_chrome_restart`. It only alerts a human via
+`notify.sh` if even that can't re-auth (a genuine 2FA/password wall).
+
+<Warning>
+**The watchdog must WATCH, never HARM (Caleb 2026-07-08 — the "watchdog was the killer" fix).** Its health probe
+`isCdpConnectable()` used to `connectOverCDP()` then `browser.close()` — and on this Chrome build that close
+**tore down the browser's live pages.** So every 60s the watchdog killed the actively-scraping worker, mis-read
+the wreckage as "WEDGED," and hard-relaunched Chrome — **568 relaunches**, an endless self-inflicted crash loop
+that looked exactly like "the scraper won't stay logged in." Two guards now prevent it, permanently:
+1. **Passive probe** — a raw DevTools websocket open/close (Node global `WebSocket`) that never calls
+   `browser.close()`, so probing a healthy Chrome is harmless.
+2. **Fresh-log guard** — if the `fub-backfill-a` log is fresh (the worker wrote scrape output seconds ago), the
+   watchdog **never probes or relaunches**: an actively-producing worker is definitive proof CDP is healthy.
+
+Rule for anyone touching the watchdog: a monitor may **look** but must never **close/relaunch a browser that has a
+live worker.** Code: `fub-backfill-watchdog.mjs` — `isCdpConnectable` + the `workerFresh` guard in `check()`.
+**Known gap (audit F9, 2026-07-09):** a Chrome whose DevTools websocket has wedged (HTTP alive, ws hangs forever)
+can hide behind the fresh-log guard, because the empty-queue exit loop keeps writing "Nothing to scrape" — a log
+write, not real scrape output. The freshness signal must key on *scrape output*, and CDP connects need an
+external timeout, not an in-process race.
+</Warning>
+
+**Manual override (rarely needed):**
+```
+mcp__camp-david__fub_chrome_restart
+```
+Kills + relaunches the FUB Chrome (port 18800), re-logs-in, returns `logged_in: true` + the landing URL. Use it if
+you want an instant fix instead of waiting for the ≤2-min watchdog cycle, or if a 2FA alert fired. **Before
+2026-07-03 the watchdog only ran the in-session login-bot and, on a real logout, gave up + alerted a human — so it
+could sit spinning until someone ran this tool by hand. That gap is now closed.**
+
+## Processes (pm2 on Camp David)
+
+Live reading 2026-07-09 (audit of record). **Read the heartbeat, not pm2 "online"** — pm2 status lies (see F2/F4).
+
+| pm2 name | script | role | live? |
+|---|---|---|---|
+| **fub-backfill-a** | `fub-parallel-scraper.mjs` | THE scraper — `FUB_WORKERS` (3) pages inside the one Chrome A `:18800`, pending-first from `fub.rehydration_log` (`FOR UPDATE SKIP LOCKED`). High restart count is the **exit-relaunch cycle** (exits clean on empty queue, pm2 relaunches), not crashes. | ✅ online |
+| **fub-watchdog** | `fub-backfill-watchdog.mjs` | self-healing (`FUB_SINGLE_CHROME=1`) — passive websocket probe, fresh-log guard, relaunches a dead Chrome A, auto-logs-in. **Watches passively; never closes/relaunches a Chrome with a live worker.** | ✅ online |
+| **fub-relay** | `tools/fub-sync/fub-relay.mjs` | Camp David `fub.*` → Railway `fub.*` mirror — 30s loop, 16-table allowlist, upsert-only, never deletes. Measured lag: ms. | ✅ online |
+| **fub-body-recovery** | `fub-body-recovery-consumer.mjs` | **Lane 2 consumer (shipped C1, 2026-07-09)** — polls `fub.body_recovery_queue` on the mirror, scrapes the one masked body, flips `content_status` + bumps `synced_at`. | ✅ online |
+| **fub-webhook-scraper** | `fub-webhook-scraper.mjs` | the OLD "real-time" rehydrator — **DEAD ~6 weeks / online-but-WEDGED** (see below). Its whole path is retired by the Lane-2 plan. | 🔴 wedged / retiring |
+| ~~fub-backfill-b~~ | ~~`fub-parallel-scraper.mjs`~~ | **RETIRED 2026-07-08** — the 2nd Chrome (B `:18802`) was removed; one browser, one boss | ⛔ |
+| ~~fub-webhook-sink~~ | `fub-webhook-scraper.mjs` | **deliberately stopped** — redundant duplicate, no mem cap → OOM crash-loop. Reading its "down" as a failure is a known trap. | 🛑 stopped on purpose |
+| ~~fub-sync~~ | `fub-complete-sync.mjs` | manual full sync — normally stopped | 🛑 |
+
+<Warning>
+**`fub-webhook-scraper` is NOT live/real-time — it has been silently dead ~6 weeks (audit F2, 2026-07-09).** pm2
+reports it "online" (18h uptime, 270 silent restarts), but its heartbeat (`fub.webhook_scraper_heartbeat`) last
+beat **2026-05-30** and its queue (`fub.rehydration_queue`) last drained **~May 9** — 49,231 rows piled up with
+nothing draining them. It looked healthy only because pm2 "online" was trusted over the heartbeat. This entire
+`rehydration_queue` path is **retired** — Lane 2 (`fub-body-recovery`) replaces it, and losing it loses nothing
+that works. Evidence: `docs-site/fub/master-scraper-ssot-audit.mdx` F2. Going forward, health checks alert on **heartbeat
+recency**, never process status.
+</Warning>
+
+`fub-scraper-lib.mjs` is the **SSOT for all scraping logic** (imported by both the parallel + webhook scrapers).
+Key exports: `scrapePersonFull`, `scrapeEmailCards`, `saveZillowHomeActivity`, `syncPersonHomeActivityToMirror`,
+`matchAndUpdateEmails`, `applyApiTexts`, `refreshLeadCounts`.
+
+<Warning>
+**Repo is the SSOT.** Every production scraper file lives in `tools/fub-scraper/`. Deploy via
+`tools/fub-scraper/deploy.sh` → Camp David. **Never hand-edit the `.mjs` files on the box** ([Scraper SSOT Law](/fub/master-scraper-ssot)).
+</Warning>
+
+## The scrape-on-entry doctrine
+
+The moment a new Zillow inquiry fires the FUB `eventsCreated` webhook, the handler spins up a **per-lead scrape**
+that intercepts FUB's own authenticated SPA call `GET /api/v1/events?hasProperty=true` and walks the lead's **entire
+timeline** — every home they ever touched (Zillow URL, zpid, MLS, price, **photo**) — in one shot, keyed by FUB's
+stable `fub_event_id` into `fub.zillow_home_activity`, then **full-replaces** that person's rows in the Railway
+mirror. On demand, re-run it with **`mcp__fub-scraper__fub_scrape_lead`** or **`mcp__camp-david__fub_scrape_person`**.
+This is the front door for all new lead data — when a lead's cards look wrong, **re-running the scrape is the first move.**
+
+### The real activity time — `activity_at` (2026-07-12)
+
+Each home row carries **`activity_at timestamptz`** — the REAL moment the lead viewed/saved the home, lifted
+from FUB's browse-list `occurred` field. It exists because `activity_date` is **date-only and UTC-sliced**, so
+an evening view (e.g. Jul 11 9:24pm ET) rolled its date forward a day and the CRM feed fell back to
+**scrape-time** for the timestamp (Austin Banh's 6303 N Bellefontaine showed "Jul 12 5:46am" — the scrape — vs
+FUB's Jul 11). The CRM converter (`homeOccurredAt`) now uses `activity_at` first, so the feed + the FUB Context
+view render FUB's real time 1:1.
+
+Two gotchas: **(1)** after scp'ing a new `fub-scraper-lib.mjs`, **pm2-restart the worker** — a running worker
+holds the old lib in memory, so `activity_date` populates while `activity_at` stays NULL (the tell). **(2)** a
+lead minted BEFORE the fix keeps scrape-time `occurred_at` — `logActivity` is `DO NOTHING` on conflict and the
+heal path never touches `occurred_at` (write-once identity), so the per-lead fix is a **re-scrape + purge/re-mint**
+(`scripts/austin-remint-loop.ts`); a fleet-wide `occurred_at` heal needs Zach's sign-off.
+
+## What it can't recover
+
+**If a FUB user sets their emails private/hidden in the FUB UI, the DOM scraper cannot recover them** — they read
+`[CONTENT HIDDEN]` in the actual UI, so there is nothing to scrape. This is a FUB privacy feature, not a scraper
+failure (concrete case: Aaron Foster's UI-hidden emails store `[CONTENT HIDDEN]` permanently). So a large `hidden`
+count is **largely expected** and must not be "fixed." What it **can** recover: anything visible in Zach's FUB UI,
+including the newest message body via the intercepted timeline API (`lastEmail.bodyHtmlVisibleClean`; a direct
+public-API fetch returns `401`).
+
+## Tables & queues
+
+| Table / queue | Holds |
+|---|---|
+| `fub.people` | leads — `phones`, `tags`, `content_status`, materialized `*_count` |
+| `fub.text_messages` · `fub.emails` · `fub.calls` · `fub.notes` | activity; each carries `content_status` (`hidden` → `visible` once recovered) |
+| `fub.events` | lead events (Property Inquiry / Viewed / Seller) with the clean `property` jsonb |
+| `fub.zillow_home_activity` | every home viewed/saved/shared **with the photo** + **`activity_at`** (real view time) — off the relay, scraper-mirrored |
+| `fub.saved_searches` | saved searches (scraper-only) |
+| `fub.rehydration_log` | the **backfill** queue (status pending/rehydrated) — 49,059 rehydrated · 0 pending |
+| `fub.rehydration_queue` | the **retired** old "real-time" queue — 49,231 pending graveyard, nothing draining it (see F2) |
+| `fub.body_recovery_queue` (on the **Railway mirror**) | **Lane 2** targeted masked-body jobs — `resource_type IN ('text','email','call_note')` |
+
+## Health & runbook
+
+**Fast path (MCP tools):**
+- `mcp__camp-david__fub_scraper_status` — running/stuck/down, Chrome alive on 18800, heartbeat, current person.
+- `mcp__camp-david__fub_backfill_status` — per-process `health` verdict, heartbeat, `content_status` distribution.
+  Read `health` and compare `last_crash_at` vs `last_deploy_at` — a crash older than the last deploy means the fix is holding.
+- `mcp__camp-david__fub_chrome_restart` — the session-expired fix (relaunch + re-login).
+
+**Healthy =** `fub-backfill-a` + `fub-body-recovery` + `fub-relay` + `fub-watchdog` all `online` **and beating a
+fresh heartbeat**; the pending backfill backlog trends down. A big `hidden` count is **not** automatically bad
+(UI-hidden emails). **Trust the heartbeat, not pm2 "online"** — F2 proved a wedged process can report online for
+6 weeks. `fub-webhook-scraper`, `fub-webhook-sink`, and `fub-sync` are dead/retired — don't restart them.
+
+## Audit of record — Fable-5 end-to-end (2026-07-09)
+
+Ordered by Zach before the notifications/triggers/FUB-update build. Every claim carries evidence: a `file:line`, a
+live SQL count, or a pm2 reading. Full page was `docs-site/fub/master-scraper-ssot-audit.mdx` (now folded here).
+
+### Verdict in one paragraph
+
+The **core pipeline is healthy**: one hardened Chrome, the watchdog fix is holding (zero crash-loops since
+2026-07-08), the backfill drained the book (49,059 rehydrated / **0 pending**), and the Camp David → Railway relay
+is **real-time to the millisecond** with the notify triggers enabled on the mirror. What's broken is the
+**edges**: the "real-time" rehydrator has been silently dead ~6 weeks over a 49k-row graveyard queue (F2), the
+Lane-2 body-recovery queue had zero writers/readers (F1), the mirror carries 46k ghost rows the master deleted
+(F3), monitoring lies twice (a startup-snapshot heartbeat + a pm2-online-but-wedged process, F4), and the Lane-2
+queue as originally designed was **unreachable from the CRM** (Camp David is LAN-only) — relocated to the mirror.
+
+### The three queues (this is where past confusion lived)
+
+| Queue | Purpose | Live state | Verdict |
+|---|---|---|---|
+| `fub.rehydration_log` | the **backfill** queue (parallel scraper claims from it, `fub-parallel-scraper.mjs:100-116`) | 49,059 rehydrated · 175 error · **0 pending** | ✅ Drained; the `peopleCreated`-only flood-fix held (`apps/dashboard/server/fub-webhooks.ts:346-358`). |
+| `fub.rehydration_queue` | the **old "real-time"** queue (`fub-webhook-scraper` polls it) | **49,231 pending · 820 done (newest ~May 9)** | 🔴 Graveyard — retired by the Lane-2 plan; losing it loses nothing that works. |
+| `fub.body_recovery_queue` | **Lane 2** targeted masked-body jobs | live on the mirror (was empty CD copy) | 🟡→✅ Relocated to the Railway mirror; C1 consumer live. |
+
+### The data (live counts, Camp David master)
+
+- `fub.text_messages` — 400,920 rows: `sms` 288k · `group_sms` 100k · `zillow_inapp` 12.6k. `content_status`:
+  visible 379,503 · hidden 21,289 · api_only_unrecoverable 128. In-app is born-visible (0 ever masked).
+- `fub.emails` — hidden 173,948 vs visible 28,747 (~86% masked — the biggest recovery backlog, served on-demand
+  by Lane 2, never bulk).
+- Notify triggers on the mirror: `trg_fub_new_message` + `trg_fub_new_email` both **enabled**, gated
+  `content_status='visible' AND is_incoming=true` with the re-sync transition guard
+  (`tools/fub-sync/sql/fub_new_message_notify.sql`).
+
+### Who consumes the scraper's output (the "entire project" it serves)
+
+| Consumer | Reads | Via |
+|---|---|---|
+| CRM lead import | `fub.people/events/notes/text_messages` | `lib/fub-import/`, `lib/inngest/functions/fub-lead-import.ts` |
+| Lead-detail live refresh | `pg_notify('fub_lead_changed')` from the relay | `lib/realtime/fubListener.ts` (LISTEN, SSE fan-out) |
+| Comms dock / texts / activity feed | `fub.text_messages/calls/emails` | `app/api/leads/[id]/fub-activity/`, `lib/fub/backfill-fub-*` |
+| AI brief / Myli context | `fub.people/events/text_messages/calls/notes` | `lib/ai/fub-brief.ts` |
+| Notifications (current, being replaced) | mirror pollers | the 4 `fub-*-poll` Inngest fns — being ripped (flood anti-pattern) |
+| Past-client / SRG reconciliation | `fub.*` + `fub.zillow_home_activity` | `tools/fub-scraper/build-*` tools |
+
+### Findings — ranked
+
+<AccordionGroup>
+  <Accordion title="F1 🔴 The Lane-2 queue was unreachable from the CRM — relocated to the mirror (DECIDED)">
+    `fub.body_recovery_queue` was created on Camp David, but the enqueuing router runs on **Railway**, which has
+    no route to LAN postgres (the tailscale funnel proxies HTTPS only). **Decision (Caleb+Lee 2026-07-09): the
+    queue lives on the RAILWAY mirror.** Lee enqueues there natively; Caleb's consumer polls it from Camp David
+    (CD→RW connections already exist — the relay does exactly this). The relay can never clobber it because the
+    relay is **allowlist-based** (16 named tables) and the queue is simply never added. `resource_type` CHECK
+    extended to `('text','email','call_note')` so masked call-notes can queue too.
+  </Accordion>
+  <Accordion title="F2 🔴 The 'real-time' rehydrator has been dead 6 weeks while pm2 said online">
+    `fub-webhook-scraper`: pm2 online, heartbeat last beat **2026-05-30**, queue last drained ~May 9, 270 silent
+    restarts, 49,231 pending rows piled up. Nobody noticed because pm2 "online" was trusted over the heartbeat.
+    **Fix:** the joint plan retires this path entirely (Lane 2 replaces it); the systems-health cockpit (Phase D)
+    must alert on **heartbeat recency**, never process status.
+  </Accordion>
+  <Accordion title="F3 🟠 The mirror carries 46,046 ghost rows the master deleted">
+    `fub.text_messages`: Camp David 400,920 rows vs Railway **446,966** — same id range. The relay never deletes
+    (by design, Rule #0), so Camp David's group_sms dedup never propagated. Ghost rows can surface as duplicate
+    texts in any CRM thread that reads the mirror. **Fix:** a one-time reconciled cleanup on the mirror (delete
+    RW rows whose id no longer exists on CD, table named, count stated) — **needs Zach's typed approval** — plus
+    a documented rule that master-side deletes require a mirror-side reconcile pass.
+  </Accordion>
+  <Accordion title="F4 🟠 Monitoring lies twice">
+    (a) The scraper heartbeat computes `total` **once at startup** (`fub-parallel-scraper.mjs:370-373`) and never
+    refreshes — it still displays the pre-lock flood backlog while the real queue is **0 pending**. (b) pm2
+    "online" ≠ working (see F2). **Fix:** heartbeat re-counts the queue each beat; health checks read heartbeats +
+    queue depth, not process state. Phase D probes: queue depth stale &gt;N = RED · webhook recency &gt;30min =
+    RED · consumer heartbeat.
+  </Accordion>
+  <Accordion title="F5 🟠 ecosystem.config.cjs drift — the pm2 config can't reproduce the live box">
+    The ecosystem file still defines the dead `fub-webhook-sink` and does NOT define the live-named
+    `fub-webhook-scraper` that `deploy.sh` reloads (`deploy.sh:18-22` vs `ecosystem.config.cjs:56-70`). A fresh
+    `pm2 start ecosystem.config.cjs` would start the wrong world. Also: DB/FUB creds are hardcoded in the file,
+    and `fub-parallel-scraper.mjs:25` imports the lib from a hardcoded `/Users/lee/` path. **Fix:** rewrite the
+    ecosystem to exactly the intended apps (backfill-a, watchdog, relay, the Lane-2 consumer), env from `.env`,
+    retire dead blocks.
+  </Accordion>
+  <Accordion title="F6 🟡 Empty-queue exit loop burns pm2 restarts">
+    On an empty queue the parallel scraper exits instantly (`:376-380`) under pm2's `min_uptime` (30s), so the
+    restart counter climbs forever (280k) and every relaunch pays full startup. Harmless today but it masks real
+    crashes inside the same counter. **Fix:** idle-sleep (e.g. 5 min) before the empty-queue exit, mirroring the
+    existing `cooldownExit()` error path (`:87-92`).
+  </Accordion>
+  <Accordion title="F7 🟡 The 216k cleanup (zillow_home_activity dedup) — tool ready, run pending">
+    `fub.zillow_home_activity` accumulated ~77% duplicate rows (volatile upsert key + NULL list_position; 1.78M →
+    ~411k target) plus URL-as-address rows from the note-parser path. The reversible cleanup tool exists
+    (`tools/fub-scraper/dedup-home-activity.mjs`, Zach-approved design 2026-06-27): collapse to one row per
+    (person, zpid/address, activity_type), fix the unique indexes, run CD first then mirror. `--execute` is
+    Rule #0 — **needs Zach's typed approval in-session** before running.
+  </Accordion>
+  <Accordion title="F8 ✅ What's confirmed healthy (don't touch)">
+    The watchdog fix (passive probe + fresh-log guard) — zero kill-loops since 2026-07-08. The login bot (Google
+    SSO, actionable-inputs-first). The relay (ms-level parity, allowlist, never-delete). The `peopleCreated`
+    enqueue gate — flood fix held (0 pending). The mirror notify triggers (enabled, transition guard verified).
+    Throughput after the one-Chrome consolidation: 65/hr → 236/hr.
+  </Accordion>
+</AccordionGroup>
+
+### The build this feeds (the Caleb+Lee joint plan, in flight)
+
+Phases A–D, each gated, all notification toggles OFF until the staged flip-on: **A** parallel build (Lee: rip the
+4 pollers, recency gate, Lane-2 enqueue, router stores calls/texts/emails natively · Caleb: the Lane-2-only
+consumer on the relocated queue, retire the full-person claim path, the shared called#→subtype resolver lib) →
+**B** repoint FUB's 20 webhooks to `crm.houseloop.ai` + dark-verify on real traffic → **C** staged flip-on one
+family at a time, each verified on Zach's phone → **D** permanence: health probes on heartbeat/queue-depth recency
+(the F2/F4 lesson), run-log lanes, docs flipped. Interface locks (ACK trail cipher #11671/#11672): store
+`content_status` as visible-if-body-present (in-app is born-visible), consumer reads the full RW row at claim so
+the relay round-trip never drops metadata, queue CHECK includes `call_note`.
+
+### Live-fire addendum — what building C1 surfaced (same day)
+
+<Update label="2026-07-09 PM" description="C1 shipped + live-fire findings">
+  **C1 SHIPPED:** `fub-body-recovery-consumer.mjs` live on Camp David (pm2 `fub-body-recovery`), queue + NOTIFY
+  trigger + heartbeat live on the mirror. **Proven on a real masked SMS** (id 296220): 47ms enqueue→claim, 13s
+  scrape via the timeline-API sniff, body visible on both DBs. Unrecoverable rows honest-error after 3 spaced
+  attempts. New findings from the live fire:
+
+  - **F9 🔴 A wedged Chrome hides behind the fresh-log guard.** Chrome A's DevTools websocket wedged (HTTP alive,
+    ws connections hang forever) — and the backfill's empty-queue exit loop kept writing "Nothing to scrape" to
+    its log, which kept the watchdog's fresh-log guard satisfied. A wedged Chrome can therefore persist
+    indefinitely. Worse: a hung `connectOverCDP` **blocked the consumer's whole event loop**. Fix directions: the
+    freshness signal must be *scrape output*, not any log write; CDP connects need an external watchdog.
+  - **F10 🟠 The masked-SMS backlog is 99.7% fake.** 21,232 of 21,289 hidden texts sit on **`person_id = 0`** —
+    orphans from a webhook attribution bug, tied to no person. Real-person masked texts: **56**, mostly ancient
+    outbound bulk with empty FUB timelines (unrecoverable by design). Lee's A4 storage path must guard against
+    writing `person_id=0`.
+  - **F10 outcome (2026-07-09 eve): 9,343 orphans RE-ATTACHED, Zach-approved.** Gold tier 5,676 (phone +
+    exact-name + no-twin) + Tier-2 3,667 (family/co-buyer names + the existed-before-message guard). The twin
+    check killed 7,793 would-be duplicates. Orphans 21,234 → 11,891. Reversal snapshots:
+    `.claude/reports/personid0-reattach-{gold,tier2}-2026-07-09.csv`.
+  - **F12 🔴 fub-relay cursor strands same-timestamp bulk writes.** The text_messages cursor advances to
+    `max(synced_at)` after its 2,000-row batch cap — when &gt;2,000 rows share one `synced_at`, the tail is
+    **silently skipped forever** (2,669 rows stranded, zero errors). Data healed with unique per-row re-bumps; the
+    code fix (Lee) is a keyset cursor `(synced_at, id)`. Until then bulk CD writes must stagger `synced_at`.
+  - **F11 🔴→✅ Recovered bodies only reached the mirror via LEGACY realloop (fixed).** The lib's recovery fns
+    (`applyApiTexts`/`matchAndUpdateMessages`) set body + `content_status` but **not `synced_at`** — so the
+    cursor-driven relay never carried flips; they reached Railway only through the legacy
+    `realloop.co/api/fub/sync-message` POST, which dies at cutover. The consumer now **bumps `synced_at` on every
+    flipped row**; proven live. **The legacy realloop POSTs were fully removed from the lib 2026-07-11** — see the
+    2026-07-11 update below.
+</Update>
+
+<Update label="2026-07-11 PM" description="Continuous daemon + relay-completeness + realloop removed + two-Chrome backfill (Benji / Fable 5)">
+  A full-pipeline hardening pass while running the ~25K stale-people resync. Verified end-to-end on prod, not
+  assumed. Files: `tools/fub-scraper/fub-parallel-scraper.mjs`, `tools/fub-scraper/fub-scraper-lib.mjs`.
+
+  - **Batch → continuous daemon.** `fub-parallel-scraper.mjs` was a batch job — it drained `pending` then ended
+    without `process.exit()`, so the `connectOverCDP` websocket kept the event loop alive and it hung idle
+    "online", never re-scanning (the root of F9's "empty-queue exit loop"). Now the workers loop forever (claim →
+    on empty `nap POLL_IDLE_MS` → re-poll), **re-verify the FUB session every ~75 scrapes** so a multi-day sweep
+    self-heals its login, and handle SIGTERM cleanly. A lead enqueued later is picked up within the poll interval
+    with **no manual restart**. `claimLead` also orders **HouseLoop leads first**.
+  - **Per-person relay completeness (the F11 root fix, generalized).** On every successful scrape the worker
+    re-stamps `synced_at = NOW()` on that person's `text_messages` / `calls` / `emails` / `notes` / `events` +
+    `people`. The CD→Railway relay forwards by a `synced_at` cursor, so a rehydrated person's historical rows
+    (stamped months ago, behind the cursor) would otherwise **never reach the mirror** — "scraper runs for days,
+    mirror stays behind." Now every rehydrated person's COMPLETE current set propagates. Proven end-to-end: 5 test
+    people, mirror `text_messages` count == Camp David exactly. **Zillow in-app** (`message_type='zillow_inapp'`)
+    rides the same path and lands.
+  - **realloop.co fully removed from the scraper.** All 6 legacy POSTs (3 `sync-message`, 2 `sync-email`, 1
+    `notify-scraper`) deleted from `fub-scraper-lib.mjs`. The relay carries CD→Railway; in-app notify is the native
+    `fub-inapp-sweep → /api/fub/body-recovered → fub-body-recovered` path (SOLE in-app notifier, gated). **Zero
+    realloop references remain** — this scraper no longer touches realloop.co, matching the trigger-events doctrine.
+  - **Two-Chrome parallel backfill (throughput ×2).** `fub-backfill-b` revived on **Chrome B (:18802)** — launched
+    via `launch-chrome2.mjs` with FUB cookies **injected from Chrome A** (shared session, no second SSO). 6 workers
+    total. **Reset-guard:** each scraper's startup now only resets `in_progress` rows older than **15 min** (real
+    crashes), never the sibling's live claims — without it a second scraper's startup clobbered the first's
+    in-flight work and both re-scraped the same person. `fub-chrome-guard` caps BOTH ports (`MAX_CHROME=3`,
+    `MAX_TABS=12`) and never touches the MLS/billing Chromes.
+  - **Safe by construction — no notification flood.** The mirror triggers are transition-guarded: `notify_new_message`
+    fires only on INSERT or a `hidden→visible` transition (a `visible→visible` re-sync does **not** fire), and
+    `auto_queue_lead` only queues `content_status IS NULL` people. Re-stamping `synced_at` on already-visible rows
+    therefore fires **zero** notifications — verified against `hl_notification` on prod (the 2026-07-09 flood cannot recur).
+  - **Op note — Chrome wedge on rapid restart.** Restarting a scraper twice in quick succession can leave its Chrome
+    with orphaned `about:blank` tabs → workers hang on blank pages (0 sub-step logs, CPU idle). Fix:
+    `mcp fub_chrome_restart` (fresh Chrome A), then restart the scraper. If worker pages show `about:blank` instead
+    of `…/people/view/<id>`, that's the wedge.
+</Update>
+
+### What stays parked behind this
+
+Number porting ([Phone Porting PRD](/guides/phone-voice-prd)) and the [AI Voice](/guides/ai-voice) buildout —
+in that order, only after the FUB pipeline is verified live and signed off.
+
+## Incidents
+
+- **2026-07-08 PM (Caleb / Opus 4.8) — THE WATCHDOG WAS THE KILLER + consolidation to one Chrome.** "FUB scraper
+  down, won't stay logged in" (Zach), recurring all day. It was **never a login problem** — it was the watchdog
+  destroying its own scraper. Root cause chain, each fixed:
+  1. **The health probe was destructive.** `isCdpConnectable()` did `connectOverCDP()` + `browser.close()`; on this
+     Chrome build that close tears down the browser's live pages. So every 60s the watchdog killed the
+     actively-scraping worker mid-lead, mis-read the aftermath as "WEDGED," and hard-relaunched Chrome —
+     **chrome-restart #568**, an endless self-inflicted crash loop. → **Fix:** passive raw-websocket probe (never
+     `browser.close()`) + a **fresh-log guard**.
+  2. **The scraper's startup re-login was dead code.** It clicked `input[type=submit].u-bigBlueButton` — the legacy
+     FUB email/password form button. FUB is Google SSO now, so it always failed → instant 10-min cooldown. → **Fix:**
+     delegate to `fub-login-bot.mjs` (Google SSO) and re-verify.
+  3. **A stray-tab auto-closer** (`ctx.on('page')`) closed any non-FUB page — including the Zillow pages a worker
+     legitimately opens mid-scrape. → **Fix:** made it **log-only**.
+  Then per Zach ("go down to one chrome, harden it up"): **retired Chrome B (18802) + `fub-backfill-b`**, ran the
+  watchdog with `FUB_SINGLE_CHROME=1`, set `FUB_WORKERS=3`. Result: `restarts:0`, throughput **65/hr → ~236/hr**.
+  Commits `62b28ef234`, `83b02ff6d8`, `8f8e01cb65`; `pm2 save`d so it survives reboot.
+- **2026-07-08 07:41 UTC (Caleb / Opus 4.8)** — Chrome A (18800) kept getting kicked out and **couldn't log itself
+  back in** (Zach report). Diagnosis: **the login-bot was crying wolf on 2FA.** `driveGoogle()` tested a broad regex
+  (`2-Step Verification | verify it's you | passkey | try another way | authenticator`) **before** it ever filled the
+  password — but Google renders "Try another way" and a passkey hint as *options* on the ordinary password screen, so
+  the bot bailed `exit 3 "2FA — human required"` while a usable password field sat right there. **Fix
+  (`fub-login-bot.mjs`, commit `8f8e01cb65`):** exhaust every action the bot CAN take — email → password → chooser →
+  consent — FIRST; declare `2fa` only when a REAL challenge is present (a visible code input `input[type=tel]` /
+  `one-time-code`, or a "Google sent a notification" push) AND nothing else is actionable. **Verified:** cleared ALL
+  cookies (true cold state) → the fixed bot re-logged in via Google SSO **autonomously in 11 seconds**.
+- **2026-07-03** — BOTH Chromes logged out, workers crash-looping, and the watchdog **sat there spinning** — it only
+  ran the in-session login-bot and, on a real logout, gave up + alerted a human. Fixed live with `fub_chrome_restart`,
+  then made persistent: the watchdog now HARD-relaunches Chrome (kill + fresh-profile launch + re-login) whenever the
+  in-session login fails on a persistent login tab. Only alerts a human if even that fails (real 2FA).
+- **2026-06-30** — FUB session expired, auto-login failed → workers crash-looping on the login page. Fixed live with
+  `fub_chrome_restart`.
+- **2026-06-28** — Blank-photo root cause: `mirrorUrl()` used `require()` in an ES module → silently null'd the mirror
+  URL on on-demand scrapes, so photos wrote Camp David but never the Railway mirror the CRM reads. Fixed: ESM `fs`,
+  mirror sync sources from Camp David, always runs, never shrinks, fails loud.
+- **2026-06-02** — `fub-webhook-sink` OOM crash-loop (redundant duplicate, no mem cap) stopped permanently; UI-hidden
+  email truth established.
+
+---
+
+# ═ THE FUB FOLLOW-UP WIDGET (absorbed from fub/follow-up-widget, 2026-07-17) ═
+
+
+<Note>
+**Quarantined FUB section.** Part of the **FUB system** on RealLoop infrastructure
+(realloop.co, future ConvertLoop) — **not** HouseLoop web/CRM. Documented here only because FUB
+leads migrate into HouseLoop eventually. The one shared touch-point with the CRM (inbound call/text
+routing) is described under [Inbound routing](#inbound-routing-one-number-two-systems) and is
+deliberately the only crossover.
+</Note>
+
+## What it is
+
+A Follow Up Boss **embedded app** ("Houseloop") that renders in the right column of every FUB
+person view. It loads the lead's **recovered** history (the bodies the [FUB scraper](/fub/master-scraper-ssot)
+unmasked), acts as the agent's AI clone, and lets them **text or call the lead** without leaving
+FUB. Served from `https://realloop.co/fub-widget`.
+
+- **Auth:** FUB passes a `context` (base64 JSON) plus an HMAC `signature`; the widget verifies
+  `HMAC-SHA256(context, FUB_EMBEDDED_APP_API_KEY)` before rendering. No `X-Frame-Options` (it's an iframe).
+- **Freshness:** every panel re-reads the database on open (`Cache-Control: no-store`) so it always
+  reflects the latest activity.
+
+## The three tabs
+
+| Tab | Shows |
+|---|---|
+| **Actions** | Claude "what should I do?" — summary, intent, single best next step, a channel-aware drafted reply, **Approve & Send**, **Call lead**, Regenerate. |
+| **Activity** | Texts / Calls / Emails / Homes — the real recovered content, homes are clickable Zillow links. |
+| **Context** | The living brain — who the lead is + buying intent, regenerated from live data. |
+
+The AI reads a **single unified, timestamped timeline** across *every* channel — texts, emails,
+calls, team notes, and home-activity events — with the most-recent line flagged, so suggestions
+reflect what just happened rather than a stale early message.
+
+## First-touch outreach mode
+
+When a lead has a **team-exit / prior-agent tag** (e.g. `Team Exit - April Atkinson`), no recent
+outbound from us, and a real in-market property to anchor on, the widget switches to a cold
+first-touch script:
+
+1. **Who** — "Zach Spradling, team lead at The Spradling Group in Overland Park — the local Zillow
+   team that runs showings in your area."
+2. **Bridge** — names the prior agent: "April's moved on from our team, so I'm personally looking
+   after your search now."
+3. **The property** — the most-recently-viewed home **in the lead's primary market** (out-of-state
+   browsing noise filtered out), pulled from the notes.
+4. **The ask + open door** — "Saw you checking out `[address]` — want to go see it? Happy to set up
+   that one or any others you've got your eye on."
+5. The exact Zillow URL is appended deterministically (the model never edits the link).
+
+## Sending — text and call
+
+There is **no FUB API that sends a message** (`POST /v1/textMessages` only *logs*; it never
+transmits). So the widget sends through a number we control and logs into FUB for the timeline.
+
+- **Number:** `+1 (913) 286-1761` "Zach AI Outbound" on our Twilio account — A2P brand **approved**,
+  campaign **verified**, in a Messaging Service.
+- **Text** — `POST /fub-widget/send` sends via the Twilio Messages API (`From` = the AI-outbound
+  number **and** `MessagingServiceSid` together, for A2P compliance), then logs to the FUB timeline
+  via the registered-system API (gated on `FUB_SYSTEM_KEY`).
+- **Call (click-to-call bridge)** — `POST /fub-widget/call` rings the agent's cell first, then
+  `/fub-widget/voice/outbound` returns TwiML that dials the lead with the AI-outbound number as
+  caller ID and bridges the two. The agent talks on their normal phone; the lead sees the
+  AI-outbound number.
+
+<Note>
+Logging sent/received texts onto the **FUB timeline** requires registering the system at
+`apps.followupboss.com/system-registration` and setting `FUB_SYSTEM` + `FUB_SYSTEM_KEY`. Sending,
+calling, and inbound routing all work without it — only the FUB timeline row waits on that key.
+</Note>
+
+## Inbound routing — one number, two systems
+
+A lead lives in **exactly one** system — FUB (this widget) or HouseLoop CRM — never both, and keeps
+the same number when they graduate FUB to HouseLoop. Inbound to the AI-outbound number therefore
+routes by **ownership = does an `hl_leads` row exist for that phone** (HouseLoop-first, FUB-fallback):
+
+```
+Lead texts/calls the AI-outbound number
+   -> CRM webhook (front door) checks hl_leads by phone tail-10
+        - HouseLoop lead          -> handled in the CRM (unchanged)
+        - not a HouseLoop lead     -> forwarded to the FUB widget:
+             SMS   -> POST realloop.co/fub-widget/sms/inbound  (X-HL-Forward-Secret + MessageSid dedupe)
+             Voice -> TwiML Redirect to realloop.co/fub-widget/voice/inbound (whisper "call from <lead>")
+```
+
+Graduation is automatic: the moment an `hl_leads` row exists for that number, the next inbound
+resolves to HouseLoop and the widget stops receiving it — **no double-send, no flag to flip.** The
+shared `FUB_FORWARD_SECRET` guards the SMS forward; `MessageSid` / `CallSid` dedupe Twilio retries.
+
+<Note>
+True lead caller-ID on a forwarded inbound call is **not possible on raw Twilio** (anti-spoofing /
+STIR-SHAKEN). The agent's phone shows the AI-outbound number; a spoken **whisper** announces who's
+calling instead.
+</Note>
+
+## Endpoints
+
+| Route | Purpose |
+|---|---|
+| `GET /fub-widget` | The iframe (Actions / Activity / Context), HMAC-gated |
+| `GET /fub-widget/ai` | Claude read + channel-aware draft (no-store) |
+| `POST /fub-widget/send` | Send text via Twilio + log to FUB |
+| `POST /fub-widget/call` | Click-to-call bridge |
+| `POST /fub-widget/sms/inbound` | Receive a FUB-owned inbound text forwarded by the CRM front-router |
+| `POST /fub-widget/voice/inbound`, `/voice/whisper`, `/voice/outbound` | Inbound forward + whisper + outbound bridge TwiML |
+
+## Change log
+
+- **2026-06-02** — Shipped the comms console: Twilio send + click-to-call from the widget; one-number
+  CRM-to-FUB inbound router (CRM front-door fallback-forward); first-touch outreach mode; AI now reads
+  the full multi-channel timeline (added notes/calls/events).
+
+---
+
+# ═ THE DEPARTED-AGENT ZILLOW BINDING (absorbed from fub/departed-agent-zillow-binding, 2026-07-17) ═
+
+
+<Info>
+**Why this exists.** Follow Up Boss is a Zillow walled garden — our **Zillow Tech Connect** lead feed is bound
+to the FUB *login email* of a specific seat (**Ben Froeschl**, a departed employee). Deleting that seat or
+changing its login email risks the Zillow sync. So we **keep the seat and take over the login** instead. This
+page is the runbook for that takeover + the `info@houseloop.ai` capture inbox it feeds. Set up 2026-07-09 (Adam).
+</Info>
+
+## The problem
+
+- **Ben Froeschl** left, but his FUB seat (`bfroeschl@spradlingrealtygroup.com`) is the identity **Zillow Tech
+  Connect** is bound to. Kill it and the Zillow feed can break / demand re-verification.
+- His login email — `bfroeschl@spradlingrealtygroup.com` — was a **deleted Google Workspace user**, so we
+  couldn't receive his password-reset mail, and Zillow notifications addressed to him were going nowhere.
+- His FUB profile still carried his **old personal cell** (702-686-5697).
+
+## The fix — three moves
+
+### 1. Resurrect the address as an ALIAS (not a user, not a group)
+`bfroeschl@spradlingrealtygroup.com` is now an **email alias on the `support@spradlingrealtygroup.com` Google
+user** (Admin Console → Users → support → *Add alternate emails* → `bfroeschl`). All external mail to Ben's
+address now lands in the **support@** inbox.
+
+<Note>
+**Why an alias, not a Google Group.** A Group was the first attempt, but org policy locks *Allow external
+members* to **No**, so the Group rejected the external member `fub-notifications@houseloop.ai` and (being a
+Group) applied a posting policy that blocked external robot senders. An **alias on a user** has no posting
+policy — it accepts all external mail. The Group was deleted; the alias is the keeper.
+</Note>
+
+### 2. Take over the FUB login (never change the login email)
+1. FUB → *Forgot password* for `bfroeschl@spradlingrealtygroup.com`.
+2. The reset email lands in **support@** (via the alias) — **proven**: it arrived seconds after the request.
+3. Set a new password → **`spradling2026`** (stored: Master Cred Sheet row *Follow Up Boss -- Ben Froeschl*,
+   `.env` `CRED_FUB_BEN_FROESCHL_*`). Verified with a clean login.
+
+<Warning>
+**Never change Ben's FUB *login email*.** That is the string Zillow Tech Connect is bound to. Change the
+password, the phone, the name — never the login email.
+</Warning>
+
+### 3. Phone → the Legacy Agents Twilio line
+Ben's FUB profile **Phone** was set to **(913) 675-9877** — the **Legacy Agents Twilio line** that every
+departed-agent number forwards to (Caleb's past-agent pool). Old cell 702-686-5697 removed. His old agent number
+**913-379-3429** was added as a `Ben Froeschl` row in the **Legacy Agents routing group** (HouseLoop → Settings →
+Phone Numbers), matching the other past-agent rows (`platform=follow_up_boss`, forwards to the same line).
+
+<Note>
+FUB's Settings → Phone field does **not** persist a `fill()`+blur — it needs a slow character `type()` **and** the
+**Save** button at the bottom of the page. (Field mask formats `9136759877` → `(913) 675-9877`.)
+</Note>
+
+## `info@houseloop.ai` — the capture + contact inbox
+
+A HouseLoop mailbox, **`info@houseloop.ai`** (Google user; `.env` `CRED_GOOGLE_WORKSPACE_INFO_HOUSELOOP_AI_*`),
+is the single landing spot for:
+
+- **Vendor lead notifications** — point Zillow, Follow Up Boss, Google My Business, Realtor.com email alerts here
+  so an AI layer can parse them into one stream.
+- **Consumer "contact HouseLoop"** — usable directly on the houseloop.ai website contact form ("notifications@"
+  read too technical for the consumer side, so the mailbox was renamed **notifications@ → info@**; the old
+  `notifications@houseloop.ai` is retained as an **alias** so nothing already pointed at it breaks). The
+  `fub-notifications@houseloop.ai` alias is also on this mailbox.
+
+## Where the credentials live
+
+| Thing | Where |
+|---|---|
+| Ben FUB login (`bfroeschl@…` / `spradling2026`) | Master Cred Sheet · `.env` `CRED_FUB_BEN_FROESCHL_*` |
+| `info@houseloop.ai` mailbox pw | `.env` `CRED_GOOGLE_WORKSPACE_INFO_HOUSELOOP_AI_*` |
+| SRG Admin Console (drives the alias) | `zach@spradlingrealtygroup.com` / `spradling2026` |
+
+## Related
+
+- [FUB Scraper](/fub/master-scraper-ssot) · [FUB Lead Import](/fub/master-scraper-ssot) · [FUB Trigger Events](/guides/trigger-events)
+- [Phone Numbers & Call Routing](/comms/calls) — the Legacy Agents routing group
