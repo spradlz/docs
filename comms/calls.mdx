@@ -73,10 +73,21 @@ finished conversation); missed → the no-answer forward chain → voicemail. Ha
   [Trigger Events](/guides/trigger-events).
 - Unknown caller + the line's **Creates-Lead** toggle ON → the lead is **minted DURING the ring**
   (`lib/leads/mint-phone-lead.ts` — ONE writer, shared with Myli's wrap-up; source owner/stage defaults,
-  mig 0416 — a phone-minted lead is never ownerless).
-- The caller's **NAME resolves from the FUB people mirror at ring time** and **Twilio `ForwardedFrom`**
-  tells us WHICH past agent's old number was dialed (`lib/phone/caller-context.ts`) — both ride the call
-  row, the card, and the minted lead ("Sachind Jamesh — Alisha Hanks' old line", never "Unknown Caller").
+  mig 0416 — a phone-minted lead is never ownerless). **Two cases:** a **truly-unknown** caller mints a bare
+  "Unknown Caller" lead (voicemail triage, §4, later updates the name/callback or deletes it if spam); a caller
+  the **FUB mirror knows** is a candidate for the **FUB pull-in** — the `creates_lead` behaviour that imports
+  their FUB context + browsing (never their comms). See [Trigger Events → the FUB pull-in](/guides/trigger-events).
+- **Caller NAME — the HouseLoop lead WINS (2026-07-17, the "Zach Test" autopsy).** When the call matches an
+  existing HouseLoop lead, **that lead's own name is used**. The FUB people mirror (`callerContext`,
+  `lib/phone/caller-context.ts`) is consulted **only as a fallback** — to name/pull a caller we don't have yet.
+  A stale FUB contact sitting on one of OUR own numbers (there was a "Zach Test" contact on Zach's cell) must
+  never override the real lead. **Twilio `ForwardedFrom`** still tells us WHICH past agent's old number was
+  dialed. All of it rides the call row, the card, and the minted lead ("Sachind Jamesh — Alisha Hanks' old
+  line", never "Unknown Caller").
+- **Line NAME comes from the NAMED source, never a code map (2026-07-17).** The line a call reached resolves via
+  `lineLabelForNumber` (called number → `hl_phone_numbers` → `lead_source_id` → `hl_lead_sources.name`, else the
+  number's `label`) — rename a source and the card/notification follow it. The old hardcoded `CALL_LINE_LABEL`
+  map is a fallback only for an unregistered number.
 - **One call = one trigger event** — the lane that ANSWERS the number fires it. FUB's `callsCreated` echo
   of a call that landed on our Twilio is skipped; FUB-native lines (Zach's seat) fire via the FUB router
   into the inbox lane.
