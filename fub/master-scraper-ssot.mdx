@@ -81,66 +81,19 @@ live?**
 a bump on the `sort=-updated` heartbeat) tells us *person X did something* → we surgically re-scrape **that one
 person** → the dumb scraper fetches the details → they mint into the feed.
 
-## 🔴 The gap found 2026-07-15 (why leads go stale after pull-in)
+## ✅ Lock-step sync — PROVEN LIVE (2026-07-16; the 2026-07-15 stale-lead gap is closed)
 
-Traced end-to-end on **Shamir Pearson (FUB 50442)**, who went dark in HouseLoop after his tour request even though
-FUB had a day of newer activity:
+The one-line history: *after pull-in, a lead's ongoing Zillow behavior notified but never triggered the
+per-person re-scrape the feed depends on* (root-caused on Shamir Pearson, FUB 50442). The fix is the
+**activity-sweep**, live and proven end-to-end (full chain in ~95s on Shamir):
 
-1. He saved `2435752` + viewed `2442158` on Jul 14 → FUB notes fired → `notesCreated` webhook stored them in
-   `fub.notes` ✅ (the owner alert fired).
-2. Those notes are **bare zpid URLs with no address** → the note→`zillow_home_activity` parser can't build a real
-   row → nothing landed in the mirror.
-3. The enrichment needs a **re-scrape** of his browse feed — but **an existing HouseLoop lead never gets
-   re-scraped on activity.** The per-person priority scrape runs **once, at initial mint only** (the `created`
-   gate in `fub-lead-import.ts`); the comment says it outright: *"Only NEW behavioral FUB mints wait; existing-lead
-   + backfill skip."* The old real-time re-scrape worker (`fub-webhook-scraper`, drained `fub.rehydration_queue`)
-   was **retired ~May 30**; its "high-priority lane so an active lead scrapes in seconds" replacement was **spec'd
-   but never built** (see the lead-import changelog).
-4. So his mirror froze at his mint-time scrape, and his 5 Jul-14 saved searches (scraper-only) never arrived.
-
-**One-line root cause:** *after pull-in, a lead's ongoing Zillow behavior **notifies** but never triggers the
-per-person re-scrape the feed depends on.* The alert path works; the **data-into-the-feed path is severed**.
-
-The **manual "sync" the UI used to expose** (`POST /api/fub/rebackfill` → re-runs `backfillFubBehavior`, minting a
-lead's fresh FUB activity into `hl_lead_activity`) is the **back half** of the loop and still exists — but with no
-automated trigger in front of it, keeping a lead in sync became a button nobody presses. Pulling that button out
-removed the only way the sync ran by hand. The fix is to make it automatic, so there's no button to forget.
-
-## ✅ The fix — the activity-sweep (lock-step sync, automated)
-
-Build the active-lead re-scrape the lead-import doc listed as NEXT. It reuses the exact rail the in-app sweep
-already runs on — no new infrastructure:
-
-1. **Detect** — a registered Inngest tick polls `GET /v1/people?sort=-updated` for people with `updated > cursor`
-   (everyone active since the last tick), **filtered to HouseLoop leads** (`fub_person_id ∈ hl_leads`). PLUS the
-   instant lane: a `notesCreated` (save/view) webhook for a HouseLoop lead enqueues immediately, without waiting
-   for the poll.
-2. **Enqueue** — a targeted per-person re-scrape job into `fub.body_recovery_queue` (the **same queue the live
-   `fub-body-recovery` consumer already drains** for the in-app sweep sentinel).
-3. **Scrape** — the dumb scraper re-walks that ONE person → refreshes `fub.zillow_home_activity` (views/saves) +
-   `fub.saved_searches`.
-4. **Mint** — the scraper POSTs `POST /api/fub/rebackfill` → `backfillFubBehavior` mints the new activity into
-   `hl_lead_activity` → it appears in **All + Website Activity**, in step with FUB.
-
-Debounced + HouseLoop-leads-only → surgical (a few per minute for active leads), never a 49k re-walk. This one
-bridge keeps every pulled-in lead lock-step with FUB and rides the proven in-app rail.
-
-### ⚠️ The re-scrape is necessary but NOT sufficient — mint note-only saves from the note (2026-07-15)
-
-Live-testing on Shamir surfaced a deeper truth: **his 07-14 saves/views were NEVER in FUB's browse feed** (the
-`GET /api/v1/events?hasProperty=true` list the scraper reads) — they existed ONLY as `notesCreated` "Property
-Saved/Viewed: `<bare-zpid>`" notes. So **no re-scrape can ever recover them.** The fix: `convertNote`
-(`lib/fub/convert-fub-signal.ts`) now emits a `save_home`/`property_view` straight from the note, and
-`backfillFubBehavior` resolves the bare zpid → the full home (address/price/photo) from the person's OWN captured
-rows for that zpid. **The scraper stays primary** for any view it has (richer, real photo); **notes fill only the
-gaps** the browse feed misses — so note-only saves land AND a view never renders twice. Proven: Shamir's 07-14
-save (4224 E 104th Ter) + view (10516 Richmond Ave) now mint, zero doubles.
-
-### The double-card dedup + the in-app surfacing
-- **Double view card:** the same view was written to `fub.zillow_home_activity` by two writers (the note-parse id
-  `146xxx` and the scraper browse-feed id `18xxxxx`) — a fub_event_id key double-minted it. Fixed by deduping the
-  mint query on the LOGICAL view identity (home + type + minute), keeping the richer row.
-- **Zillow in-app → All + Messages** (not just the FUB tab): still pending on this pass.
+`fub-activity-sweep-tick` (Inngest cron `*/3`, polls `GET /v1/people?sort=-updated`, HouseLoop-leads-only,
+15-min self-debounce) → `person_rescrape` job into `fub.body_recovery_queue` → the live `fub-body-recovery`
+consumer flips Camp David `rehydration_log` → the parallel scraper's priority claim → re-scrape of that ONE
+person (browse feed + saved searches) → `POST /api/fub/rebackfill` → `backfillFubBehavior` mints into
+`hl_lead_activity`, idempotent. Note-only saves/views (never in the browse feed) mint straight from the
+`convertNote` path with zpid→home resolution; double cards dedup on logical view identity. The deep
+import + sync flow is documented in ONE place: **[FUB → HouseLoop: Lead Import](/fub/lead-import)**.
 
 ## Sync control surfaces (reference)
 
