@@ -34,6 +34,31 @@ single law the whole system exists to satisfy. It does **not** duplicate the dee
 **Adam** (CRM feed/sync) · scraper infra: **Caleb** · Camp David box: **David**.
 </Info>
 
+## 🟢 IS THE SCRAPER HEALTHY? — THE ONE SIGNAL (read this BEFORE you ever say it's down)
+
+**Run `node tools/fub-scraper/scraper-health.mjs` — or call the `fub_scraper_status` MCP tool. GREEN = healthy. Done.**
+
+The scraper is healthy **iff FRESH DATA is landing in `fub.*`** (THE ONE LAW below). That single fact proves the
+whole webhook → scrape → relay → mirror pipeline is alive end-to-end. If texts/emails/calls/notes/events synced in
+the last ~2 hours, **it is working — full stop.**
+
+**These signals LIE. Do NOT judge health by them (this is where every false "it's broken" comes from):**
+- ❌ **pm2 status / restart counts** — a wedged proc reported "online" for 6 weeks; restart counts are cumulative
+  and self-healing (`fub-backfill-a`'s periodic "Target page closed → 5m cooldown → exit(1)" is the normal
+  `cooldownExit()` self-heal, NOT a crash-loop).
+- ❌ **`fub.rehydration_queue` depth / last-processed** — a DEPRECATED graveyard (retired ~2026-05, ~12k pending by
+  design). The ACTIVE queue is **`fub.body_recovery_queue`**.
+- ❌ **`fub_scraper_status` "screen session not running"** — obsolete; the scrapers run under **pm2, not screen**.
+  (The MCP tool was fixed 2026-07-17 to stop reporting this false DOWN.)
+- ❌ **`webhook_scraper_heartbeat`** — the retired `fub-webhook-scraper` lane; its proc is correctly STOPPED.
+
+**THE CANONICAL ROSTER (this is the truth — supersedes any "one Chrome / backfill-b retired / FUB_SINGLE_CHROME"
+prose later in this doc, which is the pre-2026-07-11 era the 2026-07-16 audit reversed):**
+- **SHOULD be ONLINE (6):** `fub-backfill-a` (Chrome A :18800) · `fub-backfill-b` (Chrome B :18802, revived
+  2026-07-11 — **TWO Chromes is correct**) · `fub-body-recovery` · `fub-watchdog` · `fub-chrome-guard` · `fub-relay`.
+- **SHOULD be STOPPED (intended — "down" here is NOT a failure):** `fub-webhook-scraper` (retired) ·
+  `fub-webhook-sink` (OOM dup) · `fub-sync` (manual) · `fub-home-refresh` (non-core).
+
 ## THE ONE LAW (this is the whole point)
 
 **When a lead is pulled into HouseLoop, their activity feed must keep flowing — the HouseLoop lead stays LOCK-STEP
