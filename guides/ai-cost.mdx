@@ -1,6 +1,98 @@
 ---
 title: "AI Cost & Attribution"
-description: "How every Anthropic and OpenAI dollar is split across HouseLoop, PlacedAgent, and Memory OS — and where caching saves money."
+description: "Every AI dollar, traced. How Anthropic + OpenAI spend attributes to two clean buckets (HouseLoop · BossLoop Infra), the ONE categorizer both the /ai-cost page and the Run Log read, the systemic cost-logging audit that made every LLM caller visible in real time, the daily 8am digest + sentinel, and the open holes (Deepgram STT voice cost)."
+---
+
+# ═══ 2026-07-17 — CURRENT STATE (everything shipped in the AI-cost reckoning) ═══
+
+<Info>
+This is the live, current picture. The **2026-07-16 PM forensic audit** section below is history (how the
+$106.74 mystery was found + the first kills) — kept because it's the origin story, but everything here
+supersedes it where they differ.
+</Info>
+
+## Operation One Provider — OpenAI is (nearly) dead
+
+Every AI job HouseLoop runs now bills to Anthropic (Claude), with OpenAI shrunk to a couple of shrinking
+holdouts. Verified live:
+
+- **AI Search** — the website NLP route (`app/api/search/nlp/route.ts`): understanding, **re-rank
+  (gpt-4o → Claude Sonnet 4.6)**, follow-up intent + narration (→ Haiku) all run Claude now; `parseViaOpenAI`
+  survives only as the designed fallback. Caught a **live outage** doing this: OpenAI's balance went to $0
+  mid-week and search's re-ranker was silently down all day — the exact auto-reload disease.
+- **AI Vision** — listing photo tags (`lib/listings/vision-tags.ts` + `vision-catalog.ts`): **gpt-4o → Claude
+  Haiku**, full 200-photo galleries preserved by requesting Repliers CDN **`?class=small` thumbnails**
+  (400×300 ≈ 160 tok/photo — the Claude equivalent of gpt-4o's `detail:"low"` peephole). Real 7-day audit:
+  1,250 new listings × ~25 photos ≈ **$20/wk** (≈ half the old gpt-4o bill).
+- **Buckets** — TWO living: **HouseLoop** (the product) · **BossLoop Infra** (agents/memory/tooling). The old
+  skeleton keys were swapped: Anthropic "personLI" → **BossLoop Infra** key; a new `bossloop-infra-svc` OpenAI
+  key minted; the OpenAI "Memory OS" project renamed **BossLoop Infra**. **PlacedAgent is PAUSED** (its
+  Anthropic key DISABLED + OpenAI project ARCHIVED). After the swap, any spend in the **default** or
+  **PlacedAgent** buckets = a breach (a rogue/legacy key is alive). Browser-side `VITE_OPENAI_API_KEY` reads
+  (dashboard client) were **killed** — an API key must never ship in a client bundle.
+
+## The ONE categorizer — page and Run Log can't disagree
+
+`apps/houseloop-crm/lib/ai-cost/ai-category.ts` is the single source of truth for "what AI category is this
+`hl_run_log` row." It exports the fn→category map (`AI_CATEGORY_FNS`), the closed category allowlist
+(`KNOWN_AI_CATEGORIES`), the ONE SQL `aiCategorySql()`, and the ONE row filter `aiRowFilterSql()`. **Both**
+`app/api/ai-cost/route.ts` (the page) **and** `lib/run-log/feed.ts` (the Run Log) import it. This killed the
+drift where the page had a hardcoded `VISION_FNS` list saying vision=AI while the Run Log's registry said
+vision=IDX — so the page showed vision spend but clicking it dumped you into an empty log. Now they're
+identical (verified live: vision 4,288 · dossier 2,409 · seo 28,138 · follow_up 429 · ai_search 138 · call_analysis 76).
+
+## The AI Cost Run Log tab — atomic pills
+
+The Run Log's `ai` view (renamed **"AI Cost"** from "AI Search Cost") carries per-category filter pills the
+same way the Website tab does — **Search · Vision · Follow-Up · Dossiers · Calls & Voicemail · Rollups ·
+Narratives · SEO Articles · Home Blurbs · De-fork**. Counts are computed **server-side** (`aiCatCounts`, a
+30-day tally) so a pill reads the true count regardless of the active filter. Vision runs were **moved out of
+the IDX lane into the AI lane** (registry `category: 'ai'`). Every card on `/ai-cost` deep-links to its own
+pill (`/run-log?view=ai&cat=<category>`).
+
+## The systemic cost-logging audit — every caller now visible
+
+The trigger: vision spend looked stale on `/ai-cost` because the intake path never emitted a cost row and its
+cost was still computed with **gpt-4o pricing after the Claude swap**. A full 2-agent sweep of every LLM
+caller (CRM + website) against the canonical spec (every call → an `hl_run_log` cost row, **per-model
+pricing**, real category + model + real tokens) found the CRM mostly clean but the **entire website AI layer
+invisible**. Fixes shipped:
+
+- **NEW `apps/houseloop-web/lib/ai/emit-ai-cost.ts`** — the ONE web cost emitter (per-model pricing; the web
+  counterpart of the CRM's `lib/ai/log-ai-cost.ts`). Emits `houseloop/ai.call` → the CRM `ai-call-log` fn
+  writes the row. Before this the website had **nothing**.
+- Wired (were invisible): **market-narrative** (Sonnet — wasn't even reading `usage`), **seo-articles** (+
+  **killed a hardcoded `$2/$10` blended-pricing bug** that billed Haiku articles at Sonnet rates — same class
+  as the vision gpt-4o bug), **house-blurb**, **smart-features** (highest-frequency — fires on every search),
+  **defork**, and the CRM **buy-time-ack classifier** (one-line cost opt).
+- Added categories `seo_house` + `defork` to the allowlist + pills.
+- **CRM audit = clean**: Myli reply/compose, dossier, rollups, call-analysis, voicemail, coordination all log
+  correctly with the right category, real model, real tokens. The reporting fetches (sentinel, workspace-costs)
+  correctly don't self-log.
+
+## The daily digest + the sentinel
+
+`ai-cost-sentinel` (Inngest, `lib/inngest/functions/ai-cost-sentinel.ts`, cron `0 13 * * *` = 8am CT) sends
+**ONE text a day** with yesterday's spend by bucket, and folds any tripped alarm into that same text (never
+spam). It reads **yesterday's finalized** billing (not today's laggy feed — the first version false-positived
+on Anthropic's daily-bucket lag). Four alarms: **breach** (dead-bucket spend), **per-provider flatline** (a
+provider that averaged real spend reads $0 — how we'd catch a dead balance, the OpenAI auto-reload disease),
+**spike** (>3× baseline), **rogue key** (an Anthropic key id outside the known set). Alerts SMS from the
+**913-800-4470** Notifications line; every run lands in the Run Log (`category: 'alerts'`).
+
+## Open items (honest holes)
+
+- 🔴 **Deepgram STT is invisible** — call-recording + voicemail transcription (`lib/calls/analyze.ts`
+  `transcribe()`, reused by voicemail-triage) is billed **per audio-minute**, has no model in the pricing
+  table, and logs zero. Needs a `transcription`/`ai_voice` category priced per-minute from recording duration.
+  **This is the same shape as the AI-voice cost problem** (see [AI Voice](/guides/ai-voice) → NEED TO DO NEXT).
+- The `ai-search.event` row stamps `model: HAIKU` even when Sonnet re-rank tokens are inside `cost_usd`
+  (dollar-correct; model attribution imprecise). Minor.
+- **Scribe memory layer is dead** (last write 2026-04-20) — hive + the file/handoff/lock memory are the live
+  layers. Not a cost bug; noted so nobody "revives" a dead OpenAI-embedding path.
+- **Zach's clicks pending:** prepay OpenAI ~$20 + turn **auto-reload OFF** (embeddings-only now); revoke the
+  personLI + BossLoop-Master keys once the default buckets read $0.
+
 ---
 
 # ═══ 2026-07-16 PM — THE FORENSIC AUDIT (the $106.74 mystery SOLVED + the kills) ═══
