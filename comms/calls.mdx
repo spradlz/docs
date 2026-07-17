@@ -1,37 +1,435 @@
 ---
 title: "Calls"
-description: "How HouseLoop makes and takes phone calls — the answering agent (Myli), call recording, and call intelligence — and where the telephony that carries them is configured."
+description: "THE one document for everything phone: the five lines and their inboxes, how a call routes (webhook order, loop guards, clean hangups), mint-at-ring + caller context, recording + AI analysis (dual-channel transcripts, Claude summaries), voicemail + Myli triage, the one notification card, phone-number lead-flow attribution, the Twilio provider + A2P, and the number-porting playbook + PRD. The AI voice AGENT lives on its own page: AI Voice."
 ---
 
-**Calls** is the voice channel: a lead (or anyone) dials a HouseLoop number, the call is answered — by a
-teammate, by a forward, or by the AI voice agent — and what happened is captured on the lead's timeline.
+<Info>
+**THE ONE CALLS DOC (consolidated 2026-07-17, Zach directive).** This page absorbed and retired
+`guides/phone-numbers-and-call-routing`, `crm/phone-voice-voice-recording`, and
+`crm/phone-voice-phone-provider` (their URLs redirect here). Sibling pages: **[AI Voice](/guides/ai-voice)**
+= the agent that answers · **[Inboxes](/guides/inboxes)** = the mailbox layer numbers feed ·
+**[Trigger Events](/guides/trigger-events)** = the canonical catalog every call event fires into ·
+**[CRM Comms](/guides/crm-comms)** = the one-writer comms subsystem (texts + calls + iMessage).
+**Running-document law:** the UPDATE LOG below is newest-first; every change stamps an entry AND re-edits
+the body to current truth — no stacked superseded blocks, ever (git history holds the past).
+</Info>
 
-<Note>
-**Looking for call ROUTING — which number rings where?** That lives on ONE page:
-**[Phone Numbers, Call Routing & Number Porting](/guides/phone-numbers-and-call-routing)** — the live
-**bucket model** (Company · Sign Call · Past Agents Line · Ana's line, all forwarding to Zach's cell until
-Myli answers), the FUB team-inbox funnel, the loop-guard, and the porting playbook. This section is only
-about what happens *after* a call is answered.
-</Note>
+## Update log
 
-This section covers the two things you *operate* for calls. The plumbing underneath them — the numbers
-themselves, how a ringing call is routed, and porting — lives in **[Phone Numbers, Call Routing & Number
-Porting](/guides/phone-numbers-and-call-routing)**.
+- **2026-07-17** — Consolidated into THE one Calls doc (4 docs → 1). All content below re-verified current.
+- **2026-07-16** — Answered-forward recording (dual-channel) + Caller/Agent transcripts · dial-status clean
+  hangups · branded voicemail greeting · mint-at-ring + caller context (FUB-mirror names, ForwardedFrom) ·
+  the ONE human notification card · per-line trigger fires (lead-less included) · SMS delivery-status
+  callback. All live-proven on an organic Zillow caller (Sachind → Alisha Hanks' old line).
+- **2026-07-16** — The five-bucket model live-verified; loop-guard in code; A2P verified on all owned lines.
+- **2026-07-14** — Per-line lead sources (the number IS the source), migs 0398/0399/0401.
 
-## What's in here
+## 1 · The lines (the five buckets)
 
-| Page | What it is |
+Every inbound line lands in ONE of five buckets — **the caller ID IS the bucket** (save these as contacts).
+Each number feeds an [Inbox](/guides/inboxes); each is its own [lead source](#6--phone-numbers--lead-flow).
+
+| # | Contact name | Line | Who lands here | Feeds inbox | Source key |
+|---|---|---|---|---|---|
+| 1 | **SRG Company** | 913-320-0906 (Twilio, ours) | Google Business, portals, cold company calls | Company | `phone_company` |
+| 2 | **SRG Sign Call** | 913-354-8600 (Twilio, ours) | Yard-sign + listing callers | Company | `phone_signcall` |
+| 3 | **SRG Past People** | **913-675-9877 "Past Agents Line"** (Twilio, ours) | ALL 37 FUB past-agent numbers + Ben's 379-3429 + Ana's FUB seat 349-5536 + legacy company 270-0645 & 453-5505 + Ana's GV 954-7123 (until port) | Past Agents | `phone_pastclient` |
+| 4 | **Ana Line** | 913-954-7123 (porting in — firm land ~2026-07-21, forward pre-staged) | Ana's past clients | Ana (personal) | `phone_analegacy` |
+| 5 | **FUB-native** | 913-490-2988 (Zach's FUB seat — never porting) | His assigned leads calling back (rings via FUB) | Zach (personal) | `fub_zach_seat` |
+
+- When a bucket forwards to a cell, the dial leg presents **the LINE as caller ID** (`<Dial callerId={to}>`)
+  — the phone shows the bucket contact; the real caller's number is captured on the `hl_calls` row + the card.
+- A miss rolls to OUR voicemail (18-second dial timeout deliberately undercuts carrier voicemail ~24-30s) +
+  recording + notification. Nothing can die in FUB voicemail.
+- **Twilio SIDs / port status:** Company `PN81286df6…` landed · Sign `PNb49c2582…` landed · Ana
+  `PN8ff2c539…` porting-in · Past Agents landed + wired.
+
+## 2 · How a call routes (`app/api/phone/webhooks/voice/route.ts`)
+
+Webhook decision order, top to bottom:
+1. **Caller-based forwarding rules** (`hl_phone_forward_rules`, `/settings/phone`) — an explicit human rule
+   wins for ANY caller.
+2. **Owned line** (platform=twilio): resolve the line → its inbox trigger seat → ring the routing targets /
+   `forwards_to` chain. Owned lines NEVER hand off to the FUB front-router.
+3. **Spam gate**: a repeat caller with a 180-day spam history and no lead relationship gets `<Reject>` —
+   but the trigger event still fires (`routed_by='spam-gate'` — a gate is routing, not a signal eraser).
+4. **FUB front-router fallback** (non-owned lines, non-HouseLoop callers) → `<Redirect>` to FUB's webhook.
+5. **Per-dialer default** (`hl_dialer_assignments.call_forwarding`).
+
+**The loop-guard (CONSTITUTIONAL — the 2026-07-14 call-forward loop autopsy), three belts in code:**
+1. **Pool guard** — never `<Dial>` a number WE own (pool→pool re-entry is structurally impossible).
+2. **Echo guard** — never dial the caller back.
+3. **Hop breaker** — ≥4 webhook entries for the same caller→line pair in 60s = a loop through an external
+   hop → dialing stops, voicemail hard-stop.
+
+**Answered vs missed (dial-status, 2026-07-16):** `<Dial action>` asks the webhook what's next when a dial
+ends — answered → clean `<Hangup/>` (a caller can NEVER fall through into the voicemail recorder after a
+finished conversation); missed → the no-answer forward chain → voicemail. Handler:
+`app/api/phone/webhooks/dial-status/route.ts`; shared TwiML fragments: `lib/phone/twiml.ts`.
+
+**Mint-at-ring + caller context (2026-07-16, live-proven on an organic Zillow caller):**
+- Every inbound call/text on an owned line **fires a trigger event** — lead-less included, stamped with the
+  line's source key (the board's per-inbox counts read exactly this). Catalog + fire-pipeline law:
+  [Trigger Events](/guides/trigger-events).
+- Unknown caller + the line's **Creates-Lead** toggle ON → the lead is **minted DURING the ring**
+  (`lib/leads/mint-phone-lead.ts` — ONE writer, shared with Myli's wrap-up; source owner/stage defaults,
+  mig 0416 — a phone-minted lead is never ownerless).
+- The caller's **NAME resolves from the FUB people mirror at ring time** and **Twilio `ForwardedFrom`**
+  tells us WHICH past agent's old number was dialed (`lib/phone/caller-context.ts`) — both ride the call
+  row, the card, and the minted lead ("Sachind Jamesh — Alisha Hanks' old line", never "Unknown Caller").
+- **One call = one trigger event** — the lane that ANSWERS the number fires it. FUB's `callsCreated` echo
+  of a call that landed on our Twilio is skipped; FUB-native lines (Zach's seat) fire via the FUB router
+  into the inbox lane.
+
+## 3 · Recording & AI analysis
+
+**The settings surface** — CRM sidebar → Phone & Voice → **Voice & Recording** (`/settings/voice-recording`):
+
+| Setting | Scope | Who can change | Persisted to | Default |
+|---|---|---|---|---|
+| My Call Recording Preference (`recordCalls`) | Per-user opt-out | Any signed-in user | `hl_users.data.recordCalls` | on |
+| Enable Call Recording (`recordingEnabled`) | Team | Admin / owner only | `hl_settings` key `call_recording` | off |
+| Conversational Intelligence AI (`aiAnalysisEnabled`) | Team | Admin / owner only | `hl_settings` key `call_recording` | off |
+
+A call records when the team toggle is ON **and** the user has not opted out (`shouldRecordForUser`,
+`lib/voice-recording.ts`). API: `app/api/settings/voice-recording/route.ts` (GET / PUT admin-only / PATCH
+personal). Opt-out model mirrors SureSend.
+
+**The capture + pipeline (LIVE — shipped and proven 2026-07-16):**
+- **Voicemail** records via `<Record>`; **answered forwards** record via `record-from-answer-dual` on the
+  `<Dial>` legs (dual-channel — caller on one channel, answerer on the other).
+- The recording callback (`app/api/phone/webhooks/recording/route.ts`) disambiguates via Twilio's
+  **`RecordingSource`**: `RecordVerb` = our voicemail (flips outcome, fires the voicemail pings/triage);
+  `DialVerb` = an answered forward (outcome `answered`, no voicemail framing, analysis still runs).
+- **Analysis** (`lib/calls/analyze.ts`, Inngest `call-analyze`): Deepgram transcription — **multichannel on
+  dual recordings → `Caller:` / `Agent:` speaker labels** (mono voicemails use acoustic diarization) →
+  Claude Haiku summary bullets + sentiment + suggested tasks → written to the `hl_calls` row.
+- **The call card** (lead detail, All + Calls tabs — ONE `ActivityHeroCard`, never a parallel copy):
+  headline + line context + "New lead created" pill + FUB link + player + summary + suggested tasks +
+  collapsible transcript.
+- **SMS delivery truth** (E1, 2026-07-16): outbound texts carry a `StatusCallback` →
+  `app/api/phone/webhooks/sms-status/route.ts` stamps `hl_messages.status` forward-only
+  (queued→sent→**delivered/undelivered/failed** + error code). The escalation ladder reads REAL delivery,
+  never Twilio's initial "accepted" (the Renita lesson).
+
+## 4 · Voicemail
+
+- **The greeting** (branded, Polly Neural — ONE definition in `lib/phone/twiml.ts`): *"You've reached the
+  Spradling Group. We're sorry we missed your call. Please leave your name, number, and a brief message
+  after the tone, and we'll get back to you shortly."*
+- **Known-lead voicemail** → the owner-aware notification with the recording link.
+- **Cold/unknown-caller voicemail** → **Myli's AI triage** (`lib/calls/voicemail-triage.ts`, Inngest
+  `voicemail-triage`): Deepgram transcript → Claude disposition (`buyer · seller · client · agent_recruit ·
+  important` vs `spam · vendor · robocall · unclear`) → **important notifies the owner** (with Myli's
+  one-line summary + callback number); spam/vendors/robocalls are suppressed; **fail-open** (unreadable →
+  still alert — never miss a buyer). Disposition stamps `hl_calls.data` (`vm_category`, `vm_summary`,
+  `vm_callback`, `vm_reason`); runs show in the Run Log.
+
+## 5 · Notifications (the ONE card)
+
+One inbound call = ONE human card (2026-07-16, the word-salad autopsy):
+- Copy comes from the `hl_notify_classes` templates for `phone_call_received` (mig 0417) with real merge
+  fields — `{{call.from}}` · `{{call.line}}` (whose old line was dialed) · `{{call.duration}}` ·
+  `{{call.voicemail}}` · `{{call.minted}}` — all conditional (absent facts vanish, never "from · ·").
+- Delivered: *"📞 Sachind Jamesh called — Alisha Hanks' old line (913) 347-6406 · from (281) 786-5333 ·
+  New lead created"* + the HouseLoop lead link + the FUB profile link.
+- Phone-line fires brand as HouseLoop-native (no "from Phone Call — Past Client" source-phrase). The FUB
+  echo card for pool calls is dead (one call = one card). Inbox subscribers + the owner share the call
+  entity → one ping per person.
+
+## 6 · Phone numbers & lead-flow (the number IS the source)
+
+- Directory: **/settings/phone-numbers** — a number is four facts: what it is · its label · who carries it ·
+  **which inbox it feeds**. No behavior lives on a number.
+- Forwarding rules: **/settings/phone** ("Call Forwarding") — caller-based rules + voicemail default.
+- **Attribution is decided by the line that was dialed**: `hl_phone_numbers.lead_source_id` → the per-line
+  lead source → its inbox trigger seat → routing. The per-line sources (`phone_company` · `phone_signcall` ·
+  `phone_pastclient` · `phone_analegacy` · `fub_zach_seat`) live under the inbox integration on both the
+  Trigger Events and Lead Sources pages. Company (320-0906) rides Zillow + Homes.com + GMB — they collapse
+  to the ONE `phone_company` source on purpose. Past Client is deliberately ONE number (675-9877); the
+  per-past-agent attribution comes from `ForwardedFrom`, not separate sources.
+- Migrations: **0398** (per-line sources created; old generic `phone_call` deactivated not deleted) ·
+  **0399** (by-number reconcile + `lead_source_id` wiring) · **0401** (call/text trigger seats,
+  creates-lead + draft workflow stubs) · **0415** (Zach's FUB seat + Ana's inbox) · **0416** (source
+  owner/stage defaults).
+
+## 7 · Twilio (the provider)
+
+**The settings surface** — CRM sidebar → Phone & Voice → **Twilio** (`/settings/phone-provider`):
+- Credentials (4 fields: Friendly Name · Account SID · Auth Token · optional Subaccount SID) live in
+  `hl_settings` key `phone_provider` (auth token server-side/masked). **Verification law:** the record is
+  `verified` only when Twilio returns account status `active`. Disconnect deletes the creds.
+- Live status (connection, Voice/SMS capability, A2P campaign, the numbers table) is fetched from the
+  Twilio REST API at request time — never cached in the DB.
+- **Dialer assignments** (`hl_dialer_assignments`): one row per user — number, nickname, messaging service,
+  call forwarding, voice/text defaults. **One number, one living owner** (assign conflicts 409).
+- APIs: `GET/POST/DELETE /api/phone/provider` · `GET/POST /api/phone/dialers`.
+
+**A2P 10DLC (verified):** campaign **`CA7VR08` = VERIFIED** · brand `BNb9246a967…` STANDARD/APPROVED
+("Spradling Realty Group") · Messaging Service `MG05ab6dd6…` ("Low Volume Mixed").
+**THE LAW: every number joins the sender pool the moment it lands**
+(`POST messaging.twilio.com/v1/Services/MG05ab…/PhoneNumbers`) — the 30034 unregistered-number incident is
+why. Carrier-provisioning caveat: always verify one delivered test text on a fresh number.
+
+## 8 · FUB funnel laws (the wiring that must never drift)
+
+- **Ana's FUB profile phone = 675-9877, forever.** She works no FUB leads; changing it silently re-routes
+  the whole 37-number funnel.
+- **Two numbers per FUB user:** the SEAT line (FUB-owned, what leads dial, shown on Team Members) vs the
+  RING target (profile phone, where it rings). Zach: seat 490-2988 → cell. Ana: seat 349-5536 → 675-9877.
+- FUB team inboxes (Past Agents 37 numbers · Company 270-0645 + 453-5505) forward → 675-9877; Ben
+  Froeschl's kept seat (379-3429, the Zillow Tech Connect binding) rings 675-9877 + desktop.
+- Known FUB quirk (leave it): +19139547123 sits on FUB's `blockedIdentifiers` list since 2025-10.
+
+## 9 · History (compressed — git holds the rest)
+
+2026-07-09 numbers page + provider rename → 2026-07-11 ONE front door (675-9877) + carrier-VM race fix
+(timeout 25→18s) → 2026-07-13 numbers→inboxes model (routing groups deprecated in place) → 2026-07-14
+call-forward loop incident → the loop-guard law → 2026-07-16 the five-bucket model + loop-guard in code +
+A2P 12/12 → 2026-07-16 answered-recording/mint-at-ring/one-card (this doc's Update log) → 2026-07-17
+consolidated into THE one Calls doc.
+## 10 · Number porting — the port-out playbook
+
+**The God-tier endgame:** every business line lives in **our own Twilio**, not FUB or Google Voice. Then inbound
+SMS/voice hits a **Twilio webhook → HouseLoop native → the Myli workflow**, and outbound sends **AS the exact
+line** the person dialed. No middleman, no forwarding shell game, no lost source. We already own **two Twilio
+accounts** (HouseLoop + SRG, `support@spradlingrealtygroup.com`, vault / Master Sheet row 78).
+
+### Port a Google Voice (Workspace) number → Twilio (the 913-954-7123 recipe, battle-tested 2026-07-09)
+
+A **Google Workspace** Voice number (managed under our domain) ports differently from a consumer GV number — there's
+no `voice.google.com/about/port` unlock screen. The credentials + the address all live in the **Admin Console**.
+
+1. **Get the port-out credentials from Google Admin.** Admin Console → Apps → Google Workspace → **Google Voice →
+   Number porting** → the **"Port-out info"** button (top-right of the Ports list). It shows the **US/Canada
+   port-out PIN** (10 digits; the reveal eye/copy are trusted-click only — read it off-screen if automating).
+   - **Account number** = the **Google Billing ID** from the invoice (e.g. `9620-6665-8983` → `962066658983`) — **NOT**
+     the 10-digit phone number, despite what Google's generic help says.
+   - **PIN** = that port-out PIN.  **BTN** = `+1<number>`.
+2. **Submit the port-in via the Twilio Porting API — not the beta UI.** The "Port-in US Local (Beta)" wizard's
+   eligibility step downloads a CSV via a blob link that **silently kills the request when driven by automation** (it
+   never persists). Use the API (creds `TWILIO_ZACH_ACCOUNT_SID` / `TWILIO_ZACH_AUTH_TOKEN`):
+   - Upload the billing statement: `POST https://numbers-upload.twilio.com/v1/Documents` (multipart `File`,
+     `document_type=utility_bill`) → returns `RD…` doc SID.
+   - Create the port-in: `POST https://numbers.twilio.com/v1/Porting/PortIn` — **must** include top-level
+     `account_sid` + `target_port_in_date` + `notification_emails[]` + `losing_carrier_information{…}` +
+     `phone_numbers[{phone_number, pin}]` + `documents[RD…]`.
+   - Twilio auto-generates the **LOA** and emails it via **HelloSign** to `authorized_representative_email` for
+     signature. On signature → `port_submitted`. Full runbook: memory `reference_google_voice_port_out_playbook`.
+3. **Land it.** Point the number's **Messaging + Voice webhooks at HouseLoop** → native inbound; send AS it.
+
+<Warning>
+**⚠️ THE #1 REJECTION CAUSE — `INVALID_ADDRESS` (code 22154) + the 2-BUSINESS-DAY PROPAGATION TRAP.**
+The port validates the service address against the **losing carrier's (Bandwidth) record**, which = the **Google
+Voice "Service address"** (voice.google.com/settings → Service address, per-number), **NOT** the billing/invoice
+address. Two attempts for Ana's number bounced `INVALID_ADDRESS`: first the stale Kansas address, then the *correct*
+Florida one — because Google's own screen says **"Service addresses register within 2 business days."** When you
+**change** the service address it renders instantly in the UI but takes **up to 2 business days to propagate to
+Bandwidth**, and the port validates against the not-yet-updated carrier record. **So: fix the Google Voice service
+address → WAIT ~2 business days → THEN (re)submit the port with that exact string.** `customer_name` + address must
+match letter-for-letter. Twilio opens a Zendesk ticket per attempt but only echoes the `22154` code; reply-to-ticket
+reaches Porting Ops if you need the exact CSR address.
+</Warning>
+
+<Warning>
+**Secondary GV gotcha (VoIP direct-reject):** if a GV number rejects for reasons *other* than address, the
+battle-tested fallback = a **two-step port**: GV → a cheap **prepaid mobile SIM** (Tello / US Mobile, ~$10) first,
+let it settle a few days, **then** port that SIM → Twilio. Slower, near-100%. Try direct first.
+</Warning>
+
+### Port-vs-Forward — the LOCKED decision (Zach 2026-07-09)
+
+We do **not** port all ~35. We port the **3 real assets** and **forward the legacy pool** to one line — far
+less porting, same capture.
+
+| Number | Role | Action | Fires |
+|---|---|---|---|
+| **913-320-0906** | Company (Google My Business) | **PORT** out of FUB → Twilio | `phone_call_company` |
+| **913-354-8600** | Sign / Listings | **PORT** out of FUB → Twilio | `phone_call_sign` |
+| **913-954-7123** | Ana (real) | **PORT** out of Google Voice → Twilio | `phone_call_ana` |
+| 913-453-5505 · 913-270-0645 · +37 past-agent lines | Legacy / departed agents | **STAY in FUB → forward to one "Legacy Agents" Twilio line** | `phone_call_past_agent` |
+
+**Why forward the legacy pool instead of porting it:** those numbers aren't assets worth owning — they just
+need to not fall through. Forwarding is a same-day FUB config change (no port wait), and the numbers **stay in
+FUB so FUB keeps logging them natively**. They forward to a single dedicated Twilio "Legacy Agents" number that
+Myli answers (legacy intro) and that rings your cell.
+
+<Warning>
+**Two things this creates:**
+1. **Ported numbers leave FUB.** Once 320-0906 / 354-8600 / 954-7123 are on Twilio, FUB no longer logs them —
+   so each call is **mirrored back into FUB via the API** (`POST /v1/calls`, the `mirror_to_fub` step) to keep
+   the FUB timeline intact.
+2. **The legacy line can't tell which original number was dialed.** 40 numbers forwarding to one Twilio line all
+   read as "someone called the legacy line" — so they resolve to ONE subtype (`phone_call_past_agent`). FUB
+   still holds the exact number if per-number detail is ever needed. **Caller-ID pass-through** must be set on
+   every forward, or you see the FUB inbox number instead of who actually called.
+</Warning>
+
+For the FUB ports: **request a port-out packet from Follow Up Boss support** (account# + PIN + LOA per number) →
+Twilio port-in. Confirm each line in **FUB Admin → Phone Numbers** first; each port is a real **cutover**, not a
+copy. The forwarding pool needs no port — it's a routing change in FUB.
+
+### The rollout — pilot ONE, then batch
+
+1. **Pilot: 913-954-7123 (Ana's).** Port it first, prove the full **Twilio → HouseLoop native inbound + Myli
+   send-as-Ana** flow end-to-end. It's the highest-value line and its own worst gotcha (Google Voice) — nail it
+   and everything else is easier.
+2. **Then the owned business lines:** 913-320-0906 (Company/GMB) · 913-354-8600 (Sign/Listings).
+3. **Forward the past-agent pool** (453-5505, 270-0645, +37) → the single "Legacy Agents" Twilio line. This is
+   a same-day FUB routing change and does **not** wait on any port — do it FIRST to prove the loop.
+4. **Re-point the SRG `913-347-xxxx` numbers** (Commission Grids, etc.) off GoHighLevel (`leadconnectorhq.com`) →
+   Myli. We already own them.
+
+### A2P 10DLC — already registered, and EVERY number joins it (LAW, Zach 2026-07-09)
+
+US carriers require **A2P 10DLC brand + campaign registration** to send application SMS from a 10-digit number.
+We have a **VERIFIED campaign** (brand STANDARD/APPROVED, service "Low Volume Mixed", `MG05ab6dd6…`) — no fresh
+registration ever needed.
+
+**THE LAW (locked 2026-07-09 after the 30034 incident): every number joins the campaign's sender pool THE MOMENT
+it lands in the account — buy or port, BEFORE its first send.** One API call:
+`POST messaging.twilio.com/v1/Services/MG05ab…/PhoneNumbers {PhoneNumberSid}`. Note carrier provisioning takes
+hours after adding — a number can be in the pool and still bounce 30024 briefly; **verify one delivered test
+message before declaring any send-path live.**
+
+<Check>
+**2026-07-14 — A2P coverage is now 100% (Lee).** Audited the account against the sender pool: **12 numbers in the
+account, 12 in the pool.** Three ported lead-flow lines were live for Voice but **missing from the A2P pool** —
+**Company 320-0906**, **Sign Call 354-8600**, and **Ana Legacy 954-7123** (just ported). Added all three to
+`MG05ab6dd6…` via the one-call API. Brand `BNb9246a…` **APPROVED**, campaign `QE2c6890…` **VERIFIED (MIXED)** — no
+re-vetting, coverage is instant. Every number the account owns can now send A2P SMS. (Carrier provisioning caveat
+still applies — confirm one delivered test on 320-0906 / 354-8600 / 954-7123 before first production send.)
+</Check>
+
+<Warning>
+**Why this is law:** on 2026-07-08 the systems-health line sent 21 notification texts before it was on the
+campaign — all silently blocked (30034), the compliance subscore cratered to 6/20, and the "fix" was never
+delivery-verified (its own test bounced 30024 mid-provisioning). Audited + closed 2026-07-09: **every account
+number now registered** (incl. the new (913) 800-4470 Notifications line, joined before its first send), and the
+systems-health cockpit (Phase D) gains a probe — any outbound message with an error code = RED + text Zach.
+</Warning>
+
+### Cost (rounding error vs one Kyle Nations)
+
+| Item | Cost |
 |---|---|
-| **[AI Voice](/guides/ai-voice)** | Myli, the AI agent that answers the phone — a **Pipecat cascade** (Deepgram → Claude → ElevenLabs; LiveKit+Gemini and Retell both abandoned), the architecture (number → CRM webhook → `<Connect><Stream>` to the bot), the answer gate, and the `/ai/voice` control surface. |
-| **[Voice & Recording](/crm/phone-voice-voice-recording)** | The call-recording policy and Conversational Intelligence settings — per-user opt-out, team recording default, and the Deepgram → Claude transcript + summary. |
+| Google Voice port-out unlock | **$3 / number** |
+| Twilio port-in | ~$1 / number (one-time) |
+| Twilio number hosting | ~$1.15 / number / month |
+| A2P 10DLC campaign | **already registered — $0** (just add each number to it) |
+| Prepaid SIM (only if two-step GV port) | ~$10 / number |
 
-## How a call flows
+### Who does what
 
-1. A call lands on a HouseLoop number (see **[Phone Numbers & Call Routing](/guides/phone-numbers-and-call-routing)**).
-2. Routing decides who answers: a forward to a teammate's cell, the dialer default, or the **AI voice agent**.
-3. If enabled, the call is **recorded** and (with AI analysis on) transcribed and summarized.
-4. The call — direction, duration, recording, disposition, and any AI summary — is written to the lead's
-   activity, and an inbound call fires a notification.
+- **Human (Ezra / Zach):** sign the LOAs, pay the GV $3 unlock, click through the Twilio port-in console, the
+  FUB support port-out requests. Porting can't be done headless.
+- **Lee / automation:** the Twilio side — subaccount setup, the **port-in via Twilio's Porting API**, the
+  **receiver webhooks** (Twilio → HouseLoop), **adding each ported number to the existing A2P 10DLC campaign**, and wiring each ported line's
+  `workflow_id` in `hl_phone_numbers` → the Myli phone workflow.
 
-For the end-to-end architecture (the voice webhook order, Twilio signature verification, idempotency), see the
-comms subsystem map: **[CRM Comms — Texts, Calls, iMessage](/guides/crm-comms)**.
+### The receiver architecture (post-port, per line)
+
+```
+Inbound call/text → the ported number (in OUR Twilio)
+        → Twilio Messaging/Voice webhook → HouseLoop (native ingest, hl_lead_activity)
+        → match/create lead → the ONE (FUB→now-Twilio · Phone Call) workflow
+        → Myli reads the To line → source category → classify human → text-back AS the dialed line
+```
+
+---
+
+## 11 · The porting PRD (decisions · requirements · acceptance)
+
+<Info>
+**Ownership + capture + notifications is the scope.** Owner: **Caleb** (capture) · **Lee** (notifications) · Zach
+(telephony/porting). The voice agent that *answers* these lines — [AI Voice](/guides/ai-voice) — is a separate,
+**later** phase, **parked until this porting work is done**. It is NOT part of this spec.
+</Info>
+
+### Goal
+
+**Own every business number in our own Twilio, and capture every call natively — records + notifications.** Kill
+the three-source shit-show (FUB / Twilio / Google Voice) and collapse it to one pipe: **Twilio captures, FUB
+mirrors.** (Once we own the lines, the [AI Voice](/guides/ai-voice) agent becomes the front door — next phase.)
+
+### The problem (why this exists)
+
+- Phone-call notifications (Company / Sign / Past-Agent / Ana) are **documented but fire 0** — the trigger
+  `phone_call_received` is wired to Twilio, but the numbers route through FUB + Google Voice, so nothing reaches it.
+- FUB **call capture broke** at the webhook cutover (stale since ~2026-07-07) and **never captures cold/unknown
+  callers** to the company line.
+- **Ana's calls run through Google Voice** — invisible to both FUB and Twilio.
+- No transcripts exist anywhere (FUB has none).
+
+### The decisions (LOCKED 2026-07-09)
+
+| # | Decision |
+|---|---|
+| D1 | **Port 3 assets → our Twilio:** Company `913-320-0906`, Sign/Listings `913-354-8600`, Ana `913-954-7123` (out of Google Voice). |
+| D2 | **Forward the legacy pool** (`913-453-5505`, `913-270-0645`, +37 past-agent) → ONE dedicated "Legacy Agents" Twilio line. Stay in FUB; do NOT port. |
+| D3 | **One notify key `phone_call_received`, 5 subtypes** resolved by dialed-number → `hl_phone_numbers.category` (company/sign/past_agent/ana + generic). Shared resolver used by BOTH the Twilio webhook and the FUB path. |
+| D4 | **Ported numbers mirror back into FUB** via `POST /v1/calls` so the FUB timeline stays intact (they leave FUB on port-out). |
+| D5 | **A2P 10DLC is already registered** under our Twilio account — the ported numbers get **added to the existing campaign**, no new brand/campaign registration needed. |
+| D6 | **The line owner is the agent (Myli Voice), NOT part of this PRD.** Who *answers* the owned lines is the [AI Voice](/guides/ai-voice) build — it rolls in after porting. This spec only gets the numbers owned + captured. |
+
+### Requirements
+
+<AccordionGroup>
+  <Accordion title="R1 — Ownership & routing">
+    - Port D1's three numbers into our Twilio (own them natively).
+    - Forward D2's legacy pool → the single "Legacy Agents" Twilio line (same-day FUB config).
+    - Caller-ID pass-through on every forward (see who actually called, not the FUB inbox number).
+    - Add the ported numbers to the **existing A2P campaign** in Twilio.
+  </Accordion>
+  <Accordion title="R2 — Capture (Caleb)">
+    - Store every call natively on Twilio inbound (metadata + recording + which line), **including cold/unknown
+      callers** to the company line.
+    - Shared subtype resolver `resolvePhoneCallSubtype(dialedNumber)` → `hl_phone_numbers.category` → subtype,
+      called by both the Twilio webhook and the FUB path (`lib/phone/resolve-subtype.ts`).
+    - `mirror_to_fub` — write each ported-number call back to FUB (`POST /v1/calls`) with attribution + recording.
+    - Google Voice ingest for Ana until her number is ported (then retire GV).
+  </Accordion>
+  <Accordion title="R3 — Notifications (Lee)">
+    - `phone_call_received` fires the correct 1-of-5 typed card by subtype.
+    - Lead-less path for cold callers (no person match required).
+    - `fub_created` recency gate so a one-off catch-up never notifies on old activity.
+  </Accordion>
+</AccordionGroup>
+
+### Acceptance criteria
+
+- ☐ Call any of the 4 lines → a lead appears in HouseLoop CRM with the correct source + recording.
+- ☐ The matching typed notification (`phone_call_company/sign/past_agent/ana`) fires — no more 0s.
+- ☐ A cold unknown caller to the company line is captured + notified (lead-less).
+- ☐ A ported-number call also appears on the FUB timeline (mirror).
+- ☐ Ana's calls captured (GV bridge now; native after port).
+
+### Phases & owners
+
+<Steps>
+  <Step title="Phase 1 — Legacy line live (same-day, no porting)">
+    Forward the legacy pool → the Twilio "Legacy Agents" line. Capture the call (`create_lead` + recording) +
+    fire the notification. Proves the full capture loop without waiting on carriers. **Owner: Caleb** (capture),
+    Zach (FUB forward config).
+  </Step>
+  <Step title="Phase 2 — Capture + notify unified (in parallel)">
+    Shared subtype resolver · store cold/unmatched calls + recording · `phone_call_received` fires all 5 subtypes ·
+    `mirror_to_fub`. **Owner: Caleb** (capture) + **Lee** (notify).
+  </Step>
+  <Step title="Phase 3 — Port the 3 assets (1–2 weeks, carrier-gated) — IN PROGRESS">
+    Port Company + Sign + Ana into Twilio; add to the existing A2P campaign; retire Google Voice. **Owner: Zach**
+    (port requests) + Caleb (webhook wiring on landing). **Live status in the build log below.**
+  </Step>
+</Steps>
+
+### Open items / risks
+
+- **FUB `POST /v1/calls`** — confirm the API supports logging a call back to a person (for D4/mirror). Caleb to verify.
+- **Google Voice port `INVALID_ADDRESS` (RESOLVED, diagnosed 2026-07-10)** — the real cause was **not** a VoIP
+  direct-reject; it was the service-address **2-business-day propagation delay** (change renders in Google instantly
+  but reaches the carrier late). Fix = wait for propagation, then match the Google Voice service address exactly.
+  Two-step-via-prepaid-SIM stays as the fallback only if a *non-address* reject shows up.
+- **Legacy line can't distinguish which original number was dialed** — all resolve to `phone_call_past_agent` (FUB
+  still holds the exact number if needed).
+
+---
