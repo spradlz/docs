@@ -125,8 +125,28 @@ job appears, add it to the skip set.
 ## Filtering
 
 <ParamField query="view" type="string" default="all">
-  `all` · `comms` · `website` · `idx` · `ai` · `value` · `system`. Selects the tab (category).
+  `all` · `comms` · `email` · `website` · `idx` · `alerts` · `ai` · `seo` · `value` · `system`.
+  Selects the tab (category). Note the tab LABELED "Inngest" is `view=system`.
 </ParamField>
+<ParamField query="sortKey" type="string">
+  Server-side column sort — allow-listed projected columns: `status` · `label` · `category` ·
+  `channel` · `fn` · `trigger` · `source` · `idx_status` · `ai_cat` · `alert_type` · `who` ·
+  `app`. Omit for the default When (ts) order. Pair with `sort` for direction; paginate with
+  `offset` (the `before` cursor applies to ts order only).
+</ParamField>
+<ParamField query="offset" type="number">Non-ts sort pagination — skip N rows (load-more).</ParamField>
+<ParamField query="events" type="string">
+  Website tab: comma-list of pixel event_types. Email tab: comma-list of email kinds
+  (`email_sent`,`email_opened`,…) — the event pills.
+</ParamField>
+<ParamField query="alertType" type="string">
+  Saved Search tab — comma-list of `on-create` · `instant` · `daily` · `weekly`.
+</ParamField>
+<ParamField query="jobType" type="string">
+  Inngest tab — comma-list of function ids (the orchestration pills send their member fns).
+</ParamField>
+<ParamField query="cat" type="string">AI Cost tab — comma-list of atomic `ai_cat` values.</ParamField>
+<ParamField query="idxStatus" type="string">IDX tab — comma-list of listing statuses.</ParamField>
 <ParamField query="audience" type="string">
   Website Activity only — `human` or `bot`. Splits real visitors from SEO crawlers
   (Googlebot, GoogleOther, AI scrapers) classified at pixel ingest.
@@ -137,8 +157,28 @@ job appears, add it to the skip set.
 <ParamField query="channel" type="string">
   `email` · `imessage` · `sms` · `call` · `notification` (communication rows).
 </ParamField>
-<ParamField query="q" type="string">Free-text search across label + preview.</ParamField>
-<ParamField query="before" type="string">Cursor — return rows older than this timestamp (pagination).</ParamField>
+<ParamField query="q" type="string">Free-text search across label + preview + MLS digits (maps to the feed's `search`).</ParamField>
+<ParamField query="before" type="string">Cursor — return rows older than this timestamp (pagination, ts order).</ParamField>
+
+## Performance architecture (audit 2026-07-17)
+
+Why every view loads in under ~1s on a 976k-row log:
+
+- **Per-view predicate pushdown** — the lane views (idx/ai/seo/alerts/value) inject their own
+  category predicate INTO the `hl_run_log` branch so Postgres skips the other ~970k rows via the
+  mig `0419` indexes (`(source, started_at)` + `(fn, started_at)`; `hl_pixel_event (occurred_at)`
+  serves the Website/All sort). The category gate stays the classification SSOT.
+- **`idx_type` is derived post-query** for only the returned page's listings (the 60-day LAG
+  window per MLS, on the partial expression index). It previously ran as a CTE in EVERY view's
+  SQL and a nested-loop plan re-executed its 165k-row window scan per returned row — the 36.7s
+  Communications hang.
+- **All-view per-branch top-K** — each of the three branches contributes its own newest N (3×
+  the page, index-ordered) before the union sorts; skipped when a search or column sort is
+  active (those take the exact path).
+- **Bounded pill tallies** — idx 60d · AI 30d · Inngest orchestrations 30d (registry-bounded —
+  the raw `fn` column carries 17k+ distinct values).
+- The smoke test (`scripts/runlog-smoke.ts`) runs all 10 views with a **5-second budget** —
+  a perf regression fails CI-style, not silently.
 
 ### Example
 
