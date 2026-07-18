@@ -71,7 +71,20 @@ Every `.mdx` under `docs-site/` must be listed somewhere in `docs.json`, OR it's
 
 ### 2. MDX syntax error — usually curly braces
 MDX reads `{ ... }` as code. Literal braces in prose break the build, e.g. `HouseLoop: {link|No lead created}`.
-Wrap them in backticks so they're literal: `` `{link | No lead created}` ``. The dry run tells you the file + line.
+Wrap them in backticks so they're literal: `` `{link | No lead created}` ``. The dry run tells us the file + line.
+
+### 3. THE INVISIBLE ONE — a `%` in a HEADING crashes the page at RENDER (build stays green)
+**Discovered 2026-07-18 after the SRG reconciliation master was error-500 for 15 days.** A percent sign in any
+heading (`## ... at 100%`) becomes part of the anchor slug; Mintlify's server render then calls
+`decodeURIComponent` on it and throws `URIError: URI malformed` — **every visit to the page 500s, while the
+Mintlify BUILD check stays green**, so `mirror-docs.mjs` happily reports `published: true`. Neither the dry run
+nor the build catches it. Same class: a bare `{{token}}` in prose also render-crashes with a green build.
+- **Rule: never put `%` (or `{{`) in a heading — write "percent".** Percent signs in body prose are fine.
+- **Sweep before you hunt:** `grep -rnE '^#{1,6} .*%' docs-site --include="*.mdx"`
+- **To corner an unknown render-crash:** run the docs locally — `cd ~/.bossloop/docs-repo && npx mint dev` —
+  the crashing page 500s locally with the real error in the console, and you can bisect the file offline.
+(2026-07-18: this exact bug had silently killed `guides/srg-reconciliation-engine`, `fub/master-scraper-ssot`,
+and `wip/adam-pastclient-address-resolver` — three of our most-read pages.)
 
 Fix whatever it names, then run the real publish (`node tools/docs/mirror-docs.mjs`) and confirm `"ok": true`.
 
