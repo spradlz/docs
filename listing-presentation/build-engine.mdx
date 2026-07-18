@@ -1,0 +1,91 @@
+---
+title: "The Reproducible Build Engine"
+description: "The deterministic scripts, assets, and exact commands that turn CMA comp data + subject facts into the branded, merged listing-presentation print PDF. This is the half that is code, not vibe."
+---
+
+<Note>
+This is the **build half** — everything downstream of having the comp data. It is fully deterministic:
+same inputs, same output, every run. No login, no network, no MCP server required. It lives in the
+toolkit at `.claude/reports/listing-presentation-work/`.
+</Note>
+
+## The scripts
+
+| Script | Input | Output |
+| --- | --- | --- |
+| `build-lp-v3.py` | brand assets, `curated-reviews.json` | `sg-sellers-page.html` — the 17-page presentation deck |
+| `rebrand-cma.py` | the Claude-Cowork CMA HTML (in Downloads) | `cma-branded.html` — the CMA in our brand |
+| `compress-cma.py` | `cma-branded.html` | `cma-branded-web.html` — a &lt;16MB copy for the on-screen artifact only |
+
+The print PDF is produced by rendering each HTML with headless Chrome and merging with `pdfunite`.
+
+## What `rebrand-cma.py` does (in order)
+
+It reads Cowork's raw CMA (navy + **gold**, Segoe UI) and applies deterministic transforms:
+
+1. **Swap the entire stylesheet** for our token system — navy `#0F2153`, brand blue `#2D6DFF`, no gold,
+   serif display face, our card/table/pill styles.
+2. **Drop our white lockup** on the cover (transparent PNG, never a white box).
+3. **Fix the fake galleries.** Cowork padded each data sheet's "19-photo" gallery by repeating the one
+   real photo 19+ times. The engine hoists that single real photo to the **top of the sheet as a hero**
+   and deletes the duplicate grid.
+4. **Add the difference column** to every comp table — the your-home-vs-comp delta, computed from the
+   row values: green when we're ahead, amber when we're behind (**never red**), a dash when there's no
+   clean numeric diff.
+5. **Retune the numbers + commentary** to the reconciled recommendation and remove contradictions. These
+   are the per-listing content edits (the pricing story) — the one part that is judgment, expressed as an
+   explicit, reviewable list of find-and-replace edits so it's still reproducible from the script.
+6. **Merge the price graphic into the Executive Summary** (Min / Recommended / Max) and even up the
+   comp columns.
+
+## Reproduce it
+
+```bash
+cd .claude/reports/listing-presentation-work
+
+# 1. build both halves
+python3 build-lp-v3.py          # -> sg-sellers-page.html  (presentation)
+python3 rebrand-cma.py          # -> cma-branded.html      (CMA)
+
+# 2. serve locally so Chrome can render with images
+python3 -m http.server 8811 &
+
+# 3. render each to a full-resolution PDF
+CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+"$CHROME" --headless --disable-gpu --no-pdf-header-footer \
+  --print-to-pdf=pres.pdf "http://localhost:8811/sg-sellers-page.html"
+"$CHROME" --headless --disable-gpu --no-pdf-header-footer \
+  --print-to-pdf=cma.pdf  "http://localhost:8811/cma-branded.html"
+
+# 4. merge into one print PDF
+pdfunite pres.pdf cma.pdf "$HOME/Desktop/Spradling-Group-Listing-Presentation-<name>.pdf"
+```
+
+## Print discipline (non-negotiable)
+
+- **Every `.sheet` / `.page` is one US-Letter page** — `@page{size:letter;margin:0}` + `min-height:11in`
+  + `page-break-after:always`, with `page-break-after:auto` on the last sheet so there's no trailing blank.
+- **Measure, don't assume.** After any change, each page's rendered height must stay under the ~1056px
+  (11in @ 96dpi) print boundary. The build checks this with Playwright before rendering the PDF; a page
+  that spills to a second physical sheet is a bug, fixed by tightening spacing — not shipped.
+- **Verify the actual PDF**, not just the browser: `pdfinfo` must report the expected page count with
+  every page `612 x 792 pts (letter)`, and individual pages get rendered to PNG to confirm nothing
+  bleeds across a break.
+
+## The brand law it enforces
+
+Ported straight from our UI doctrine so the CMA matches the CRM and the website:
+
+- Navy `#0F2153` is the only navy; brand blue `#2D6DFF` is the accent. **No gold, no green** used
+  decoratively (green only ever means genuine positive/advantage — e.g. a "+" difference).
+- The HouseLoop lockup is **always transparent**, never on a white box.
+- Real photography only. No duplicated or fabricated imagery — if we only have one real photo, we show
+  one, not a faked gallery.
+- Tokens, not raw hex, for anything that can be a token.
+
+## Toolkit contents
+
+Everything is colocated in `.claude/reports/listing-presentation-work/` so relative paths resolve:
+the scripts above, the brand assets (`lockup-d-white.png`, cover/interior photography, portal `logos/`),
+`curated-reviews.json` (hand-curated, name-free seller/buyer reviews), and `SKILL-cma-data-pull.md`
+(the companion MLS data-pull skill).
