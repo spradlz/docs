@@ -288,9 +288,24 @@ Exit - <name>`** + notes. 4. Still nothing → NOT RESOLVED → investigation.
 Spradling Team **1,251** · Ana Only **434** (post-dedup; the doctrine's 461 was pre-dedup) · Ana Handoff
 **82** · Agent DNC **12** · Internal **1**. Route + count by the `bucket` COLUMN, never `is_ana`.
 
-### Disposition — still own it or moved?
-County DEED primary → Repliers → Ninja. **180-day rule** (a Sold ≤180d after the purchase IS the purchase).
-**Seller signal:** a candidate current home actively listed/pending = the highest-value reactivation event.
+### Disposition — the deterministic engine (Zach LOCKED 2026-07-18)
+Every home carries ONE of four tokens in `hl_srg_past_client_homes.disposition`, computed deterministically from
+**SISU close dates + the MLS data sheet** (read across **Residential + Multifamily + Land** — investment properties are
+often MF; a residential-only search wrongly reads "off-market"). MLS# is the address ground truth. No LLM, no dogfood.
+- **`owns`** — bought with us, MLS shows NO sale since our buy → still own it (`current_home_status=own`).
+- **`sold_moved`** — we repped BOTH the buy and the later sale (`we_repped_sale=true`).
+- **`lost_listing`** — bought with us, later sold via a NON-SRG agent (`sold_not_by_us=true`) — the Bazalgette rule below.
+- **`lost_buy`** — bought with ANOTHER agent, never in SISU.
+The rule per home: NOT in SISU + non-roster buy agent → `lost_buy`; else pull the MLS sheet, find any sale after our buy
+date — none → `owns`; sale by OUR roster agent (or a SISU sell) → `sold_moved`; sale by another agent → `lost_listing`.
+Stamp `resale_after_purchase/date/price/mls/source`, `resale_checked_at`, `disposition_source`. **Seller signal:** an
+`owns` home actively listed/pending = the highest-value reactivation event. A multi-owner client has MANY `owns` homes,
+each its own HouseLoop ID — we do NOT assume which is their primary residence.
+> **Status (2026-07-18):** disposition is 98% unpopulated (0 resale checks ever run); the deterministic BOOK-WIDE engine
+> is specced + queued for execution — handoff `.claude/state/caleb-to-fable-disposition-engine-2026-07-18.md`. The
+> identity backbone it builds on is done: home URLs 100% (sellable book), agent-of-record **2,106/2,106 = 100%**,
+> address integrity swept (1 real MLS mislink fixed). The card model is proven on Nations (pc1, 5 homes, all 4 tokens)
+> and Julie Ferguson (pc3545).
 
 ### Lost listing — the Bazalgette rule
 > ONLY a home **we BOUGHT** that **they later sold via a NON-SRG agent**. If WE sold it, never lost. A
