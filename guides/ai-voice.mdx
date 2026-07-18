@@ -1,6 +1,6 @@
 ---
 title: "AI Voice"
-description: "THE one AI Voice doc — Myli answers the phone. CURRENT runtime (2026-07-18) = GEMINI LIVE native-audio SPEECH-TO-SPEECH (one model, audio→audio; gemini-2.5-flash-native-audio, voice Leda) hosted on PIPECAT CLOUD (apps/myli-voice-agent/pipecat_bot.py, MYLI_ENGINE=s2s). The old Deepgram→Haiku→Cartesia cascade is RETIRED — kept only as the MYLI_ENGINE=cascade fallback. This page reads top-to-bottom: the S2S stack, the lines she covers, her prompt architecture (lean base + 4 buckets), the CRM seam, the host, cost, then the ONE go-live blocker (wire Twilio → the deployed agent). Cascade / Retell / LiveKit+Gemini are quarantined in HISTORY."
+description: "THE one AI Voice doc — Myli answers the phone. CURRENT runtime (2026-07-18) = GEMINI LIVE native-audio SPEECH-TO-SPEECH (one model, audio→audio; gemini-2.5-flash-native-audio, voice Leda) hosted on PIPECAT CLOUD (apps/myli-voice-agent/pipecat_bot.py, MYLI_ENGINE=s2s), WIRED to Twilio via the CRM voice route (phone_provider.pipecat_cloud_agent). The old Deepgram→Haiku→Cartesia cascade is RETIRED — kept only as the MYLI_ENGINE=cascade fallback. This page reads top-to-bottom: the S2S stack, the lines she covers, her prompt architecture (lean base + 4 buckets), the CRM seam, the host, cost, then go-live (gauntlet + polish). Cascade / Retell / LiveKit+Gemini are quarantined in HISTORY."
 ---
 
 <Info>
@@ -11,6 +11,12 @@ past). Everything under **HISTORY** at the bottom is quarantined dead eras, not 
 
 ## Update log
 
+- **2026-07-18 (PM)** — **The wire is IN.** The CRM voice route now streams myli-mode calls to the deployed
+  Pipecat Cloud agent: new `hl_settings.phone_provider.pipecat_cloud_agent` config (env `PIPECAT_CLOUD_AGENT`
+  overrides; prod = `myli-voice.spradling-group`) → `<Stream url="wss://api.pipecat.daily.co/ws/twilio">` with
+  the `_pipecatCloudServiceHost` parameter (§06). Fallback chain: cloud agent → ngrok `pipecat_ws_host` →
+  LiveKit SIP → voicemail. Commit `b45e401fd4`, deploy verified SUCCESS + Inngest re-synced. Next: the
+  913-937-9359 gauntlet call, then transcript + `ai_voice` cost polish.
 - **2026-07-18** — **The speech-to-speech pivot + a real host.** Ripped out the 3-hop cascade
   (Deepgram STT → Claude Haiku → Cartesia TTS) and put Myli on **Gemini Live native-audio speech-to-speech**
   — ONE model, audio in → audio out (`gemini-2.5-flash-native-audio-preview-09-2025`, voice **Leda**,
@@ -182,12 +188,11 @@ which the observer doesn't sum, so a live S2S call currently does NOT land a rea
 the cost meter for the audio-token model + the Pipecat Cloud host cost is a go-live follow-up (§06).
 </Warning>
 
-# ═══ 06 · GO-LIVE — the ONE blocker + what's next ═══
+# ═══ 06 · GO-LIVE — the wire is in; gauntlet + polish remain ═══
 
-<Warning>
-**The one thing gating "she answers": Twilio still streams to the old ngrok host, not the deployed agent.** The
-CRM voice route emits `<Connect><Stream url="wss://{pipecat_ws_host}/ws" />`, which points at the laptop tunnel.
-To route calls to Pipecat Cloud, the route must emit the Pipecat Cloud service-host TwiML instead:
+**The Twilio → Pipecat Cloud wire SHIPPED 2026-07-18** (commit `b45e401fd4`, CRM deploy verified SUCCESS).
+The CRM voice route (`app/api/phone/webhooks/voice/route.ts`) reads `hl_settings.phone_provider.pipecat_cloud_agent`
+(env `PIPECAT_CLOUD_AGENT` overrides; set to `myli-voice.spradling-group` in prod) and, when present, emits:
 
 ```xml
 <Connect>
@@ -197,10 +202,9 @@ To route calls to Pipecat Cloud, the route must emit the Pipecat Cloud service-h
 </Connect>
 ```
 
-(us-west = the bare `api.pipecat.daily.co`; other regions prefix the host.) Gate it on a
-`hl_settings.phone_provider.pipecat_cloud_agent` config (keep the ngrok `/ws` branch as fallback), deploy the CRM
-(git push → `curl -X PUT https://crm.houseloop.ai/api/inngest`), then test-call **913-937-9359**.
-</Warning>
+(us-west = the bare `api.pipecat.daily.co`; other regions prefix the host.) **Fallback chain preserved:**
+cloud agent → ngrok `pipecat_ws_host` → LiveKit SIP → `<Record>` voicemail. Instant rollback = clear
+`pipecat_cloud_agent` from the config (no deploy needed).
 
 **Go-live checklist:**
 
@@ -208,7 +212,7 @@ To route calls to Pipecat Cloud, the route must emit the Pipecat Cloud service-h
 - [x] Lean base + 4 buckets seeded (migrations 0419 + 0420); `set_caller_type` records the bucket.
 - [x] Deployed to Pipecat Cloud (`myli-voice`, agent-2x, us-west, cold-start) — status **ready**.
 - [x] Secrets set (`myli-voice-secrets`, `MYLI_ENGINE=s2s`).
-- [ ] **Wire Twilio → the deployed agent** (the `_pipecatCloudServiceHost` TwiML above) — the blocker.
+- [x] **Wire Twilio → the deployed agent** (the `_pipecatCloudServiceHost` TwiML above) — shipped 2026-07-18, commit `b45e401fd4`.
 - [ ] Test-call **913-937-9359**: she greets once, latency flat ~1 s, seller flow asks the ADDRESS, `set_caller_type` fires (watch `pipecat cloud agent logs myli-voice`).
 - [ ] Re-add transcript capture (aggregator turn events) → the wrap-up.
 - [ ] Re-wire `ai_voice` cost for the audio-token model + the Pipecat Cloud host cost.
