@@ -1,162 +1,137 @@
 ---
-title: "Trigger-Event Test Cockpit"
-description: "The receipt-first test harness for every trigger event + workflow in the CRM: a full-page cockpit off the Trigger Events page that fires each door for real on a test lead, obeys the real routing rules, and renders a top-to-bottom 'white sheet' of real receipts (the Myli text, the email in full, the stage change, the Inngest checkmarks) plus an AI-vs-AI role-play bar. This page is the PRD + architecture + build state — read it to continue the build."
+title: "Test Cockpit: the AI Testing & Tuning Studio"
+description: "ONE surface under AI where every AI behavior in HouseLoop gets tested AND tuned: fire trigger events and workflows for real, roleplay against Myli's voice brain and the lead-follow-up brains, watch every receipt and run log live, edit the prompt as a draft on the spot, re-run, and promote to live only when the gauntlet is green. This page is the living PRD + architecture + build state."
 ---
 
 <Info>
-**Status: IN BUILD (P0 + P1 backbone shipped).** This is the living PRD/architecture for the Test Cockpit. The
-build is phased (P0-P4 below); P0 (the catalog reader) and the P1 backbone (the 3 real emitters + the receipt
-assembler + the run API) are committed + verified live — a real Direct Registration fired end-to-end (purge →
-mint → `hl_trigger_fire` matched=1 → real welcome email to the inbox). Spec (LOCKED wireframe):
-`docs/wireframes/test-cockpit-2026-07-20.html`. Plan: `.claude/plans/` (approved). Scope-lock:
-`.claude/state/session-scope-test-cockpit.lock`. Owner: Adam.
+**Status: IN BUILD. Adam runs point on design + implementation (Zach 2026-07-20); Lee owns the AI Voice
+engine + Lead Follow-Up research.** Shipped so far: the Trigger Events backend + page (details below).
+The unified 3-section cockpit is in wireframe iteration. Wireframe (ONE link, updates in place):
+`https://claude.ai/code/artifact/487fad8c-696d-4926-a461-e7f9545e6d70` · pinned source:
+`docs/wireframes/test-cockpit-wireframe-v1-2026-07-20.html`. Scope-lock:
+`.claude/state/session-scope-test-cockpit.lock` · handoff: `.claude/state/adam-handoff.md`.
 </Info>
 
-## Why this exists
+## The vision: a tuning studio, not a test bench
 
-Every trigger event is only trustworthy if you can fire it **for real** on a live lead and read **every receipt**.
-Two production lies this session stayed hidden until a real registration + a real saved search were driven through
-the actual UI: the saved-search **"80 sent / 0 delivered"** phantom (the runner skipped a locked-but-archived
-workflow while the site stamped "sent"), and a **hand-rolled "100 homes"** alert (a backdated watermark faked a
-result). The fix isn't more one-off manual testing — it's a **systematic, autonomous, receipt-first** harness: one
-place to fire any trigger event on demand, obey the real routing, and prove it with receipts. No vibe, no
-hand-rolling.
+Every AI behavior in HouseLoop - the voice answer, the first-touch text, the nurture cadence - is driven by
+prompts, context blocks, and playbooks. Today those live in one place (AI Prompting + AI Context Blocks) and
+the behaviors fire somewhere else (workflows, the voice line, the clone). The Test Cockpit closes the loop in
+ONE surface:
 
-## What it is — the cockpit
+**SEE the prompt → TEST it → WATCH receipts + run log → EDIT as draft → RE-RUN → PROMOTE (gauntlet-gated).**
 
-Entry (Zach 2026-07-20): a single **Test Cockpit** page at the **bottom of the Pipeline & Workflow** nav group —
-NOT a Test button on every trigger-event row. Open it, and a **dropdown at the top picks what to test: a trigger
-event OR a workflow**. The page has four zones.
+- **Drafts never touch production.** Every compose seam accepts a prompt override, so the cockpit tests draft
+  prompts without redeploying or changing what real leads experience.
+- **Promote is gated on the gauntlet** - a prompt change cannot go live until its scenario suite passes.
+  This is CI for prompts: every edit is proven against the trap scenarios BEFORE it talks to a real lead.
+- **AI Prompting stays the single source of record.** The cockpit is where drafts get proven, then promoted
+  into it. No forked prompt copies (REUSE_NOT_RECREATE).
+- **The Prompt & Context rail rides every section:** whatever you are testing, the exact live prompt/persona/
+  playbook/context blocks that drive it are visible right there - with Edit as draft, Diff vs live, and
+  Re-run with draft.
 
-<Frame caption="The locked wireframe — the build spec (UI_ITERATION_HTML_FIRST). Every receipt block is labeled with the real table it reads.">
-  <img src="/images/test-cockpit-wireframe.png" alt="Trigger-Event Test Cockpit wireframe: criteria bar on top, live receipt run-log at center, workflow steps at right, role-play bar at bottom" />
+## Where it lives (Zach decision, 2026-07-20)
+
+**AI → Test Cockpit.** Not under Pipeline & Workflow - because the cockpit is not only testing workflows and
+trigger events. Those doors inject AI context blocks and solicit conversation with the lead, so testing them
+IS testing the AI. It sits next to the consolidated prompts home (AI Prompting + AI Context Blocks): one
+place to author prompts, one place to prove them.
+
+<Frame caption="Wireframe v2 (in iteration): the tuning loop up top, true tabs (one section per view), the receipt white sheet, and the Prompt & Context rail with the gauntlet-locked promote.">
+  <img src="/images/test-cockpit-wireframe.png" alt="Test Cockpit wireframe v2: AI breadcrumb, tuning-loop strip, three tabs, full receipt white sheet, prompt and context rail" />
 </Frame>
 
-1. **① Top bar — what to test + the test-lead criteria.** A **"What to test" selector** (a `Trigger event` /
-   `Workflow` toggle + a dropdown of every door / every workflow); a source picker **Follow Up Boss** (search a real
-   test lead, like the lead-integration pull-in) or **Direct Registration** (mint fresh under houseloop.ai); an
-   editable **email + phone** (default Zach's real ones); a **New-lead / Existing-lead** arm toggle; and a
-   **role-play persona** (one of 4-5 DISC profiles, each with its own prompt) for the AI counterparty.
-2. **② Right column — the workflow that will run.** The top-to-bottom node cards for the selected arm (reusing the
-   Workflow Builder render), with live ✅/⏳/○ state and an "edit ↗" deep-link to `/workflows?wf=`.
-3. **③ Center (~75%) — the live "white sheet" run log.** On **Run**, a live top-to-bottom stream: "opening
-   Playwright… registering this lead…" → **trigger fired** (the `hl_trigger_fire` receipt) → **lead created / stage
-   changed** (the receipt + a link to the lead) → **branded email sent** (the **full HTML render of the exact email**
-   + who it sent as) → **Myli text sent** (the words) → the all-activity sheet, each row with a ✓ and its
-   source-table proof.
-4. **④ Bottom — the role-play / override bar.** **Autonomous run** (the DISC persona converses with Myli/the clone,
-   AI-vs-AI down the whole workflow); **Override** (Zach texts the clone himself, as the lead, to his real phone, and
-   watches it respond); a channel toggle **SMS · Email · Voice (soon)**.
+## The three sections
 
-## The architecture — the pipeline of one Run
+### 1 · Trigger Events & Workflows (Adam - BUILT, live at /settings/test-cockpit)
 
-```
-Test button (row) → cockpit → Run
-  1. PURGE    the test lead (clean slate)                         → purgeLead()  [reuse]
-  2. FIRE     the door via its family's REAL emitter              → fireDoor(eventKey, arm, testLead)
-  3. WAIT     for Inngest to settle
-  4. GATE     assert the fire ledger (the primary receipt)        → hl_trigger_fire.matched / hl_tool_fire.ok
-  5. RUN      the receipt reader + assemble the white sheet        → auditLead() [reuse] + receipt assembler
-  6. RENDER   the cockpit: workflow (right) + receipts (center)
-```
+Fires the REAL production door on a test lead, then reads every receipt. **The only section that touches the
+real world** - it says so in amber (New arm purges the test lead with the real DELETE cascade, then mints
+fresh and sends real comms).
 
-**INNGEST_OR_IT_DOESNT_EXIST:** every fire goes through the *real* production emitter — never a fake side-effect.
-**The table is the truth:** every receipt reads a real table; nothing is inferred or re-rendered.
+- **Controls:** What to test (trigger event OR workflow) · lead source (FUB / Direct) · email + phone · New/
+  Existing arm · DISC roleplay persona · Run.
+- **The receipt "white sheet"**, each card backed by its real table:
+  | Step | Proof |
+  |---|---|
+  | Trigger fired | `hl_trigger_fire` (event_key, matched, routed_by) - rendered as the code receipt |
+  | Lead created + stage | `hl_leads` + `hl_stage_transitions` (read DIRECT - workflow stage moves skip the All feed) |
+  | **Context injected** | the `buildFirstTouchBrief` blocks the AI actually received - the seam between the workflow and the AI; opens in the Prompt rail |
+  | Branded email | `hl_email_send_log.body_html` - the FULL sent HTML in an iframe |
+  | Myli text | `hl_messages` - the words, as an iMessage bubble (delayed nurture beats show as pending) |
+  | Audit scorecard | every surface verified (lead · workflow · notification · email · text · note · tag · All feed) |
+- **Right rail:** the workflow run (node states) + the Prompt & Context rail.
+- **Run history:** every past test run with the prompt VERSION it ran against and its result - so you can see
+  whether a prompt change actually helped.
 
-### The row source — the catalog (P0, SHIPPED)
+### 2 · AI Voice (Lee - engine working, UI in wireframe)
 
-`lib/test-harness/catalog.ts` → `buildTestCatalog()` reads `hl_trigger_events` (THE board catalog) + the two-arm seat
-bindings (`hl_lead_source_events` native / `hl_fub_webhook_settings` FUB, mig 0381), so the Test page rows **can never
-drift from the live Trigger Events board**. It returns **8 families / 71 events**, each with its family, fire method,
-and whether each arm (new / existing) is bound + active with the real workflow name. Verified live.
+Retell-style testing for Myli's voice brain: text-mode roleplay against the LIVE deployed persona + playbooks
+(no calls, no sends, pennies).
 
-| Family | Events | How the harness fires it (`fire`) |
-|---|---|---|
-| **Website Registration** | 30 | `ui` — Playwright over real Chrome drives houseloop.ai (direct reg, tour, contact, saved search, seller) |
-| **Follow Up Boss** | 3 | `fub` — flip the FUB door on + create/scrape a real FUB person → `fub/lead.import` |
-| **Behavioral (Website)** | 4 | `behavior` — emit the pixel view/like/save/share |
-| **Inbox & Communication** | 5 | `webhook` — POST the inbound SMS/BB/email webhook |
-| **Insights** | 5 | `cron` — invoke the `insight-engine` cron |
-| **Transaction Coordination** | 3 | `tc` — e-sign send / Documenso webhook |
-| **AI Tools** | 20 | `tool` — `execTool` on the bound lead |
-| **Manual** | 1 | `manual` — the Add-Lead path |
+- **Scenario library:** archetype scenarios (happy-seller, valuation-fisher, question-asker, bye-mid-intake,
+  injection-attacker, rambler, refuser, wrong-number) - each traps a specific failure. Every bad real call
+  becomes a new scenario; the suite only grows.
+- **Gauntlet:** simulated callers with persona briefs · cross-family Claude judge · binary rubric with quoted
+  evidence · pass^k history trend. Engine: `tools/myli-voice/roleplay.mjs` (interactive) + `gauntlet.mjs`.
+- **Chat with the brain:** interactive text roleplay against live OR draft persona.
+- **Phone smoke test:** one button dials the scripted call on the real line, records both channels, drops the
+  recording + transcript in the cockpit (`test-call.mjs`).
 
-Saved-search delivery has a **second half**: after the search is created via `ui`, the harness **seeds a synthetic
-`Listing`** (matching the metro, `firstSeenAt=now`) → `houseloop/idx.event` → the instant alert fires → email; then
-cleans up. This is the `seed` mechanism.
+### 3 · Lead Follow-Up (new - the conversion playground)
 
-### The receipt "white sheet" — what proves each step
+Tests the whole lead-conversion system on synthetic fixture leads with a **hard no-send guarantee**: it runs
+on the compose-only seams (`composeAiMessage` composes without sending; the harness runtime mocks every
+mutating tool). Nothing ever reaches a real person.
 
-The receipt assembler (P0 next) gathers, in time order, for one `hl_workflow_runs.id`:
+- **Fixtures + personas:** synthetic leads (buyer/seller fixtures) × DISC lead personas × the AI lane
+  (Myli or the owner's clone).
+- **Touchpoints:** first-touch compose · conversation roleplay (autonomous AI-vs-AI or manual override "type
+  as the lead") · nurture floor touch · daily home pick · instant-ack · e-sign nudge.
+- **Assertion gates:** one-question-per-text (Cold-Lead Law), no leaked reasoning, valid tool args, policy
+  deflections - judged with evidence.
+- **Cadence dry-run:** "if this lead goes silent, what fires and when" - computed, writes nothing.
+- Productizes the proven harness patterns: `mack-roleplay.ts` (AI-vs-AI) + `preview-firsttouch.ts`
+  (preview == send) on the compose seams.
 
-| Step | Proof table + column | Rendered as |
-|---|---|---|
-| Door fired | `hl_trigger_fire` (`event_key`, `matched`, `routed_by`) · AI: `hl_tool_fire` | the code receipt |
-| Workflow ran | `hl_workflow_runs` (`status`, `outcome`, `triggered_by`) | the run spine (top) |
-| Inngest ran | `hl_run_log` (`status='success'`) | the ✓ checkmark |
-| Lead created / stage | `hl_leads` + `hl_stage_transitions` (⚠ NOT in the All feed — read it directly) | receipt + lead link |
-| Email sent | `hl_email_send_log.body_html` (the FULL rendered HTML) + `to_email` + sender | full email in an iframe |
-| Myli text | `hl_messages` (`body`, `channel`, `actor_role`) | the words, as a bubble |
-| Note / tag / task / appt | `hl_notes` · `hl_lead_tags` · `hl_tasks` · `hl_appointments` | activity rows |
+## What is built and verified (the Trigger Events backbone)
 
-## What to reuse (do NOT rebuild)
+- **`lib/test-harness/`** (CRM app): `catalog.ts` (rows from `hl_trigger_events` + the two-arm seat bindings -
+  8 families / 71 events, can never drift from the board) · `doors.ts` (per-door expectation registry) ·
+  `audit.ts` (`auditLead` 10-surface reader + `purgeTestLead` real cascade) · `receipt.ts` (the white-sheet
+  assembler) · `emitters/` (website-intake via `processLeadIntake` direct, FUB via `fub/lead.import`,
+  saved-search via a gated synthetic-Listing seed → `houseloop/idx.event`) · `run.ts` (purge → fire → poll →
+  receipt).
+- **APIs:** `POST /api/test/run` · `GET /api/test/receipt` · `GET /api/test/catalog` (admin-gated).
+- **The page:** `app/(crm)/settings/test-cockpit/` + `components/settings/test-cockpit/TestCockpit.tsx`.
+- **Verified live:** a real `direct_registration` fired end-to-end - purge → fresh mint → `hl_trigger_fire`
+  matched=1 → the real welcome email (full 9.3KB body_html read back) → workflow running. INNGEST-or-it-
+  doesn't-exist: every fire goes through the real production emitter; every receipt reads a real table.
 
-- **Receipt reader:** `auditLead()` (`tools/mcp/houseloop-registration-harness-server.mjs`) — 10 independent surface
-  checks across CRM + web DBs. Lift into `lib/test-harness/`.
-- **Clean-slate reset:** `purgeLead()` (`lib/leads/purge-lead.ts`) — real DELETE cascade + pixel/ghost purge +
-  phone-keyed comms + web-User delete + the `hl_deleted_web_emails` tombstone.
-- **Full email render:** `WorkflowPreviewModal` (`components/workflows/`) renders an email via iframe srcDoc.
-- **Vertical step list:** the Run Log's `FeedRow.trail` render (`components/run-log/RunLogTable.tsx`).
-- **Node cards:** `WorkflowBuilder` `NodeCard`/`nodeSummary` (needs a new read-only render mode).
-- **Fire chains (all built except the seeder + Playwright recipes):** website `pushLeadToCRM →
-  /api/integrations/website/lead-intake` · FUB `webhook → fub-webhook-router → fub/lead.import → backfillFubComms` ·
-  saved-search `Repliers webhook → houseloop/idx.event → savedSearchInstantCheck`.
-- **Role-play:** the `scripts/harness/mack-roleplay.ts` AI-vs-AI pattern (`__getCloneRuntimeForHarness`), promoted
-  into the cockpit's bottom bar.
+Hard-won rules baked in: the intake dedups by PHONE (strong key) - a fresh mint requires the purge; website
+doors are REAL (a saved_search test mints a real lead); nurture workflows sit `active` mid-delay, so a run is
+"ok" when the door fired + routed, with settle/audit as the live progression.
 
-## Build state + phased roadmap
+## Roadmap
 
-- **P0 — Foundation (SHIPPED):** the catalog reader (`lib/test-harness/catalog.ts`, verified live) + the frozen
-  wireframe spec. Commit `6c42f77769`.
-- **P1 — The 3 customer families end-to-end (SHIPPED, commit `b15139d324`):** the receipt assembler
-  (`lib/test-harness/receipt.ts`) + `GET /api/test/receipt` + `POST /api/test/run` (purge → fire → poll →
-  receipt) + `fireDoor` emitters for **Direct Registration** + the other website doors (via `processLeadIntake`
-  directly — the real intake, no HTTP hop), **Saved-search** delivery (synthetic-`Listing` seed → `idx.event`,
-  gated for blast radius), **FUB** (`fub/lead.import` admin-bypass). `auditLead`/`purgeLead` lifted into
-  `lib/test-harness/audit.ts`. Verified live: a real Direct Registration fired end-to-end. *(Note: the website
-  emitter fires the real production door — `saved_search` etc. actually MINT/route a lead, not a no-op.)*
-- **P2 — The cockpit page:** `app/(crm)/test/**` — a **Test Cockpit** page at the bottom of Pipeline & Workflow
-  (sidebar entry + `CRM_PAGES` slug), port the locked wireframe node-by-node: the "What to test" dropdown (trigger
-  event / workflow), the criteria bar, the receipt canvas + the read-only workflow render + the role-play bar.
-- **P3 — The rest:** Inbox/Comms webhooks · Insight crons · the 20 AI-tool `execTool` fires · TC `document_*` · the
-  **existing-arm** (`created:false`) path + the enrollment gate.
-- **P4 — The gauntlet:** "Run All" → fire every door in sequence → the per-event sign-off sheet ("N/N tested green").
-
-## Gotchas the build must honor
-
-- **Stage change is invisible to the All feed** — workflow `update_stage` runs `logEvent:false`
-  (`execute-step.ts`); the receipt MUST read `hl_stage_transitions` directly, not `hl_lead_activity`.
-- **AI-tool / inbox / insight doors can't be UI-fired** — fire them through their real emitter (`execTool` / webhook
-  POST / cron invoke) and gate on `hl_tool_fire` / `hl_trigger_fire`; label unbound doors honestly (`matched=0`).
-- **Prod-data safety** — the web DB is the single prod Postgres; the synthetic-`Listing` seed and every test write
-  hit live data, so the seeder + `purgeLead` must clean up deterministically. A real address (`zach@…`) dodges the
-  `isUndeliverableAddress` guard; never `@example.com`.
-- **FUB clean-slate** — the `fub_person_id` link means re-import re-pulls; scope FUB tests to a dedicated test person.
-- **New nav leaf needs a slug** — the cockpit is its own page at the bottom of Pipeline & Workflow (Zach
-  2026-07-20), so adding it to the sidebar REQUIRES a matching `CRM_PAGES` entry in `tools/docs/crm-nav-sync.mjs`
-  or the nav-sync check `exit(1)`s.
-
-## How to resume the build
-
-1. Read the scope-lock (`.claude/state/session-scope-test-cockpit.lock`) and the approved plan.
-2. P1 first: the receipt assembler API (reuse `auditLead`) + the Direct-Registration emitter (the Playwright recipe is
-   already proven — general-reg drove houseloop.ai to a real lead + two-beat emails this session).
-3. Verify each slice against live data (fire → assert `hl_trigger_fire.matched≥1` + `hl_workflow_runs.completed` +
-   the expected surfaces), purge, re-run idempotently. `tsc` clean; deploy coordinated with Lee (ONE TREE).
+- **NOW - Wireframe iteration:** the 3-section cockpit wireframe (one artifact link above) - Zach iterates
+  live, then locks, then we port (UI_ITERATION_HTML_FIRST).
+- **Port the shell:** true tabs (one section per view - locked), the tuning-loop strip, the Prompt & Context
+  rail, run history with prompt versions. Move the app nav leaf from Pipeline & Workflow to AI.
+- **Prompt draft/promote plumbing:** every compose seam takes a promptOverride; drafts version in AI
+  Prompting; promote gated on the section's gauntlet being green.
+- **Section 2 + 3 build-out:** wire Lee's voice engine into the UI; build the Lead Follow-Up playground on
+  the compose seams with mocked tools.
+- **Remaining emitters (Trigger Events):** inbox webhooks · insight crons · the 20 AI-tool `execTool` fires ·
+  TC `document_*` · the existing-arm path.
+- **The gauntlet at scale:** Run All → fire every door / every scenario → the per-item sign-off sheet.
 
 ## Related
 
-- [Trigger Events](/guides/trigger-events) — the board this Test button attaches to (the door catalog + the fire ledger)
-- [Workflows](/guides/workflows) — the engine each Run exercises
-- [Closed-Loop Follow-Up](/guides/closed-loop-follow-up) — the nurture engine most doors hand off to
-- [Lead Conversion — Overview](/guides/lead-conversion-overview) — the journey these doors drive
+- [AI Prompting](/guides/ai-programming) + [AI Context Blocks](/guides/ai-context-blocks) - the prompts home;
+  the cockpit's drafts promote into it
+- [Trigger Events](/guides/trigger-events) · [Workflows](/guides/workflows) - the doors + engine section 1 fires
+- [Closed-Loop Follow-Up](/guides/closed-loop-follow-up) · [Lead Conversion Overview](/guides/lead-conversion-overview) -
+  the system section 3 exercises
+- [Run Log](/guides/run-log) - the production run ledger the cockpit's receipts mirror
