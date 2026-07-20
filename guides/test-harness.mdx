@@ -62,6 +62,27 @@ large-modal pattern):
 - The **Prompt & Context rail** on the page shows the FULL live prompt at a glance (no truncation) with the
   same Edit / Diff / Re-run / Promote controls.
 
+### How it works under the hood (BUILT, 2026-07-20)
+
+- **One prompt system, no fork:** the cockpit rides the AI Programming registry
+  (`lib/ai/prompt-registry.ts` + `hl_ai_prompt_history`). A new slot `first_touch_contract` was added,
+  backed by `hl_settings ai_text_prompts.first_touch_contract` (mig 0427 seeded the exact code contract -
+  1,985 chars). The same slot is editable from `/ai/prompting` AND the cockpit modal.
+- **The compose reads it live:** `buildFirstTouchBrief` resolves `contractOverride` (a cockpit draft
+  re-run) → the LIVE registry value → the old code constant as a never-break fallback. An edit takes
+  effect on the very next compose - no deploy.
+- **Drafts live BESIDE live:** `PUT /api/ai/prompts/[key] {draft:true}` stores the draft at
+  `<jsonPath>__draft` - no history row, live untouched; a live save (promote) clears the draft.
+  `GET /api/ai/prompts/[key]` returns `slot + live + draft + history` - the modal reads one endpoint.
+- **The no-send test:** `POST /api/test/preview-firsttouch` runs the EXACT workflow compose chain
+  (`buildFirstTouchBrief` → `composeAiMessage` → `cleanComposedOutput`) on the test lead with the
+  editor's current text as the contract - byte-for-byte what would send, zero sends - and returns the
+  message + the one-question / no-leaked-reasoning checks. Proven live: the modal composed a real first
+  touch off the real dossier with both checks green and nothing sent.
+- **The honest promote gate:** no scenario suite is wired to text prompts yet, so promote is a typed
+  confirm (type PROMOTE). The gauntlet gate replaces it when the suites land - the UI never fakes a
+  "6/7 green".
+
 ## The three sections
 
 ### 1 · Trigger Events & Workflows (Adam - BUILT, live at /settings/test-cockpit)
@@ -137,10 +158,12 @@ doors are REAL (a saved_search test mints a real lead); nurture workflows sit `a
 
 - **DONE - Wireframe locked** (Zach 2026-07-20 v2.2, after live iteration: full-length prompt rail, no
   descriptor pills, visible promote path, near-full-height editor modal).
-- **NOW - Port the shell:** true tabs (one section per view - locked), the tuning-loop strip, the Prompt &
-  Context rail + editor modal, run history with prompt versions. Move the app nav leaf from Pipeline &
-  Workflow to AI. Prompt store: `hl_prompts` (versioned; seeded from the hardcoded contracts) so the modal
-  edits real records, with the code as fallback.
+- **DONE - The shell + the tuning loop shipped** (2026-07-20): true tabs live in the CRM, nav under AI,
+  the first-touch contract in the registry (editable, drafts, code fallback), the Prompt Editor modal +
+  rail wired to real records, the no-send compose test proven end to end.
+- **NOW - B4:** run history on the Trigger Events tab (real past runs; prompt-version stamping follows
+  once runs record which version they composed with) + more registry slots (nurture floor brief, daily
+  home) as their compose seams are lifted out of code.
 - **Prompt draft/promote plumbing:** every compose seam takes a promptOverride; drafts version in AI
   Prompting; promote gated on the section's gauntlet being green.
 - **Section 2 + 3 build-out:** wire Lee's voice engine into the UI; build the Lead Follow-Up playground on
