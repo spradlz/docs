@@ -1,0 +1,152 @@
+---
+title: "Trigger-Event Test Cockpit"
+description: "The receipt-first test harness for every trigger event + workflow in the CRM: a full-page cockpit off the Trigger Events page that fires each door for real on a test lead, obeys the real routing rules, and renders a top-to-bottom 'white sheet' of real receipts (the Myli text, the email in full, the stage change, the Inngest checkmarks) plus an AI-vs-AI role-play bar. This page is the PRD + architecture + build state — read it to continue the build."
+---
+
+<Info>
+**Status: IN BUILD (P0 shipped).** This is the living PRD/architecture for the Test Cockpit. The build is phased
+(P0-P4 below); P0 (the catalog reader) is committed + verified. Spec (LOCKED wireframe):
+`docs/wireframes/test-cockpit-2026-07-20.html`. Plan: `.claude/plans/` (approved). Scope-lock:
+`.claude/state/session-scope-test-cockpit.lock`. Owner: Adam.
+</Info>
+
+## Why this exists
+
+Every trigger event is only trustworthy if you can fire it **for real** on a live lead and read **every receipt**.
+Two production lies this session stayed hidden until a real registration + a real saved search were driven through
+the actual UI: the saved-search **"80 sent / 0 delivered"** phantom (the runner skipped a locked-but-archived
+workflow while the site stamped "sent"), and a **hand-rolled "100 homes"** alert (a backdated watermark faked a
+result). The fix isn't more one-off manual testing — it's a **systematic, autonomous, receipt-first** harness: one
+place to fire any trigger event on demand, obey the real routing, and prove it with receipts. No vibe, no
+hand-rolling.
+
+## What it is — the cockpit
+
+Entry: on the **Trigger Events page** (`/settings/trigger-events`), every trigger-event row gets a **Test** button.
+Click → a **single full-page overlay** with four zones.
+
+<Frame caption="The locked wireframe — the build spec (UI_ITERATION_HTML_FIRST). Every receipt block is labeled with the real table it reads.">
+  <img src="/images/test-cockpit-wireframe.png" alt="Trigger-Event Test Cockpit wireframe: criteria bar on top, live receipt run-log at center, workflow steps at right, role-play bar at bottom" />
+</Frame>
+
+1. **① Top bar — the test-lead criteria.** Source picker **Follow Up Boss** (search a real test lead, like the
+   lead-integration pull-in) or **Direct Registration** (mint fresh under houseloop.ai via Playwright); an editable
+   **email + phone** (default Zach's real ones); a **New-lead / Existing-lead** arm toggle; and a **role-play persona**
+   (one of 4-5 DISC profiles, each with its own prompt) for the AI counterparty.
+2. **② Right column — the workflow that will run.** The top-to-bottom node cards for the selected arm (reusing the
+   Workflow Builder render), with live ✅/⏳/○ state and an "edit ↗" deep-link to `/workflows?wf=`.
+3. **③ Center (~75%) — the live "white sheet" run log.** On **Run**, a live top-to-bottom stream: "opening
+   Playwright… registering this lead…" → **trigger fired** (the `hl_trigger_fire` receipt) → **lead created / stage
+   changed** (the receipt + a link to the lead) → **branded email sent** (the **full HTML render of the exact email**
+   + who it sent as) → **Myli text sent** (the words) → the all-activity sheet, each row with a ✓ and its
+   source-table proof.
+4. **④ Bottom — the role-play / override bar.** **Autonomous run** (the DISC persona converses with Myli/the clone,
+   AI-vs-AI down the whole workflow); **Override** (Zach texts the clone himself, as the lead, to his real phone, and
+   watches it respond); a channel toggle **SMS · Email · Voice (soon)**.
+
+## The architecture — the pipeline of one Run
+
+```
+Test button (row) → cockpit → Run
+  1. PURGE    the test lead (clean slate)                         → purgeLead()  [reuse]
+  2. FIRE     the door via its family's REAL emitter              → fireDoor(eventKey, arm, testLead)
+  3. WAIT     for Inngest to settle
+  4. GATE     assert the fire ledger (the primary receipt)        → hl_trigger_fire.matched / hl_tool_fire.ok
+  5. RUN      the receipt reader + assemble the white sheet        → auditLead() [reuse] + receipt assembler
+  6. RENDER   the cockpit: workflow (right) + receipts (center)
+```
+
+**INNGEST_OR_IT_DOESNT_EXIST:** every fire goes through the *real* production emitter — never a fake side-effect.
+**The table is the truth:** every receipt reads a real table; nothing is inferred or re-rendered.
+
+### The row source — the catalog (P0, SHIPPED)
+
+`lib/test-harness/catalog.ts` → `buildTestCatalog()` reads `hl_trigger_events` (THE board catalog) + the two-arm seat
+bindings (`hl_lead_source_events` native / `hl_fub_webhook_settings` FUB, mig 0381), so the Test page rows **can never
+drift from the live Trigger Events board**. It returns **8 families / 71 events**, each with its family, fire method,
+and whether each arm (new / existing) is bound + active with the real workflow name. Verified live.
+
+| Family | Events | How the harness fires it (`fire`) |
+|---|---|---|
+| **Website Registration** | 30 | `ui` — Playwright over real Chrome drives houseloop.ai (direct reg, tour, contact, saved search, seller) |
+| **Follow Up Boss** | 3 | `fub` — flip the FUB door on + create/scrape a real FUB person → `fub/lead.import` |
+| **Behavioral (Website)** | 4 | `behavior` — emit the pixel view/like/save/share |
+| **Inbox & Communication** | 5 | `webhook` — POST the inbound SMS/BB/email webhook |
+| **Insights** | 5 | `cron` — invoke the `insight-engine` cron |
+| **Transaction Coordination** | 3 | `tc` — e-sign send / Documenso webhook |
+| **AI Tools** | 20 | `tool` — `execTool` on the bound lead |
+| **Manual** | 1 | `manual` — the Add-Lead path |
+
+Saved-search delivery has a **second half**: after the search is created via `ui`, the harness **seeds a synthetic
+`Listing`** (matching the metro, `firstSeenAt=now`) → `houseloop/idx.event` → the instant alert fires → email; then
+cleans up. This is the `seed` mechanism.
+
+### The receipt "white sheet" — what proves each step
+
+The receipt assembler (P0 next) gathers, in time order, for one `hl_workflow_runs.id`:
+
+| Step | Proof table + column | Rendered as |
+|---|---|---|
+| Door fired | `hl_trigger_fire` (`event_key`, `matched`, `routed_by`) · AI: `hl_tool_fire` | the code receipt |
+| Workflow ran | `hl_workflow_runs` (`status`, `outcome`, `triggered_by`) | the run spine (top) |
+| Inngest ran | `hl_run_log` (`status='success'`) | the ✓ checkmark |
+| Lead created / stage | `hl_leads` + `hl_stage_transitions` (⚠ NOT in the All feed — read it directly) | receipt + lead link |
+| Email sent | `hl_email_send_log.body_html` (the FULL rendered HTML) + `to_email` + sender | full email in an iframe |
+| Myli text | `hl_messages` (`body`, `channel`, `actor_role`) | the words, as a bubble |
+| Note / tag / task / appt | `hl_notes` · `hl_lead_tags` · `hl_tasks` · `hl_appointments` | activity rows |
+
+## What to reuse (do NOT rebuild)
+
+- **Receipt reader:** `auditLead()` (`tools/mcp/houseloop-registration-harness-server.mjs`) — 10 independent surface
+  checks across CRM + web DBs. Lift into `lib/test-harness/`.
+- **Clean-slate reset:** `purgeLead()` (`lib/leads/purge-lead.ts`) — real DELETE cascade + pixel/ghost purge +
+  phone-keyed comms + web-User delete + the `hl_deleted_web_emails` tombstone.
+- **Full email render:** `WorkflowPreviewModal` (`components/workflows/`) renders an email via iframe srcDoc.
+- **Vertical step list:** the Run Log's `FeedRow.trail` render (`components/run-log/RunLogTable.tsx`).
+- **Node cards:** `WorkflowBuilder` `NodeCard`/`nodeSummary` (needs a new read-only render mode).
+- **Fire chains (all built except the seeder + Playwright recipes):** website `pushLeadToCRM →
+  /api/integrations/website/lead-intake` · FUB `webhook → fub-webhook-router → fub/lead.import → backfillFubComms` ·
+  saved-search `Repliers webhook → houseloop/idx.event → savedSearchInstantCheck`.
+- **Role-play:** the `scripts/harness/mack-roleplay.ts` AI-vs-AI pattern (`__getCloneRuntimeForHarness`), promoted
+  into the cockpit's bottom bar.
+
+## Build state + phased roadmap
+
+- **P0 — Foundation (SHIPPED):** the catalog reader (`lib/test-harness/catalog.ts`, verified live) + the frozen
+  wireframe spec. Commit `6c42f77769`.
+- **P1 — The 3 customer families end-to-end:** the receipt assembler API (`app/api/test/receipt`) + `fireDoor`
+  emitters for **Direct Registration** (Playwright — the flow was proven live this session), **Saved-search** (the
+  synthetic-`Listing` seeder + cleanup), **FUB** (toggle + real person + import). Reuse `auditLead`/`purgeLead`.
+- **P2 — The cockpit page:** `app/(crm)/test/**` — port the locked wireframe node-by-node; the receipt canvas + the
+  read-only workflow render + the role-play bar.
+- **P3 — The rest:** Inbox/Comms webhooks · Insight crons · the 20 AI-tool `execTool` fires · TC `document_*` · the
+  **existing-arm** (`created:false`) path + the enrollment gate.
+- **P4 — The gauntlet:** "Run All" → fire every door in sequence → the per-event sign-off sheet ("N/N tested green").
+
+## Gotchas the build must honor
+
+- **Stage change is invisible to the All feed** — workflow `update_stage` runs `logEvent:false`
+  (`execute-step.ts`); the receipt MUST read `hl_stage_transitions` directly, not `hl_lead_activity`.
+- **AI-tool / inbox / insight doors can't be UI-fired** — fire them through their real emitter (`execTool` / webhook
+  POST / cron invoke) and gate on `hl_tool_fire` / `hl_trigger_fire`; label unbound doors honestly (`matched=0`).
+- **Prod-data safety** — the web DB is the single prod Postgres; the synthetic-`Listing` seed and every test write
+  hit live data, so the seeder + `purgeLead` must clean up deterministically. A real address (`zach@…`) dodges the
+  `isUndeliverableAddress` guard; never `@example.com`.
+- **FUB clean-slate** — the `fub_person_id` link means re-import re-pulls; scope FUB tests to a dedicated test person.
+- **No new nav-label drift** — the cockpit is an overlay off the Trigger Events row, not a new left-nav leaf (avoids
+  a `crm-nav-sync` slug requirement).
+
+## How to resume the build
+
+1. Read the scope-lock (`.claude/state/session-scope-test-cockpit.lock`) and the approved plan.
+2. P1 first: the receipt assembler API (reuse `auditLead`) + the Direct-Registration emitter (the Playwright recipe is
+   already proven — general-reg drove houseloop.ai to a real lead + two-beat emails this session).
+3. Verify each slice against live data (fire → assert `hl_trigger_fire.matched≥1` + `hl_workflow_runs.completed` +
+   the expected surfaces), purge, re-run idempotently. `tsc` clean; deploy coordinated with Lee (ONE TREE).
+
+## Related
+
+- [Trigger Events](/guides/trigger-events) — the board this Test button attaches to (the door catalog + the fire ledger)
+- [Workflows](/guides/workflows) — the engine each Run exercises
+- [Closed-Loop Follow-Up](/guides/closed-loop-follow-up) — the nurture engine most doors hand off to
+- [Lead Conversion — Overview](/guides/lead-conversion-overview) — the journey these doors drive
