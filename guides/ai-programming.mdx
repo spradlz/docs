@@ -1,0 +1,106 @@
+---
+title: "AI Programming"
+description: "THE one home for how we program every AI agent — prompting doctrine, conversation states, scoring, and the PROMPT REGISTRY (where every live prompt actually lives). Section approved by Zach 2026-07-20. Law: prompts live in the DB, ONE home each; this page holds the doctrine and the map, never a copy of the prompt text — a copied prompt is a drifted prompt."
+---
+
+<Info>
+**Why this page exists (Zach, 2026-07-20).** Research + hard-won lessons about prompting the voice agent,
+text agents, scoring, and conversation states had no home and were drifting across sessions. This page is
+the ONE place. New AI-prompting knowledge lands HERE; live prompt text lives ONLY in its runtime home (see
+the Registry) and is edited via the CRM's AI Prompting screen — never copied into docs.
+</Info>
+
+# ═══ 01 · THE PROMPT REGISTRY — every live prompt and its ONE home ═══
+
+The anti-drift core. The runtime DB is the source of truth for prompt TEXT; this table is the MAP. The
+same catalog powers the CRM **AI Prompting** screen (`/ai/prompting`) — the UI, this doc, and the API all
+read the one catalog in `apps/houseloop-crm/lib/ai/prompt-registry.ts`. Add a slot there → it appears in
+the UI and belongs in this table.
+
+| Slot | Agent | Runtime home (the ONE truth) | What it is |
+|---|---|---|---|
+| `myli_voice_base` | Myli (phone receptionist) | `hl_role.persona` (the AI role with `answers_calls`) | The OpenAI-skeleton base prompt: role/mission, personality, KB, rules, conversation flow, safety |
+| `myli_voice_bucket.seller` | Myli | `hl_settings` key `myli_voice_buckets` → `seller` | The seller FUNNEL playbook (hot-loaded mid-call on triage) |
+| `myli_voice_bucket.buyer` | Myli | same → `buyer` | Buyer playbook |
+| `myli_voice_bucket.past_client` | Myli | same → `past_client` | Past-client playbook |
+| `myli_voice_bucket.other` | Myli | same → `other` | Vendor/wrong-number/asking-for-someone playbook |
+
+Extend by auditing other AI prompt homes (clone persona layers, notification AI, etc.) into the catalog —
+additive, one slot per prompt, never a second copy.
+
+**Editing:** CRM → AI → **AI Prompting** (`/ai/prompting`) — view + edit each slot in the UI with version
+history (`hl_ai_prompt_history` keeps every prior value). No more SQL surgery.
+
+# ═══ 02 · PROMPTING DOCTRINE — how we write agent prompts ═══
+
+Built from OpenAI's official Realtime prompting guide + cross-vendor research (ElevenLabs, Vapi, Retell)
++ our own live-call scar tissue. Full cited research: `.claude/reports/voice-agent-design-research-2026-07-20.md`.
+
+## The skeleton (OpenAI's, adopted as law for voice agents)
+
+`Role & Objective (as a MISSION with a checklist) → Personality & Tone (incl. Length / Pacing / Variety) →
+Context (the KB, behaviorally gated) → Reference Pronunciations → Tools → Rules → Conversation Flow
+(states with Goal / sample phrases / Exit-when) → Safety & Escalation.`
+
+## Our laws (each one paid for in blood)
+
+1. **THE PRESET IS THE LAW.** Start from the provider's official starter config/prompt structure. Never
+   hand-tune provider knobs (VAD sensitivities etc.) — every deviation we tried made latency/turn-taking
+   WORSE, measured.
+2. **The mission is a checklist.** "You are NOT done until you have: …" — a described job produces a
+   passive agent; a checklist produces drive.
+3. **The follow-up-question asymmetry** (from ChatGPT's leaked voice prompt — the "always driving" feel):
+   ask ONE single-sentence follow-up when natural; NO question right after answering the caller's direct
+   question; never use language that signals the conversation is over.
+4. **Ask, never announce.** "Let me get some details" = a stall. Sample phrases ARE the questions — the
+   model closely imitates them.
+5. **Answer-then-advance.** Caller asks a question → answer in one sentence → next intake question in the
+   SAME breath.
+6. **"Need … before" is banned.** Never frame intake as screening ("I need X before the team calls you
+   back") — the agent builds the caller's file FOR them.
+7. **Variety or robot.** Never the same sentence twice; re-asks must be re-phrased; after two dodges, drop
+   it and move on.
+8. **Entity capture:** one exact value at a time; digit-by-digit read-back for numbers/addresses;
+   re-confirm after corrections; never alter a digit.
+9. **Voice-specific:** 1–2 sentences per turn; prosody in words ("speak quickly and warmly") not params;
+   spoken-style numbers; ~2,000-token ceiling (latency).
+10. **KB without dumping:** answer ONLY from the Context block; not there → "I don't know" + offer a
+    callback; never guess.
+
+# ═══ 03 · CONVERSATION STATES & THE OBSERVER — the "invisible state" ═══
+
+## The 3-tier state ladder (climb only on evidence)
+
+1. **Single prompt + Conversation Flow section** — phases written in the prompt (Goal / sample phrases /
+   Exit-when). Receptionist territory.
+2. **Per-state instruction/tool swapping** — the runtime hot-loads instructions per phase (our Myli
+   playbook hot-load via `session.update`; Pipecat Flows is the framework version). Climb here when calls
+   consistently derail ("context rot").
+3. **Hard graph with coded transitions** — compliance-heavy flows only; over-noding sounds robotic.
+
+**The law: the LLM's job is language; the goal lives in code.** Transitions are state mutations signaled
+by tool calls — never something the model is trusted to remember.
+
+## The Observer pattern (how lead-qual will work)
+
+Fast model talks naturally. A parallel tracker (deterministic + small LLM extractor) watches the
+transcript, owns the slot checklist + score, and steers by injecting context between turns ("You have X
+and Y. Next goal: Z. Do not re-ask X."). The talking model never knows it exists. Scoring is ALWAYS
+computed by the tracker layer, never the talking model, and persists on the CRM lead record.
+
+## Scoring (the industry pattern, for the lead-qual build)
+
+Rubric-driven (real-estate shape: timeline / motivation / price band / pre-approval / area / has-agent),
+0–100 + tier, updated per response, stored as lead fields; threshold crossings fire handoff (hot transfer
+/ agent alert). SMS nurture = **CRM-as-state**: each inbound rehydrates from lead fields (slots, score,
+next-goal pointer) → reply → extractor updates fields → writeback → next touch scheduled (behavioral
+triggers beat time drips) — maps 1:1 onto Inngest + `hl_leads`.
+
+# ═══ 04 · RESEARCH ARCHIVE ═══
+
+- **2026-07-20 — Voice/text agent design research** (two deep-research agents, fully cited): why ChatGPT
+  AVM/Gemini Live feel natural (architecture + the leaked personality prompt), states/scoring/observer
+  consensus, per-agent architecture recommendations → `.claude/reports/voice-agent-design-research-2026-07-20.md`
+- **2026-07-18 — The Gemini latency verdict** (Gemini Live native-audio TTFB unfixable community-wide;
+  OpenAI Realtime swap) → memory `project_myli_voice_latency_verdict` + `guides/ai-voice` update log.
+- Future research lands in this section — one page, consolidation over sprawl.
