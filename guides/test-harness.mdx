@@ -4,14 +4,21 @@ description: "ONE surface under AI where every AI behavior in HouseLoop gets tes
 ---
 
 <Info>
-**Status: LIVE - the shell + the tuning loop are shipped and proven in the CRM (2026-07-20). Adam runs
-point on design + implementation; Lee owns the AI Voice engine + Lead Follow-Up research.** Live today at
-**AI → Test Cockpit** (`/settings/test-cockpit`): the tuning-loop strip, the three tabs, the full Trigger
-Events & Workflows section, and the **Prompt Editor modal wired to real records** - the first-touch
-contract was edited out of code into the prompt registry and the no-send compose test works end to end.
+**Status: LIVE - two of three tabs are shipped and PROVEN in the CRM (updated 2026-07-21). Adam runs
+point on design + implementation; Lee built the AI Voice tab + engine end to end.** Live today at
+**AI → Test Cockpit** (`/settings/test-cockpit`): the tuning-loop strip, the three true tabs, the full
+Trigger Events & Workflows section (with real run history), the **AI Voice tab** (scenario gauntlet +
+live roleplay + prompt rail, backed by the in-app voice engine - **11/11 scenarios certified pass^3 on
+2026-07-21**), and the **Prompt Editor modal wired to real records** - the first-touch contract was
+edited out of code into the prompt registry and the no-send compose test works end to end. Tab 3 (Lead
+Follow-Up) renders an honest build-state frame; its compose-only seams are prepped.
 The LOCKED build spec: `docs/wireframes/test-cockpit-LOCKED-2026-07-20.html` (artifact:
 `https://claude.ai/code/artifact/487fad8c-696d-4926-a461-e7f9545e6d70`). Scope-lock:
-`.claude/state/session-scope-test-cockpit.lock` · handoff: `.claude/state/adam-handoff.md`.
+`.claude/state/session-scope-test-cockpit.lock` · handoffs: `.claude/state/adam-handoff.md` +
+`.claude/state/lee-handoff.md`.
+
+Naming note: this doc's file slug is `test-harness` (historical - the engine lives at
+`lib/test-harness/`); the product's name is the **Test Cockpit**. Same thing.
 </Info>
 
 ## The vision: a tuning studio, not a test bench
@@ -102,27 +109,85 @@ fresh and sends real comms).
   | Branded email | `hl_email_send_log.body_html` - the FULL sent HTML in an iframe |
   | Myli text | `hl_messages` - the words, as an iMessage bubble (delayed nurture beats show as pending) |
   | Audit scorecard | every surface verified (lead · workflow · notification · email · text · note · tag · All feed) |
-- **Right rail:** the workflow run (node states) + the Prompt & Context rail.
-- **Run history:** every past test run with the prompt VERSION it ran against and its result - so you can see
-  whether a prompt change actually helped.
+- **Right rail:** the REAL bound workflow for the selected door with its ACTUAL node list (from
+  `hl_workflows.workflow_config` via `GET /api/test/workflow-preview` - never a hardcoded guess) + the
+  Prompt & Context rail.
+- **Run history (BUILT):** `GET /api/test/history` - the real recent workflow runs + door fires for the
+  current test lead, no synthetic rows (an empty lane says so). Prompt-version stamping (which contract
+  version a run composed with) lands when runs record it - the column is absent until then, never faked.
 
-### 2 · AI Voice (Lee - engine working, UI in wireframe)
+### 2 · AI Voice (Lee - BUILT, live as tab 2)
 
 Retell-style testing for Myli's voice brain: text-mode roleplay against the LIVE deployed persona + playbooks
-(no calls, no sends, pennies).
+(no calls, no sends, pennies) - shipped as a first-class page, not a wireframe.
 
-- **Scenario library:** archetype scenarios (happy-seller, valuation-fisher, question-asker, bye-mid-intake,
-  injection-attacker, rambler, refuser, wrong-number) - each traps a specific failure. Every bad real call
-  becomes a new scenario; the suite only grows.
-- **Gauntlet:** simulated callers with persona briefs · cross-family Claude judge · binary rubric with quoted
-  evidence · pass^k history trend. Engine: `tools/myli-voice/roleplay.mjs` (interactive) + `gauntlet.mjs`.
-- **Chat with the brain:** interactive text roleplay against live OR draft persona.
-- **Phone smoke test:** one button dials the scripted call on the real line, records both channels, drops the
-  recording + transcript in the cockpit (`test-call.mjs`).
+**The UI** - `components/settings/test-cockpit/VoiceCockpit.tsx` (Zach live redesign: "top = pick the
+scenario · center = a first-class texting screen, the roleplay IS the page · far right = my prompt in
+plain sight"). Everything on it is real - persisted runs, the composed live persona, no mock data:
 
-### 3 · Lead Follow-Up (new - the conversion playground)
+- **Scenario board:** every scenario with its latest persisted pass^k result, a per-scenario **Run** button
+  (k=3 rollouts), and **Run full suite** (the client iterates scenarios one request each, so progress
+  streams and no single request holds for the whole gauntlet).
+- **Transcript viewer:** open any persisted run - full transcripts, the judge's verdict per check with a
+  **quoted-evidence** line, plus the deterministic tool-call asserts.
+- **Live roleplay chat:** the texting screen where YOU are the caller, typing against the real brain
+  (stateless replay - the client holds the thread, each turn replays it into a fresh session).
+- **The always-on prompt rail:** the composed brain in plain sight - base persona / triage / per-bucket
+  playbook cards (seller · buyer · past client · other), each with **Edit** opening the registry
+  `PromptEditorModal`, plus the **live / draft** toggle so the whole tab runs against cockpit drafts.
+- **Phone smoke button:** one click dials the scripted call on the real line + a "Last smoke" line.
 
-Tests the whole lead-conversion system on synthetic fixture leads with a **hard no-send guarantee**: it runs
+**The in-app engine** - `lib/test-harness/voice/` (the CLI gauntlet productized into the CRM):
+
+- **`scenarios.ts`** - ELEVEN archetype scenarios, each trapping a specific failure: **happy-seller ·
+  trail-off** (the Zach repro: the caller hesitates mid-sentence - the announce-then-silence killer) **·
+  happy-buyer · buyer-specific-listing · valuation-fisher · rambler · refuser · bye-mid-intake ·
+  wrong-number · injection-attacker · question-asker**. Every bad real call becomes a new scenario; the
+  suite only grows. Plus **`UNIVERSAL_CHECKS`** - the binary checks every run is graded on (greeted once,
+  one question per spoken turn, no announce-without-a-question, no literal screening pattern, acknowledge
+  + question in the same breath, no fabricated facts) - and the exact `VOICE_TOOLS` + greeting the phone
+  bot runs, kept in lockstep so text mode exercises the REAL brain contract.
+- **`engine.ts`** - server-side **Realtime TEXT sessions** against the REAL composed persona (self-HTTP to
+  `/api/phone/myli/persona`, the ONE composer the phone bot fetches; draft mode overlays cockpit bucket
+  drafts before merging). The **caller simulator is `gpt-4o-mini`** driving persona briefs with trap
+  behaviors. The **judge is cross-family `claude-sonnet-4-6`** (kills same-family self-preference bias),
+  prompted with a **GROUNDING block** - the live clock, the caller-ID digits, Myli's approved-knowledge
+  list, and the volunteered-info rule - because without those calibrations the judge mis-flags TRUE
+  statements as fabrications. **`mustCall` tool asserts are deterministic in code**, never judged. The
+  bot's **turn-completion guard is mirrored** in the harness (any intake turn that ends without a question
+  gets one forced continuation - parity with `MyliTurnGuard` in `pipecat_bot.py`), and **spoken-flow turn
+  merging** collapses a continuation into ONE transcript turn so the judge grades the turn a caller would
+  HEAR, not the raw API events.
+
+**The APIs + persistence** (all admin-gated):
+
+| Route | Does |
+|---|---|
+| `POST /api/test/voice-gauntlet` | run ONE scenario × k against the real brain, judge, **persist to `hl_ai_voice_test_run`** (mig 0430: one row per execution, k rollouts inside `runs` jsonb), return the graded runs |
+| `GET /api/test/voice-gauntlet` | the scenario board's data (latest run per scenario + which slots hold drafts) · `?runId=` opens one run's full transcripts + verdicts |
+| `POST /api/test/voice-roleplay` | ONE stateless chat turn against the composed persona (text modality, fractions of a cent) |
+| `GET /api/test/voice-roleplay` | the rail's brain fetch - the COMPOSED persona + triage + four playbooks, live or draft |
+| `POST /api/test/voice-smoke` | place the real scripted Twilio call (~14¢) - the exact proven TwiML seller script; receipts land on the `hl_calls` row via the normal wrapup pipeline |
+| `GET /api/test/voice-smoke` | the latest smoke-call row (the "Last smoke" line) |
+
+**The CLI tier** (`tools/myli-voice/` - where the engine was born; still the fastest loop for terminal
+tuning): `roleplay.mjs` (interactive text roleplay) · `gauntlet.mjs` (the full suite, `--k` / `--only`) ·
+`test-call.mjs` (the scripted smoke call) · **`scripted-call.mjs`** (scripted Twilio caller, `--script
+seller|buyer`, downloads the dual-channel recording) · **`measure-latency.py`** (per-turn voice-to-voice
+latency straight from the WAV - caller channel vs Myli channel, pure stdlib, python3.14-safe).
+
+**The loop, PROVEN (2026-07-21):** gauntlet round 1 scored **2/11**. Four tuning rounds later (prompt
+rebuilds + judge calibration - the grounding block, volunteered-info, spoken-flow merging) - **11/11
+scenarios certified pass^3 GREEN**, and on a real scripted phone call the turn-completion guard **fired
+3 times live** (2 no-question continuations + 1 post-tool watchdog) with the funnel + close running end
+to end. Text mode tests THE BRAIN; voice feel (turn-taking, barge-in, ASR) still needs the phone smoke +
+a human ear before any voice-config release.
+
+### 3 · Lead Follow-Up (next - the conversion playground)
+
+Tab 3 today renders an honest build-state frame (never fake data); the compose-only seams it will run on
+are prepped. The plan: test the whole lead-conversion system on synthetic fixture leads with a **hard
+no-send guarantee**: it runs
 on the compose-only seams (`composeAiMessage` composes without sending; the harness runtime mocks every
 mutating tool). Nothing ever reaches a real person.
 
@@ -144,8 +209,15 @@ mutating tool). Nothing ever reaches a real person.
   assembler) · `emitters/` (website-intake via `processLeadIntake` direct, FUB via `fub/lead.import`,
   saved-search via a gated synthetic-Listing seed → `houseloop/idx.event`) · `run.ts` (purge → fire → poll →
   receipt).
-- **APIs:** `POST /api/test/run` · `GET /api/test/receipt` · `GET /api/test/catalog` (admin-gated).
-- **The page:** `app/(crm)/settings/test-cockpit/` + `components/settings/test-cockpit/TestCockpit.tsx`.
+- **APIs:** `POST /api/test/run` · `GET /api/test/receipt` · `GET /api/test/catalog` ·
+  `GET /api/test/workflow-preview` (the door's real bound workflow + node list) · `GET /api/test/history`
+  (the run-history lane) - all admin-gated. Plus the three voice routes (section 2) and
+  `POST /api/test/preview-firsttouch` (the no-send compose test).
+- **The page:** `app/(crm)/settings/test-cockpit/page.tsx` renders
+  `components/settings/test-cockpit/TestCockpitShell.tsx` - the tuning-loop strip + the ONE blue tab bar
+  with three TRUE tabs (one section per view, per the locked wireframe) - which mounts
+  `TestCockpit.tsx` (tab 1, Trigger Events & Workflows) · `VoiceCockpit.tsx` (tab 2, AI Voice) · an
+  honest build-state frame (tab 3, Lead Follow-Up), with `PromptEditorModal.tsx` shared across tabs.
 - **Verified live:** a real `direct_registration` fired end-to-end - purge → fresh mint → `hl_trigger_fire`
   matched=1 → the real welcome email (full 9.3KB body_html read back) → workflow running. INNGEST-or-it-
   doesn't-exist: every fire goes through the real production emitter; every receipt reads a real table.
@@ -161,13 +233,19 @@ doors are REAL (a saved_search test mints a real lead); nurture workflows sit `a
 - **DONE - The shell + the tuning loop shipped** (2026-07-20): true tabs live in the CRM, nav under AI,
   the first-touch contract in the registry (editable, drafts, code fallback), the Prompt Editor modal +
   rail wired to real records, the no-send compose test proven end to end.
-- **NOW - B4:** run history on the Trigger Events tab (real past runs; prompt-version stamping follows
-  once runs record which version they composed with) + more registry slots (nurture floor brief, daily
-  home) as their compose seams are lifted out of code.
-- **Prompt draft/promote plumbing:** every compose seam takes a promptOverride; drafts version in AI
-  Prompting; promote gated on the section's gauntlet being green.
-- **Section 2 + 3 build-out:** wire Lee's voice engine into the UI; build the Lead Follow-Up playground on
-  the compose seams with mocked tools.
+- **DONE - The AI Voice tab + engine landed** (2026-07-21): `VoiceCockpit` live as tab 2, the eleven-
+  scenario gauntlet + judge in `lib/test-harness/voice/`, the three voice APIs, `hl_ai_voice_test_run`
+  persistence, the CLI tier (scripted-call + latency measurement) - and the loop PROVEN: 2/11 → four
+  tuning rounds → 11/11 pass^3 certified, guard fired 3x on a real call.
+- **DONE - Run history** (2026-07-21): `GET /api/test/history` feeds the Trigger Events tab with real
+  runs; prompt-version stamping follows once runs record which version they composed with.
+- **NOW - Tab 3, the Lead Follow-Up playground:** build it on the prepped compose-only seams
+  (`composeAiMessage` + the harness clone-runtime seam), mirroring the voice tab's shape - mocked
+  mutating tools, hard no-send.
+- **NOW - Gauntlet-gated promote in the save path:** promote is still a typed confirm; the enforcement -
+  a live save of a gauntlet-covered slot requires that slot's suite green - lands in the registry save
+  path so the gate is code, not discipline.
+- **More registry slots** (nurture floor brief, daily home) as their compose seams are lifted out of code.
 - **Remaining emitters (Trigger Events):** inbox webhooks · insight crons · the 20 AI-tool `execTool` fires ·
   TC `document_*` · the existing-arm path.
 - **The gauntlet at scale:** Run All → fire every door / every scenario → the per-item sign-off sheet.
@@ -176,6 +254,8 @@ doors are REAL (a saved_search test mints a real lead); nurture workflows sit `a
 
 - [AI Prompting](/guides/ai-programming) + [AI Context Blocks](/guides/ai-context-blocks) - the prompts home;
   the cockpit's drafts promote into it
+- [AI Voice](/guides/ai-voice) - Myli's phone architecture (the runtime the voice tab tests); THIS doc owns
+  how the testing is built and called
 - [Trigger Events](/guides/trigger-events) · [Workflows](/guides/workflows) - the doors + engine section 1 fires
 - [Closed-Loop Follow-Up](/guides/closed-loop-follow-up) · [Lead Conversion Overview](/guides/lead-conversion-overview) -
   the system section 3 exercises

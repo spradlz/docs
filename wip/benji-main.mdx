@@ -19,8 +19,29 @@ _Updated 2026-07-20 late (overnight autonomous run). Plan: `.claude/plans/generi
 - **P1** — `MyliWatchingBadge` is workflow-aware: reads `active_workflow_id → hl_workflows.name` + `hl_workflow_runs.current_node_id` step off `/api/leads/[id]/ai-activity`, live over SSE. "Myli · Standing By" idle · "AI paused" master-off. Replaces static "AI watching".
 - **P2 (dark)** — `ai_converse` (Listen & Reply) + `ai_standby` (Set Next Floor Touch) node types in `lib/workflows/registry.ts` (+ RUNNABLE_STEP_TYPES) with master-gated executors in `lib/workflows/execute-step.ts`. Mig `0434_myli_standby_workflow.sql` seeds the **Myli: Standing By** workflow (kind=myli_auto, status=DRAFT, folder=AI Tools, canvas: Manual → Listen & Reply → Set Next Floor Touch). Applied to prod CRM DB. Commit `609be0c154`. Verified rendering on :3020.
 
+### 🔒 THE ai_converse BRAIN — locked with Adam (bring to joint plan review with Zach, UNAPPLIED)
+Adam's state-watcher research (`.claude/reports/lead-texting-prompt-research-2026-07-20.md`, sourced
+Structurely/Ylopo/LPMAMA/NAR) locks the `ai_converse` design: **NOT free chat** — a CODE-owned ledger +
+skippable state ladder. The node I shipped in P2 is just the dark SHELL (free-chat placeholder); the real
+brain is:
+- **mig 0435 `hl_lead_convo_state`** (DRAFT ONLY — do not apply before the joint review): `lead_id` uuid PK
+  FK→hl_leads CASCADE · `state` (S0_confirm_tour..S6_nurture) · `mode` ('conversational'|'behavioral') ·
+  `ledger` jsonb (keys: tour_time_confirmed, representation_status, email_captured, on_our_search_account,
+  motivation_timeline, price_target, lender_status, buyer_agreement_signed, human_takeover, takeover_reason) ·
+  `updated_at`.
+- **4 rules:** (1) SINGLE WRITER = the watcher; the composer reads the ledger READ-ONLY and voices ONLY the
+  lowest unfilled slot (resolver-never-eats-own-dogfood). (2) Every transition + captured fact → `logActivity`
+  (All feed shows the ladder move). (3) Full gate stack `aiMasterEnabled AND service AND ai_responder!='none'`;
+  `buyer_agreement_signed=false` HARD-BLOCKS tour language in CODE (NAR 8/17/24). (4) NOT columns on hl_leads,
+  NOT run-scoped, NOT the AI context prose.
+- **The ladder:** S0 confirm tour → S1 representation → S2 migrate off Zillow (email only) → S3 qualify
+  (motivation/timeline before price) → S4 financing → S5 buyer agreement (HARD GATE) → S6 behavioral nurture.
+- **ai_converse contract:** reads the ledger each turn, emits a structured `HANDOFF{reason}` the watcher routes
+  on (then Myli goes silent). TCPA 8-8 local + STOP enforced by the WATCHER, not the prompt.
+- `ai_standby` = the S6 BEHAVIORAL mode (quiet → portal-activity re-engage) over the existing floor engine.
+
 ### ⛔ REMAINING — needs Zach + Inngest Run Log (do NOT flip blind)
-- **P3 — Auto-enroll + override/resume.** ACTIVATION = flip `Myli: Standing By` to `status='active'`, then enroll idle leads + repoint `handoffToStandby` (`lib/ai/ensure-floor.ts:266`) to park the lead on Standing By. ⚠️ HAZARD: the runner calls `handoffToStandby` after EVERY run *including Standing By's own* → self-re-enroll loop; guard by skipping enroll when the just-finished run WAS standby (2-min dedupe alone is not enough). Enroll via `inngest.send({ name: 'houseloop/workflow.run', data: { workflowId, leadId, triggeredBy, triggerPayload } })` (see `runtime.ts:406`). Prove on ONE test lead in the Run Log before the global backfill.
+- **P3 — Auto-enroll + override/resume + the state-watcher brain above.** ACTIVATION = flip `Myli: Standing By` to `status='active'`, then enroll idle leads + repoint `handoffToStandby` (`lib/ai/ensure-floor.ts:266`) to park the lead on Standing By. ⚠️ HAZARD: the runner calls `handoffToStandby` after EVERY run *including Standing By's own* → self-re-enroll loop; guard by skipping enroll when the just-finished run WAS standby (2-min dedupe alone is not enough). Enroll via `inngest.send({ name: 'houseloop/workflow.run', data: { workflowId, leadId, triggeredBy, triggerPayload } })` (see `runtime.ts:406`). Prove on ONE test lead in the Run Log before the global backfill.
 - **P4 — Retire `ai_conversations` / `ai_closed_loop` code toggles.** LAST. `ai_closed_loop` is fail-CLOSED — seed a successor gate BEFORE removing the key or nurture dies silently. Typed Zach approval + Run-Log proof required (Rule #0-adjacent).
 
 ### Docs
