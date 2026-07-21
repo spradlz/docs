@@ -99,6 +99,33 @@ one-off script (see [Listing intake pipeline](/guides/listing-intake-pipeline)).
 the event `value-history/persist.run` (`{ limit?, hlids?[] }`) for targeted back-seeds/re-runs. Files:
 `apps/houseloop-web/lib/inngest/functions/{zillow-research-ingest,past-client-zillow-cache,value-history-persist,sold-data-reconcile}.ts`.</Info>
 
+## Portal-value spread — Zillow + Redfin, HouseLoop Estimate on top (Zach LOCKED 2026-07-21)
+
+For the **Home Value Report / Homeowner's View**, a past-client home shows a **row of portal values** — **Zillow**
+(`zestimate`, already cached via Ninja) and **Redfin** (`redfinEstimate`) — with **our HouseLoop Estimate on top**
+("we weigh all of these plus our own algorithm"). Only two portals, by Zach's call: **Zillow via the OpenWeb Ninja
+API, Redfin via scrape.**
+
+**Why scrape Redfin, and why NOT the MLS tools (scouted + rejected 2026-07-21):** the value must be **address-based and
+current**. Cloud CMA needs live MLS *comps* → fails on off-market homes (every past client who still owns). Remine is
+parcel-based but its listing/owner/sale record is **stale** (anchored to the last MLS listing) and it carries no
+Zillow. The Redfin Estimate is address-keyed and current, so we read it straight off the Redfin property page.
+
+| Piece | Where |
+|---|---|
+| The scraper | `tools/houseloop-photos/redfin-estimate-scraper.mjs` (Camp David) — worklist = `hl_past_client_homes` JOIN `Listing`, stalest-first; human-search Redfin (reuses `redfin-human-scraper`'s zero-block recipe: real Chrome, type the address, autocomplete, Enter → land on `/home/<id>`); extract the estimate (brand-label `Redfin Estimate` anchor + `predictedValue` JSON fallback); write `redfinEstimate` back to `Listing`. |
+| Monthly cron | `tools/houseloop-photos/redfin-estimate-cron.sh` on Camp David (`0 1 1 * *`) — single-instance guarded (file lock **and** a live-process `pgrep` guard). Resumable: skips homes with a fresh `redfinEstimateAt` (< 25 days). |
+
+**Why Camp David, not an Inngest fn:** Redfin blocks datacenter IPs. The scrape must run from Camp David's residential
+IP in a real headful Chrome — Railway/Inngest can't reach Redfin. So this one value source is a **Camp-David cron**, not
+a registered Inngest function (the address-based AVM exception to "Inngest or it doesn't exist"). It writes its durable
+output straight to `Listing` (the table is the truth), single-threaded + human-paced (~15–20s/home, ~11h for the full
+~1,900-home cohort → an overnight monthly run), and **self-stops on Redfin challenge detection** (never hammers).
+
+**The sanity band:** a real home value is ~$20k–$50M — anything the extractor grabs outside that (a rent/mo or
+price-per-sqft mis-grab) is dropped, not written. Coverage gaps (Redfin has no estimate for a home) are stamped and
+skipped, not retried every run.
+
 ## Disposition — no sold home renders flat (hardened 2026-07-03)
 
 A sold home only gets its value **minted** (and its AI overview written) when the `listing-sold` Inngest function
