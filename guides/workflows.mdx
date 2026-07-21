@@ -472,6 +472,32 @@ Full spec: `GT/GT - ACTIVE/GT_HOUSELOOP_WORKFLOW_CONDITIONS.md`.
 - System workflows show a lock banner with **Duplicate as Custom** in place of Save. **Duplicate-as-Custom uses the
   thorough copy** (`/duplicate`) — it clones the full canvas + step config, not a shell.
 
+## Myli: Standing By — the standby workflow (dark, 2026-07-20)
+
+Myli's **standby** — her resting state between triggered workflows — is now a REAL workflow on the canvas
+instead of invisible code behind two toggles (`ai_conversations` + `ai_closed_loop`). This is the workflow
+sibling of the closed-loop "the active workflow IS the state": when a lead isn't in a triggered workflow, it
+parks on **Myli: Standing By**, and the lead-detail pill reads *"Myli · Standing By"* off `active_workflow_id`.
+
+Two new AI step types make the standby WYSIWYG (both master-gated by `aiMasterEnabled()` in `execute-step.ts`,
+so the All-AI failsafe can't leak):
+
+| Step | Type | What it does |
+| --- | --- | --- |
+| **Listen & Reply** | `ai_converse` | Myli reads every inbound text/email and replies in her voice with her tools; carries her standing-orders prompt (Context Block or one-off brief, like AI Message). The reply itself runs through the inbound engine (`dispatchInboundToAi`), which now obeys `ai_responder`. |
+| **Set Next Floor Touch** | `ai_standby` | Schedules the nurture floor on the lead's stage cadence (reuses `ensureFloor`), so Myli is never the last to leave a lead cold. |
+
+The workflow is seeded by `db/migrations/0434_myli_standby_workflow.sql` (`key='myli_standing_by'`,
+`kind='myli_auto'`, folder **AI Tools**) — canvas: **Manual → Listen & Reply → Set Next Floor Touch**.
+
+<Note>
+**Built DARK (status `draft`) on purpose.** Nothing routes here yet and no lead is enrolled — the code
+engines stay authoritative during dual-run. Auto-enroll + the override/resume stack (a triggered workflow
+suspends standby; on chain-end the lead re-enrolls) and the retirement of the two code toggles are the next,
+separately-verified steps (voice-safety: build dark → dual-run → prove in the Run Log → flip → retire last).
+See `guides/closed-loop-follow-up`.
+</Note>
+
 ## Reference
 
 - `apps/houseloop-crm/lib/workflows/runtime.ts` — `workflowDispatcher` + `workflowRunner` (Inngest)
