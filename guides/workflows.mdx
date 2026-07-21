@@ -63,6 +63,41 @@ Structural hard rules fall out of the `VALIDITY` map: **Insights = Existing-only
 arm), **Communication · New exists only for Company Inbox**, and **Transaction Coordination is Existing-only with no
 Type selector**.
 
+### The naming law (Zach LOCKED 2026-07-20)
+
+Every workflow is named **`PLATFORM: ARM - EVENT`** - platform abbreviated with a **colon**, then the arm,
+then a hyphen and the trigger event:
+
+- `FUB: New Lead - Tour Request` · `FUB: Existing Lead - Tour Request` · `FUB: New Lead - Property Inquiry`
+- Not "Follow Up Boss —", not "FUB —", not "… — First Touch". The arm leads so the two arms of one event
+  sort and scan together under the platform prefix in every dropdown (Workflows page, Test Cockpit, Configure modal).
+- Before naming a new workflow on any platform, check the existing sibling names and match the pattern - never
+  invent a new one.
+
+### The row contract (how a workflow files - and how misfiling happens)
+
+The Workflows page files a workflow by **`folder` FIRST** (the Family token); the trigger/name heuristics are
+legacy fallback only. So every `hl_workflows` row - **including system workflows created by migration or SQL** -
+MUST be stamped at creation with:
+
+| Column | Required value |
+| --- | --- |
+| `folder` | the Family token: `houseloop` / `follow_up_boss` / `inbox` / `transaction` / `manual` |
+| `lead_stage` | the arm: `new_lead` / `existing_lead` (null only for Manual) |
+| `name` | per the naming law above |
+| `trigger_type` | the event key for native/HouseLoop workflows; **NULL for FUB-bound workflows** (their trigger is the seat binding in `hl_fub_webhook_settings`) |
+
+A row with an empty `folder` falls to the heuristics, and a FUB workflow whose `trigger_type` happens to match a
+website trigger label will misfile under **HouseLoop.ai Website** (this exact bug shipped 2026-07-20: the FUB
+property-inquiry workflow, created by SQL with `folder=''`, rendered inside the HouseLoop table). Stamp the
+taxonomy at insert; never rely on the guesser.
+
+**FUB workflows bind via the seat, both arms:** the seat row (`hl_fub_webhook_settings`) carries `workflow_id` +
+`workflow_active` (New) and `existing_workflow_id` + `existing_workflow_active` (Existing), and the FUB import's
+arm-picker (`resolve-fub-settings-workflow` in `lib/inngest/functions/fub-lead-import.ts`) reads the arm by the
+`created` flag - fail-closed, same law as the native doors. (Wired 2026-07-20; before that the Existing arm
+columns were decorative and FUB only ever fired the New arm.)
+
 ### The folder view (how the page renders)
 
 The Workflows page is a **folder view** (`components/workflows/WorkflowsTable.tsx`), not a flat grid: an **integration
