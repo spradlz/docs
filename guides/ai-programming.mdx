@@ -1,35 +1,74 @@
 ---
 title: "AI Programming"
-description: "THE one home for how we program every AI agent — prompting doctrine, conversation states, scoring, and the PROMPT REGISTRY (where every live prompt actually lives). Section approved by Zach 2026-07-20. Law: prompts live in the DB, ONE home each; this page holds the doctrine and the map, never a copy of the prompt text — a copied prompt is a drifted prompt."
+description: "THE FULL PROGRAMMING for every AI agent across VOICE, TEXT, and EMAIL — the prompt registry (all ten live slots + their ONE runtime homes), the prompting doctrine, the Conversation Director, how each lane COMPOSES its prompt, and the one working memory. Law: prompts live in the DB, ONE home each, edited at /ai/prompting; this page holds the doctrine and the map, never a copy of the prompt text — a copied prompt is a drifted prompt."
 ---
 
 <Info>
-**Why this page exists (Zach, 2026-07-20).** Research + hard-won lessons about prompting the voice agent,
-text agents, scoring, and conversation states had no home and were drifting across sessions. This page is
-the ONE place. New AI-prompting knowledge lands HERE; live prompt text lives ONLY in its runtime home (see
-the Registry) and is edited via the CRM's AI Prompting screen — never copied into docs.
+**Running-document law (matches `guides/ai-voice`).** The UPDATE LOG below is newest-first; every change
+stamps an entry AND re-edits the body to current truth — no stacked "superseded" blocks (git history holds
+the past). **Why this page exists (Zach, 2026-07-20):** research + hard-won lessons about prompting the
+voice agent, text agents, scoring, and conversation states had no home and were drifting across sessions.
+This page is the ONE place. New AI-prompting knowledge lands HERE; live prompt text lives ONLY in its
+runtime home (see the Registry) — never copied into docs.
 </Info>
+
+## Update log
+
+- **2026-07-21** — **Doc expanded to the full charter (Zach-approved reconciliation): voice + TEXT + EMAIL
+  programming, one map.** Registry table fixed to ALL TEN live slots (voice base/triage/4 buckets + the 4
+  text slots, migs 0419/0426–0431). New sections: §03 how the VOICE persona is composed (hat gates, ground
+  truth, the KB-drop latency decision, bucket hot-swap), §04 how the TEXT system prompt is assembled
+  (buildSystemPrompt layering, instant-ack, the who-speaks gating chain), §05 the first-touch / email lane
+  (contract selection, SMS physics, the no-separate-email-slot truth), §06 the ONE working memory
+  (`composeMyliMemory` — the one-brain keystone). §02b clarified (turn guards BUILT, slot-tracker observer
+  FUTURE); old §03 re-scoped as §07 with BUILT/FUTURE markers. Testing mechanics → `guides/test-harness`;
+  voice hardware/runtime → `guides/ai-voice`.
+- **2026-07-20/21** — Page created (registry + doctrine + Director, §01/§02/§02b), per the Zach-approved
+  AI Programming system.
 
 # ═══ 01 · THE PROMPT REGISTRY — every live prompt and its ONE home ═══
 
 The anti-drift core. The runtime DB is the source of truth for prompt TEXT; this table is the MAP. The
 same catalog powers the CRM **AI Prompting** screen (`/ai/prompting`) — the UI, this doc, and the API all
 read the one catalog in `apps/houseloop-crm/lib/ai/prompt-registry.ts`. Add a slot there → it appears in
-the UI and belongs in this table.
+the UI and belongs in this table. **Ten live slots today:**
 
-| Slot | Agent | Runtime home (the ONE truth) | What it is |
-|---|---|---|---|
-| `myli_voice_base` | Myli (phone receptionist) | `hl_role.persona` (the AI role with `answers_calls`) | The OpenAI-skeleton base prompt: role/mission, personality, KB, rules, conversation flow, safety |
-| `myli_voice_bucket.seller` | Myli | `hl_settings` key `myli_voice_buckets` → `seller` | The seller FUNNEL playbook (hot-loaded mid-call on triage) |
-| `myli_voice_bucket.buyer` | Myli | same → `buyer` | Buyer playbook |
-| `myli_voice_bucket.past_client` | Myli | same → `past_client` | Past-client playbook |
-| `myli_voice_bucket.other` | Myli | same → `other` | Vendor/wrong-number/asking-for-someone playbook |
+| Lane | Slot | Runtime home (the ONE truth) | Seeded / moved by | What it is |
+|---|---|---|---|---|
+| VOICE | `myli_voice_base` | `hl_role.persona` (the AI role with `answers_calls`) | trimmed lean by mig 0419 | The base persona: mission, personality & tone, rules, safety. **The composed phone base deliberately DROPS the KB block** — the KB lives in the buckets; keeping the base tiny is the whole latency fix (mig 0419: the old ~5,374-token every-turn prompt caused ~1.5s turns + glitches) |
+| VOICE | `myli_voice_triage` | `hl_settings` `myli_voice_prompts` → `triage` | mig 0431 | The RIGHT-NOW addendum appended at call start: identify the caller, the ONE-BREATH RULE, first questions per type, trailing-off recovery. Was hardcoded in the bot until 2026-07-20 — the **no-hidden-prompts law** (Zach live: "where did this prompt come from" — a prompt segment invisible in the rail caused the announce-then-silence flinch; every segment is now a registry slot) |
+| VOICE | `myli_voice_bucket.seller` | `hl_settings` `myli_voice_buckets` → `seller` | mig 0419 | The seller FUNNEL playbook, hot-loaded mid-call on triage |
+| VOICE | `myli_voice_bucket.buyer` | same → `buyer` | mig 0419 | Buyer playbook (area/listing, price range, timeline) |
+| VOICE | `myli_voice_bucket.past_client` | same → `past_client` | mig 0419 | Past-client playbook (warm, roll into seller/buyer when it becomes one) |
+| VOICE | `myli_voice_bucket.other` | same → `other` | mig 0419 | Vendors / wrong numbers / asking-for-someone |
+| TEXT | `first_touch_contract` | `hl_settings` `ai_text_prompts` → `first_touch_contract` | mig 0427 | The context-first opening contract for the workflow `ai_message` first touch (greeting → who you are → real relationship → the request by address → ONE question) |
+| TEXT | `tour_first_touch_contract` | same → `tour_first_touch_contract` | mig 0429 | The purpose-built TOUR contract (replaces the general shape when the request is a tour): logistics-only, platform + address + time + "does that time still work" — no relationship line in message 1 |
+| TEXT | `floor_touch_brief` | same → `floor_touch_brief` | mig 0428 | The scheduled silence-breaker instruction (closed loop) |
+| TEXT | `daily_home_brief` | same → `daily_home_brief` | mig 0428 | The one hand-picked home note |
 
-Extend by auditing other AI prompt homes (clone persona layers, notification AI, etc.) into the catalog —
-additive, one slot per prompt, never a second copy.
+## The editing surfaces (two, deliberately different)
 
-**Editing:** CRM → AI → **AI Prompting** (`/ai/prompting`) — view + edit each slot in the UI with version
-history (`hl_ai_prompt_history` keeps every prior value). No more SQL surgery.
+- **`/ai/prompting`** (`app/(crm)/ai/prompting/page.tsx`) — view + edit each slot; its Save **PUTs the
+  LIVE value directly** (`PUT /api/ai/prompts/[key]`, `app/api/ai/prompts/[key]/route.ts:28`).
+- **The Test Cockpit's Prompt Editor modal** (`components/settings/test-cockpit/PromptEditorModal.tsx`)
+  owns the **draft → prove → promote** flow: "Save draft" writes the cockpit draft (live untouched, no
+  history row), test against the draft, then "Promote draft to live" does the real PUT.
+
+## The plumbing (how a slot's text actually flows)
+
+- **Version history — `hl_ai_prompt_history`** (mig 0426): every live save appends a row (slot_key, value,
+  editor, note). On a slot's **first-ever edit**, the pre-edit original is auto-seeded first
+  (`seedOriginal`, `app/api/ai/prompts/[key]/route.ts:83`) so the starting point is never lost.
+- **The draft mechanism**: a cockpit draft is stored BESIDE the live value at the same settings key, path
+  `<jsonPath>__draft` (`lib/ai/prompt-read.ts:33`). Settings-backed slots only. A live save clears the
+  draft so live and draft never diverge silently (route.ts:69-71).
+- **The code-constant fallback law**: every compose path reads the live value via
+  `readPromptLive(slotKey)` (`lib/ai/prompt-read.ts:14`) and falls back to its old code constant when the
+  read returns null — a missing/hiccuping settings row can never break production composing.
+- **Honest nuance — the gauntlet gate**: by LAW and practice (§02b #5) no prompt change goes live without
+  the judged gauntlet green, but the save path does **not yet enforce it** — promote is a manual
+  typed-confirm ("No automated suite is wired to this prompt yet", PromptEditorModal.tsx:197). The
+  gauntlet gate replaces the confirm when the scenario suites land.
 
 # ═══ 02 · PROMPTING DOCTRINE — how we write agent prompts ═══
 
@@ -88,6 +127,12 @@ conversation.** The industry consensus (Retell/Bland/Vapi/OpenAI's own reference
 5. **Eval-gated shipping** — no prompt change goes live without the judged gauntlet green
    (pass^k, repeat runs — single runs lie about stochastic models; Zillow ran 69%→95% this way).
 
+**Build status (2026-07-21):** the turn-level Director is **BUILT and live** — `MyliTurnGuard`, the
+post-tool watchdog, `wait_for_user`, and SemanticTurnDetection all ship in
+`apps/myli-voice-agent/pipecat_bot.py` (guard class :371, `wait_for_user` :508, semantic turn :640). The
+**slot-tracker checklist + scoring observer** (#2's runtime slot tracking, §07's Observer) is **FUTURE** —
+today the checklist still lives in the bucket prompts.
+
 **THE ONE-BREATH RULE** (prompt law #1, in every voice prompt): the acknowledgment and the next
 question are ONE breath — a spoken turn is complete ONLY when it ends with exactly one question
 (sole exception: the final goodbye, which is SPOKEN before `end_call`, never skipped). Sample
@@ -97,30 +142,196 @@ phrases" — official guide): every state's samples end in a question.
 **ONE BRAIN, MANY MOUTHS** (Zach doctrine 2026-07-20): Myli is ONE persona + ONE per-lead working
 memory + ONE rulebook across voice/text/email; the MODELS are swappable per-channel engines under
 the brain (phone = gpt-realtime-2.1, text = Claude Sonnet — decided; A/B parked). Deep dive:
-`guides/closed-loop-follow-up`.
+`guides/closed-loop-follow-up`. The memory keystone: §06.
 
-# ═══ 03 · CONVERSATION STATES & THE OBSERVER — the "invisible state" ═══
+# ═══ 03 · THE VOICE LANE — how the phone persona is COMPOSED ═══
+
+One endpoint owns it: **`GET /api/phone/myli/persona`**
+(`apps/houseloop-crm/app/api/phone/myli/persona/route.ts`), called by the Pipecat voice worker at call
+start. Myli's phone personality is CONFIG, not code. Runtime/hardware/deploy detail: `guides/ai-voice`.
+
+## Cold hat vs warm hat (the company-line law, Zach 2026-07-15)
+
+The hat is picked by who's calling **AND which line they dialed** (route.ts:44-106):
+
+- The **company / front-door / test line is ALWAYS the cold AI Receptionist** — a total stranger. She
+  NEVER name-recognizes a caller just because their number exists somewhere in the CRM.
+- The **WARM hat** (greet by first name + full memory) requires BOTH: **(1)** the caller dialed the
+  agent's OWN line — a number in `hl_phone_numbers` assigned to this ai_agent (route.ts:66-77) — AND
+  **(2)** the matched lead is actually ASSIGNED to her (`assigned_ai_agent_id`, route.ts:103-105).
+- Why: the old code flipped warm for ANY lead-matched number on ANY line, so a test lead calling the
+  company line got "hey Zach" — dead wrong for a company receptionist.
+
+## GROUND TRUTH injection (route.ts:148-161)
+
+The model has no clock and no caller-ID access — on real calls it invented dates ("Wednesday December
+18th") and digits (Zach live-test 2026-07-17). So the route injects the only two per-call facts the voice
+layer actually knows: the current date/time (Central) and the caller-ID digits (or "ask and read back
+digit by digit" when unavailable). The bot re-prepends the merged ground truth to a bucket when it swaps
+prompts mid-call, so the clock + caller-ID survive the swap (route.ts:173-175).
+
+## The composed base (route.ts:163-171)
+
+```
+persona = groundTruth
+        + role persona            (hl_role.persona, per-agent override wins)
+        + role voice doctrine     (hl_role.voice_persona, per-agent override wins)
+        + memoryBlock             (warm calls only — composeMyliMemory, §06)
+```
+
+with `{{agent.*}}` / `{{ai.*}}` / `{{team.*}}` merge tokens resolved for the acting agent. **The KB block
+is intentionally DROPPED from the base** — the receptionist triages first, then the bot swaps in ONE
+specialized bucket; keeping the base tiny is the whole latency fix (mig 0419).
+
+## Triage addendum + bucket hot-swap
+
+- The **triage block** comes from the registry (`myli_voice_triage`, mig 0431 — no hidden prompt
+  segments) via `readPromptLive` and is returned merged as the `triage` field (route.ts:201-206); the bot
+  appends it at call start.
+- The **buckets** (`myli_voice_buckets`, merge-token-resolved, route.ts:177-192) are returned as a map;
+  the bot hot-swaps the session instructions to base + ONE bucket via `session.update` when the model
+  calls `set_caller_type` (pipecat_bot.py:679 — OpenAI's own documented dynamic-flow pattern).
+- **`?prompt_source=draft`** overlays each bucket's cockpit draft (and the triage draft) BEFORE merge, so
+  the Test Cockpit chats against a draft through the exact same composition path (route.ts:182-192). The
+  phone bot never sends the param — live calls unchanged.
+
+The route also returns `voice_enabled` (the master kill switch, from the phone hat's tools) and the
+per-capability toggles (capture_caller / set_callback / take_message / flag_spam).
+
+# ═══ 04 · THE TEXT LANE — how the text system prompt is ASSEMBLED ═══
+
+One file owns the conversational text brain: **`apps/houseloop-crm/lib/ai/lead-conversation.ts`**.
+
+## buildSystemPrompt — the layering (lead-conversation.ts:2018-2088)
+
+```
+system = grounding      (RIGHT NOW clock/tz + WHO YOU ARE TEXTING + how-you-search-homes doctrine)
+       + agentBlock     (loadDefaultAgentBlock — the acting agent identity)
+       + stagesBlock    (the lead's live pipeline stages → drives appointment type)
+       + memory         (composeMyliMemory — §06, the one-brain keystone)
+       + persona        (role persona + per-agent override + the role's KB docs, smart-fields resolved)
+```
+
+Unlike the voice base, the text lane DOES inject the role's Knowledge Base docs into the persona stack
+(:2029-2038) — latency physics differ; there is no per-turn re-read tax on text.
+
+## The instant-ack layer (never a quiet thread)
+
+- **`generateAck`** (:2110) — a fast Haiku micro-call reads the lead's last message + thread position and
+  writes ONE fitting buy-time line ("yeah, getting that locked in for you now!") — or SKIPs when buying
+  time would read weird. It is armed ONLY when the model actually invokes a slow tool and ~10s pass with
+  no reply (:2197-2217) — never a blind timer on small talk.
+- **Rotation ban:** the last 8 ack texts persist in `hl_settings.ai_ack_rotation` and are banned from
+  reuse, so it can never read canned. **`ACK_VARIANTS`** (:2095) is the static error-fallback pool only.
+
+## THE WHO-SPEAKS GATING CHAIN — `dispatchInboundToAi` (:225)
+
+Every inbound text/iMessage/email walks this chain, in order:
+
+1. **The master switch** (:229 → `aiEnabledForLead` :212): the ALL-AI failsafe
+   `hl_settings ai_master.enabled` (mig 0432, `lib/ai/master-gate.ts` — off beats everything, even the
+   pilot list) AND `ai_conversations.enabled` (with the `pilot_lead_ids` live-fire override).
+2. **Destination-identity routing** (:237-243): WHO was contacted decides the lane. Inbound landed on an
+   AGENT'S identity (their number/email) → the human owns it and their **AI clone** covers per
+   config/SLA — not Myli. Landed on Myli's/company identity (or unknown) → fall through.
+3. **The per-lead mic — `hl_leads.ai_responder`** (mig 0430; :245-259): `'none'` → NO AI reply, full
+   stop. `'clone'` → the owner's clone lane speaks (no owner → honest silence). `'myli'` / legacy NULL →
+   Myli's watch lane. The lead-card toggles write this field — they are REAL, not decorative.
+4. **The clone master gate** (mig 0431, `hl_settings ai_clones.enabled`): a three-layer AND — master
+   toggle × per-agent `hl_agent_clone_config.enabled` × the per-lead mic — enforced in
+   `lib/agent-runtime/resolve-send-identity.ts:47` (`clonesMasterEnabled`). Master OFF = every clone
+   silent; Myli does NOT take over (never a bulk write, so flipping back on restores exact prior config).
+5. **Myli's watch lane requirements**: an assigned AI owner + an AI role with a non-empty persona (an
+   empty persona logs a VISIBLE `ai_skipped_no_persona` activity row instead of silent death, :283-295).
+   Email inbound additionally requires the email dark-gate (§05).
+
+Myli's watch is deliberately NOT gated by the per-lead `ai_mode_enabled` escalation flag (:261-266) —
+that flag belongs to the SLA/escalation layer; gating on it was exactly why "turn workflows off → Myli
+went silent."
+
+# ═══ 05 · THE FIRST-TOUCH / EMAIL LANE ═══
+
+One function owns the first-touch brief: **`buildFirstTouchBrief`**
+(`apps/houseloop-crm/lib/workflows/first-touch-brief.ts:160`). Both the live workflow node
+(`execute-step.ts` → ai_message) AND the preview harness call it, so a preview is byte-for-byte what gets
+sent (the three hand-copied drifting copies burned a live deal, 2026-07-18).
+
+## Contract selection order (:176-179)
+
+```
+explicit override (cockpit re-run-with-draft)
+  > tour_first_touch_contract (live slot, when the request is a tour)
+  > first_touch_contract (live slot)
+  > CONTEXT_FIRST_CONTRACT (the code constant — the never-break fallback)
+```
+
+## What gets stacked into the brief (:217-228)
+
+- **The contract** (above) — the dominant, in-the-moment instruction: greeting → who you are → the REAL
+  relationship (only if the dossier supports it; never invented) → the request by ADDRESS → ONE question.
+  Tour first touches deliberately withhold the relationship line from message 1.
+- **`intentGuidance`** (:127) per resolved intent: tour_request (acknowledge the EXACT time, never re-ask),
+  property/FUB inquiry, seller_inquiry, contact_request.
+- **The relationship line** (:100) pulled straight from `hl_lead_dossier` + `hl_lead_facts` so it sits
+  beside the contract, not 40 facts deep in the system prompt.
+- **Platform + brand lines** (:185-200): the platform the request came through ("through Zillow") and the
+  company name the responder introduces with — from the lead's ROUTING RULE (mig 0436), never hardcoded.
+- **`formatRuleFor(channel)`** (:54): **SMS physics** for text (aim under 160 GSM-7 chars = one billed
+  segment; 320 hard ceiling; no em dashes / curly quotes — they force UCS-2 and triple carrier cost) vs
+  the email body shape (2–4 short paragraphs, no subject/signature — added automatically).
+- **`STYLE_RULE`** (:39 — casual tone from word choice, never dropped capitalization) and
+  **`NO_REASONING`** (:46 — output ONLY the message; a leaked chain-of-thought to a real lead is a fire).
+
+## THE EMAIL TRUTH — no separate email slot
+
+There is **no email prompt slot and no separate email brain**. Email reuses the text brain end-to-end:
+the same `dispatchInboundToAi` chain, the same `buildSystemPrompt`, the same contracts — with
+`formatRuleFor('email')` swapping the output shape. Email auto-reply ships **DARK** behind
+`hl_settings ai_conversations.email_enabled` (explicit `true` to activate;
+lead-conversation.ts:273-277) until the e2e proves it. Texts unaffected.
+
+# ═══ 06 · THE ONE WORKING MEMORY — the one-brain keystone ═══
+
+**`composeMyliMemory(leadId)`** (`apps/houseloop-crm/lib/ai/myli-memory.ts:18`) is the canonical per-lead
+memory composer — the working-memory layer of ONE BRAIN, MANY MOUTHS. Every channel that speaks for Myli
+composes the lead's rolled-up memory through THIS one call, identically — never by assembling the blocks
+itself:
+
+- **Voice** — the persona route injects it as the warm-call memory block
+  (`app/api/phone/myli/persona/route.ts:119`). The company-line cold hat simply doesn't call it for
+  strangers — that's the cold-hat law, not a different memory.
+- **Text/email** — `buildSystemPrompt` injects the identical composition
+  (`lib/ai/lead-conversation.ts:2086`).
+
+What it returns: the **dossier block** (structured facts) + the **context brief** (comms / browsing /
+notes distillation), both built over the per-lead everything-store — `hl_lead_activity` (the canonical
+run-log), `hl_messages`, `hl_calls`, and the email logs. Change the memory here and every mouth changes
+together; a channel composing its own memory blocks is the drift this function exists to make impossible.
+
+# ═══ 07 · CONVERSATION STATES & THE SCORING OBSERVER ═══
 
 ## The 3-tier state ladder (climb only on evidence)
 
 1. **Single prompt + Conversation Flow section** — phases written in the prompt (Goal / sample phrases /
    Exit-when). Receptionist territory.
-2. **Per-state instruction/tool swapping** — the runtime hot-loads instructions per phase (our Myli
-   playbook hot-load via `session.update`; Pipecat Flows is the framework version). Climb here when calls
-   consistently derail ("context rot").
+2. **Per-state instruction/tool swapping** — the runtime hot-loads instructions per phase. **BUILT — this
+   is Myli voice today**: the triage → bucket hot-swap via `session.update` (§03), plus the turn-level
+   guards (`MyliTurnGuard`, `wait_for_user`, semantic turn detection — §02b, all live in
+   `pipecat_bot.py`). Climb here when calls consistently derail ("context rot").
 3. **Hard graph with coded transitions** — compliance-heavy flows only; over-noding sounds robotic.
 
 **The law: the LLM's job is language; the goal lives in code.** Transitions are state mutations signaled
 by tool calls — never something the model is trusted to remember.
 
-## The Observer pattern (how lead-qual will work)
+## The Observer pattern — FUTURE (how lead-qual will work)
 
+Not yet built — the turn guards above are the shipped half of the Director; this is the unshipped half.
 Fast model talks naturally. A parallel tracker (deterministic + small LLM extractor) watches the
 transcript, owns the slot checklist + score, and steers by injecting context between turns ("You have X
 and Y. Next goal: Z. Do not re-ask X."). The talking model never knows it exists. Scoring is ALWAYS
 computed by the tracker layer, never the talking model, and persists on the CRM lead record.
 
-## Scoring (the industry pattern, for the lead-qual build)
+## Scoring — FUTURE (the industry pattern, for the lead-qual build)
 
 Rubric-driven (real-estate shape: timeline / motivation / price band / pre-approval / area / has-agent),
 0–100 + tier, updated per response, stored as lead fields; threshold crossings fire handoff (hot transfer
@@ -128,7 +339,7 @@ Rubric-driven (real-estate shape: timeline / motivation / price band / pre-appro
 next-goal pointer) → reply → extractor updates fields → writeback → next touch scheduled (behavioral
 triggers beat time drips) — maps 1:1 onto Inngest + `hl_leads`.
 
-# ═══ 04 · RESEARCH ARCHIVE ═══
+# ═══ 08 · RESEARCH ARCHIVE ═══
 
 - **2026-07-20 — Voice/text agent design research** (two deep-research agents, fully cited): why ChatGPT
   AVM/Gemini Live feel natural (architecture + the leaked personality prompt), states/scoring/observer
@@ -136,3 +347,9 @@ triggers beat time drips) — maps 1:1 onto Inngest + `hl_leads`.
 - **2026-07-18 — The Gemini latency verdict** (Gemini Live native-audio TTFB unfixable community-wide;
   OpenAI Realtime swap) → memory `project_myli_voice_latency_verdict` + `guides/ai-voice` update log.
 - Future research lands in this section — one page, consolidation over sprawl.
+
+---
+
+**Pointers:** testing mechanics (the Test Cockpit, the judged gauntlet, sim callers, pass^k) →
+`guides/test-harness`. Voice hardware, engines, Pipecat Cloud deploy, Twilio wiring → `guides/ai-voice`.
+The closed-loop follow-up system (floors, daily home, cadence) → `guides/closed-loop-follow-up`.
