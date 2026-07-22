@@ -26,10 +26,39 @@ The identity fields live in the member editor's **Profile** section:
 
 The surrounding editor also exposes (subject to permissions), documented in full with the Team / member editor:
 
+- **Contact Cards** — the member's **vCard** (savable contact) and **Digital Business Card** (branded image). See below.
 - **Permissions** — Access level (Owner / Admin / Member) and member Type (Human / AI Agent). Only admins can change another member's access, and you cannot change your **own** access.
 - **Connections** — Email, Calendar, Phone, and iMessage channel connections.
 - **Roles** — job roles for humans; AI-kind roles with per-role persona/tool/doc overrides for AI agents.
 - **AI Clone** — human members only: assign and configure the AI clone that sends as you (your phone, email, calendar).
+
+## Contact Cards (vCard + Digital Business Card)
+
+Each human member (and Myli, the standalone AI agent) has **two** shareable cards, edited in two sections of the member editor. Both are **data-driven** — every field lives in `hl_users.data`, nothing is hardcoded — and both are **public** so a text message can attach them (Twilio MMS / iMessage fetch them unauthenticated, the same mechanism Follow Up Boss uses).
+
+<Info>These are two different things. The **vCard** is a real savable contact (`.vcf`) — the recipient taps it and gets the native "Add Contact" screen. The **Digital Business Card** is a branded **image** (`.png`) you text as a picture — no save button. Per-human **AI clones** never get cards; standalone agents (Myli) do.</Info>
+
+### vCard
+
+The savable contact. Editable fields: **Name** (`full_name`), **Title** (`data.title`), **Mobile** (`data.card_phone` — a dropdown of the member's own assigned lines: Twilio dialer / iMessage / cell), **Email** (`data.card_email` — a dropdown of known addresses or a custom one), **Homepage** (`data.card_homepage`, default `houseloop.ai`), and **Notes** (`data.card_note`, default `Spradling Group powered by HouseLoop`).
+
+The section shows a live preview of what the card looks like when sent — the **collapsed** suggestion row and the **expanded** iOS contact card — plus a Copy-link and Download-`.vcf` control.
+
+Card construction rules (learned on real devices):
+
+- The **header is name + photo only** — no `ORG`, no company mash-up. iOS combines title + company into the line above the name and it reads cluttered, so the brand lives in **Notes** instead. If **both** title and company are blank, iOS shows "Unknown" there, so a title (e.g. "Realtor") is what fills that slot.
+- The **headshot is embedded as base64** inside the `.vcf`. iOS refuses to fetch a remote `PHOTO;VALUE=URI`, so a linked photo shows initials — the bytes must be inline.
+- Served as `text/vcard` at **`/api/team/vcard/[id]`** (public). A shareable web version lives at **`/c/[id]`** (a clean contact page with a "Save to Contacts" button).
+
+### Digital Business Card
+
+A branded card **image** you text as a picture. Editable fields: **Name**, **Title**, **Mobile**, **Email** (same data as the vCard — an edit syncs both). Rendered server-side (Satori / `next/og`) as a PNG at **`/api/team/card-image/[id]`** (public). The preview in the editor **is** that exact PNG shown large, so it always matches what gets sent.
+
+### Sending them
+
+The lead text composer gets two separate controls — **Send vCard** and **Send Business Card** — that attach the respective artifact (SMS via Twilio `MediaUrl`, iMessage via a BlueBubbles attachment). The picker list comes from **`/api/team/cards`**.
+
+<Tip>A member's headshot lives in the website app at `houseloop.ai/brand/headshots/<name>.jpg` and must be `https` or the card falls back to initials. `tools/houseloop-cards/enhance-headshot.mjs` (Gemini "nano-banana") can face-restore/upscale a rough photo into a clean headshot while preserving the person's identity.</Tip>
 
 ## Data source
 
