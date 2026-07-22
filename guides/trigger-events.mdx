@@ -323,10 +323,23 @@ doors below (mig `0285`). Any doc/code still treating "Property Inquiry" as one 
 | # | Trigger event | Created from (the FUB signal) | Notification class | The card |
 |---|---|---|---|---|
 | 1 | `tour_request` | `eventsCreated` · Property Inquiry with tour language ("interested in touring/seeing X") | `lead_created` | 🏠 *registered* (`{{contact.full_name}}`) |
-| 2 | `contact_request` | `eventsCreated` · Property Inquiry with reach-out language ("have an agent call me") | `lead_created` | 🏠 *registered* |
+| 2 | `contact_request` | `eventsCreated` · Property Inquiry with reach-out language ("have an agent call me") **OR a real-message General Inquiry** (serviced 2026-07-22) | `lead_created` | 🏠 *registered* |
 | 3 | `rental_inquiry` | `eventsCreated` · Property Inquiry, source **Zillow Rentals** | `lead_created` | 🏠 *registered* |
 | 4 | `property_inquiry` | `eventsCreated` · Property Inquiry (the default — "I am interested in `<addr>`") | `lead_created` | 🏠 *registered* |
 | 5 | `seller_inquiry` | `eventsCreated` · **Seller Inquiry** ("I want to sell my home") | `lead_created` | 🏠 *registered* |
+| 24 | `registration` | `eventsCreated` · **Registration** (portal sign-up). Boarded 2026-07-22 (mig 0442), seeded Sync-ON / **Creates-Lead OFF** — flip it on to mint from a registration | `lead_created` | 🏠 *registered* |
+| 25 | `pre_approval` | `eventsCreated` · **Pre-Approval** (mortgage readiness). Boarded 2026-07-22 (mig 0442), seeded Sync-ON / **Creates-Lead OFF** | `lead_activity_insight` | 🎯 *readiness signal* |
+
+<Note>
+**General Inquiry / Registration / Pre-Approval — the "never drop a lead" completion (2026-07-22).** These three
+FUB event types were dropped at the HouseLoop boundary (they weren't in `SERVICED_FUB_EVENT_TYPES`), so a
+Zillow **General Inquiry** like Kenneth Hunt (FUB 50544) — which FUB created and even emailed us — never became
+a CRM lead. All three are now serviced: a real-message General Inquiry classifies to `contact_request` (the junk
+filter still drops blank / phone-notice / Zillow-system messages → `null`); Registration and Pre-Approval got
+their own rows. Mint safety: the "latest intent" re-derive ranks the four strong property intents
+(`STRONG_FUB_EVENT_TYPES`) **above** these three, so adding them can never shadow a mintable Property Inquiry.
+Backstop: see the **Email Lead Safety-Net** below.
+</Note>
 
 #### System-family (activity on an existing lead)
 
@@ -359,6 +372,30 @@ doors below (mig `0285`). Any doc/code still treating "Property Inquiry" as one 
    Zach's FUB-native seat fires into the inbox lane. See [the board SSOT](/guides/trigger-events) §THE INBOX
    LANE for the full pipeline. The 3 dead subtype rows were deleted (mig 0415).
 </Warning>
+
+#### Email Lead Safety-Net — the backstop that catches what the webhook drops or misses (2026-07-22)
+
+The FUB webhook is the primary path, but it can DROP a lead (an unserviced type) or MISS one (a webhook that
+never arrives — no auth, no retry). The **Email Lead Safety-Net** (`lib/inngest/functions/email-lead-ingest.ts`,
+cron every 5 min) is the second, independent capture: every vendor lead-alert email is forwarded into
+**`info@houseloop.ai`** — FUB's own `leads@followupboss.com` "New Lead from …" / "Lead Alert from …" (the
+richest signal — carries the lead's name, email, phone, message, and a `people/view/{id}` link) and Zillow's
+direct `no-reply@leads.premieragent.com`. The fn reads that inbox via domain-wide delegation, parses each alert
+(`lib/email/parse-lead-email.ts`), and reconciles it.
+
+**It cannot double-count — a DELAYED RECONCILER (Zach's locked design):**
+- **5-min grace window** — only acts on emails older than 5 min, so the instant webhook always wins first.
+- **Idempotent** — every Gmail `message_id` is stamped in `hl_email_lead_ingest`, processed exactly once.
+- **Mint-only-if-absent** — pre-checks `hl_leads` by `fub_person_id` / email / last-10 phone; if the lead already
+  exists (webhook or a prior email got it) it SKIPS (no mint, no trigger). It mints **only** a genuinely absent
+  lead — via `processLeadIntake` on the vendor's existing `fub_*` source.
+- **Toggle-gated** — a mint only happens when the parsed intent's **Creates-Lead** is ON in
+  `hl_fub_webhook_settings`. The board below is the ONE control surface for BOTH the webhook and the email net.
+- **Reconcile stamp** — when the alert carries a `fub_person_id`, the net stamps it on the minted lead so the
+  later webhook treats the lead as EXISTING (no double NEW-lead fire).
+
+Forwarding is Gmail filter → `info@` on the source mailboxes (`premieragent.com` + `leads@followupboss.com`),
+created by API via the service account — see [Vendor Lead Email Capture](/guides/vendor-lead-email-capture).
 
 ## Behavioral signals MINT when Creates Lead is ON
 

@@ -48,6 +48,25 @@ No hardcoded never-mint list; the toggle governs per event. Detail:
 [FUB Trigger Events → Behavioral signals mint](/guides/trigger-events#behavioral-signals-mint-when-creates-lead-is-on).
 </Note>
 
+## The second capture path — the Email Lead Safety-Net (2026-07-22)
+
+The webhook is the primary path, but it can DROP a lead (an unserviced type — the reason General Inquiry /
+Registration / Pre-Approval were completed in `SERVICED_FUB_EVENT_TYPES`) or MISS one (a webhook that never
+arrives — our endpoint has no auth and FUB gives no retry guarantee). Kenneth Hunt (FUB 50544) proved it: FUB
+created him and even emailed `New Lead from Zillow - Kenneth Eugene Hunt`, but HouseLoop never pulled him in.
+
+The **Email Lead Safety-Net** (`lib/inngest/functions/email-lead-ingest.ts`) is the independent backstop: FUB's
+own alert emails (`leads@followupboss.com`) + Zillow direct forward into `info@houseloop.ai`, and a 5-min cron
+parses them and mints any lead that isn't already in the CRM. It shares the FUB control surface — a mint only
+happens if the parsed intent's **Creates-Lead** toggle is ON in `hl_fub_webhook_settings`.
+
+**It reuses this doc's dedup contract, so it can never double-count** — it calls `processLeadIntake` only after a
+pre-check finds NO existing `hl_leads` row (matched by `fub_person_id` / lower-email / last-10 phone), stamps the
+`fub_person_id` it parsed from the alert's `people/view/{id}` link so the later webhook's `importFubLead`
+reconciles onto the same row (link, never duplicate), and is idempotent per Gmail `message_id`
+(`hl_email_lead_ingest`, mig 0443). Full design: [Trigger Events → Email Lead Safety-Net](/guides/trigger-events)
+· plumbing: [Vendor Lead Email Capture](/guides/vendor-lead-email-capture).
+
 ## What a FUB signal becomes in HouseLoop — the 2026-07-10/11 hardening
 
 Once captured, a lead's activity is mirrored into HouseLoop the right way — governed by **one master**, **forward-only**,

@@ -156,16 +156,29 @@ info@houseloop.ai.
 |---|---|---|---|
 | `sales@spradlingrealtygroup.com` (Ana's Zillow login) | from `premieragent.com` | `info@houseloop.ai` | **201** ✅ |
 | `zach@houseloop.ai` (Zach's Zillow login) | from `premieragent.com` | `info@houseloop.ai` | 0 (freshly wired) |
+| `zach@spradlingrealtygroup.com` (FUB team alerts) | from `leads@followupboss.com` | `info@houseloop.ai` | wired 2026-07-22 ✅ |
 | `support@spradlingrealtygroup.com` | to `bfroeschl@…` (Ben's alias) | `info@houseloop.ai` | — |
-| `info@houseloop.ai` (the capture inbox) | — | holds all forwarded leads | **201** ✅ |
+| `info@houseloop.ai` (the capture inbox) | — | parsed by the Email Lead Safety-Net | ✅ |
 
 <Note>
-**Two open items on info@houseloop.ai:**
-1. **The parse layer is not built yet.** Leads are landing in `info@` (201+), but nothing in the CRM watches +
-   parses that inbox into leads/trigger events. That is the remaining build — a multi-source lead-email parser
-   (Premier Agent / FUB `leads@followupboss.com` / Realtor.com) that creates the CRM lead + fires the trigger.
-2. **`info@` currently blanket auto-forwards everything to `zach@spradlingrealtygroup.com`** (`leaveInInbox`, so a
-   copy stays — it's noise, not data loss). Not part of this design; flagged for a decision on whether to keep it.
+**The parse layer is LIVE (2026-07-22).** The **Email Lead Safety-Net**
+(`apps/houseloop-crm/lib/inngest/functions/email-lead-ingest.ts`, cron every 5 min) reads `info@houseloop.ai`
+via domain-wide delegation and reconciles the forwarded lead alerts into HouseLoop leads. Parser:
+`apps/houseloop-crm/lib/email/parse-lead-email.ts`. It is a **delayed reconciler** — it cannot double-count
+(full contract: [Trigger Events → Email Lead Safety-Net](/guides/trigger-events)):
+
+- **Senders parsed:** FUB's own `leads@followupboss.com` (`New Lead from {vendor} - {name}` / `Lead Alert from …`
+  — carries name, email, phone, message, and a `people/view/{id}` link = the `fub_person_id`) and Zillow direct
+  `no-reply@leads.premieragent.com` (Reply-To = the lead's email). Marketing / digests / hot-sheets are ignored.
+- **5-min grace window** so the instant FUB webhook always mints first; **idempotent** per Gmail `message_id`
+  (`hl_email_lead_ingest` ledger, mig 0443); **mint-only-if-absent** (dedup by `fub_person_id` / email / last-10
+  phone) so it never doubles; **toggle-gated** by the FUB Trigger Events board; stamps `fub_person_id` so a later
+  webhook treats the lead as existing.
+- To reach `info@`, both streams forward there by API filter: `premieragent.com` (on `zach@houseloop.ai` +
+  `sales@spradlingrealtygroup.com`) and `leads@followupboss.com` (on `zach@spradlingrealtygroup.com`).
+
+**One open item:** `info@` also blanket auto-forwards everything to `zach@spradlingrealtygroup.com` (`leaveInInbox`,
+so a copy stays — noise, not data loss). Not part of this design; flagged for a decision on whether to keep it.
 </Note>
 
 ## Credentials & references

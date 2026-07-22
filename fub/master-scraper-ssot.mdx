@@ -15,6 +15,13 @@ re-edits the body to current truth — no stacked superseded blocks, ever (git h
 
 ## Update log
 
+- **2026-07-22** — **Pull-in of a FRESH FUB person, end-to-end (Lee).** find-people / single "Pull in" no longer
+  fail when a person is newer than the scraper mirror. The search falls back to the **FUB API** to SURFACE them,
+  and the single "Pull in" **triggers the sanctioned scrape front door** (`person_rescrape` → CDP scraper →
+  `fub/lead.rehydrated`) then imports from the populated mirror — so pulling in scrapes the lead and brings in
+  everything. Root cause of the failed on-demand scrape: a **stale hardcoded FUB API key** in
+  `tools/mcp/fub-scraper-server.mjs` (now reads `.env FUB_API_KEY`). New **"Pulling in a fresh person"** +
+  **"FUB API key topology"** sections in §3 below.
 - **2026-07-17** — **Signals put to bed (Caleb).** ONE canonical health check shipped (`tools/fub-scraper/scraper-health.mjs`);
   the `fub_scraper_status` MCP tool rewritten to judge by FRESH DATA (was checking a screen session that never
   existed → permanent false "DOWN"); the deprecated `fub.rehydration_queue` labeled + the stale one-Chrome prose
@@ -490,6 +497,41 @@ workflows, no notifications). Four steps:
    Zach types the Rule #0 approval (`approval:'ZACH-TYPED-OK'`) — a bulk write to `hl_leads` never fires from the browser.
 
 Stage mapping is applied one-shot at import (`opts.stageId ?? source default`); the flow is **one-way** — FUB → HouseLoop, no stage sync-back. Files: `components/settings/fub/FubImportWizard.tsx`, `app/api/integrations/fub/import/{preview,run,count}/route.ts`, `lib/inngest/functions/fub-import-all.ts`, `lib/fub-import/import-fub-lead.ts`.
+
+### Pulling in a FRESH person — the mirror lag + the scrape front door (Lee, 2026-07-22) 🔒
+**The problem:** the CRM reads only the Railway mirror (`fub.people`), which the scraper populates — so it **lags
+the FUB API**. A person created minutes ago (proven: **Kenneth Eugene Hunt, FUB 50544**, while the mirror's newest
+was 50543) is **in FUB but not yet in the mirror**. The single-person **find people** search (`import/search`) and
+the **Pull in** (`import/person` → `importFubLead`) both read only `fub.people`, so a fresh person was invisible
+AND un-importable (`importFubLead` threw *"not found in fub.people"*).
+
+**The fix (doctrine-aligned — the scraper stays the front door, the CRM never reads FUB data direct):**
+- **Search** (`app/api/integrations/fub/import/search/route.ts`) merges a **live FUB API** lookup
+  (`fubGet('/people?name|email|phone=…')`, current `FUB_API_KEY`) with the mirror rows — de-duped by id, API-only
+  rows flagged **`notInMirror`**. A FIND aid only: it surfaces the person so the operator can pull them in; it does
+  not ingest data.
+- **Pull in** (`lib/inngest/functions/fub-lead-import.ts`, `importMode:'single'` only) — when the person isn't in
+  `fub.people`, it **enqueues a `person_rescrape` into `fub.body_recovery_queue`** (the SSOT lock-step mechanism)
+  → the live Camp David CDP scraper (logged into FUB as Zach — it **sees** them, no REST key needed) walks their
+  FUB page → **upserts `fub.people` + full browse/comms history** → `POST /api/fub/rebackfill` fires
+  `fub/lead.rehydrated`. The import `waitForEvent`s on it (3-min timeout, soft *"pull in again in a moment"* on
+  timeout) THEN mints from the populated mirror. So **pulling in a fresh lead scrapes them and brings in
+  everything** — via the front door, no parallel CRM→FUB-API data path. Human `single` pull-in only; the
+  fail-closed webhook mint gate is untouched.
+
+### 🔑 The FUB API key topology (read before touching any FUB API / scraper key) 🔒
+There is **ONE current FUB API key — `.env` `FUB_API_KEY`** (mirror of the Master Credentials sheet). Everything
+that calls the FUB REST API MUST use it, from env — never a hardcode:
+- **CRM app** — `lib/fub/fub-api.ts` (`fubGet`, Basic-auth `FUB_API_KEY`) + the webhook fetch-back. ✅ current.
+- **Scrape tools** — `tools/mcp/fub-scraper-server.mjs` now reads `process.env.FUB_API_KEY`. It previously
+  **hardcoded a stale key** (`fka_0GHgNJ…`) that **404'd** on a real fresh person the current key resolved fine,
+  silently breaking the on-demand scrape's API-pull step (2026-07-22 incident).
+- **Camp David scrapers** DOM-scrape the FUB UI via **Zach's logged-in Google/CDP session** — they see everyone
+  in the account regardless of the REST key (the REST key is only for the API-pull of a person's core fields).
+
+**Verify a key:** `curl -u "<key>:" https://api.followupboss.com/v1/people/<id> -H "X-System: HouseLoop"` → 200 +
+the person = current; a 404 on a person you can see in the FUB UI = a **stale key**. **Rotate:** update `.env`
+`FUB_API_KEY` (+ the sheet + `node tools/credentials/sync-creds.mjs`), and ensure no tool hardcodes it.
 
 ### Layer 1 — real-time sync (event-driven, NO polling) 🔒
 ```
