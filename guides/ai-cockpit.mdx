@@ -18,6 +18,25 @@ than one job ever touch this thing?* **Yes** → it's equipment with its own con
 Numbers). **No** → the config lives on the job's page (pond rules → Inside Sales · audit rules → Database
 Manager · writing → Content Manager).
 
+<Update label="2026-07-22 ~10:40Z" description="Section reorder + Team Pulse KPI rewire + actor attribution">
+  - **Block order changed** (Zach): **Your AI team on duty** now sits ABOVE **Team pulse**, which sits above
+    **Live AI Activity**. Pulse timeframe defaults to **7 days** (Today read too sparse).
+  - **Team Pulse KPIs fixed** (`/api/team/pulse` ai-team): **Facts** count the real per-actor rows (reconcile
+    `/api/ai-follow-up/stats`); **AI spend** is priced PER ACTOR at that agent's `MODEL_PRICING` (matches
+    `/api/ai-follow-up/spend`); **Income contributed = AI-ATTRIBUTION credit** — the closed GCI (from the
+    canonical closing truth `sisu_transactions.gci`) of any deal where an AI **set the appointment** that led
+    to the close. It is ISOLATED to the AI cockpit — it never rolls into company/human totals; the human keeps
+    the same GCI once on their dashboard (**no double count**). It reads $0 until an AI-set appointment closes.
+  - **Live AI Activity actor labels:** every AI row now shows a **robot-head icon + name**; a clone renders
+    **"Name (clone)"** (a clone shares the human's id, so it must be marked). Shared `aiActorLabel` helper.
+  - **Actor attribution:** all AI actions (facts, dossier/context, appointments, comms) stamp the **real
+    acting actor** via `resolveActorStamp(leadId)` — never a generic "AI"/"first ai_agent". `actor_kind`
+    (human|clone|myli) separates clone-work from the human even though they share an id. **Myli is the default
+    context owner on every lead** (`default_ai_agent_user_id = Myli` on all lead-source routing rules +
+    backfilled) — **present, silent** (her mic/`ai_responder` stays off; presence ≠ voice). See
+    [Lead Activity Log](/guides/lead-activity-log) for the write-side contract.
+</Update>
+
 ## The four blocks (top to bottom)
 
 1. **Your AI services** — the six job boxes, one line, **these ARE the master switches** (no separate
@@ -27,30 +46,32 @@ Manager · writing → Content Manager).
    toggles with honest copy until their flags exist — no orphan flags, ever. The page header carries the ONE
    global **All AI** switch: OFF kills `enabled` + `voice_enabled` together; ON restores the engine only
    (voice returns on its own switch — fail-closed).
-2. **Team pulse** — THE PULSE DECK (`components/team/PulseDeck.tsx`, locked 2026-07-13): the ten-card
-   member instrument at AI-team scope — Total leads [New · Stages moved] · Phone calls [Received · Made] ·
-   Texts [Received · Sent] · Emails [Received · Sent] · Tasks [Completed · Created] / Homes searched
-   [Searches · Shared] · Facts captured [Notes · Dossiers] · Appointments set [Resched · Cancels] ·
-   Income contributed [Closed · Pending] · Spend [Conversation · Extraction]. Pills INSIDE each hero, 2×5
-   fixed grid, Today/7d/MTD/YTD in the header, month-vs-cap capline below. Data: `/api/team/pulse?scope=ai-team`.
-   The SAME deck renders on every member page at one-person scope (humans get the 8-card 2×4 without
-   Facts/Spend). EXTENSION LAW: each future service ships its win-card into the team deck.
-3. **Your AI team — on duty** — one BUSINESS CARD per AI agent, atomic single-value rows so nothing wraps:
+2. **Your AI team — on duty** — one BUSINESS CARD per AI agent, atomic single-value rows so nothing wraps:
    Status · Duties (icons from REAL seats — inbox manager count + the calls channel, never hardcoded) ·
    Leads · Inboxes · Actions today · Appts 7d · Spend month, plus the Add Agent ghost. Data:
    `/api/ai-follow-up/agent-cards`.
+3. **Team pulse** — THE PULSE DECK (`components/team/PulseDeck.tsx`): the ten-card member instrument at
+   AI-team scope — Total leads · Phone calls · Texts · Emails · Tasks · Homes searched · Facts captured
+   [Notes · Dossiers] · Appointments set · **Income contributed** (AI-attribution closed GCI, see the
+   2026-07-22 note above) · **Spend** [Conversation · Extraction] (per-actor MODEL_PRICING). Pills INSIDE
+   each hero, 2×5 grid, Today/**7d**(default)/MTD/YTD, month-vs-cap capline below. Data:
+   `/api/team/pulse?scope=ai-team`. The SAME deck renders on every member page at one-person scope (humans
+   get the 8-card 2×4 without Facts/Spend). EXTENSION LAW: each future service ships its win-card into the deck.
 4. **Live AI Activity** — the compact table **When · Agent · Action · Lead · Result · Cost** under a
-   `MenuTable` header (agent tabs · lens filters). Cost = the row's stamped tokens priced at the actor's
-   model rate, computed by `/api/ai-follow-up/feed`. The table streams the recent tail; the full
-   [Run Log](/guides/run-log) stays the forensic timeline.
+   `MenuTable` header (agent tabs · lens filters). The **Agent** cell shows a robot-head icon + the real actor
+   name (clones marked "(clone)"). Cost = the row's stamped tokens priced at the actor's model rate, computed
+   by `/api/ai-follow-up/feed`. The table streams the recent tail; the full [Run Log](/guides/run-log) stays
+   the forensic timeline.
 
 ## What died here (the locked IA)
 
 - **"AI Overview" no longer exists** — the Cockpit replaced it; the full agent management surface is AI Agents (C2).
 - **The separate Masters/Spend/Services/Performance sections died** (v15) — masters live ON the service
   boxes, spend rides the pulse, services ARE the toggle strip.
-- **AI Cost + AI Run Log nav entries died** — their pages survive, linked from the capline + Activity.
-- The nav group now reads: **AI Cockpit · AI Agents · [AI Services] the six jobs (dimmed until each page
-  ships: Receptionist→C4 · Inside Sales→C5 · DBM→C6; Clones are LIVE — every enabled clone gets its own
-  duty card next to Myli, 2026-07-16) · [Equipment] AI Voice · [Library] AI
-  Context Blocks** — with the run-log health dot riding the Cockpit item.
+- **AI Cost** (restored 2026-07-16) **and AI Run Log** (restored 2026-07-22) are nav entries again. The AI
+  section's **AI Run Log** is the run-log MIRROR filtered to the AI lane (`/run-log?view=ai`); the FULL Run
+  Log (all crons/ingest/jobs) lives under **Integrations & API** next to Background Jobs — matching the docs
+  nav. See [Run Log](/guides/run-log).
+- The AI nav group reads: **AI Cockpit · AI Agents · AI Cost · AI Run Log · Test Cockpit · [AI Services] the
+  six jobs · [Equipment] AI Voice · AI Toolbox · [Library] AI Context Blocks · AI Prompting** — with the
+  run-log health dot riding the Cockpit item.

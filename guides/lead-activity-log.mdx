@@ -5,6 +5,23 @@ description: "The one canonical run-log for every lead event — one store, one 
 
 The **lead activity log** is the single source of truth for everything that ever happens to a lead — texts, emails (sent, opened, clicked), notes, tasks, appointments, calls, website activity, and record changes. One append-only table holds every event; one API reads it; every surface in the lead detail (and Myli's dossier) calls that one API. There are no parallel sources of truth.
 
+<Update label="2026-07-22 ~10:40Z" description="Actor attribution — one resolver, real per-actor stamps">
+  Every **AI** action stamps the **real acting actor**, never a generic "AI"/"first ai_agent". One source —
+  **`resolveActorStamp(leadId)`** (`lib/agent-runtime/resolve-send-identity.ts`) — returns the real acting
+  `hl_users` id (the human behind a clone, Myli's id for standalone Myli); comms, `fact_captured`,
+  `context_built` (dossier refresh), and `appointment_created` all stamp from it. The row carries **`actor`**
+  (the id) + **`actor_role`** (human|ai_agent|…) + **`actor_kind`** (`human|clone|myli`) — so a **clone's**
+  work is separable from the **human's** even though a clone shares the human's id. This powers per-agent
+  attribution across the AI Cockpit, Team Pulse, and Live AI Activity (which shows a robot-head icon + name,
+  clones labeled "(clone)").
+
+  **Myli is the default context owner on every lead** — `default_ai_agent_user_id = Myli` is set on all
+  lead-source routing rules (config in `hl_lead_sources`, editable in the Lead Sources UI — NOT hardcoded) and
+  backfilled onto existing leads (`hl_leads.assigned_ai_agent_id`). This is **presence, not voice**: her mic
+  (`ai_responder`) stays untouched/off, so she owns and updates context everywhere but never speaks unless a
+  mic is explicitly flipped (assignment ≠ voice).
+</Update>
+
 ## The shape — one store
 
 Every event is one row of the same shape in **`hl_lead_activity`** (migration `0221`):

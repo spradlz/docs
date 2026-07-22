@@ -107,6 +107,107 @@ with the client, the real purchase price, and the relationship dossier.
 
 *(Task board mapping: G1≈P1/P2 · G2+G5≈P4/P5/P8 · G3≈P3 · G4≈P4-owner. This section IS the source of truth.)*
 
+## 🏠 REDFIN PAST-CLIENT HOME-VALUE SCRAPER — THE RECIPE (locked 2026-07-22, verified)
+
+Supplies the **Redfin Estimate** per past-client home for the HVR value row (Zillow + Redfin + HouseLoop
+Estimate on top). Address-based, works on off-market homes. Tool: `tools/houseloop-photos/redfin-estimate-scraper.mjs`
+(runs on Camp David; on-box path `/Users/lee/redfin-estimate-scraper.mjs`).
+
+### ⚠️ THE ONE LAW (this is what broke it, and the fix)
+**The scraper MUST drive a WARM, PERSISTENT Chrome — never a cold, throwaway `chromium.launch()` context.**
+A cold browser (fresh profile, no cookies) gets served Redfin's stripped **"Search smarter, powered by AI (BETA)"**
+experience with NO address autocomplete → every search no-navs → 0 hits. A warmed persistent Chrome gets the
+REAL address autocomplete → the exact `/home/<id>` page. *(2026-07-21 power outage killed the warm Chrome →
+the scraper silently got 0 hits until this was found. Root cause was the browser, not Redfin, not the IP.)*
+
+### THE BROWSER (bring this up FIRST, keep it alive)
+- A dedicated persistent Chrome: profile `/Users/lee/redfin-chrome-profile`, `--remote-debugging-port=18810`
+  (its OWN port — FUB uses 18800/18802), non-headless, parked on `https://www.redfin.com`.
+- Launch: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=18810
+  --user-data-dir=/Users/lee/redfin-chrome-profile --no-first-run --no-default-browser-check
+  --disable-blink-features=AutomationControlled https://www.redfin.com` (detached: `nohup … </dev/null &`).
+- Verify up: `curl -s http://127.0.0.1:18810/json/version`. **TODO to lock forever: a `redfin-chrome-up.sh`
+  + a guard (pm2 or the FUB `chrome-guard` pattern) so it AUTO-RELAUNCHES after any reboot.**
+
+### THE SCRAPER CONNECTS (does NOT launch)
+- `chromium.connectOverCDP('http://127.0.0.1:18810')` → `browser.contexts()[0]` / its page. Live in
+  `redfin-estimate-scraper.mjs` as `connect()` (2026-07-22).
+
+### NAVIGATE TO THE HOME — TWO PATHS (the `navToHome()` function)
+1. **FAST PATH — direct URL (the big win, Zach 2026-07-22):** once a home's Redfin `/home/<id>` URL is known
+   (saved in `Listing.redfinEstimateUrl`), just `page.goto(savedUrl)` and read the estimate. **No search at
+   all.** So after the FIRST full pass, every monthly refresh is instant direct hits.
+2. **DISCOVERY PATH — search (only for a home with no saved URL yet):**
+   - Type **NUMBER + STREET ONLY** into `#search-box-input` (e.g. `6532 Lowell Avenue`). **NOT the full
+     address with city/zip** — the DB city is often WRONG (6532 Lowell is in *Mission* not Overland Park;
+     9700 W 164th is *Stilwell*), and a full-string search dumps you on a map/area page.
+   - Wait for the **"Addresses" dropdown to lazy-load** (`[data-rf-test-name^="item-row"]` visible + a settle pause).
+   - **CLICK the address suggestion row** — a `[role="link"]` item-row whose text starts with the street number
+     and carries a `KS`/`MO` state (that row carries the REAL city), skipping the "Search On Map" and
+     "neighborhood" rows. (Do NOT use ArrowDown counting or click the "active" row — both land wrong.)
+   - `waitForURL(/\/home\/\d+/)`.
+
+### THE RIGHT-HOME GUARD (never stamp a wrong value)
+- **Only write when the landed URL is `/home/<id>`.** If it's a `/city/…geo-address` results page or a
+  `/neighborhood/…` page, the search didn't resolve → no-nav → SKIP, don't stamp (those list OTHER homes;
+  writing one would put a neighbor's value on your client). **Every home IS on Redfin** — a no-nav means the
+  SEARCH missed, not that the home is absent; the fix is the recipe, never a shrug.
+
+### EXTRACT · WORKLIST · WRITE-BACK
+- **Extract (estimate AND range — Zach 2026-07-22):** `predictedValue` = the Redfin Estimate;
+  **`minSalePriceRange` / `maxSalePriceRange`** = the estimate sale-price RANGE (e.g. $265k–$321k). The JSON is
+  usually ESCAPED inside a JS string (`\"key\":val`) so match LOOSELY (`key\D{0,5}(\d{4,})`), not `"key":`.
+  Page-text fallback: the "Redfin Estimate $X" label + a `$X – $Y` range. Sanity band $20k–$50M or discard.
+- **Worklist:** `hl_past_client_homes JOIN "Listing"` (also selects `redfinEstimateUrl` for the fast path),
+  stalest `redfinEstimateAt` first, `--fresh-days N` skips recently-done → resumable.
+- **Write-back:** `Listing.redfinEstimate / Low / High / Url / At` (additive cols, WEB DB). **The URL is saved
+  on EVERY hit** — that's what makes the next run a direct hit.
+
+### THE TWO RUN MODES (locked 2026-07-22)
+- **MODE 1 — DISCOVERY (first pass / any home with no saved URL):** needs the **WARM persistent Chrome**
+  (18810) + the search recipe above (type number+street-name, click the address suggestion). ~15–20s/home.
+  Discovers + **saves** the `/home` URL. This is what handles bad DB data (wrong street-type/city).
+- **MODE 2 — MONTHLY REFRESH (every home that has a saved URL):** just `page.goto(savedUrl)` and read
+  `predictedValue` + `minSalePriceRange`/`maxSalePriceRange`. **~0.5–1.0s/home** (measured 2026-07-22:
+  596ms / 522ms / 1119ms). **Works on a COLD one-off Chrome — no warm profile needed** for the refresh; add a
+  ~2–3s pace between hits to stay polite. The scraper already does this automatically (the fast path in
+  `navToHome`): once every home has a URL, the whole monthly run is direct hits and finishes in ~1–1.5h instead
+  of ~8h. Only homes still missing a URL fall back to Mode 1.
+
+### RUN · SAFETY · RESTORE
+- **Run (full URL-discovery pass over everybody):** `cd /Users/lee && nohup node redfin-estimate-scraper.mjs
+  --limit 3000 --fresh-days 0 > /tmp/redfin-estimate.log 2>&1 </dev/null &`. Monthly refresh = same command
+  (fast, mostly direct hits). Cron `redfin-estimate-cron.sh` (1st).
+- **Safety:** single-threaded, human pace 6–11s, STOP on a real challenge, **NEVER two instances**.
+- **RESTORE AFTER A REBOOT (the lock):** a reboot kills the persistent Chrome → the scraper no-navs everything →
+  looks "blocked" but ISN'T. Recovery = relaunch the persistent Chrome, confirm 18810 up + on redfin.com, THEN
+  run. Never debug the recipe before confirming the warm browser is alive.
+- **Receipts:** ~537 stamped 2026-07-21. Recipe rebuilt + re-verified 2026-07-22: `6532 Lowell Ave` (Mission)
+  → `$278,727`, `10036 W 51st St` (Shawnee) → `$240,907`, `10007 W 86th Ter` → `$283,771` — all URLs saved.
+  Full ~1,942-home URL-discovery pass launched 2026-07-22.
+
+### PROGRESS LOG (timestamped — append as work lands)
+- **2026-07-21 aft** — Scraper built + proven; batch stamped ~537 past-client homes. Value-source decision
+  locked (Zillow + Redfin + HL Estimate on top).
+- **2026-07-21 eve** — Power outage killed Camp David; the resume got 0 hits (mis-diagnosed as a Redfin block).
+- **2026-07-22 ~04:00** — Root cause found: cold `chromium.launch()` browser → stripped bot search. Stood up a
+  WARM persistent Chrome (port 18810, own profile). Recipe cracked.
+- **2026-07-22 ~05:00** — Rebuilt the scraper: `connectOverCDP` + type-number-street + CLICK the address
+  suggestion + **direct-URL fast path** + save-URL-every-hit. Verified live (6532 Lowell $278,727, etc.).
+  Launched the full ~1,942-home URL-discovery pass.
+- **2026-07-22 ~06:00** — Added the RANGE: was only saving the point estimate (range null); fixed extraction to
+  `minSalePriceRange`/`maxSalePriceRange`. Verified live (1302 NE 70th Terr → $263,279, range $251k–$303k).
+  Relaunched the full pass capturing estimate + range + URL.
+- **2026-07-22 ~06:30** — COMPLETENESS fix (Zach: every home must capture — no client sees null when Redfin
+  has the value). Root cause of the no-navs was NOT all-caps — it's WRONG DB DATA (e.g. DB "4729 Hedges
+  STREET, Raytown" but Redfin = "4729 Hedges AVE, Kansas City"). Fix: `navToHome` now types NUMBER +
+  STREET-NAME with the **type suffix stripped** (so Redfin finds the real home despite bad type/city), and
+  retries variants (stripped → full → +city), matching the suggestion by #+name-word+state. Archive homes now
+  land (6100 Greenwood → $404,678 · 3300 W 144th → $636,194, with ranges). Full run relaunched.
+- **2026-07-22 ~07:00** — Timed the direct-URL refresh on a one-off cold Chrome: **~0.5–1.0s/home** to grab
+  estimate + range (no search, no warm browser needed). Locked as MODE 2 (monthly refresh) in the recipe.
+- **TODO:** `redfin-chrome-up.sh` + a guard so the persistent Chrome auto-relaunches after a reboot.
+
 ## 🏆 THE SCOREBOARD (live 2026-07-20 — post MLS-ID re-run, Fable 5)
 
 > **THE DISPOSITION (per-HOME, MLS-ID law, golden-gated 8/8, contradictions 0):**
