@@ -48,6 +48,24 @@ identity (Myli default → the agent's clone if configured → the human owner).
 agent-agnostic (HouseLoop Team). Numbers: Myli iMessage/SMS on the one number via BlueBubbles; Twilio for
 voice + SMS on the dialer lines.
 
+### The manual composer "From" default (the human is using the UI)
+
+When a **human** opens the Text or Call composer on the lead detail, the default "From" is **the assigned
+agent's own line** — because a person composing sends from their own number, regardless of the AI mic. Both
+bars resolve the same way via `GET /api/leads/[id]/send-identity` (`defaultSenderId` for Text, the new
+`defaultVoiceNumber` for Call), in strict priority:
+
+1. **Lead has an assigned agent** → that agent's own line — their `is_text_default` dialer for texts, their
+   `is_voice_default` dialer for calls, or their default BlueBubbles line for iMessage. This uses
+   `resolveUserSendIdentity(assigned_user_id)`, which is **not** AI-gated, so it holds even when the AI is
+   paused. Reassign the agent → reopen → it's the new agent's line (resolved live from `assigned_user_id`).
+2. **No assigned agent (company / inbound lead)** → **the number the lead came in on** — the most-recent
+   inbound call's destination line (`hl_calls.to_number`), e.g. the SRG Company Line `913-320-0906`. A
+   Myli-active but human-unassigned lead still defaults to its company line, not Myli's line.
+3. Neither → the AI-lane (Myli) default, then the first available line.
+
+Myli's own automated sends are unaffected — they still resolve through `resolveAgentSendIdentity`.
+
 ## Where it's managed
 Settings → Phone (dialers + forwarding rules) · Settings → Voice & Recording · Settings → iMessage.
 Run Log surfaces every call-analyze / sms-dispatch run.
