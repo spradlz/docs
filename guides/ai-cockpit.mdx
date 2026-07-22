@@ -18,6 +18,25 @@ than one job ever touch this thing?* **Yes** → it's equipment with its own con
 Numbers). **No** → the config lives on the job's page (pond rules → Inside Sales · audit rules → Database
 Manager · writing → Content Manager).
 
+<Update label="2026-07-22 ~12:40Z" description="The All-AI master is now a CASCADE + snapshot/restore; duty pill reads it; the send gate">
+  - **The "All AI" master is now a TRUE CASCADE with snapshot/restore (Adam, Zach-locked).** OFF no longer
+    just flips two flags — it **snapshots** the current state of every child (the clone master, the nurture
+    engine, conversations, EVERY per-agent clone toggle, EVERY per-lead `ai_responder` mic) into
+    `hl_settings.ai_master_snapshot`, then **cascades them all off**. ON **restores the snapshot verbatim** (a
+    lead you'd turned OFF stays OFF) — OR, via a **choice modal** on re-enable, **turns the clone ON for every
+    owned lead**. Fully reversible (snapshot-backed). Code: `lib/ai/ai-cascade.ts` +
+    `POST/GET /api/settings/ai-switches`; modal in `app/(crm)/ai/page.tsx`. This supersedes the old destructive
+    "OFF kills enabled + voice_enabled together" behavior (mig 0432 replaced the bulk-write with the gate; the
+    cascade now makes the child STATE match what the gate enforces, so the cockpit toggles never lie).
+  - **The AI-team duty pill reads the master.** A card's Status was HARDCODED green "Working"; it now reads the
+    master — **"Working"** when All AI is on, **"Off duty"** when off (`AgentDutyCard`, `masterOn` prop).
+  - **THE SEND GATE (`canAiActOnLead`, `lib/ai/can-act.ts`).** Every AI send/write path is now gated by the
+    Assignment Law + the mic + the master: an AI actor may act on a lead ONLY if it is the actor ASSIGNED to
+    that lead, its mic (`ai_responder`) isn't `none`, and the master is on. Verified live end-to-end (a clone
+    text and a Myli text fired to the test lead only with the master on, correctly attributed). Deep dive:
+    [Closed Loop Follow-Up](/guides/closed-loop-follow-up) + [Comms Refactor](/comms/comms-refactor).
+</Update>
+
 <Update label="2026-07-22 ~10:40Z" description="Section reorder + Team Pulse KPI rewire + actor attribution">
   - **Block order changed** (Zach): **Your AI team on duty** now sits ABOVE **Team pulse**, which sits above
     **Live AI Activity**. Pulse timeframe defaults to **7 days** (Today read too sparse).
