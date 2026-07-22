@@ -42,6 +42,46 @@ Timezone choices offered: Central, Eastern, Mountain, Arizona (no DST), Pacific,
 
 When enabled, automations with "Execute only during business hours" checked delay their actions to the next moment inside this window. Individual automations can override these defaults with their own schedule.
 
+## ⏰ Timezone — the ONE law (why an 8 PM appointment kept showing as 9 PM)
+
+<Warning>
+**HouseLoop is a Kansas City business → everything renders in CENTRAL (`America/Chicago`). Never
+`America/New_York` — that is EASTERN and is one hour ahead.** A recurring bug (hit ~50×, fixed 2026-07-22)
+had appointments and lead-detail times display **one hour late** (an 8:00 PM Central appointment read
+9:00 PM). The stored data was always correct (`8 PM CDT = 01:00 UTC`); the render was wrong.
+</Warning>
+
+**Root cause:** display formatters **hardcoded** `timeZone: 'America/New_York'` — including a function
+literally named `fmtCentral()` that rendered *Eastern* — and `lib/business-profile.ts` defaulted to
+`America/New_York` while a comment called it "KC/Central." The lie kept regenerating the bug every time a new
+time-rendering component was written by copy-paste.
+
+### The law for developers (never hardcode a zone)
+
+There is exactly ONE place timezones are defined — **`apps/houseloop-crm/lib/datetime.ts`** — and every
+date/time render MUST go through it. Never write a `timeZone:` literal in a component.
+
+| Surface | Use | Resolves to |
+|---|---|---|
+| Any **business-wide** time (calendar, settings, dashboards, notifications, server-side merge tokens) | `BUSINESS_TZ` / `fmtBusinessTime()` / `fmtBusinessDateTime()` | `America/Chicago` (Central) — or the value in Business Settings |
+| Any time **shown on a lead** (lead detail, appointments, activity feed, streams) | `leadDisplayTz()` | the **lead's** zone (from their phone area code, mig 0375), falling back to Central |
+
+- **Lead-detail law (Zach 2026-07-10):** times *on a lead* render in the **lead's** timezone, set once per
+  render by `CenterLane` (`setLeadDisplayTz`) and read by every lead-scoped formatter via `leadDisplayTz()`.
+  A 913 (Kansas City) lead is Central, so it reads Central — the same as the business. Every lead-detail
+  component (Next Actions, Appointments, Emails/AI/Deals streams) reads `leadDisplayTz()` so they can never
+  disagree with `CenterLane` again.
+- **The store is always UTC.** `hl_appointments.starts_at` is a UTC instant. Input wall-clock → UTC via
+  `wallTimeToUtcISO()`; UTC → a `<input type="datetime-local">` via `utcToWallInput()`. Both are DST-aware
+  (they compute the real Central offset for that date — `−5` CDT in summer, `−6` CST in winter).
+- **The business zone is configurable** in Business Settings above (`getBusinessTimezone()` reads the DB), and
+  `BUSINESS_TZ` is the default/fallback. `business_hours.timezone` must match (it was wrongly Eastern; fixed
+  2026-07-22).
+
+**If you catch yourself typing `timeZone: 'America/New_York'` (or any zone literal) in a formatter — STOP.**
+Import `BUSINESS_TZ`/`leadDisplayTz` from `lib/datetime` instead. That is the whole fix, and the reason this
+bug is now closed for good.
+
 ## Data source
 
 Both sections persist as singleton rows in the `hl_settings` table (CRM database), stored as JSON:
