@@ -37,6 +37,23 @@ Manager · writing → Content Manager).
     [Closed Loop Follow-Up](/guides/closed-loop-follow-up) + [Comms Refactor](/comms/comms-refactor).
 </Update>
 
+<Update label="2026-07-22 ~19:15Z" description="The cascade now applies AT MINT too — a new lead's stored AI state can't lie">
+  - **The master cascade now applies AT MINT, not just at runtime (`lib/ai/mint-ai-state.ts`, Zach-locked).**
+    THE BUG: a lead was minted with its clone STATE armed (`ai_mode_enabled=true`, `ai_responder='clone'`)
+    straight from the routing rule's `clone_default_on`, **without consulting the masters** — Kenneth Hunt (FUB
+    50544) pulled in showing the clone ON in the cockpit while `ai_master` was OFF. The runtime gate held (0
+    sends), but the STORED STATE lied. Now both mint paths — the FUB import (`import-fub-lead.ts`) and native /
+    website intake (`process-intake.ts`) — resolve `ai_mode_enabled` + `ai_responder` through
+    **`resolveMintAiState`**, which cascades the masters OVER the routing rule: if **`ai_master`** is off →
+    nothing arms; if **`ai_clones`** is off → a clone responder degrades to `none`; if **`ai_conversations`**
+    (ISA) is off → a Myli/ISA responder degrades to `none`. A parent-off lead mints
+    **`ai_mode_enabled=false` + `ai_responder='none'` regardless of `clone_default_on`.**
+  - **Presence stays, acting is gated.** `assigned_ai_agent_id` (Myli as context owner) is untouched — a lead is
+    still Myli-assigned, just silent. **Assignment ≠ voice.** The mint state now AGREES with the runtime
+    `canAiActOnLead` gate — one truth (reuses `aiMasterEnabled()`, fail-open like the runtime read). Verified
+    against live settings (master OFF → clone seat mints OFF; masters ON → clone arms normally, no regression).
+</Update>
+
 <Update label="2026-07-22 ~10:40Z" description="Section reorder + Team Pulse KPI rewire + actor attribution">
   - **Block order changed** (Zach): **Your AI team on duty** now sits ABOVE **Team pulse**, which sits above
     **Live AI Activity**. Pulse timeframe defaults to **7 days** (Today read too sparse).
