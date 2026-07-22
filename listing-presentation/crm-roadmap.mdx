@@ -1,71 +1,85 @@
 ---
-title: "Roadmap: Into the CRM"
-description: "The plan to move the listing-presentation skill from a Benji conversation into a first-class HouseLoop CRM section — type an address, get the pages, edit them live in a chat box. Includes the architecture recommendation and the honest dependencies."
+title: "Roadmap: The CMA Tool in the CRM"
+description: "The plan to move the listing-presentation build from a Caleb conversation into a first-class HouseLoop CRM feature — Listings → CMA Tool: type an address, it makes a card, runs the full Matrix→Cloud CMA→HouseLoop-template pipeline end to end, streams its findings to the page as live HTML, and you talk to it in a chat bar to make corrections in real time. Driven by locked, mapped Camp David browsers."
 ---
 
 <Note>
-**The goal, in Zach's words.** In the HouseLoop CRM, a **Listing Presentations** section sits alongside
-the Seller Report. You type in an address, hit enter, and it runs through and outputs the pages per our
-template. A dialogue box lets you talk to the AI — "re-look at this price," "add a column here" — and edit
-in real time. This page is the plan to get there.
+**The goal, in Zach's words.** A new **Listings** left-nav item with a **CMA Tool**. It works like creating a TC
+loop: you type an **address**, it makes a **card**, and the card runs the whole process end to end. A big **chat
+bar** lets you talk to it exactly like you talk to Caleb here — it has all the tools to do the work and fix things
+in real time. It **streams HTML of its findings to the page live**, you can **edit**, and it renders into the
+**locked gold-star template**. The whole thing is powered by **Camp David browsers, mapped step-for-step** so it
+runs identically every single time.
 </Note>
 
-## Where it lives in the CRM
+## The end-state template — the GT canon (LOCKED)
 
-A new left-nav section, **Listing Presentations**, parallel to the existing **Seller Report** under the
-seller/CRM surfaces. One row per listing you're preparing; open one to get the address bar, the rendered
-pages, and the chat box.
+Every CMA renders into the exact book proven on the Kenney Hunt / 9928 W 52nd St build (the **gold-star reference**):
 
-## The three build phases
+**Cover → By the Numbers → Listing Presentation → CMA cover → Closest Comparables (section) → Additional Area
+Comparables (section) → per-comp agent analysis (lead sentence + 4–5 bullets + difference column + all photos) →
+"The Bottom Line" conclusion page (read + As-Is / After-Work range boxes) → Suggested Price Range (white write-in
+box) → Thank You.**
+
+The reference PDF + all source data/photos are locked at
+`.claude/reports/listing-presentation-work/merriam-9928-w-52nd/` and `.../deliverables/`. The build engine + the
+step-by-step recipe live in [The Reproducible Build Engine](/listing-presentation/build-engine) and
+`viktor-okoth/BUILD-HANDOFF.md`.
+
+## The autonomous pipeline (address in → book out)
+
+1. **Matrix (Camp David persistent Chrome):** log in, search the subject, **select the closest comparables**.
+2. **Cloud CMA handoff:** Select All → click the Matrix **Cloud CMA** button → the comps push into a Cloud CMA report.
+3. **Export** the non-branded Cloud CMA PDF.
+4. **Extract:** `pdfimages` (all photos) + `pdftotext` (comp data) → `data.json` + `photos.json`.
+5. **Rebuild + rebrand** into the HouseLoop template with `build-cma.py` (2-section, per-comp analysis, conclusion).
+6. **Assemble** deck + By-the-Numbers + CMA in the locked order → the final PDF + live HTML.
+
+Steps 3–6 are **proven twice** (Viktor + Merriam) and fully generalized. Step 1–2 — the **Matrix comp-selection +
+Cloud CMA handoff** — is the hard, fragile piece that needs to be **locked and mapped** on Camp David.
+
+## The build plan (phased — each phase ships before the next)
 
 <Steps>
-<Step title="Phase 1 — the skill (done)">
-Talk to Benji, he runs the deterministic engine, you iterate in chat. This is live today and is what the
-other two pages in this section document. It proves the template and the build engine.
+<Step title="Phase 0 — Lock the canon (done / doing)">
+Freeze the template + conclusion as the GT gold-star; commit; publish the Kenney CMA as the reference version;
+publish these step-by-step docs. This is the target every later phase renders into.
 </Step>
-
-<Step title="Phase 2 — the build engine as a service">
-Port `build-lp-v3.py` + `rebrand-cma.py` into a server-side module the CRM can call. It already takes
-structured input (subject facts + CMA comp data) and returns HTML/PDF — so this is a lift-and-shape, not
-a rewrite. Output stored per listing; re-runnable on every edit.
+<Step title="Phase 1 — Map + lock the Matrix→Cloud CMA browser flow (the hard part)">
+Encode the exact deterministic steps — login → subject search → **select the closest comparables** → Select All →
+**Cloud CMA** → export — into one runnable tool on Camp David's persistent Chrome (port 18812, profile
+`/Users/lee/mls-cma-profile`) with a `mls-cma-chrome-up.sh` + reboot guard. This is the same anti-bot,
+human-only automation that must never be headless. **Highest risk; most iteration.**
 </Step>
-
-<Step title="Phase 3 — the MLS data service + the UI">
-Automate the one manual half (the MLS pull) as a background job, and build the CRM section: address bar,
-live page preview, and the chat box wired to Myli for real-time edits.
+<Step title="Phase 2 — The build module (mostly done)">
+The extract → `data.json`/`photos.json` → `build-cma.py` → assemble pipeline, wrapped as a server-callable module
+that takes `{address}` and returns the branded HTML + PDF. Already generalized + env-driven.
+</Step>
+<Step title="Phase 3 — The CMA Tool UI">
+**Listings** left-nav → **CMA Tool**. Address bar → creates a **card** (the TC-loop create pattern, reusing our
+component set — no lookalikes). The card runs the pipeline via an **Inngest event → Camp David CDP consumer**
+(the FUB DB-queue→consumer pattern; "Inngest or it doesn't exist"). A **chat bar wired to Myli** with the pipeline
+tools; the page **streams the CMA HTML live** as findings land, and it's **editable** in place. Renders the locked
+template.
+</Step>
+<Step title="Phase 4 — Full docs + canvas-is-truth verification">
+Every step documented; the whole thing reproducible address-in → book-out; verified end to end on a real listing.
 </Step>
 </Steps>
 
-## Architecture recommendation
+## Architecture (per the constitutional rules)
 
-**It does not need to be a standalone MCP server.** It's a CRM feature backed by our normal stack. The
-honest shape:
-
-| Piece | What it is | Notes |
+| Piece | What it is | Rule it honors |
 | --- | --- | --- |
-| **MLS data job** | A registered **Inngest** function that logs into Heartland MLS Matrix with our stored creds and pulls subdivision-anchored comps + photos | The hard part. Auth + anti-bot risk; must use a real browser session, obey MLS terms, and **fail loudly** (never fabricate) — per the CMA data-pull skill. "Inngest or it doesn't exist." |
-| **Build module** | The two Python scripts, ported to a server function that takes `{subject, comps}` and returns HTML + PDF | Deterministic; already parameter-shaped. The reproducible core. |
-| **CRM section** | A `Listing Presentations` left-nav surface: address bar, page preview, version history | Built from the existing CRM component set (no new lookalikes). |
-| **The chat box** | Myli (our AI) with a small set of tools that re-run the build with edits and re-render | "Change the price," "add a column" become tool calls that re-run the module — the same edits Benji makes today, in the UI. |
+| **MLS data job** | Inngest event → Camp David CDP consumer drives Matrix + Cloud CMA on the persistent Chrome, exports the PDF, hands off to the build module | Inngest-or-it-doesn't-exist · no-headless-browsers · locked/mapped steps |
+| **Build module** | `build-cma.py` + deck/track-record builders, server-callable, env-driven, renders the gold-star template | Reproducible, data-driven |
+| **CMA Tool UI** | `Listings` → `CMA Tool`: address → card → live HTML preview → edit, built from the existing CRM component set + the TC-loop create pattern | Reuse-not-recreate · UI doctrine |
+| **The chat bar** | Myli with the pipeline tools — re-run, re-extract, re-price, edit a comp's analysis, correct in real time | The AI already lives in our stack (no MCP server) |
 
-**Why not an MCP server:** MCP exposes tools to an external AI client. Here the AI (Myli) already lives
-inside our stack, so the cleaner design is CRM UI + Inngest job + build module + Myli tools. An MCP layer
-would be extra surface with no payoff.
-
-## Honest dependencies and risks
-
-- **The MLS pull is the gating risk.** It's auth-gated, browser-based, and subject to MLS terms and
-  anti-bot defenses. Automating it reliably is the real project; until it's solid, the pull stays
-  semi-manual (Phase 1/2 with a human-authenticated session).
-- **Pricing stays a judgment step.** The engine can lay out the comps and compute the deltas, but the
-  recommended number and the narrative are a comparative read. The CRM version should *surface* the
-  analysis and let a human confirm it — not silently auto-price.
-- **Data honesty is a hard rule, not a nicety.** No fabricated photos, no padded galleries, no number the
-  data doesn't support. The Lawrence Gunther build caught all three (a faked 19-photo gallery, a price
-  that contradicted a pending comp); the CRM version has to enforce the same, structurally.
-
-## Definition of done (Phase 3)
-
-Zach opens **Listing Presentations**, types an address, hits enter, and within a few minutes has a
-letter-size PDF matching this template — comps, difference columns, hero photos, the price graphic — with
-a chat box he can use to take a second pass at the price or add a column, and it re-renders live.
+## Honest dependencies & risks
+- **Phase 1 is the gate.** The Matrix comp-selection + Cloud CMA handoff is auth-gated, anti-bot, browser-based.
+  Until it's rock-solid it stays semi-manual (agent selects comps + exports; the tool takes it from the export).
+- **Pricing stays judgment.** The recommended list is left blank (white write-in box) for the agent; the tool
+  surfaces the range and the read, it does not auto-price.
+- **Data honesty is structural.** Real photos only, the seller name comes from the call sheet (never the Cloud CMA),
+  thin markets are labeled thin, additional comps are context not equals.
