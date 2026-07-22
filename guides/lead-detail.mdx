@@ -1,46 +1,81 @@
 ---
 title: "Lead Detail Page"
-description: "The /leads/[id] command center — the three-lane shell, the always-on center iPad, the parity lanes, the per-section AI toggle, and the TC Dashboard / Referral Dashboard mode bands. The hub that ties every lead-detail surface together."
+description: "The /leads/[id] command center — the SINGLE-SCROLL FUB-style page: three lanes that scroll as one, the inline composer at the top of the center iPad, the icon filter row of read-only feed lenses, the AI Context + FUB tabs, and the TC / Referral mode bands. The hub that ties every lead-detail surface together."
 ---
 
 The lead detail page (`/leads/[id]`) is where an operator works a single lead. It is the hub for a set of
 surfaces that each have their own deep-dive doc — this page explains how they fit together, and links out to
 the detail.
 
-![The default lead detail page — three lanes with the navy iPad in the center](/images/lead-detail-default.png)
+<Note>
+**Single-scroll redesign (Zach-locked 2026-07-21 → shipped 2026-07-22, Benji).** The page moved from three
+independently-scrolling lanes + a self-scrolling "iPad" with a bottom dock, to a **single-scroll, Follow-Up-Boss
+style page**: the whole page scrolls as ONE, the center feed is the tall column, the side lanes end and scroll
+away, and the iPad frame grows with the conversation. **The composer moved to the TOP of the iPad** (inline, no
+modals) and **the old bottom dock became an icon filter row of read-only feed lenses.** Everything below reflects
+the new architecture. Source: `components/leads/detail/{CenterLane,LeadComposer,TextComposer,EmailComposer,CallComposer,NoteComposer}.tsx`.
+</Note>
 
-**The default view** (above): the three-lane shell with no mode band. Left lane = the lead + agent (with the
-two mode toggles at the very top: **Active ⟷ Referral** and **Agent ⟷ TC**). Center = the navy "iPad" (KPI hero
-cards → Buyer/Seller stepper → the dual-lane Texts dock → the dock tabs). Right lane = Myli, the AI assistant on
-the lead. Everything below explains each piece and the two modes that drop a band above it.
+## The single-scroll shell
 
-## The three-lane shell
-
-The page is a fixed three-column grid; each column scrolls independently.
+Three columns, but the **whole page scrolls as one** — the center feed defines the page height; the left/right
+lanes end and scroll away.
 
 | Lane | What it holds |
 |---|---|
-| **Left** | The lead + the human agent (and the agent's AI clone). Identity header, contact, agent/collaborators, tags, the **AI Mode** toggle. |
-| **Center** (the "iPad") | The navy activity panel — hero KPI cards, the Buyer/Seller stage stepper, the activity streams, and the dock. **This panel never changes shape** — see below. |
-| **Right** | **Myli**, the assigned AI agent — status, context, brain map. |
+| **Left** | The lead + the human agent (and the agent's AI clone). Identity header, contact, agent/collaborators, the **Appointments** section (＋ add · card actions), tags, the **AI Mode** toggle. |
+| **Center** (the "iPad") | The **inline composer** at the top, then the **icon filter row**, then the **feed** — grows with the conversation. |
+| **Right** | **Myli**, the assigned AI agent — status, model, cost, and the big **Brain Map** button. |
 
-The left and right lanes are built from the same shared primitives so they stack pixel-identically — see
+The left and right lanes share the same primitives so they stack pixel-identically — see
 [Lead Detail — Parity Lanes](/guides/lead-detail-parity-lanes) and
 [Lead Detail — AI Agent](/guides/lead-detail-ai-agent).
 
-## The center iPad never changes
+## The inline composer (top of the iPad)
 
-The center panel always renders the **active baseline**, regardless of the lead's mode:
+Composing is **always available at the top** — no overlay modals. A tab strip switches between:
 
-**Hero KPI cards → Buyer/Seller stage stepper → activity streams → the dock.**
+**✦ AI Summary · Send Text · Send Email · Make Call · Create Note.**
 
-The dock tabs are always: **All · Texts · Calls · Emails · Notes · Appts · Tasks · Website · Deals**. A deal is
-added on the **Deals** tab; the stage stepper reads the lead's Buyer/Seller pipeline. Nothing about this panel
-mutates when you switch modes — modes render a band *above* the lanes instead (next section).
+- **AI Summary** reads Myli's real dossier (`hl_lead_dossier` via `GET /api/leads/[id]/context`): the summary,
+  where-they-stand, and sentiment. **Generate** builds it on demand when none exists.
+- **Send Text** — To (name → number) · **From = the A2P-compliant company lines** (`/api/phone-numbers`, `a2p===true`)
+  + the iMessage line · ✦ AI-generate tabs (Introduction / Follow Up / Still Buying / Nurture Lead / **+ Custom**
+  voice-mic modal) · **Attach vCard / Biz-Card** (renders a chip in the body, sends with the message).
+- **Send Email** — inline To/From/Subject, AI-generate tabs, live signature preview, Send Email.
+- **Make Call** — inline, dual-mode: **Make Call** (rings your mobile then bridges the lead → an **on-call screen
+  with a live timer + notes**; on hangup — detected via `/api/calls/status` polling — the notes become a
+  **call-note** in the feed) and **Log Call** (record a past call). Green **Call** button (the Phone icon).
+- **Create Note** — inline textarea + a blue **Create Note** button.
+
+**The `+ Custom` modal** is the one pink/purple (`--hl-ai`) overlay: a big prompt + a Web-Speech **mic** → `/ai-draft`.
+
+## The icon filter row (read-only feed lenses)
+
+Below the composer, an **icon row** (icon over a single-word label + a count badge) filters the ONE feed. It
+replaced the old bottom dock. Order:
+
+**All · ✦ AI · Text · Emails · Calls · Notes · Appts · Activity · Starred · Log · ⌃ FUB (far right).**
+
+- **The middle column is READ-ONLY** — no create/send buttons in any lens. Creating/sending comes from the top
+  composer and the side lanes (the ＋ on the left-lane Appointments section).
+- Count badges are always visible and **turn red when there's something NEW** (a new message on Text, new website
+  activity on Activity). Counts come from the activity `byKind` map (categorized via the badge catalog) + a real
+  email count + the star count.
+- **AI** = the AI Context (`LeadContextPanel` `initialView="context"`) — dossier + facts + memory updates (moved
+  out of the old Myli-lane "Context" button). **FUB** (far right, the 3-chevron logo) = the imported Follow Up
+  Boss thread (`initialView="fub"`).
+- **Starred** = rows the user pinned with the per-row ☆ (`hl_lead_activity_star`, per user). **Log** = the
+  change/audit kinds (stage/name/contact/tag/deal). **Notes** = human notes only (excludes `fact_captured`
+  AI-memory). **Emails** reads the real email log so older sends still show.
+- **Appts** = the appointments view (all appointments, no create button — the ＋ is on the left lane). Left-lane
+  appointment cards have a **View · Edit · Disposition** action row: View → the middle Appts column, Edit → the
+  edit modal (this appointment loaded), Disposition → the outcome modal.
 
 <Note>
-Deals are always **added on the iPad Deals tab.** The TC Dashboard band renders the transaction, but it is not
-where you create one.
+Modals (appointment create/edit, etc.) center over the **visible viewport** of the iPad — the anchor rect is
+clamped to the screen, because the single-scroll iPad is a tall column (unclamped, a modal's Save button fell
+off the bottom).
 </Note>
 
 ## Modes render a band above the lanes
