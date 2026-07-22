@@ -7,7 +7,7 @@ description: "The living work-in-progress plan for untangling HouseLoop comms �
 **This is a living WIP document — owned by Caleb.** It is the single source of truth for the
 calls / text / emails refactor. Every part below is tracked here as `SHIPPED` / `NOT BUILT`
 until it is live and verified on prod. If a comms change isn't reflected here, it isn't real.
-Last updated: **2026-07-15**.
+Last updated: **2026-07-22** (Part 5 — AI send governance + attribution, Adam).
 </Info>
 
 ## Why this exists (the honest status)
@@ -51,6 +51,7 @@ scoped by **`lead_id` alone** and "cleaned" with subtractive band-aid filters.
 | **2 — Guarantee inbound → super-admin ping** | Every inbound text/email/voicemail/call alerts Zach | ✅ **SHIPPED** |
 | **3 — One conversation-identity model** | THE fix — kills the contamination on all 3 channels | 🟡 **3.1 Texts + 3.2 Calls SHIPPED · Emails → Email Engine Phase 2** |
 | **4 — "Route to a number" custom-cell** | The call-routing modal (inbox + profile) | ✅ **SHIPPED (2026-07-15)** |
+| **5 — AI send governance + attribution** | The gate (assignment/mic/master) · no-junk-writes · correct attribution · lane purity · the 4th (leads-table) reader | ✅ **SHIPPED + LIVE-VERIFIED (2026-07-22)** |
 
 <Info>
 **Notification scope — how "All leads / any agent" actually works (corrected 2026-07-15).** There is **no
@@ -175,6 +176,50 @@ The old "Route a number" action dumped you into the Numbers page. Now it's a sim
 Call Routing modal, living in **two** places: the Company Inbox, and each person's Profile. No "desktop"
 option — forward to my cell, or forward to a different number; misses roll to voicemail. Both write what
 the phone system actually reads at call time (`ring_targets` / `call_forwarding`), so the change rings.
+
+---
+
+## PART 5 — AI SEND GOVERNANCE + attribution truth · ✅ SHIPPED + LIVE-VERIFIED (Adam, 2026-07-22)
+
+<Info>
+**This is the AI-actor half of comms truth — it sits ON TOP of Caleb's conversation-identity model (Part 3).**
+Part 3 answers *"which lead does a message belong to."* Part 5 answers *"is this AI actor even allowed to send,
+and who really sent it."* Three production incidents (a clone texting a lead when clones were "off"; Myli
+nudging a `mic=none` lead; a phantom "Myli texted" that never sent) traced to ONE disease: AI sends fired from
+many paths that never checked assignment/mic, got mis-attributed, and were read/written through divergent
+tables. Shipped commit `961979fd32`; verified live end-to-end (a clone text + a Myli text fired to the Zach
+test lead's phone, correctly attributed). Full receipts: memory `project_houseloop_clone_unauthorized_send_faduma`.
+</Info>
+
+- **THE ONE GATE — `canAiActOnLead(actor, leadId)`** (`lib/ai/can-act.ts`). Every AI send/write path calls it
+  FIRST. It enforces **THE ASSIGNMENT LAW** (an AI actor may write/send/be-attributed on a lead ONLY if it is
+  the actor ASSIGNED to that lead), **THE MIC** (`ai_responder='none'` = silence, everywhere), and **THE
+  MASTER**. It delegates to the ONE resolver `resolveActorStamp` → `resolveAgentSendIdentity` so "who may act"
+  and "who a send goes out as" can never drift. Adopted at the fire-time choke point (`inngest-fn.ts`
+  reviewBeforeFire — covers the esign nudge / floor / daily-home / clone dispatchers at once), the workflow
+  `ai_message` node, `schedule-esign-nudge`, and the floor-backstop query.
+- **NO JUNK WRITES — the phantom, killed at the source (Zach's law: never a filter to HIDE a row).** The
+  BlueBubbles webhook (`app/api/bb/inbound/route.ts`) no longer writes an **empty-body outbound echo** to
+  `hl_messages` at all (it used to land there and only the run-log MIRROR filtered it → the leads table read
+  it as a phantom "Myli texted" on a lead Myli wasn't assigned to). Don't write junk; don't filter it after.
+- **⚠ THE 4th TEXTS READER Part 3.1 MISSED — `lib/leads-query.ts`.** Part 3.1 scoped the three thread readers
+  by `conversation_key IS NOT NULL`, but the **leads-table** reader (`leads-query.ts`) is a fourth reader it
+  never listed — it read `hl_messages` raw, so a broadcast/echo still surfaced there. Now every leads-query
+  read (display columns, "Agent Action", the texted/not-texted filter predicates, AND the sort keys) applies
+  the identical `conversation_key IS NOT NULL` scope — one canonical scope, no per-surface divergence.
+- **CORRECT ATTRIBUTION.** A clone/Myli text is **never** logged as `human`: the workflow `ai_message` node now
+  passes `actorRole='ai_agent'` through `sendTextAs` (the Twilio branch used to default to `human`, hiding that
+  it was AI + skipping the owner ping). The AI-composed **email** now writes the canonical `logActivity('email_sent')`
+  on the LIVE path (was backfill-only). Facts + the dossier refresh stamp the real actor via `resolveActorStamp`
+  (see [AI Cockpit](/guides/ai-cockpit) actor-attribution).
+- **LANE PURITY.** `hl_workflow_runs` carries `actor_type` (mig 0440), stamped at run open, so a clone-run
+  workflow can never surface on Myli's sacred RIGHT lane (the `ai-activity` API filters by lane).
+
+**Verify (done 2026-07-22, live):** master ON via the cockpit → fire the FUB tour workflow on the test lead with
+`mic=clone` → the clone text delivers to the phone, `actor_role=ai_agent`, run `actor_type=clone`. Flip
+`mic=myli` → the Myli text sends from Myli's line, `actor=Myli`, run `actor_type=myli`. With the master OFF,
+neither fires. (Found in the same pass: the FUB tour first-touch **compose** puts the wrong name in the body —
+"This is Ana" from Myli — a vibe-coded CONTENT bug, separate from this governance layer, queued for the workflow redo.)
 
 ---
 
