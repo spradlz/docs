@@ -1,6 +1,114 @@
 ---
 title: "Closed Loop Follow-Up"
-description: "How Myli's signal-driven follow-up works in HouseLoop CRM — the lead-detail reasoning chain (head) and the Workflow Engine (brain) that drives it."
+description: "How Myli's signal-driven follow-up works in HouseLoop CRM — the lead-detail reasoning chain (head) and the Workflow Engine (brain) that drives it, and THE JOURNEY CHECKLIST: every phase of the buyer & seller journey, its goal, tools, gate, ghosting recovery, and value-ladder rung."
+---
+
+{/* ═══════════════════════════════════════════════════════════════════════════════
+    THE WORKING CHECKLIST (Zach + Adam, 2026-07-21). This is a LIVE discussion scaffold —
+    we walk it phase by phase and lock the philosophy of each. Nothing here is final until
+    we discuss it. Checkboxes = "we have discussed + locked this phase's philosophy."
+    ═══════════════════════════════════════════════════════════════════════════════ */}
+
+<Info>
+**⭐ THE JOURNEY CHECKLIST — the working philosophy doc (Zach + Adam, started 2026-07-21).** This is where
+we go phase by phase, for **buyers and sellers**, and lock what each phase MEANS: its goal, the tools Myli
+uses, the gate to advance, how we recover from a ghost, and what value we add on the ladder. **The checkboxes
+track our DISCUSSION, not the build** — a box is checked when we've locked the philosophy of that phase
+together. Below the checklist, the rest of the page documents the shipped engine (the head, the brain, the
+laws). Related doctrine: [AI Programming](/guides/ai-programming) (how the prompts compose) ·
+[Connecting With People](/guides/connecting-with-people) (what she says).
+</Info>
+
+## ═══ THE FRAME — workflow → watching state ═══
+
+The mental model we're building to (Zach vision, 2026-07-21):
+
+1. **A workflow is the SHORT opening move**, not where the lead lives. It fires the opener (e.g. confirm the
+   tour, one question) and hands off.
+2. **No reply in ~1 hour → the lead drops into the WATCHING STATE.** The workflow gives way to a persistent,
+   time-aware watcher (the expectation clock: send touch → set `expected_reply_by` → race reply-vs-timer).
+3. **In the watching state, Myli holds — live, for every lead — three things:**
+   - **STATE** — which phase of the journey they're in (the ladder below).
+   - **SENTIMENT** — how they feel right now (warm / engaged / cold / annoyed / ghosting). A Director cognition output.
+   - **GOAL** — the one next thing she's driving toward for THAT lead in THAT phase.
+4. **Two surfaces read this:** **Wonderland** = the god-view across ALL leads (state + sentiment + goal at a
+   glance); the **full iPad view** = inside Myli's brain for ONE lead (her facts, current state + why, sentiment,
+   active goal, next planned touch). *These are the UI we build on top of the ladder.*
+
+The engine underneath: `hl_lead_convo_state` (mig 0435, DRAFT — state · mode · ledger) + the expectation clock
+(Adam's floor) + the Director cognition packet (Lee). This checklist defines the CONTENT the engine runs.
+
+## ═══ THE BUYER JOURNEY ═══
+
+The ladder Myli walks a buyer through. **Goal-frame aware** — she asks only the ONE next unfilled slot (code
+owns the ladder; the LLM owns the words). Tools are her REAL toolbox (`lib/ai/ai-action-catalog.ts`).
+
+| # | Phase | 🎯 Goal | 🧰 Tools | 🔒 Gate / Exit |
+|---|-------|---------|----------|----------------|
+| **1** | **New Lead / Tour Request** | **Set the appointment** ✅ *(Zach-locked)* | `text_lead` · `schedule_appointment` · `lookup_property` · `add_note` · `update_stage` | Exit when tour time confirmed |
+| 2 | Representation | Become their agent (are you working with anyone?) | `text_lead` · `manage_tags` · `add_note` · `update_contact` | Has-other-agent → courteous exit + tag |
+| 3 | Migrate off the portal | Get them on OUR search account (capture email) | `text_lead` · `send_email` · `update_contact` | Exit when email captured / account made |
+| 4 | Qualify | Learn motivation + timeline (before price) | `text_lead` · `add_note` · `update_contact` | Exit when motivation/timeline known |
+| 5 | **Financing + Buyer Agreement** | Lender intro **+ buyer agreement SIGNED** | `text_lead` · `send_document` (e-sign) · `send_email` | 🔒 **HARD GATE** — signed BEFORE any tour (NAR law) |
+| 6 | Behavioral Nurture | Stay top-of-mind; re-engage on portal activity | `send_home` · `search_homes` · `text_lead` · `schedule_followup` | Behavioral mode — activity-triggered |
+
+**Per-phase, we lock the philosophy of each (the discussion):**
+
+- [x] **Phase 1 — Goal locked: set the appointment.** *(Zach, 2026-07-21)* — still to discuss: tools, gate, ghosting recovery, value-add.
+- [ ] **Phase 2 — Representation** — goal · tools · gate · ghosting recovery · value-add · sentiment handling
+- [ ] **Phase 3 — Migrate off the portal** — goal · tools · gate · ghosting recovery · value-add · sentiment handling
+- [ ] **Phase 4 — Qualify** — goal · tools · gate · ghosting recovery · value-add · sentiment handling
+- [ ] **Phase 5 — Financing + Buyer Agreement (the hard gate)** — goal · tools · gate · ghosting recovery · value-add · sentiment handling
+- [ ] **Phase 6 — Behavioral Nurture** — goal · tools · gate · ghosting recovery · value-add · sentiment handling
+
+## ═══ THE SELLER JOURNEY ═══
+
+A seller lead (valuation / thinking-of-listing) walks a parallel ladder toward a **signed listing agreement**.
+Seller REQUIRED_SLOTS (`lib/ai/director/state.ts`): name · property address · timeline · reason for moving ·
+number · appointment time. *(Phases below are the proposed skeleton — we lock each in discussion.)*
+
+| # | Phase | 🎯 Goal (proposed) | 🧰 Tools | 🔒 Gate / Exit |
+|---|-------|---------|----------|----------------|
+| 1 | New Lead / Valuation Request | Set the listing appointment | `text_lead` · `schedule_appointment` · `lookup_property` · `add_note` · `update_stage` | Exit when listing appt confirmed |
+| 2 | Representation | Become their listing agent | `text_lead` · `manage_tags` · `add_note` | Already-listed → courteous exit |
+| 3 | The Valuation Hook | Deliver the home value / CMA teaser (the reason they raised a hand) | `send_email` · `lookup_property` · `send_home` | Exit when value delivered + engaged |
+| 4 | Qualify | Motivation + timeline + price expectation | `text_lead` · `add_note` · `update_contact` | Exit when motivation/timeline/price known |
+| 5 | Listing Appointment + Agreement | Pre-listing packet → listing agreement SIGNED | `text_lead` · `send_document` (e-sign) · `send_email` | 🔒 Gate — listing agreement signed |
+| 6 | Behavioral Nurture | Equity/market updates until they're ready | `send_email` · `text_lead` · `schedule_followup` | Behavioral mode — equity/market-triggered |
+
+- [ ] **Phase 1 — New Lead / Valuation** — goal · tools · gate · ghosting recovery · value-add · sentiment handling
+- [ ] **Phase 2 — Representation** — goal · tools · gate · ghosting recovery · value-add · sentiment handling
+- [ ] **Phase 3 — The Valuation Hook** — goal · tools · gate · ghosting recovery · value-add · sentiment handling
+- [ ] **Phase 4 — Qualify** — goal · tools · gate · ghosting recovery · value-add · sentiment handling
+- [ ] **Phase 5 — Listing Appointment + Agreement** — goal · tools · gate · ghosting recovery · value-add · sentiment handling
+- [ ] **Phase 6 — Behavioral Nurture** — goal · tools · gate · ghosting recovery · value-add · sentiment handling
+
+## ═══ GHOSTING RECOVERY — the re-engagement ladder ═══
+
+*(The DEFAULT state, not a branch — when a lead goes quiet in ANY phase, this is how she brings them back.)*
+We philosophize this together — the open questions:
+
+- [ ] **The cadence** — how many touches, over what timeframe, before dropping to long-term behavioral drip?
+- [ ] **The angles** — value drop · market update · pattern-interrupt · the breakup/takeaway text · new-listing alert. Which, in what order?
+- [ ] **Buyer ghost vs seller ghost** — do they recover differently?
+- [ ] **Channel escalation** — text → email → call → behavioral. When does she change channels?
+- [ ] **The hard exit** — when does a ghost become a cold/behavioral lead and stop active touches (TCPA + not-annoying law)?
+
+## ═══ THE VALUE LADDER — every touch adds value ═══
+
+*(The anti-"just checking in" law. Every touch delivers something worth receiving. We rank the rungs together.)*
+
+- [ ] **Buyer value rungs** — new-listing alert · early/exclusive inventory · price-drop alert · sold comps · neighborhood data · financing intro. Order low→high commitment.
+- [ ] **Seller value rungs** — equity/valuation update · "what your neighbor sold for" · market report · buyer-demand signal · staging tips. Order low→high commitment.
+- [ ] **Behavioral beats time** — activity-triggered touches (viewed 3×, new area, price cut on a saved home) over calendar drips. Which behaviors trigger which value drop?
+- [ ] **The philosophy** — what makes a touch feel like a gift vs a nag? (the line we never cross)
+
+<Info>
+**Research feeding this checklist:** buyer-side elite-texting research (5-message gold ladder, ledger design,
+escalation triggers, TCPA-in-code) → `.claude/reports/lead-texting-prompt-research-2026-07-20.md`. Seller
+journey + ghosting recovery + value ladder research → *(in progress, 2026-07-21)*.
+</Info>
+
 ---
 
 <Info>
