@@ -1,0 +1,146 @@
+---
+title: "AI Safety Toggles"
+description: "The kill switches that stop AI from texting, the ONE authorization gate every AI send passes, and how a send is attributed + logged. The safety contract for all outbound AI."
+---
+
+<Warning>
+**The law, in one line:** No AI (Myli, a clone, a workflow, a scheduled follow-up) may text, email, or be
+attributed on a lead unless it passes **`canAiActOnLead`** — which requires the **master ON**, the lead's
+**mic open** (`ai_responder` ≠ `none`), and the acting AI **assigned to that lead**. If any of those is false,
+the send is **cancelled, never sent**. A toggle you flipped off must actually silence the AI — every time.
+</Warning>
+
+## Why this page exists
+
+Three separate incidents (Faduma, Allison Nellis, and **Nickolas Loring — 2026-07-23**) all had the same
+shape: an AI sent a text to a real lead that the operator believed was turned off. The toggles existed; the
+send paths just didn't all check them. This page is the single place that documents **every kill switch, the
+one gate that enforces them, and how to actually stop the AI** — so "I turned it off and it sent anyway" can
+never happen silently again.
+
+---
+
+## The kill-switch ladder (by blast radius)
+
+There are five independent switches, largest blast radius first. Each is a real stored flag — the runtime gate
+reads them live, so flipping one takes effect on the next send with no deploy.
+
+| # | Switch | Kills | Where it lives | Set via |
+|---|--------|-------|----------------|---------|
+| 1 | **Master AI** | ALL AI everywhere (Myli + every clone + inbound + proactive) | `hl_settings` key `ai_master` → `aiMasterEnabled()` (`lib/ai/master-gate.ts`, mig 0432) | AI Cockpit → **"All AI"** header toggle (true cascade, `lib/ai/ai-cascade.ts`) |
+| 2 | **Clones** | every per-human clone (Myli lives) | `hl_settings` key `ai_clones` → `clonesMasterEnabled()` (mig 0431) | AI Cockpit → **AI Clones** |
+| 3 | **This agent's clone** | one person's clone | `hl_agent_clone_config.enabled` | Settings → My Team → member → **AI Clone** tab |
+| 4 | **This lead (the mic)** | AI on ONE lead | `hl_leads.ai_responder` (`none` / `clone` / `myli`, mig 0430) | the lead-detail AI-send control |
+| 5 | **This source** | AI on a whole lead source | routing rule `default_message_sender` / the `ai_responder` default it stamps at intake | Settings → Lead Routing |
+
+**The mic is law (mig 0430):** `ai_responder='none'` means *silence on this lead, from every path* — proactive
+follow-ups, workflow steps, clone tasks, nudges. Assignment (`assigned_ai_agent_id`) is **presence/ownership**,
+NOT permission to speak. An assigned agent with the mic at `none` says nothing.
+
+**Inbound has its own extra gate:** replies to an inbound text also require `ai_conversations.enabled` for the
+lead (`aiEnabledForLead`) — pass `requireConversations` to the gate for reply paths only.
+
+<Note>
+The AI Cockpit **"All AI"** master is a **true cascade** (2026-07-22): OFF snapshots the state of every child
+switch then disables them; ON restores them exactly. So the master is a real global stop, not just a runtime
+flag — but the runtime gate (`ai_master.enabled`) is the source of truth every send consults.
+</Note>
+
+---
+
+## The ONE gate — `canAiActOnLead`
+
+`apps/houseloop-crm/lib/ai/can-act.ts` — **every** AI send/write/attribution path calls this first. It answers
+"may THIS actor act on THIS lead right now?" by delegating to the canonical resolver `resolveActorStamp`
+(`lib/agent-runtime/resolve-send-identity.ts`), which enforces **master + clones-master + the mic + assignment**
+and returns the lead's currently-authorized actor — or `null`.
+
+```ts
+const gate = await canAiActOnLead(actorUserId, leadId);
+if (!gate.allow) return; // reason: no_authorized_actor | actor_not_assigned | conversations_off | lead_missing
+// gate.actorType ('clone' | 'myli'), gate.actorUserId — who the send goes out AS
+```
+
+`allow: false` when the master is off, the mic is `none`, the clone is disabled, nobody is assigned, or the
+queued actor is no longer the lead's authorized actor (reassigned / mic flipped lanes since scheduling).
+
+### Every send path and the gate it uses
+
+| Path | File | Gated? |
+|------|------|--------|
+| **Inbound reply** (Myli/clone answers a text) | `lib/ai/lead-conversation.ts` `dispatchInboundToAi` | ✅ gate + `requireConversations` |
+| **Workflow `ai_message` node** | `lib/workflows/execute-step.ts:1088` | ✅ gate |
+| **E-sign nudge** | `lib/scheduledActions/esign-nudge-dispatch.ts:42` | ✅ gate (in-dispatcher) |
+| **Scheduled actions** (clone-task · floor · daily-home · takeover) | `lib/scheduledActions/inngest-fn.ts` executor | ✅ **UNCONDITIONAL gate (2026-07-23 fix)** |
+| **Clone task dispatcher** | `lib/scheduledActions/clone-dispatcher.ts` | ✅ defense-in-depth gate |
+
+The scheduled-action executor runs the gate as an unconditional step for **every** `actor_type in (clone, myli)`
+row, regardless of `requires_review` — a blocked row is marked `cancelled`, never dispatched.
+
+---
+
+## Attribution + the Run Log (how a send is credited)
+
+Every outbound row (`hl_messages`) carries its provenance so a surface can tell a human-typed text from an
+AI-driven one:
+
+- **`actor_role`** — `human` (typed) vs `ai_agent` (AI-driven). A clone/workflow/nudge send is `ai_agent`.
+- **`actor`** / **`our_identity_user_id`** — a **clone acts AS the human it clones**: it sends from that human's
+  own line and the row is credited to the human, with `actor_role='ai_agent'` marking it AI-driven. (This is
+  intentional — a clone is your double — but it means "who sent it" and "was it AI" are two different columns.)
+- **`llm_call_id` / `workflow_run_id` / `decision_audit_id`** — the provenance trail (which LLM call composed it,
+  which workflow run, which Director decision). Empty on a hand-typed human text.
+- **`resolveActorStamp`** (`lib/agent-runtime/resolve-send-identity.ts`) is the single writer of the actor stamp —
+  the same resolver the gate uses, so "who may act" and "who it's credited to" never drift.
+
+**Run Log:** every AI action lands in `hl_run_log` (Inngest `function.finished` → `capture-fn.ts`). The full Run
+Log lives under **Integrations & API → Run Log**; the AI-filtered view is the same page at `/run-log?view=ai`
+(one endpoint, no duplicate surface). *If it didn't run through a registered Inngest function visible here, it
+doesn't exist* (the "Inngest or it doesn't exist" law).
+
+---
+
+## The Nickolas Loring incident (2026-07-23) — worked example
+
+**What happened:** Myli/AI texted a real lead (Nickolas Loring, source Zillow) *"Hey Nickolas, just checking in —
+did you get a chance to tour that for-sale-by-owner home yet?"* while the lead's mic was **`ai_responder='none'`**
+and the **master AI was OFF**.
+
+**Root cause:** a human created a follow-up **task**; `enqueueCloneTask` turned it into a scheduled action with
+`requires_review=false`. At fire time the executor only ran the authorization gate inside the
+`if (row.requires_review)` branch — so the gate was **skipped entirely**, and the clone dispatcher had **zero
+gates** (a 2026-07-03 "the per-task assignment IS the authorization" rule that predated the mic). The master was
+off and it still sent.
+
+**Why the notification looked wrong:** the row was `actor=Zach` + `actor_role='ai_agent'`, sent from Zach's line,
+with `llm_call_id`/`workflow_run_id`/`decision_audit_id` all empty — an AI send wearing the human's identity with
+no provenance. So the notification said "Myli sent" (the lead's assigned agent) while the lead-detail said "Zach
+Spradling sent" (the crediting identity). Two columns, two answers.
+
+**The fix (shipped 2026-07-23):** the `canAiActOnLead` gate is now an **unconditional** executor step for every
+`actor_type in (clone, myli)` scheduled action, regardless of `requires_review`, plus a defense-in-depth gate at
+the top of the clone dispatcher. A muted lead, master-off, or disabled clone now cancels the send. This reverses
+the "per-task assignment IS authorization" rule — **the mic/master/assignment gate is the only authorization.**
+
+<Warning>
+**Known follow-up (tracked):** `enqueueCloneTask` auto-fires an AI send on *any* `text`/`email`/`follow_up` task
+assigned to a clone-enabled user (defaulting the assignee to the task's creator), so an **internal note-to-self
+task can become a lead-facing send**. The gate now blocks it whenever the lead's mic is off, but the deeper fix
+is that an internal reminder should never enqueue a lead outbound at all. Attribution provenance
+(`llm_call_id` threading on the clone-task send) is the other open hardening item.
+</Warning>
+
+---
+
+## Runbook — how to actually stop the AI
+
+1. **Everything, now** → AI Cockpit → **"All AI"** master OFF (`hl_settings ai_master.enabled=false`). This gates
+   every path that consults the gate. Confirm in the Run Log that no AI rows fire after.
+2. **A queued send that's already scheduled** → it is cancelled automatically at fire time by the gate once the
+   master/mic is off; to kill it immediately, cancel the `hl_scheduled_actions` row (status → `cancelled`).
+3. **One lead** → set its mic to `none` (`ai_responder='none'`).
+4. **One person's clone** → My Team → member → AI Clone → off.
+
+Re-enabling is the reverse — the cascade restores child switches; individual switches are flipped back where you
+turned them off. **Verify on prod** (send yourself a test on a mic-open lead, confirm a mic-`none` lead stays
+silent) before trusting the switch.
