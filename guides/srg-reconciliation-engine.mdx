@@ -67,10 +67,18 @@ with the client, the real purchase price, and the relationship dossier.
     **Paul Walrod's address was WRONG: 1300 E 80th (not 85th)** — MLS 2485414, $180k 2024-05-23, SPRADLINGGP;
     child re-addressed + repinned to HLID270015; Zach fixed SISU too · Derek Moore = MLS 2325743 ($375.5k
     2021-07-15, ANASPRAD buyer). All five sheets banked in `hl_mls_property_history`.
-  - [ ] **R3 value refresh** (currently ON ZACH'S HOLD): re-anchor web `hlEstimate` to current Zestimates
-    book-wide + kill every CRM-copy value read — the card must be CURRENT, not month-old
-  - [ ] **card-hydration sweep**: every past-client `/home` page verified current (photos, price history,
-    pill, value) — sampled with eyes, fixed by pipeline
+  - [x] **R3 value refresh — ✅ DONE 2026-07-23.** Forced the monthly Inngest engines over all keepers
+    (`past-client/zillow-cache.run` → `value-history/persist.run`): **hlEstimate recomputed on 1,941/1,941
+    (100%) · fresh Zillow Zestimate pulled on 1,898 (97.8%) · 0 value-less** (the 43 without a fresh Zestimate
+    are off-market — Zillow has none — and carry the ZHVI-fork value). Run Log 01KY7XA35A / 01KY809BCS. Also
+    fixed a stamp bug: persist now sets `hlEstimateAt=now()` (committed; deploys with the next safe push —
+    held during the CRM AI-safety emergency).
+  - [~] **card-hydration sweep — AUDIT DONE 2026-07-23; tail characterized.** `verify-pastclient-cards.mjs`
+    over 1,949 homes: **1,842 (94.5%) fully clean.** Tail: **18 render as EMPTY records** (value + history +
+    price + photos all fail together though the value/photos DO exist on the `hl_heartlandmls_*` Listing → an
+    **HLID→listing RESOLUTION bug**, not missing data; the rooftop-guard event did NOT clear them, so it's a
+    distinct render/identity fix — deferred to the doc-vs-code audit) · **57 no-photos** (→ `hl-photo-engine`,
+    Google Street View is the floor) · **65 price-history** (44 contaminated + 21 missing → `recover-card-history`).
   - [x] **THE FULL-COHORT FUB RE-SCRAPE — ✅ COMPLETE 2026-07-20 21:47 ET.** 1,668/1,686 freshly re-scraped
     (scraped_at ≥ 07-20) + **18 unscrapable** (stage=Deleted IN FUB — their pages no longer exist; prior
     captured history is final; marked `skipped/fub_deleted`). Mirror verified HOT (63,702 texts · 7,559
@@ -256,7 +264,9 @@ a card tail:**
    w/ ai_summary + notes + events. Golden cases verified (Nations · Burgurt · Julie).
    Running as 3 resumable shards (`--rebuild`, epoch-stamped); 1,183+ re-extracted at last check. Then:
    stage2 compose → persist replace-wholesale → golden-case eyeball (Nations · Burgurt · Julie).
-2. **CARD-HYDRATION SWEEP — 🟡 AUDIT DONE 2026-07-21, fixes rolling.** Book-wide against all 1,726 pinned
+2. **CARD-HYDRATION SWEEP — 🟡 RE-AUDITED 2026-07-23: 1,842/1,949 (94.5%) clean.** Tail = 18 render-empty
+   (HLID→listing resolution bug) + 57 no-photos + 65 price-history (full breakdown in the G1 item above).
+   Prior 2026-07-21 audit detail: Book-wide against all 1,726 pinned
    rooftops: **0 missing Listing rows · 0 stale value stamps · priceHistory clean but 7 · value clean but 4**
    (one of those correct-by-rule: pending homes show list-based value, no Zestimate). **5 stale cards healed**
    same day via `recover-card-history-from-ledger.mjs --write` (additive Sold events from the receipted
@@ -267,11 +277,26 @@ a card tail:**
    these galleries reach the `/home` page. The earlier "637 full / 1,086 hero-only" figure was a wrong-column
    read of `photos` (empty) — the Redfin→R2 harvest was complete all along. Only the ~34 bare + 58 thin
    homes remain as a possible tail scrape.
-3. **R3 · VALUE REFRESH — ZACH'S KEY.** Web Zestimates are ~1 month old book-wide. On his green light:
-   run the Zestimate refresh over the past-client keepers (the existing monthly engine, forced now) → verify
-   fresh `hlEstimateAt` stamps → kill every remaining CRM-copy value read (web-live only, per doctrine).
-4. **GUARD CRON — ZACH'S KEY.** First run succeeded (22 keepers repointed). His typed sign-off flips the
-   daily 6am cron and rooftop identity is guarded hands-free forever.
+3. **R3 · VALUE REFRESH — ✅ DONE 2026-07-23.** Forced the monthly Inngest engines over all keepers
+   (`past-client/zillow-cache.run` → `value-history/persist.run`): **hlEstimate recomputed 1,941/1,941 (100%) ·
+   fresh Zestimate 97.8% · 0 value-less.** Freshness truth = `ninjaEnrichedAt` + the now-fixed `hlEstimateAt`
+   (the old "verify hlEstimateAt stamps" criterion was against a column the persist pipeline never bumped — fixed
+   this pass; committed, deploys with the next safe push).
+4. **GUARD CRON — ZACH'S KEY (still open) — this is the CIRCLE-BREAKER.** Fired again 2026-07-23 as an event
+   trial; it did NOT clear the 18 render-empty cards (those are a distinct HLID→listing resolution bug, see the
+   hydration item). But the guard IS the structural fix for the RECURRENCE — the reason twins/staleness keep
+   getting re-discovered by hand is that this cron is OFF. With the daily 6am cron ON, every new resale/twin is
+   auto-adopted + repointed hands-free, forever. Awaiting Zach's typed sign-off to flip it.
+
+<Note>
+**⭐ THE FORMAL-PROCESS LOCK (Zach 2026-07-23 — the anti-circle law).** The reason this work has "felt like
+circles" is that the maintenance runs as a mix of live-on-cron engines and hand-run one-offs. Once the tail
+above is closed end-to-end, we **audit THIS document against the actual code** (every named tool / event /
+column / cron verified to exist and do what's written) and **lock a single formal, 100%-repeatable process**:
+the four engines (value refresh · Redfin · rooftop-guard identity · photo/price backstops), each with its exact
+trigger, cron, worklist, and verify query — so the book stays current hands-free and no one re-derives it again.
+The rooftop-guard cron being OFF is the current single biggest source of recurrence.
+</Note>
 
 **THE G1 GATE:** with 1-4 done, Zach walks N complete cards (facts + fresh dossier + current value + live
 page) and signs the book. Then the build phases:
