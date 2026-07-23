@@ -71,9 +71,17 @@ date/time render MUST go through it. Never write a `timeZone:` literal in a comp
   A 913 (Kansas City) lead is Central, so it reads Central — the same as the business. Every lead-detail
   component (Next Actions, Appointments, Emails/AI/Deals streams) reads `leadDisplayTz()` so they can never
   disagree with `CenterLane` again.
-- **The store is always UTC.** `hl_appointments.starts_at` is a UTC instant. Input wall-clock → UTC via
-  `wallTimeToUtcISO()`; UTC → a `<input type="datetime-local">` via `utcToWallInput()`. Both are DST-aware
-  (they compute the real Central offset for that date — `−5` CDT in summer, `−6` CST in winter).
+- **The store is always UTC.** `hl_appointments.starts_at` / `hl_tasks.due_at` are UTC instants. Input
+  wall-clock → UTC via `wallTimeToUtcISO()`; UTC → a `<input type="datetime-local">` via `utcToWallInput()`.
+  Both are DST-aware (they compute the real Central offset for that date — `−5` CDT in summer, `−6` CST in winter).
+- **INPUT side — never `new Date()` a picked wall-time (Zach 2026-07-23, the recurrence).** When a form turns a
+  picked date + time into a stored timestamp, it MUST interpret that wall-clock as **Central**, not the editor's
+  browser zone. **Banned:** `` new Date(`${date}T${time}`).toISOString() `` — `new Date` on a zone-less string reads
+  the *browser's* timezone, so an Eastern browser stores "8:00 AM" as 8am **Eastern**, which then renders 7:00 AM
+  Central. **Correct:** `` wallTimeToUtcISO(`${date}T${time}:00`) ``. This is exactly how a Task set for 8am kept
+  showing 7am (`TaskComposerModal` used `new Date`; the appointment modal already used `wallTimeToUtcISO`). The
+  two must match. ⚠️ The `hl/no-raw-timezone` linter catches the *display* side but NOT this input pattern — grep
+  for `` new Date(`...T...`).toISOString() `` when auditing a new date-picker form.
 - **The business zone is configurable** in Business Settings above (`getBusinessTimezone()` reads the DB), and
   `BUSINESS_TZ` is the default/fallback. `business_hours.timezone` must match (it was wrongly Eastern; fixed
   2026-07-22).
