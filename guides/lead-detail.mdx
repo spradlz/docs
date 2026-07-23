@@ -35,10 +35,16 @@ The left and right lanes share the same primitives so they stack pixel-identical
 
 Composing is **always available at the top** — no overlay modals. A tab strip switches between:
 
-**✦ AI Summary · Send Text · Send Email · Make Call · Create Note.**
+**✦ AI Summary · Send Text · Send Email · Make Call · Create Note.** The composer **defaults to AI Summary on
+every load** (and resets to it when the lead changes) — read the lead before you write. The contact-band circles
+(below) open the matching composer tab, so nothing pops a modal.
 
-- **AI Summary** reads Myli's real dossier (`hl_lead_dossier` via `GET /api/leads/[id]/context`): the summary,
-  where-they-stand, and sentiment. **Generate** builds it on demand when none exists.
+- **AI Summary** reads Myli's real dossier (`hl_lead_dossier` via `GET /api/leads/[id]/context`) — the SAME source
+  the AI lens renders (one summary, two places). **↻ Refresh** rebuilds it (`POST /context` → one LLM extraction
+  over the lead's HouseLoop history + **FUB facts** via `loadFubBrief`). The summary follows a **locked format**
+  (Zach 2026-07-23): a 2-sentence read → **Key Insights** (🏡 goal · 💰 personality/decision style · 📍 current
+  stage · ⚡ risk/opportunity) → **Next Best Action** (one sentence — the immediate follow-up only; never
+  operations/financing). Rendered by the shared `AiSummaryText` component.
 - **Send Text** — To (name → number) · **From = the A2P-compliant company lines** (`/api/phone-numbers`, `a2p===true`)
   + the iMessage line · ✦ AI-generate tabs (Introduction / Follow Up / Still Buying / Nurture Lead / **+ Custom**
   voice-mic modal) · **Attach vCard / Biz-Card** (renders a chip in the body, sends with the message).
@@ -49,6 +55,15 @@ Composing is **always available at the top** — no overlay modals. A tab strip 
 - **Create Note** — inline textarea + a blue **Create Note** button.
 
 **The `+ Custom` modal** is the one pink/purple (`--hl-ai`) overlay: a big prompt + a Web-Speech **mic** → `/ai-draft`.
+
+### The "From" default — the assigned agent's own line (Zach 2026-07-22)
+
+Because a **human** is composing, the Text and Call "From" default to the **assigned agent's own line**, not the
+AI-send resolver (which blanks when the AI mic is off). Order (`GET /api/leads/[id]/send-identity`, `defaultSenderId`
+for Text + `defaultVoiceNumber` for Call): (1) the assigned agent's text/voice-default dialer (or their default
+BlueBubbles line for iMessage) — reassign the agent, reopen, it follows; (2) no assigned agent (company/inbound
+lead) → **the number the lead came in on** (last inbound `hl_calls.to_number`, e.g. the company line). Myli's own
+auto-sends are unaffected (they still resolve through `resolveAgentSendIdentity`).
 
 ## The icon filter row (read-only feed lenses)
 
