@@ -31,6 +31,21 @@ The left and right lanes share the same primitives so they stack pixel-identical
 [Lead Detail — Parity Lanes](/guides/lead-detail-parity-lanes) and
 [Lead Detail — AI Agent](/guides/lead-detail-ai-agent).
 
+## The contact band (FUB-style circles, Zach 2026-07-22)
+
+The left-lane contact rows use **colored circle icon buttons** on the left of each line — matching the sacred green
+call button — instead of uppercase labels (`components/leads/detail/ContactCircle.tsx`):
+
+- 🟢 **Green circle = Call** · 🔵 **Blue circle = Text / iMessage / Email** · 🔵 **Blue circle = Address** (a new
+  `hl_leads.address` field, mig 0447). Clicking a circle **opens the matching section of the top composer** (call →
+  Make Call, email → Send Email) — **no modal**. The email **wraps in full** so a long address is selectable/copyable.
+- Below the contact lines, **one divider**, then a second group: **Integration · Lead Source · Relationship** (they
+  keep their labels).
+- **Myli's lane mirrors it** — the same green/blue circles on her Call/iMessage/Email lines, but **inert** (she's not
+  someone you dial), so the two lanes line up. `ContactCircle` renders a `<button>` on the agent lane, a `<span>` on Myli.
+
+Locked wireframe: `apps/houseloop-crm/docs/wireframes/lead-contact-band-LOCKED-2026-07-22.html`.
+
 ## The inline composer (top of the iPad)
 
 Composing is **always available at the top** — no overlay modals. A tab strip switches between:
@@ -70,16 +85,27 @@ auto-sends are unaffected (they still resolve through `resolveAgentSendIdentity`
 Below the composer, an **icon row** (icon over a single-word label + a count badge) filters the ONE feed. It
 replaced the old bottom dock. Order:
 
-**All · ✦ AI · Text · Emails · Calls · Notes · Appts · Activity · Starred · Log · ⌃ FUB (far right).**
+**All · ✦ AI · Messages · Emails · Calls · Notes · Appts · Activity · Starred · Log · ⌃ FUB (far right).**
 
 - **The middle column is READ-ONLY** — no create/send buttons in any lens. Creating/sending comes from the top
   composer and the side lanes (the ＋ on the left-lane Appointments section).
-- Count badges are always visible and **turn red when there's something NEW** (a new message on Text, new website
-  activity on Activity). Counts come from the activity `byKind` map (categorized via the badge catalog) + a real
-  email count + the star count.
-- **AI** = the AI Context (`LeadContextPanel` `initialView="context"`) — dossier + facts + memory updates (moved
-  out of the old Myli-lane "Context" button). **FUB** (far right, the 3-chevron logo) = the imported Follow Up
-  Boss thread (`initialView="fub"`).
+- Count badges are always visible and **turn red when there's something NEW**. **Every count matches what its lens
+  renders** — the badge and the display derive from the SAME kind-list (`lib/leads/feed-lenses.ts`), so a badge can
+  never disagree with its lens (this fixed "Text said 1 with 0 shown / Activity said 8 with 2 shown", Zach 2026-07-23).
+
+<Note>
+**Messages vs Activity — "said" vs "did" (Zach 2026-07-23).** **Messages** (renamed from "Text") is **everything the
+lead sent that needs a reply** — SMS + iMessage + **Zillow in-app messages** + **requests** (tour/contact/property/
+seller inquiries) — rendered as ONE time-ordered feed (reply from the composer at the top; `AllStreamV2 kinds=MESSAGE_KINDS`).
+**Activity** is the **record of website behaviour** — views/likes/saves/searches/registration — **plus the same
+requests + in-app** (a request is also a thing they did on the site). So requests + in-app are **dual-listed** (Messages
+because they need a reply, Activity because they're a website record), and everything appears in **All**. The Zillow
+in-app card's action is **"View in Follow Up Boss"** (Zillow has no per-lead page) — the broken "Look up on HouseLoop" was removed.
+</Note>
+
+- **✦ AI** = the AI page (`LeadContextPanel` `initialView="context"`) — see below. **FUB** (far right, the 3-chevron
+  logo) = the imported Follow Up Boss thread (`initialView="fub"`); the old "Lead Context / FUB Activity" pills inside
+  the AI lens were removed.
 - **Starred** = rows the user pinned with the per-row ☆ (`hl_lead_activity_star`, per user). **Log** = the
   change/audit kinds (stage/name/contact/tag/deal). **Notes** = human notes only (excludes `fact_captured`
   AI-memory). **Emails** reads the real email log so older sends still show.
@@ -92,6 +118,27 @@ Modals (appointment create/edit, etc.) center over the **visible viewport** of t
 clamped to the screen, because the single-scroll iPad is a tall column (unclamped, a modal's Save button fell
 off the bottom).
 </Note>
+
+## The AI page (the ✦ AI lens)
+
+The **AI** lens (`LeadContextPanel`, `components/leads/detail/LeadContextPanel.tsx`) is a single cohesive
+**Myli-purple** (`--hl-ai` #A855F7) surface — reworked 2026-07-23. Top to bottom:
+
+1. **AI Summary** — the dossier summary, at the very top. One-line header: a Sparkles AI icon + bold purple
+   **AI Summary**, then a smaller grey "Myli's AI summary about `<lead>` · updated `<date/time>`" beside it, and
+   **↻ Refresh** on the right. The body renders the locked format (2-sentence read → **Key Insights** emoji bullets
+   → **Next Best Action**) via the shared `AiSummaryText` component — the SAME summary the composer's AI Summary tab shows.
+2. **Facts Myli Tracks** — one big purple AI section header, then a **3-column grid of boxed cards**, all the same
+   treatment: the read cards **Sentiment · DISC Profile · Where they stand**, then each fact **domain** with facts
+   (**Search Criteria · Current Situation · Timeline & Urgency · Budget & Financing · Motivation & Goals · Logistics
+   & Process**, plus person domains). Each card = a purple AI-icon header + its `slot: value` facts; **only learned
+   facts show** (no "not learned yet"). Shared `AiCard` primitive. The 6 home domains come straight from the fact
+   taxonomy (`lib/ai/fact-taxonomy.ts`) — no prompt change needed to produce them.
+3. **Myli Memory Updates** — the working-memory stream (`MemoryStream`), header + each entry title ("Updated working
+   memory") in the same purple AI-icon treatment.
+
+The summary + facts are generated by `buildLeadContext` (`lib/ai/extract-context.ts`) over the lead's HouseLoop
+history **and** FUB facts, written to `hl_lead_dossier` + `hl_lead_facts`. See [Lead Detail — AI Agent](/guides/lead-detail-ai-agent).
 
 ## Modes render a band above the lanes
 
