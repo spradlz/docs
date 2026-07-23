@@ -77,6 +77,24 @@ queued actor is no longer the lead's authorized actor (reassigned / mic flipped 
 The scheduled-action executor runs the gate as an unconditional step for **every** `actor_type in (clone, myli)`
 row, regardless of `requires_review` — a blocked row is marked `cancelled`, never dispatched.
 
+## THE ONE SEND ROUTE + the wall (why ungated is impossible, not just discouraged)
+
+A gate you must *remember* to call is not a wall. The enterprise-grade guarantee is structural:
+
+- **`gatedSend` (`lib/ai/gated-send.ts`)** is the ONE door for an AI-to-lead text. It calls `canAiActOnLead`
+  **first** (throws `AiSendBlockedError` on deny — sends nothing), then resolves the authorized actor's identity
+  + channel and delegates to the transport. Every AI send path uses it; the gate + channel + provenance live in
+  one place, never duplicated.
+- **`no-raw-send` ESLint rule** (`apps/houseloop-crm/eslint-rules/no-raw-send.js`, scoped to `lib/ai/**` +
+  `lib/scheduledActions/**`) makes it a **build error** for AI code to import a raw wire primitive
+  (`send-sms`, `send-bb`, `resend-send`, `gmail-send`). The only way for AI code to reach the wire is through
+  `gatedSend`. A new send path physically cannot skip the gate — the build won't compile. This is the same
+  "the linter is the law" enforcement as the UI doctrine `no-raw-*` rules.
+- **Sanctioned/exempt** (may touch the raw transport): `gated-send.ts` (the door), `system-send.ts` (the
+  explicit non-lead lane), `lead-conversation.ts` (the inbound engine — keeps its typing/pacing transport, gated
+  inline), and the scheduled-action `adapters.ts` (a transport adapter, reached only downstream of the executor's
+  unconditional gate).
+
 ---
 
 ## Attribution + the Run Log (how a send is credited)
