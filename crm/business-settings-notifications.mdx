@@ -1,0 +1,186 @@
+---
+title: "Notifications"
+description: "How you and the team get alerted — personal channels, per-event toggles, agent nudges, inbox subscriptions, and the outbound sender identity."
+---
+
+Settings → Notifications controls every alert that goes to **you** (or the team). Client-facing messages
+(tour confirmations, welcome emails, listing alerts) are **not here** — those are workflows managed per
+trigger event in [Registration Trigger Events](/settings/lead-platform).
+
+## The two panels
+
+| Panel | Who it's for | What it controls |
+|---|---|---|
+| **How I get notified** | Each agent, personally | Where your alerts land, which events ping you |
+| **Sent from** | Admins only | The outbound email + SMS identity for system alerts |
+
+---
+
+## How I get notified
+
+### My Channels
+
+The phone numbers and email addresses where YOUR alerts land. Add a phone → you get text pings. Add an
+email → you get email pings. You can have multiple of each. Each recipient controls their own channels;
+no agent can configure another agent's.
+
+### Event toggles (BELL / TEXT / EMAIL)
+
+Every notification event has three independent delivery toggles:
+
+| Toggle | What it does |
+|---|---|
+| **BELL** | In-app bell (always records regardless of TEXT/EMAIL) |
+| **TEXT** | Sends an SMS to each number in My Channels |
+| **EMAIL** | Sends an email to each address in My Channels |
+
+**TIMING** shows either "Instant" (fires immediately) or an "Nh" delay chip (Agent Nudges only — fires
+after N hours of silence). **SENT** is a live count of deliveries; click it to see the drill-down log of
+who got what and when. **VIEW** (eye) opens the notification template. **CONFIG** (gear) opens the
+per-event timing rule.
+
+#### The Connected Phone rule
+
+**Text / Missed Call / Voicemail are always locked ON for SMS.** A lead reaching you always texts your
+cell — the TEXT toggle for these three events is disabled (you can't turn it off). This matches how
+`ALWAYS_SMS_CLASSES` works in the dispatch layer (`dispatch.ts`).
+
+---
+
+### Event sections
+
+#### New Lead Activity
+
+One class: **New Lead** (`lead_created`). Fires on any first-time registration from any source
+(HouseLoop, Zillow, Realtor.com, etc.). The message body shows what the lead did — saved a search,
+requested a tour, shared a home — plus their CRM link.
+
+#### Existing Lead Activity
+
+Per-activity classes for leads already in the CRM. Grouped by channel:
+
+| Sub-group | Events |
+|---|---|
+| **Website activity** | Home liked · Home saved · Home shared · Saved search · Tour request · Contact request · Seller request · Home value report · Property viewed |
+| **Calls** | Call received · Missed call · Voicemail |
+| **Text** | New message (always SMS, locked ON) |
+| **Emails** | Email received |
+
+The Calls / Text / Emails sub-groups were folded into Existing Lead Activity on **2026-07-14** (Zach) —
+the old standalone "Communications" section is gone. Each event toggles independently.
+
+#### Lead Lifecycle
+
+Stage changed · Lead assigned · Added as collaborator · AI clone activated · Lead reassigned ·
+Appointment scheduled · Appointment completed.
+
+#### Agent Nudges ⏰
+
+Time-based reminders that fire when a human drops the ball:
+
+| Nudge | Fires when |
+|---|---|
+| **Acknowledge Handoff** | Myli hands the lead to you and you haven't introduced yourself within the configured delay |
+| **Response Needed** | A lead messaged you (text / email / call) and you haven't replied within the configured delay |
+
+Each nudge has a **timing rule** (CONFIG gear) — threshold hours + on/off per channel. The default is
+Instant. If AI Failover is on, the clone steps in when Acknowledge Handoff fires.
+
+#### AI Follow-Up 🤖
+
+Pings when the AI does something: AI Phone Calls · AI Messages Sent · AI Facts Captured · AI Homes
+Searched · AI Stages Advanced · AI Appointments Set. Off by default — opt in to the ones you want.
+
+#### Website Activity 🌐
+
+**Daily website digest** — a morning email summarizing the last 24h on houseloop.ai (real humans,
+registrations, homes viewed, searches, requests). **Bot/crawler breakdown** — include the crawlers &
+bots section in the digest.
+
+#### Transaction Deal Notifications 📁
+
+Loop created · Under contract · Document signed by client · Milestone reached · Transaction closed ·
+Transaction lost · Status changed · TC assigned · Key date approaching.
+
+Fires to the deal's assigned agent and the TC coordinator.
+
+#### System Alerts
+
+Live health badges for: Gmail disconnected · BlueBubbles disconnected · Phone / Twilio disconnected.
+
+#### Inbox Notifications
+
+Subscribe to any inbox (an agent's personal inbox or a shared line) to get pinged on every text, call,
+and email that hits it — even for leads not assigned to you. This is the "watch my wife's inbox"
+control. Stacks with the notification scope below.
+
+---
+
+## Admin-only controls
+
+### Global delivery master switches
+
+Account-wide kill switches that sit **on top of** everyone's personal prefs:
+
+- **Email off** → no notification email sends to anyone on the team, regardless of their per-event
+  setting. The in-app bell still records.
+- **SMS off** → no notification text sends to anyone.
+
+Use these to silence a channel account-wide in one flip. Only visible to admins (`canEdit = true`).
+
+### Which leads notify me (scope)
+
+Admins can choose:
+
+| Scope | Behavior |
+|---|---|
+| **Only leads assigned to me** | Default — you hear about a lead when it's yours |
+| **All leads — any agent** | Every registration + activity across the whole team |
+
+Regular agents always see only their assigned leads; the scope card is hidden for non-admins.
+
+---
+
+## Sent from
+
+Two outbound identities for **internal / team alerts**:
+
+| Sender | Key | Used for |
+|---|---|---|
+| **Email sender** | `team_alerts` | All system + team email notifications |
+| **SMS sender (INTERNAL)** | `outbound_sms` | All system + team text notifications (agent alerts) |
+
+These are **not** the addresses leads see — see [Brand line (public)](#brand-line-public) below.
+
+### Brand line (public)
+
+A dedicated public identity the **HouseLoop brand** uses when texting or emailing a lead:
+
+| Sender | Key | Used for |
+|---|---|---|
+| **Brand SMS line** | `brand_public_sms` | Listing alerts, saved-search digests, registration texts |
+| **Brand email sender** | `brand_public_email` | Same — every branded lead email sends from this one address |
+
+Promote a number from the pool in [Phone Provider](/settings/phone-provider). Keep this separate from
+the internal `outbound_sms` alert line so leads don't see your internal (913) 800-4470 number.
+
+---
+
+## Architecture notes (for builders)
+
+- **`createNotification`** (`lib/notifications/create.ts`) fans out to the lead owner + every
+  `notif_scope='all'` admin. The 5-min dedup keys on `(entity_type, entity_id)` — each distinct
+  inbound signal fires its own notification; reprocesses are dropped.
+- **`dispatch.ts`** gates SMS on `ALWAYS_SMS_CLASSES` (new_message, missed_call, voicemail) regardless
+  of pref. Email/SMS prefs are per-agent per-event; the global master sits above them.
+- **Inbound Twilio SMS → notification:** the SMS webhook (`app/api/phone/webhooks/sms/route.ts`)
+  inserts into `hl_bb_events` (channel='sms') and calls `notifyInboundMessage` with the row's UUID `id`
+  (NOT the raw `SM…` MessageSid — that string can't cast to the `uuid` column in `hl_notification`).
+- **Inbound iMessage → notification:** same path via the BB webhook
+  (`app/api/bb/inbound/route.ts`); BlueBubbles GUIDs are UUID-formatted so they pass directly.
+- **Notification scope** persisted in `hl_users.notif_scope` ('assigned' | 'all'). Admins can change
+  it; non-admins are always clamped to 'assigned' server-side.
+- **Per-event timing** (Agent Nudges delay) stored in `hl_agent_nudge_rules` and read by the Inngest
+  nudge function at fire time.
+- **Sent counts** come from `/api/notification-sends` (run-log source='notification'). Click the count
+  → drill-down modal with who + when.

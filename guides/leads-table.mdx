@@ -1,6 +1,6 @@
 ---
 title: "Leads Table"
-description: "The all-leads table — Sierra-style structured system columns (Phone/Email Status, Registered, Requests, Visits, Listings, Alerts, Agent Action, Tasks) that all read from one aggregation, with per-user unread alerts."
+description: "The all-leads table — Sierra-style structured system columns that all read from one aggregation, one SQL filter engine behind smart filters + Advanced Search, and per-user unread alerts."
 ---
 
 The `/leads` table is the operator's command center. Every column is a real,
@@ -32,6 +32,107 @@ Requests · Visits · Listings · Alerts · Agent Action · Tasks**.
 
 When a metric has no data source yet (market reports, alert unsubscribes), the
 cell renders an **honest 0** — it is never faked.
+
+## Filtering & smart filters
+
+The table has **one filter engine, and it is SQL.** Filtering never happens in the
+browser. Every filter — a smart-filter tab, the Advanced Search builder, the
+quick "All Statuses / All Agents" dropdowns — resolves to the SAME
+`FilterCondition[]`, is written to the **URL**, and is applied by
+`buildLeadsQuery` / `buildLeadsCountQuery` in `lib/leads-query.ts`. Because one
+engine computes both the visible rows and the smart-filter tab badge, the two can
+never disagree.
+
+<Note>
+Before 2026-07-24 there were **two** engines — SQL for the tab badges and a
+partial JavaScript re-implementation (`applyFilterConditions`) for the visible
+rows. They drifted: the JS side silently did nothing for 12 shipping fields
+(every `sig_*`, `has_task`, `followup_*`) because the row payload carries no
+column for them, disagreed with SQL on `stage` for leads in both pipelines, and
+used 30-day months vs Postgres calendar intervals. Adding a second condition
+could make the result set *grow*. The JS engine was deleted; this section
+documents the single-engine design that replaced it.
+</Note>
+
+### The registry is the one source of truth
+
+Every filterable field is defined once in **`lib/leads/filter-fields.ts`**
+(`FILTER_FIELDS`), imported by both the picker UI and `condToSql`. A field has a
+`key`, a `label`, a `group`, and its `operators`. Adding a field is two edits in
+the same pass — the registry entry **and** its `condToSql` branch — and a test
+(`lib/leads/filter-parity.test.ts`) fails the build if they drift apart. That
+test is what makes a "field that silently does nothing" impossible to ship.
+
+- **Only built fields are shown.** Fields flagged `comingSoon` stay defined (so the
+  intent isn't lost) but are hidden from the picker — `VISIBLE_FILTER_FIELDS` is
+  what renders. A field you can pick is a field that actually filters.
+- **Conditions AND together.** Multiple conditions narrow the result; adding one
+  can only ever *reduce* the count. If a count grows when you add a condition,
+  that's a bug upstream (a condition being dropped), not the semantics.
+- **Legacy keys are normalized, not rejected.** Old saved filters and bookmarks
+  that used the retired keys (`open_task`, `task_due_today`, `text_message`, …)
+  are rewritten to the canonical field on read by `normalizeCriteria`, so they
+  keep working while `condToSql` keeps exactly one branch per concept.
+
+### Operators
+
+| Field type | Operators |
+|---|---|
+| **Multiselect** (Stage, Source, Assigned To, Tags) | include · exclude · is empty · is not empty (Tags also: include any / all, exclude any / all) |
+| **Boolean** (Has Email, Has Phone, Has Task, Task Due Today, …) | yes · no |
+| **Number** (Lead Score, Open Task Count, …) | is greater than · is less than · is empty · is not empty |
+| **Date** (Last Communication, Last Text Sent, Created At, …) | was less than · was more than *(N minutes/hours/days/weeks/months/years)* · is empty · is not empty |
+| **Signal** (Tour Request, Any Inbound, …) | not replied to · replied to · occurred (ever) · never occurred · occurred in the last N · occurred more than N ago |
+
+A **date** field's "was more than N" matches only leads where it *happened* but
+longer ago than N — a never-happened lead is reached with **is empty**, not with
+a date operator. A **signal**'s "not replied to" means the most recent occurrence
+has no real outbound reply after it (a notification ping never counts).
+
+<Warning>
+`stage` names repeat across pipelines — "New Lead" exists in both the Buyer and
+Seller pipelines as different rows. The picker qualifies the ambiguous ones
+("New Lead · Buyer" / "New Lead · Seller"). SQL matches with `EXISTS` over
+`hl_lead_pipeline_memberships`, so a lead in either pipeline's chosen stage
+matches — a lead can sit in both pipelines at once.
+</Warning>
+
+### The URL contract
+
+| Param | Meaning |
+|---|---|
+| `?sf=<id>` | A saved smart filter is active; its tab is highlighted. The server applies that filter's stored criteria. |
+| `?criteria=<json>` | Ad-hoc / in-progress builder criteria. Takes **precedence** over `?sf=` so an edit previews immediately; `?sf=` stays in the URL to keep the tab lit. |
+| `?edit=<id>` | Opens the Advanced Search builder seeded with that filter's criteria **and previews them** (it does not load the whole unfiltered book). |
+
+The builder writes `?criteria=` on a short debounce; the server component re-runs
+`buildLeadsQuery` and returns correctly-filtered rows. The client adopts whatever
+the server applied, so the URL is the single source of truth and the two never
+fight.
+
+### Smart filters
+
+Smart filters are saved `FilterCondition[]` sets stored in `hl_smart_filters`.
+- **System filters** (`is_system`) are the built-in queue — All Leads, New Leads,
+  Not Contacted, No Task Scheduled, Task Due Today, Task Overdue, No Emails Sent,
+  No Texts Sent. Their name and logic are locked; the API rejects edits to them.
+  Whether one appears in the tab bar (`is_default`) *is* editable — hiding an
+  unused system filter from a crowded bar is a display preference, not an edit.
+- **User filters** are created from **Advanced Search → Save as Smart Filter**, and
+  can be updated, duplicated, deleted, and reordered (drag the pills, or use the
+  **Edit Smart Filters** screen at `/leads/smart-filters`).
+- **The tab bar shows `is_default` filters** plus whichever one is active; the rest
+  live on the Edit Smart Filters screen. Each tab's **red badge** is that filter's
+  live match count (`/api/smart-filters/counts`, the same SQL that draws the rows).
+- **Writes are validated + authenticated.** Every smart-filter route requires a
+  session, and `POST`/`PUT` reject criteria the SQL engine can't filter — an
+  unknown field can no longer be saved as a filter that silently matches everyone.
+
+### The 500-row window
+
+`buildLeadsQuery` returns at most **500 rows**; `buildLeadsCountQuery` counts the
+whole match set. When a filter matches more than 500, the toolbar reads
+"500 shown · N match" rather than pretending the page is the whole result.
 
 ## Unread alerts (mission control)
 
