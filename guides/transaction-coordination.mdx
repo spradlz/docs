@@ -257,6 +257,34 @@ createFillSend(leadId, 'single_property_buyer_rep', { propertyAddress, agentUser
 The `signingUrl` can be texted from any agent's line (`sendTextAs`) — the doc sends AS that agent. This is Myli's
 / the AI clone's document tool; no PDF or Documenso handling in the caller.
 
+### The signature-request email — signature block, neutral body, and NO client-text leak (2026-07-24)
+
+Three rules govern what each signer's Documenso email actually says (`lib/esign/send-loop-document.ts` +
+`components/leads/detail/SendForSignatureModal.tsx`):
+
+1. **The email body is NEUTRAL — the casual client text never leaks to the broker.** Documenso's `meta.message` is
+   ONE message applied to EVERY signer (buyer + agent + broker). So the modal sends a professional message —
+   *"Please review and sign the {doc}. Once all parties have signed, everyone receives a completed copy…"* — as
+   the e-sign email body. The agent's **casual note** (e.g. *"Trish will meet you at 1:30 😀"*) is sent SEPARATELY
+   as the **client SMS only**, never as the Documenso email. (Before the fix the broker was getting the casual
+   text in his signature-request email.)
+2. **The sending agent's signature is appended.** `sendLoopDocument` resolves the agent's signature (name ·
+   Spradling Group | HouseLoop · phone · email) from their dialer + connected inbox and appends it to BOTH the
+   Documenso message and the logged thread copy (`logEmailSend`), so the request reads like a real email from the
+   agent. Documenso renders plain text — a full graphic signature would require sending via Gmail instead.
+3. **The signing email is logged to the Emails thread.** Documenso sends from its own SMTP, so the request would
+   otherwise be invisible in the lead's Emails lens — `sendLoopDocument` records it via `logEmailSend` + an
+   `email_sent` run-log row so it shows in the feed's Email card.
+
+### Fillable §4 Agency Election name — dynamic per assigned agent (2026-07-24)
+
+The **Single Property Buyer-Broker Rep** requires the Designated Agent's name printed in **§4 Agency Election**
+(the broker won't sign without it). `contract-forms.ts` fills `f_designatedAgent` (page 1, coords read from the
+PDF underline per [SIGNATURE_ANCHORING](/guides/esignature)) with **source `agent.name`** — resolved by
+`buildLoopFillContext` to the loop's **assigned agent** (`tc_assignee`, then the lead's assigned user). So it fills
+whoever is on the loop, never a hard-coded name. (Forward-only: a copy already sent won't change — re-send to pick
+it up. Only the Single Property form carries this field today.)
+
 **Waiting on Signatures.** While a doc is `sent` and unsigned, the loop band (`MilestoneBand`) AND each Loops-list
 card (`TransactionsTable`) show a green **Waiting on Signatures** strip — the doc name, sent date, days-waiting, a
 **reminder toggle**, and **Cancel document**. The stepper's Agreement-Sent node shows the real sent date.
