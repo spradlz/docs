@@ -610,6 +610,18 @@ already on the row (no modeling, no guessing):
 > code ships — the render reads that series. Verifier: `scrape-verify-cards.mjs` flags any card whose value-
 > history start year `< yearBuilt`.
 
+### Card keeper selection — the RICH record wins, never a bare duplicate (found 2026-07-23; DURABLE FIX OWED)
+When a rooftop has multiple `Listing` rows (a real MLS listing + a synthesized `hl_pastclient_*` row, or dedup
+twins), `hl_property.active_listing_hlid` — the row the `/home` page renders — **must point at the RICHEST
+record** (photos + unit + the real transaction), and **must never point at a `quarantinedAt` row** (`readFromCache`
+returns null for quarantined/deleted → the card renders value-less off a Repliers fallback). The 2026-07-23 dedup
+was doing the opposite for a class of homes: it quarantined the rich MLS listing (14 photos, unit 1600) and kept
+a bare synthesized row (0 photos) — so the card showed a value but "No Photo Available." Immediate fix was a
+scoped repoint (Bergin + 3, reversals in `.claude/reports/*keeper-swap*`). **The durable fix belongs in the
+dedup + `pastclient-rooftop-guard`:** keeper score = has-photos, then has-value, then best status; never a
+quarantined row; sync `active_listing_hlid` whenever a twin is quarantined. Verifier: the reverse-Redfin QA
+scraper `scrape-verify-cards.mjs` (renders the page, flags no-photos / value-less / wrong-unit).
+
 ### Address first, URL last
 Resolve the ADDRESS + deal facts first; mint HLID/URL dead last. Stored hlids on closings are poison.
 
