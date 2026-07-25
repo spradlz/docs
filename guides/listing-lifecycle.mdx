@@ -70,13 +70,29 @@ The Ninja call is made **exactly once per home, at intake** — every step is id
 double-spend. **Timing:** queryable ~50ms; fully enriched within ~15–30s. There is no sub-second "fully
 resolved" guarantee, and there doesn't need to be — intake is automatic and near-real-time.
 
+### The unchanged-listing cost gate (2026-07-24)
+
+Repliers re-sends a webhook on **any** touch — a days-on-market tick, a media re-sync, a metadata re-send —
+not just real content changes. Each one used to re-fire the full `catalog-listing` run (its ~5 steps are all
+billed Inngest executions) even when nothing changed: measured **122k catalog runs/month over only ~6,253
+distinct listings (~4.6× each)**. The child steps were already idempotent (photos skip if cached, vision skips
+at `TAG_VERSION`, Ninja skips once `valueHistory` exists), so the wasted **money** was the Inngest run+steps,
+not external spend.
+
+Both dispatchers now gate on **`listingContentChanged(hlid, mlsUpdatedAt)`** (`lib/listings/cache.ts`) — read
+BEFORE the upsert overwrites the stored timestamp. `mlsUpdatedAt` (Repliers' `updatedOn`) advances on any real
+field change, so an unchanged re-sync compares equal → the catalog dispatch is **skipped** (`catalog_skipped_unchanged`).
+It **fails safe**: a brand-new row, a missing stored/incoming timestamp, or a read error all return `true` and
+still catalog. Genuine price/status changes bump `mlsUpdatedAt` and pass; **sold is a separate trigger and is
+never gated**; the daily `data-coverage-reconcile` re-queues any incomplete home as a backstop.
+
 ### Intake triggers
 
 | Trigger | Source | Notes |
 | --- | --- | --- |
-| **Webhook** | Repliers `listing.created` / `listing.updated` | The primary, instant path. |
-| **Cron backstop** | `listing-cache-sync` (hourly) | Catches anything the webhook missed; fires the same `houseloop/listing.catalog` event. |
-| **Sold** | Repliers `lastStatus = "Sld"` transition | Fires `houseloop/listing.sold` (see Disposition below). |
+| **Webhook** | Repliers `listing.created` / `listing.updated` | The primary, instant path. Fires `catalog-listing` **only when `mlsUpdatedAt` advanced** (see cost gate above). |
+| **Cron backstop** | `listing-cache-sync` (hourly) | Catches anything the webhook missed; fires the same `houseloop/listing.catalog` event — same unchanged-gate applies. |
+| **Sold** | Repliers `lastStatus = "Sld"` transition | Fires `houseloop/listing.sold` (see Disposition below). Never gated by the unchanged check. |
 
 ## Disposition — a home sells and becomes a permanent record
 
