@@ -36,6 +36,49 @@ Schedules themselves live in the registry (`SCHEDULES` in `inngest-registry.ts`)
 - **`lib/integrations/status.ts`** — `getIntegrationStatuses()` builds the `jobs[]` array (grouped cards + ungrouped cards) that the page maps to `CommandCenterCard`. Each check is independently guarded so one missing table can't break the page.
 - **Next-run** times are computed from the cron string via `nextRunISO()` (hourly, 6-hourly, and monthly-8th shapes); event/manual jobs return no next-run.
 
+## Inngest plan & cost
+
+Everything on this page runs on **one Inngest account** (org **"PlacedAgent"** — the historical name), which
+serves **three apps**: `houseloop-crm` (~101 functions, `crm.houseloop.ai/api/inngest`), `houseloop`
+(~47 functions, `houseloop.ai/api/inngest`), and `placedagent` (5 functions). So it is **~97% HouseLoop** — the
+Inngest bill is effectively HouseLoop's. Dashboard: [app.inngest.com/billing](https://app.inngest.com/billing).
+
+**Plan: Pro.** Base **$75/mo**, includes **1,000,000 executions/month**, then **~$37 per additional million**
+(effective rate from actual invoices). Base is charged at the start of each cycle; usage overage is billed at
+the start of the **next** cycle.
+
+**The billable unit is an EXECUTION = one function run PLUS each step inside it.** A 5-step function like
+`catalog-listing` bills **6 executions** per run, not 1. This is why step count — not just run count — drives
+the bill, and why a many-step function re-firing needlessly is the most expensive kind of waste.
+
+**Cost history (as of 2026-07):**
+
+| Month | Base | Usage overage | Total | Executions |
+| --- | --- | --- | --- | --- |
+| May 2026 | $75 | $164 | ~$239 | — |
+| **June 2026** | $75 | **$344** | **~$419** | **10.28M (a one-time spike)** |
+| July 2026 (to ~day 24) | $75 | on pace ~$41 | ~$116 | ~1.7M cycle-to-date |
+
+June was a **spike** (a large one-time backfill/re-catalog burst pushed executions to 10.3M); it is not the
+steady state. `hl_run_log` counts **runs** for HouseLoop-registered functions only — it will always read lower
+than Inngest's **execution** total (which adds every step, plus the PlacedAgent app).
+
+### Cost levers shipped 2026-07-24
+
+Two firehoses drove almost all avoidable spend; both were cut with near-zero functional risk:
+
+1. **FUB unmapped webhooks (~188k wasted executions/mo).** `POST /api/fub/webhook` fanned out one run per FUB
+   webhook with no filter; unhandled types (`peopleUpdated` alone ~183k/mo, plus `*Updated`/`deals*`/`tasks*`/
+   `appointments*`) spawned a run that returned `unmapped event` and did nothing. Now allowlisted at the door to
+   the 6 handled types. Detail: [Follow Up Boss → the allowlist gate](/integrations/follow-up-boss#how-a-fub-signal-flows).
+2. **Re-cataloging unchanged listings (~122k runs/mo × ~5 steps).** `catalog-listing` re-ran every Repliers
+   touch with no change detection. Now gated on `listingContentChanged(hlid, mlsUpdatedAt)`; an unchanged
+   re-sync skips the run. Detail: [Listing Lifecycle → the unchanged-listing cost gate](/guides/listing-lifecycle#the-unchanged-listing-cost-gate-2026-07-24).
+
+**To read live usage:** Inngest dashboard → **Billing → Usage** (toggle Execution / Step / Run, and This month /
+Last month). To find what is generating volume, aggregate `hl_run_log` by `fn` over a recent window — but
+remember it undercounts (runs only, HouseLoop only).
+
 ## How it fits
 
 Background Jobs is the "settings/status" surface for the same Inngest functions whose executions stream in the **Run Log**. This page answers "is each job healthy and when does it fire?"; the Run Log answers "show me the individual runs." Because health is read straight from `hl_run_log`, the scoreboard stays truthful to the [Inngest-or-it-doesn't-exist](/guides/run-log) doctrine — a job only reads `Healthy` when it has real captured runs. It shares its page, tab strip (`IntegrationsTabs`), and card component (`CommandCenterCard`) with the **Connections** tab, giving one place for everything running behind the scenes.

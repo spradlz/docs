@@ -30,12 +30,24 @@ Three belts keep it that way:
 
 ```
 Zillow / Realtor / PPC → Follow Up Boss
+  → native webhook (POST /api/fub/webhook) → ALLOWLIST GATE → fan out one Inngest run per resource
   → native webhook → fub.* mirror (raw truth, always captured)
   → classification (classifyFubEvent → the atomic trigger event)
   → hl_fub_webhook_settings row = THE decision:
        Sync (ingest to history) · Creates Lead · Workflow · Notify — four independent toggles
   → creates_lead ON → hl_leads (platform='follow_up_boss') → the FUB door fires → hl_trigger_fire ledger
 ```
+
+<Note>
+**The allowlist gate (2026-07-24, cost).** `POST /api/fub/webhook` fans out one paid Inngest run per resource,
+so it now drops any event type the router doesn't handle **before** fan-out. Only the 6 mapped types proceed:
+`peopleCreated`, `notesCreated`, `eventsCreated`, `textMessagesCreated`, `callsCreated`, `emailsCreated`
+(derived from `FUB_ENDPOINT_MAP` so the allowlist can't drift from the router). FUB was firing ~183k
+`peopleUpdated` webhooks/month alone — each spawned a run that did nothing but return `unmapped event`
+(no fetch, no mirror write, no notify): ~35% of the entire Inngest bill, pure waste. The handler still returns
+`200` on a dropped type so FUB doesn't retry. Zero blast radius — the mapped comms/notes that mirror-sync then
+skip notification are untouched. See [Inngest plan &amp; cost](/crm/integrations-api-background-jobs#inngest-plan--cost).
+</Note>
 
 FUB-platform fires show on the **Follow Up Boss** section of [Trigger Events](/guides/trigger-events) — never
 on the native HouseLoop.ai board (ledger scoped by platform).
