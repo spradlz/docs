@@ -54,12 +54,26 @@ Each number feeds an [Inbox](/guides/inboxes); each is its own [lead source](#6-
 Webhook decision order, top to bottom:
 1. **Caller-based forwarding rules** (`hl_phone_forward_rules`, `/settings/phone`) — an explicit human rule
    wins for ANY caller.
-2. **Owned line** (platform=twilio): resolve the line → its inbox trigger seat → ring the routing targets /
-   `forwards_to` chain. Owned lines NEVER hand off to the FUB front-router.
+2. **Owned line** (platform=twilio): resolve the line → **its inbox's routing group** (`hl_routing_groups.ring_targets`)
+   → ring those targets; on no-answer, the group's `no_answer` (voicemail / forward). If the line has no routing
+   group, fall back to the line's `forwards_to`, else native voicemail. Owned lines NEVER hand off to the FUB
+   front-router.
 3. **Spam gate**: a repeat caller with a 180-day spam history and no lead relationship gets `<Reject>` —
    but the trigger event still fires (`routed_by='spam-gate'` — a gate is routing, not a signal eraser).
 4. **FUB front-router fallback** (non-owned lines, non-HouseLoop callers) → `<Redirect>` to FUB's webhook.
 5. **Per-dialer default** (`hl_dialer_assignments.call_forwarding`).
+
+<Note>
+**The routing group is the source of truth — set it in the UI, not a hidden field (Zach 2026-07-24).** Each
+inbox's **Call Routing** modal (`InboxCallRoutingModal`) writes ONE `hl_routing_groups` row (who rings +
+no-answer behavior) and attaches every number in that inbox to it. The webhook prefers the routing group over
+the per-line `forwards_to`, so `forwards_to` was only ever a fallback — and a lurking one: if the routing UI
+showed "nobody to ring" (no group existed) calls silently fell through to a hardcoded `forwards_to` the UI
+never displayed. Fixed: routing groups now configured per inbox in the UI, and the old hardcoded `forwards_to`
+values were cleared from every group-covered number (the "All Leads"-style empty-criteria reset lines aside).
+Result: what the Call Routing screen shows is exactly what rings. Routing groups: `GET/POST/PUT /api/routing-groups`;
+number→group: `PUT /api/phone-numbers` (`routing_group_id`).
+</Note>
 
 **The loop-guard (CONSTITUTIONAL — the 2026-07-14 call-forward loop autopsy), three belts in code:**
 1. **Pool guard** — never `<Dial>` a number WE own (pool→pool re-entry is structurally impossible).
