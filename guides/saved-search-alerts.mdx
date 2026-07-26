@@ -16,6 +16,92 @@ the CRM's **Saved Search Listing Alerts** workflow (`sys_saved_search_digest`) a
 on the workflow canvas + in the Run Log (see *Inngest or it doesn't exist*).
 </Note>
 
+## 🔴 2026-07-26 — PLAN OF ACTION — SAVED SEARCH IS THE ZILLOW BRIDGE
+
+<Warning>
+**THIS IS THE NEXT BUILD AFTER the mobile CRM / lead-detail / Follow Up Boss work in flight.**
+Locked with Zach 2026-07-26. Nothing below is built yet. Read this block before touching saved searches.
+</Warning>
+
+### The thesis (Zach, 2026-07-26) — say it out loud before designing anything
+
+Zillow inquiries arrive through Follow Up Boss. **Those people have never visited houseloop.ai and have
+never registered.** The saved search is the lever that moves them off Zillow and onto our platform:
+
+1. The agent creates a saved search **for** the lead, on HouseLoop.
+2. The agent sends the lead a **magic link**.
+3. The lead clicks it and is signed in **as themselves** — no registration, no password, no friction.
+4. They see their search: often **more homes than Zillow, updated faster**.
+5. They hit **Request a Tour** on our site, and it comes **to us** — not to a random Zillow agent.
+
+**So the magic link is the PRODUCT, not a bug.** Structurally the lead never needs to create an account.
+That was the whole thesis and it is sound.
+
+### What is actually broken (narrow, not the whole flow)
+
+The **agent** rides the **lead's** magic link in order to author the search. `Create Saved Search as Agent`
+opens `houseloop.ai/auth/magic?ml=…` in the agent's own browser, signing the agent in as the lead. The pixel
+then does exactly what it is told: it logs "this person viewed a house" against the lead.
+
+Result (measured 2026-07-26 on lead Norma Herra): **14 property views + 2 searches on her timeline that were
+the agent's browsing**, six days of which pre-date her lead record existing. She has no web account and no
+saved search. Full root-cause trace: see the Dev Log entry below.
+
+**One-line statement of the flaw:** an agent must never hold a lead's session. Attribution follows the
+authenticated actor, and today the authenticated actor is wrong.
+
+### The architecture to build (six parts)
+
+<Steps>
+  <Step title="Shadow accounts — a lead does not need to register to own a saved search">
+    Mint a web `User` row lazily (keyed by email) for every FUB/Zillow lead we intake, flagged unclaimed.
+    Today `createSavedSearchForLead()` **fails outright** when the lead has no `User` — that is the exact wall
+    Norma hit. The shadow account is what a saved search hangs on before the person has ever clicked anything.
+  </Step>
+  <Step title="The agent authors server-side — never by impersonation">
+    A real Saved Searches surface in the CRM that calls `createSavedSearchForLead()` (`lib/leads/create-saved-search.ts`)
+    — the **same server-side path Myli already uses** today with no browser and no pixel. Two flavors: a quick
+    form, and a visual builder (below). This is the fix that makes contamination structurally impossible.
+  </Step>
+  <Step title="Visual tuning happens in AGENT context, not lead context">
+    The reason the impersonation flow existed is real: you want to tune the search on the live map, not guess in
+    a form. So open `/listings` signed in **as the agent** with a `forLead=<id>` context, and a `Save for <name>`
+    action that writes to the lead. The agent browses as themselves — the pixel logs the agent, which is correct.
+  </Step>
+  <Step title="A magic link is DELIVERED, never opened by us">
+    The CRM may mint and send a magic link. The CRM must never open one. That single rule kills this whole class
+    of bug permanently, and it costs nothing.
+  </Step>
+  <Step title="Claiming the account (the lead's side)">
+    Lead clicks the link, lands signed in, sees their search. Show a claim banner: *"This is your HouseLoop
+    account — set a password or continue with Google to keep it."* Claiming matches on **email**, so Google
+    sign-in with the same address resolves to the same account and the same saved searches. No duplicate identity.
+    Open question for Zach: do we proactively email "here is your account" or only surface it in the banner?
+  </Step>
+  <Step title="Rotate visitor_id on any identity change">
+    `hl_visitor_id` is per-browser, lives 2 years, and is **never reset on login or logout**. Rotate it whenever
+    the signed-in identity changes and one browser can never carry two people's history again — which is the
+    generic form of this bug, not just the saved-search instance.
+  </Step>
+</Steps>
+
+### ⚠️ Security finding — fix before we email magic links at scale
+
+Magic tokens are `HMAC(email)` with **no expiry and unlimited reuse** (`apps/houseloop-web/lib/auth/magic-token.ts`).
+Anyone who ever obtains the URL is that person, permanently — forwarded emails, shared screens, browser history.
+This is acceptable-ish for internal use today and **not** acceptable for a link we send to every Zillow lead.
+Needs expiry plus single-use or rotation before step 5 above ships.
+
+### 🧭 Tomorrow morning — the whiteboard list
+
+1. Decide: does a saved search mint a **shadow account**? (unblocks everything else)
+2. Decide: quick form first, or go straight to the **visual builder in agent context**?
+3. Kill `Create Saved Search as Agent` opening a lead session — replace, do not patch.
+4. Magic-link tokens: add **expiry + single use**.
+5. Rotate `visitor_id` on identity change.
+6. Decide what to do with the already-contaminated rows on Norma Herra.
+7. Decide the claim flow: proactive "here's your account" email, or banner only?
+
 ## Dev Log
 
 <Update label="2026-07-10 — Caleb" description="Live E2E audit: timezone, lead-tz rendering, Email|Website channel split, the SearchCard, and the one-card hero">
