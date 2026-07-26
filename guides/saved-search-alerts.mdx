@@ -104,6 +104,44 @@ Needs expiry plus single-use or rotation before step 5 above ships.
 
 ## Dev Log
 
+<Update label="2026-07-26 — Lee" description="Create Saved Search as Agent attributes the AGENT's browsing to the lead — full root-cause trace. Not fixed; plan is at the top of this page.">
+**Found while auditing lead source attribution. Zach reproduced it live and confirmed the sequence.**
+
+**Symptom.** Lead **Norma Herra** shows 14 property views + 2 searches on her timeline. None are hers. She has
+**no website `User` account and no saved search at all**. Six days of the browsing (from 2026-07-17) pre-date
+her lead record existing (created 2026-07-23 02:01 UTC).
+
+**What Zach did.** Lead detail → Website Activity → Saved Searches → **Create Saved Search as Agent**. That
+opens houseloop.ai signed in as the lead, in his own browser. Every home he then looked at landed on her timeline.
+
+**Root cause — the chain, all four links confirmed in code:**
+
+- `hl_visitor_id` is **per browser**: localStorage plus a first-party cookie with a 2-year lifetime
+  (`apps/houseloop-web/lib/pixel/hl-pixel.ts`). **Nothing resets it on login or logout** — sign-out clears only
+  the `hl_claimed_*` keys.
+- The CRM button (`components/leads/detail/CenterLane.tsx`) calls `/api/leads/[id]/agent-search-link`, which mints
+  `/auth/magic?ml=<HMAC(email)>` and `window.open`s it **in the same browser profile**.
+- The magic-token provider makes the session the **lead**; `HlPixelIdentify` then auto-fires `identify(lead email)`
+  carrying the **agent's** `visitor_id`.
+- `app/api/pixel/track/route.ts` runs `UPDATE hl_pixel_event SET lead_id = $2 WHERE visitor_id = $1 AND lead_id IS NULL`
+  — **no time window, no session scope**, so it adopts that browser's entire history, then replays it onto the
+  lead's activity feed.
+
+**It does not stop when you sign out.** The same route also stamps `hl_pixel_visitor.lead_id` permanently, so every
+later event from that browser is inserted already bound to the lead — and fires her website-activity notification,
+the per-door workflow, and the 10x repeat-view trigger.
+
+**Mitigation until it is fixed:** clear the `hl_visitor_id` localStorage key and cookie on houseloop.ai, or use a
+separate browser profile for anything "as agent".
+
+**Related bug found while tracing (separate, still open):** `app/api/leads/route.ts` force-reassigns
+**already-attributed** pixel events on manual lead creation — it omits the `AND lead_id IS NULL` guard the other
+adoption paths have.
+
+**Not fixed in this pass by decision** — Zach scoped it out to avoid derailing the mobile CRM work. The plan is the
+PLAN OF ACTION block at the top of this page.
+</Update>
+
 <Update label="2026-07-10 — Caleb" description="Live E2E audit: timezone, lead-tz rendering, Email|Website channel split, the SearchCard, and the one-card hero">
 **A full human-in-the-browser E2E test surfaced and fixed a cluster of display bugs. All deployed + re-verified live.**
 
