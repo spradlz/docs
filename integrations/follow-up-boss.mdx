@@ -89,9 +89,19 @@ with **real timestamps**. What shipped this pass (deep detail: [FUB Lead Import]
   orphaned OFF, and it **silently killed every FUB notification for hours**. Collapsed: `getFubSyncMaster` /
   `setFubSyncMaster` now read/write `_global.enabled` — the flag the UI shows and the code obeys (notify + process +
   forward-sync). It can't orphan again.
-- **The lead-detail feed is FORWARD-ONLY.** A pulled-in lead starts CLEAN — pre-import texts/calls/emails stay
-  context-only under the FUB tab; only new comms flow into the feed + Texts/Calls/Emails sub-tabs going forward
-  (`backfillFubComms` watermark floored at the lead's `created_at`).
+- **~~The lead-detail feed is FORWARD-ONLY.~~ RETIRED 2026-07-26 — the full history now comes in.**
+  The old rule: a pulled-in lead started clean, and pre-import texts/calls/emails stayed context-only under the
+  FUB tab (`backfillFubComms` watermark floored at the lead's `created_at`). Zach reversed it: *"I want to pull it
+  in… even if FUB goes away or the FUB mirror goes down, we have it here."*
+  The problem that law solved — old comms masquerading as today's activity — is now solved by **marking** rather
+  than **withholding**: everything imports, and anything older than the lead is stamped
+  `archived_from = 'follow_up_boss'` (migration 0456) and renders teal beneath a **Follow Up Boss · archive**
+  divider. Present, searchable, and unmistakably another era. The 24h lookback survives as the archive *cut*, so
+  the interaction that caused the pull-in still reads as current. **Notes** import for the first time
+  (`lib/fub/classify-note.ts`) — everything except FUB's property viewed/saved automation, which would
+  double-count events that already mint `save_home` / `property_view` cards.
+  Because every imported row is stamped, the whole import is reversible with one scoped `DELETE` that cannot
+  touch a native HouseLoop row — the undo statements live in the migration itself.
 - **Real timestamps, not "22 hours ago."** Property view/save activity is stamped from `scraped_at` (the real
   trigger time, matches FUB to the minute) instead of a date-only midnight, and the feed renders the actual date +
   time (Central), not a relative "Xh ago."
