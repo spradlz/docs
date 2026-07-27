@@ -1012,6 +1012,42 @@ already receives — but pure-conversation messages ("What's up with this place?
 the mandatory floor that catches every message. **Never** set `REALLOOP_FUB_AUTONOMY=1` — that
 revives the poller + FUB-write-autoreply flood stack retired in the one-writer lockdown.
 
+### From the mirror to the lead's feed — the import layer (Lee, 2026-07-27)
+
+Capture (above) puts the message in `fub.text_messages`. **Getting it onto the lead's feed is a second job**, and
+it had three independent blocks — found by reading Renita Ford's feed against her FUB thread. She showed a wall of
+empty "Text Received" cards; FUB held a real negotiation (Hold Harmless, offers, showings). **Nothing was missing
+from the database.** Every defect was downstream of capture.
+
+| # | The block | Where | The fix |
+|---|---|---|---|
+| 1 | **Only the buyer's half imported.** `is_incoming = true` was filtered in the SQL **and** re-filtered in the converter, which `return []`-ed on outbound. The premise was "you can't reply in-app through FUB" — false; agents reply in the Zillow inbox constantly. | `fub-lead-import.ts` query · `convert-fub-signal.ts` | Query takes **both directions**; converter emits outbound as `direction:'outbound'`, `actorRole:'human'`. |
+| 2 | **The same-home dedup ate the replies.** It collapsed rows sharing a home+day — but an agent's reply names *the same house* the buyer just asked about, so every reply looked like a duplicate. | `fub-lead-import.ts` | Dedup is **inbound-only** (`const isReply = m.is_incoming === false`). Outbound never dedupes. |
+| 3 | **Zillow chat was classified as SMS.** FUB delivers in-app chat through the same webhook shape as a text, and the live path never checked `message_type`. | converter | Rows carrying `message_type='zillow_inapp'` mint `in_app_message`, never `text_*`. |
+
+<Warning>
+**The backlog is NOT imported — this is the open item.** The code is live and correct, but it only runs when a
+lead is imported. Measured 2026-07-27: the mirror holds **3,732 outbound** in-app messages across **678 FUB
+people**; `hl_lead_activity` holds **15 outbound across 1 lead** (Renita, the test case). Every other lead's feed
+still shows a **one-sided monologue** while FUB holds both halves. Outbound rows carry new source ids, so a
+re-import inserts them cleanly — this needs a sweep across the 678, not a code change.
+</Warning>
+
+<Note>
+**Two constraints that shape any repair.**
+
+**Re-importing cannot repair an existing row.** `logActivity()` is idempotent on `(source_table, source_id)` and
+append-only — by design. A re-run inserts what's missing and **skips** what's there, so it can add the agent's
+half but can never fix a mislabeled row already written. Enrichment needs an explicit `UPDATE`, not a re-run.
+(This cost two no-op imports before it was understood.)
+
+**We do not know who sent the agent's messages.** FUB's `text_messages.user_name` is **NULL on the entire
+in-app history** — the scraper never captured a sender because the timeline row doesn't render one. Inferring
+the currently-assigned agent was tried and **reverted**: it printed Ana's name over messages Dean actually sent.
+The card says **"Agent"** and stops. A confident wrong name is worse than no name. If sender attribution is ever
+needed, it has to come from the scraper, not an inference.
+</Note>
+
 ## Native capture — the webhook that severs realloop.co
 
 **The native CRM webhook `crm.houseloop.ai/api/fub/webhook` is the SOLE real-time trigger.** FUB posts
