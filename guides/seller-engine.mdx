@@ -4,7 +4,7 @@ description: "THE working document for HouseLoop Seller Tools — your past clie
 ---
 
 <Note>
-**🕐 WORKING DOCUMENT — last measured 2026-07-27, 18:10 CDT.**
+**🕐 WORKING DOCUMENT — last measured 2026-07-27, 20:40 CDT.**
 
 This is the **one page Zach and Caleb work off of** until the Seller Engine is done. It replaces four
 separate guides that had drifted apart. Every number below was measured **live against both databases and
@@ -644,6 +644,65 @@ yet flipped) · `hvrMonthlySend` (event-only, dry-run default).
 Every entry below maps to a numbered task in the
 [Master Build Plan](https://claude.ai/code/artifact/2c63e8e3-4768-434b-8bfd-f548ead15f27). **This section is
 the record — if it was built, it is written down here.** Newest first.
+
+### 2026-07-27 · Task 40 — empty-render cards, and WHY A HOUSE GETS TWO HOUSELOOP IDs
+
+**Result: empty-render cards 16 → 8.** The 8 repaired now carry real value and photos ($972,438 · $609,030 ·
+$513,555, all with galleries). The remaining 8 have **no live listing at all**, so they are a data-availability
+problem now, folded into tasks 46-47.
+
+**The bug had two layers.** `hl_property.identity_key` was written with a **double-suffix**
+(`14813 w 150th pl place`, `9627 kessler street street`), so a home and its own listing were keyed to two
+different addresses. Then when de-fork merged the listings for that address it quarantined the loser — and if
+that was the only listing under *this* property, the property was left pointing at a dead row. `getListing()`
+skips quarantined rows, so the card rendered blank while a perfect listing sat a few rows away.
+
+<Warning>
+**⚑ ROOT CAUSE OF DUPLICATE HOUSELOOP IDs — settled 2026-07-27. It is the MLS feed, not our normalizer.**
+
+`hl_property.identity_key` is **UNIQUE** — but **a malformed key does not COLLIDE with the correct one**, so
+the constraint never fires and a **second HouseLoop ID is minted for one house, silently.** The malformed
+string arrives straight from Heartland, verified in `hl_srg_mls_deals`:
+
+| What the MLS sent | What we minted | Its twin |
+|---|---|---|
+| `14813 W 150TH PL PLACE` (MLS#2583791) | **HLID100257** | HLID149137 — "14813 w 150th place" |
+| `9627 KESSLER STREET STREET` | **HLID100280** | HLID326937 — "9627 kessler street" |
+
+**The fix is to collapse a repeated suffix at INGEST** — but only MATCHING pairs (`pl`+`place`,
+`st`+`street`). ⚠️ **`TERR COURT` and `ST COURT` are REAL Kansas City street types** and must never be
+collapsed.
+
+**And stop exact-string matching.** `tools/houseloop-cards/resolve-address.mjs` narrows the way a search box
+does — house number → street stem → unit — and stops at ONE home. When two rows survive for one address it
+**reports the duplicate instead of minting a third**.
+</Warning>
+
+**Zach's merge rule (locked):** when two IDs describe one house, **the CORRECT address wins; among equally
+correct, the OLDEST wins** (it has been in the wild longest — shared links, Google, old emails). The loser
+**always** aliases forward via `hl_hlid_alias` so no URL 404s. For a condo, the record carrying the real unit
+is the correct one even if it is newer.
+
+**Repaired from MLS truth** (`hl_srg_mls_deals` — MLS# is address ground truth):
+
+- **7 garbage unit hashes.** Two leaked template variables — `#F320a52c6` and `#776f18ccb` — had been parsed
+  as unit numbers and keyed into home identity, forking the homes. The MLS had every real unit:
+  Herder **230** · Cuddy **1208** · Helmich **307** · Peterson **904** · Rojas **103** · Calmus **410**.
+  Zero garbage hashes remain; `15900 Granada St #230` now resolves to exactly **HLID101348**.
+- **4 property ZIPs**, each MLS-confirmed. 2 more were vetoed by the guard below.
+
+<Note>
+**Two near-misses worth keeping on the record.**
+
+**A query escaped its scope.** The ZIP repair was about to rewrite **772 property rows** across the whole
+358k-row table — including cross-state jumps like `66083 → 64083`. Caught in the dry run and scoped to
+past-client homes: 6.
+
+**Then a guard saved a correct record.** Taking the most common ZIP among a property's listings is **not
+safe** — a mis-attached listing poisons it. `8 NE 110 Terrace` had the MLS **and** its own listing both at
+64155 (already correct) while a stray row pulled the average to 64114. Nothing is rewritten now unless the
+**MLS deal agrees**: 4 applied, 2 vetoed.
+</Note>
 
 ### 2026-07-27 · Task 36 — the 65 quarantined home pins
 
