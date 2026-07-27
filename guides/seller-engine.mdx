@@ -649,16 +649,41 @@ the record — if it was built, it is written down here.** Newest first.
 
 | # | Task | Before | After |
 |---|---|---:|---|
-| 45 | Build years | 94 missing | **59** |
-| 46 | Redfin coverage | 92.7% | **94.5%** (re-scrape running) |
+| 45 | Build years | 94 missing | **24** |
+| 46 | Redfin coverage | 92.7% | **95.6% — gate cleared, value rule LIVE** |
 | 47 | No-photo cards | 7 | **4 — at the floor** |
 | 48 | Price histories | 6 | **3 — correctly empty** |
 | 49 | pcsoi spellings | 4 | **2** |
 
-**45 · Build years.** 35 filled from `hl_srg_mls_deals` — the CRM child only carried it on 1 of 94, so the MLS
-deal row joined by `mls_number` is the real source. Of the 59 remaining, **50 are Residential** with no source
-anywhere in our data and 9 are Land/Farm, which **correctly have no build year** and are no longer counted as a
-gap. 50 of the 59 do carry a value history — those are the only homes where the floor law still cannot be clamped.
+**45 · Build years — 94 → 24, in three passes, and the root cause is now fixed.**
+
+| Pass | Source | Filled |
+|---|---|---:|
+| 1 | `hl_srg_mls_deals` joined by `mls_number` | 35 |
+| 2 | `hl_mls_property_history` — 15 by `identity_key`, **6 only the lazy resolver found** | 21 |
+| 3 | OpenWeb Ninja (Zillow) `resoFacts.yearBuilt` | 14 |
+
+Pass 2 is the argument for the lazy resolver in miniature: keying on `mls_number` matched **0 of 52**, and exact
+address matching would have missed 6 more. Narrowing (house number + ZIP → street stem) found them.
+
+<Warning>
+**The live enricher was fetching the build year and throwing it away.** `ninja-enrich.ts` never mapped
+`resoFacts.yearBuilt` into its return type, so every home came back `ninjaEnrichedAt` **with a Zestimate** and
+still had no build year — the API call succeeded, only the mapping was missing. This is not cosmetic: the
+**value-history floor law** (`lib/listings/get.ts:157`) clamps the appreciation line so it can never start before
+the home existed, and with `yearBuilt` NULL there is nothing to clamp against, so a fabricated pre-existence line
+comes back. Fixed 2026-07-27 in `ninja-enrich.ts` (extract) + `zillow-enrich.ts` (write, **fill-only** — MLS
+remains the better source and is never overwritten).
+</Warning>
+
+Of the 24 remaining, 7 are Land/Farm which **correctly have no build year**. **14 residential still carry a value
+history the floor law cannot clamp** — that is the live risk set.
+
+**46 · The Redfin gate, and why the value rule shipped.** The re-scrape finished on Camp David:
+**1,818 of 1,902 pinned homes attempted (95.6%), 1,797 with a real value**; 84 were never reachable. The number
+that justified the deploy: **845 homes — 47% — where Redfin's estimate beats Zillow's**, so the highest-source
+rule changes what we show on nearly half the book rather than being a rounding difference. Shipped as
+`MAX(portals) × 1.005` with a **25% outlier band**, so a single broken portal reading cannot run the number away.
 
 **47 · Photos — and what "good enough" means.** The photo engine harvested **7 of 7 with zero misses** (145
 photos to R2: 5 Redfin, 2 Realtor, including a Google Street View fallback). Two things worth knowing: the
