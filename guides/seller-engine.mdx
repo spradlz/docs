@@ -1,0 +1,629 @@
+---
+title: "The Seller Engine"
+description: "THE working document for HouseLoop Seller Tools — your past clients are your next listings. One page: the end goal, the live funnel, the full past-client reconciliation engine, every canonical table, the value model, all four surfaces (CRM dashboard, Audit Report, Owner's View, monthly email), and the G0-G5 build ladder. Consolidates the former Home Value Report, Seller Report, Audit Report, Home Claim / Owner's View, and SRG Reconciliation Master guides."
+---
+
+<Note>
+**🕐 WORKING DOCUMENT — last measured 2026-07-27, 15:42 CDT.**
+
+This is the **one page Zach and Caleb work off of** until the Seller Engine is done. It replaces four
+separate guides that had drifted apart. Every number below was measured **live against both databases and
+the codebase** on the timestamp above — not quoted from a prior doc.
+
+**The live build plan (checkboxes + progress bar):** [The Seller Engine — Master Build Plan](https://claude.ai/code/artifact/2c63e8e3-4768-434b-8bfd-f548ead15f27) — 84 numbered tasks.
+**The UI design spec:** [Seller Tools & Home Value Report](https://claude.ai/code/artifact/877a3c1d-6060-46c8-8ee1-ac997162aeff) — the competitor teardown + the owner's dashboard on desktop and mobile.
+
+**Re-run the numbers yourself:** `node tools/houseloop-cards/audit-seller-engine.mjs` (read-only, both DBs).
+**Rule:** if a number anywhere disagrees with this page, re-run the audit and update **here**. Never fork a second map.
+</Note>
+
+## Update log
+
+- **2026-07-27** — Consolidated five guides into this page (Home Value Report · Audit Report · Home Claim &
+  Owner's View · SRG Reconciliation Master). Full live audit run: the funnel, the value-passthrough finding,
+  the quarantined-pin bug, and six "not built" claims corrected to **already built**.
+- **2026-07-23** — Dossier complete (all 1,779). Value-history floor law locked. Redfin layer self-healing.
+- **2026-07-20** — G0 closed. The end goal + G0-G5 gate ladder locked by Zach.
+
+---
+
+## 1 · The end goal (Zach, locked 2026-07-20 — verbatim)
+
+**Every SRG past client, completely reconciled, becomes a living monthly relationship:**
+
+1. **ONE perfect HouseLoop ID card per client home** — 100% reconciled data (transactions, agents,
+   dispositions, dossier), a fully hydrated + current public `/home` page, guarded forever (one HLID, every
+   listing attaches).
+2. **THE SELLER REPORT (= the Home Value Report)** rendered three ways from the SAME reconciled truth:
+   - **CRM · Past-Client Report** — big enriched cards you SCROLL + SEARCH (name/address): the mini-dossier
+     (current value · what they paid · what they own · what we sold · lost) — click to EXPAND into the full
+     seller-report card. (Separate surface from lead-detail.)
+   - **CRM · Seller Dashboard** — the per-seller condensed card + click-through to their report.
+   - **Website · OWNER'S VIEW** — owner mode on the client's own `/home` page: their report + full history,
+     value growth since purchase (the public view stays public).
+3. **THE MONTHLY LOOP** — every past seller gets the HVR **email** (canonical shell + value hero + photos +
+   meters/gauges) with a **PERSONAL context block** in the agent's voice ("value's up another $13k — hope the
+   deck project's coming along"), fed by the dossier — **plus a text** with the clickable report link.
+   Runs itself on Inngest; Ana's workflow rides on top.
+
+**Why we win:** Homebot shows value + equity + appreciation. HouseCanary shows a range + confidence + comps.
+We meet that bar with data neither can buy — **our own transaction with the client, the real purchase price,
+and the relationship dossier.**
+
+---
+
+## 2 · Where we are right now (measured 2026-07-27)
+
+### The funnel — 1,779 is the wrong number
+
+You cannot send a value report to someone who sold and moved, has no email, or whose home pin points at a
+quarantined record.
+
+| Stage | Count | Drop |
+|---|---:|---|
+| Past clients in the book (`hl_srg_past_clients`) | **1,779** | baseline |
+| Still **own** a home we track (`disposition='owns'`) | **1,275** | −504 sold & moved / lost |
+| Reachable + permitted (email + HLID, not DNC/internal) | **1,187** | −88 |
+| Home has a trustworthy live value (not quarantined) | **1,163** | −24 |
+| **Clean enough to auto-send** | **1,114** | −49 landmines |
+| Full 3-source value (Zillow + Redfin + HouseLoop) | **1,083** | 61% of book |
+
+**Launch capacity is 1,114 homes — 63% of the book.** Every gap above has a numbered task in the build plan.
+
+### Coverage on current-home pins (1,726 resolved listings)
+
+| Signal | Count | % |
+|---|---:|---:|
+| HouseLoop Estimate | 1,722 | 99.8% |
+| Zillow Zestimate | 1,683 | 97.5% |
+| Redfin Estimate | 1,600 | **92.7%** |
+| Value history | 1,643 | 95.2% |
+| **Quarantined pins** (bug) | **20** | — |
+| Value-less | 3 | — |
+
+Across **all** past-client homes (1,905 distinct HLIDs) the quarantined count is **65**.
+
+### The book's economics
+
+**$70.8M** total equity gain · median gain **$34,112** · 147 homes up more than 50% · 23 more than doubled ·
+25 in negative equity.
+
+**Tenure — the strongest sell signal we hold:** 491 at 0-2yr · 563 at 2-5yr · **223 at 5-8yr** · **38 at
+8-12yr** · **8 at 12+**. The prime window (5yr+) is **269 people**. The book skews young, so this engine
+**compounds** — today's 563 two-to-five-year owners become next year's prime list.
+
+---
+
+## 3 · The corrections (what the audit changed)
+
+<Warning>
+**Six of ten corrections run the same direction: MORE is built than any document claimed.**
+The risk on this project is **rebuilding**, not under-building. Read the code before you write any.
+</Warning>
+
+| Claim | Reported | Measured 2026-07-27 | Verdict |
+|---|---|---|---|
+| Past clients in book | 1,779 | 1,779 | ✅ Confirmed |
+| Pinned to a home HLID | 1,743 (98%) | 1,775 (99.8%) | ✅ Better |
+| Fabricated value histories | 24 residual | **0** | ✅ Fixed |
+| HouseLoop Estimate coverage | 100% | 99.8% | ~ Near |
+| Redfin coverage | ~97% | **92.7%** | ❌ Overclaimed |
+| Value-less homes | 0 | 3 | ~ Near |
+| Quarantined home pins | unknown | **20 / 65** | ❌ Real, open |
+| Owner's view (client-facing) | "not built" | **shipping** | ✅ Underclaimed |
+| Seller Report left-nav | "not built" | **top-level already** | ✅ Underclaimed |
+| PCSOI import stack | "unbuilt" | **built, 1 lead run** | ~ Built, not run |
+| Shared HVR builder | "to build" | **exists, 112 lines** | ✅ Underclaimed |
+| Comps renderer (web) | "not wired" | **built, fed `[]`** | ~ Wired to nothing |
+
+### On the child `disposition` column — resolved
+
+The canonical map below historically flagged `hl_srg_past_client_homes.disposition` as **DEAD (2,071 null)**.
+**That is no longer true.** Measured 2026-07-27: **2,106 of 2,106 non-null, zero nulls** — because
+`regenerate-notes-from-canonical.mjs` has since pushed the canonical disposition onto the child.
+
+Both tables now agree exactly where it matters:
+
+| Source | Owned-home token | Count |
+|---|---|---:|
+| `hl_srg_canonical.disposition` | `still_owns` | **1,323** |
+| `hl_srg_past_client_homes.disposition` | `owns` | **1,323** |
+
+⚠️ **The two use different vocabularies.** Canonical: `still_owns` / `sale_side` / `lost_opportunity` /
+`sold_repped_by_us`. Child: `owns` / `sold_moved` / `lost_listing` / `lost_buy`. **`hl_srg_canonical` remains
+the SOURCE**; the child is the materialized copy the cards read. Query either — just use the right tokens.
+
+---
+
+## 4 · The value model
+
+### The locked source stack (Zach 2026-07-21)
+
+The homeowner sees a portal-value row — **Zillow + Redfin** — with the **HouseLoop Estimate ON TOP**.
+
+- **Zillow** — cached on `Listing.zestimate` via the OpenWeb Ninja pipeline.
+- **Redfin** — scraped to `Listing.redfinEstimate` (+`Low`/`High`/`Url`/`At`) by
+  `tools/houseloop-photos/redfin-estimate-scraper.mjs` on Camp David's **warm** Chrome (never headless),
+  self-healing monthly.
+- **HouseLoop Estimate** — `Listing.hlEstimate` (+`Low`/`High`/`Source`/`At`), the headline number.
+- **HouseLoop Home History** — the real sold price → today trajectory.
+
+**Cloud CMA and Remine were scouted and REJECTED** — stale and MLS-listing-anchored. Value must be
+address-based and always-current; every past client who still owns is off-market, so a listing-anchored tool
+returns nothing.
+
+<Warning>
+**🚨 THE BLOCKING FINDING — the unfair advantage is not built yet.**
+
+Measured 2026-07-27: **1,583** past-client homes carry `hlEstimateSource = "zestimate"`. **84.6%** of
+HouseLoop Estimate values sit **within 1%** of the Zillow number; only **1.9%** diverge by more than 5%.
+**Redfin is scraped on 1,600 homes and used in the estimate on exactly one.**
+
+Today the HouseLoop Estimate is **Zillow's Zestimate, relabeled.** Showing a homeowner three numbers where
+ours is visibly a copy reads as padding, not an advantage.
+
+**The fix:** blend the two portal AVMs against the three things no portal has — the **real purchase price**
+(our own closing), our **MLS-receipted sold comps** (`hl_srg_mls_deals`), and the **ZHVI trajectory**
+(`hl_market_index`, 401,118 rows) — and publish the weighting. That is the moat, and it is a build, not a scrape.
+</Warning>
+
+### The value fork ORDER (locked 2026-07-03 — order matters)
+
+1. Active / pending / coming-soon → list price × 1.005
+2. Zestimate present → zestimate × 1.005
+3. Sold + closePrice + soldDate → **ZHVI appreciation** from the real sale
+4. Stored `hlEstimate` → **LAST RESORT ONLY**
+
+Branch 3 must run before 4 — reversing them caused a "flat forever" bug.
+
+### The value-history floor law (locked 2026-07-23)
+
+**The line can never start before the home existed.** The owner's line anchors on the **REAL purchase**
+(`% = (current − purchase) / purchase`); with no sale on record it floors at the **build year**, never earlier.
+
+*The Bergin case:* 15584 S Church #1600 was built 2020 and bought 2020 for $359,900. The graph claimed
+**+112% "since 2012"** — a fabricated pre-existence line. It now reads **+32% since 2020**. Book-wide
+regeneration took fabricated histories from 196 → 24 → **0 (verified 2026-07-27)**.
+
+⚠️ **66 past-client homes still have a null build year**, so the floor cannot be enforced on them. That is
+the root cause of recurrence — fix the data, not the symptom.
+
+### Divergence — an open design decision
+
+On **73 homes the three sources disagree by more than 25%.** Worst case: HouseLoop **$132,761** · Zillow
+**$132,100** · Redfin **$412,081** (a 211% spread). Redfin diverges from Zillow by more than 5% on **657
+homes (42%)** — it is a genuine independent signal, not noise.
+
+**Needs Zach's call before pixels lock:** show the range and say why? Suppress the weakest source? A
+confidence badge? Whatever we choose, the report must be able to answer *"why is your number different from
+Zillow's?"*
+
+---
+
+## 5 · The reconciliation engine (the data foundation)
+
+**North star:** every SRG past client → ONE accurate card: person + household + every transaction we did
+(with the agent who worked it, even if they left) + their current home (deed-confirmed) + lost opportunities
++ a relationship dossier. **Accuracy is the only benchmark. The table is the truth.**
+
+### The pipeline — three stacked layers (newest is canonical)
+
+1. **Layer 1 — the canonical MLS#-anchored resolver.** `resolve-from-mls.mjs` keys every deal on its **MLS#**
+   (not the typed address) → MLS# → HLID → the WEB `Listing` rooftop life → disposition vs the SRG roster.
+   Writes **`hl_srg_canonical`**. Then `regenerate-notes-from-canonical.mjs` pushes the resolved
+   disposition/value onto the child so the audit cards and FUB notes render the truth.
+2. **Layer 2 — the deal ledger.** `build-deal-ledger.mjs` materializes **`hl_srg_deal_ledger`** (the
+   deterministic client×deal match, 5 edges, GREEN/YELLOW/RED tiers, `verified_sources[]`).
+   `build-master-houses.mjs` rolls it into the **`hl_srg_master_houses`** VIEW (one row per house + nested
+   transactions = the Zillow-style history).
+3. **Layer 3 — the WEB cards.** `sync-pastclient-worklist.mjs` mirrors the child → WEB
+   `hl_past_client_homes`; `enrich-pastclient-listing.mjs` + `hl-photo-engine.mjs` fill the WEB `Listing`;
+   `build-resolution-table.mjs` rebuilds the **`hl_pastclient_resolved`** VIEW (coverage flags).
+
+### The identity model — one home, one ID, many transactions
+
+```
+identity_key = "<street>::<zip5>"          ← the ADDRESS is the home key
+      │ (one row per key)
+      ▼
+hl_property.hl_property_id = HLID######     ← THE canonical, permanent home id (in the /home URL)
+      │  .active_listing_hlid ───────────►  names the KEEPER Listing row
+      ▼
+"Listing"  (MANY rows per home — one per sale)
+      .hlPropertyId = HLID######            ← back-link every listing → its home
+      .hlid = hl_<source>_<slug>            ← the per-LISTING id (NOT the home id)
+```
+
+A person points at their current home via `hl_srg_past_clients.website_hlid`; the child
+`hl_srg_past_client_homes` holds every home, pinned by both `hl_property_id` (HLID) and `website_hlid`.
+
+### The deal ledger — match deals, not addresses (locked 2026-07-03)
+
+**The insight that ended three weeks of resolver pain: we were answering the wrong question.** *"Whose house
+is this ADDRESS?"* is unanswerable — addresses lie (dropped units, colliding slugs, repeating condo
+floorplans, fat-fingered streets). The right question is **"which DEAL is this?"** — a deal fingerprints as
+**client name + price + close date**, and independent ledgers of the same deals join deterministically.
+
+**The five edges, in matching order:**
+
+1. **SISU↔MLS name edge** — `sisu_transactions` ↔ `hl_srg_mls_deals` by last name + price ±$3k + close date ±20d.
+2. **The MLS row's own client name** (`client_first`/`client_last`).
+3. **Price+date-unique (cross-side)** — when exactly ONE listing in the book carries the fingerprint, **with
+   the ADDRESS-CONTRADICTION VETO** (differing street numbers reject the match — this un-glued 27 silent
+   mispins the day it landed).
+4. **The FUB person-ID link** (`hl_fub_sisu_link`) — immune to name-spelling drift.
+5. **Child-row fingerprint placement** for off-market deals, with the **corrupt-date rule** (pre-2010 child
+   dates are a known corrupt class → price must be unambiguous within the client).
+
+**Tiers:** both name edges agree → GREEN · one edge → YELLOW · none → RED (off-market/referral = expected,
+not an error). **PENDING = CLOSED** (SISU died 2026-06-19; pending rows froze).
+
+**The three hops — no similarity matching anywhere:**
+
+> **CLIENT** →(name+price+date)→ **MLS#** →(history stamp)→ **HLID** → the card.
+
+**The LLM law:** an LLM **never assigns identity** — keys assign identity. Its jobs are the dossier prose,
+fact extraction from raw sources, and structured verdict *proposals* on residue. **It proposes, code
+disposes, a human confirms.**
+
+### The verification engine — trust you can see
+
+Every `build-deal-ledger.mjs --write` run ends with a verification pass that stamps, per placed row:
+
+- **`verified_sources[]`** — which INDEPENDENT sources confirm the client↔house pin (`sisu-addr` ·
+  `mls-name` · `sisu-name` · `override` · `zach-verified`).
+- **`contradiction`** — set verbatim when SISU's own street number disagrees with the pinned house.
+
+A contradicted house is **NOT fully resolved** — it moves to Needs Resolution with a proposed fix, its
+receipt, and a **Verify ✓** button. **SISU failure classes the engine catches:** address typos (transposed
+digits) · wrong-field entries (the client's residence typed as the deal address) · signing-price ghosts (a
+second row at list price on the contract date) · $0 referral-tracking ghosts · pending-frozen dates.
+
+### The no-dogfood input contract (locked 2026-07-03)
+
+> Zach: *"Make sure it doesn't eat its own dog food… it would render, I'd make fixes, I'd run it again, and
+> it would just make fixes upon its rendering before."*
+
+- **ALLOWED inputs:** the deterministic tables · **RAW** comms (`fub.*` texts, emails, calls, notes, stages,
+  tags — every one, unabridged) · **HUMAN** verdicts (override reasons, Zach notes).
+- **BANNED inputs:** `personality_paragraph`, `transaction_paragraph`, `dossier_facts`, prior stage2 outputs,
+  the quarantined `resolver_block`, rendered card notes — **any prior LLM artifact, even "for context."**
+
+Re-runs REPLACE prior LLM fields wholesale. Identity comes ONLY from the ledger.
+
+### Attribution + disposition law
+
+- **The agent waterfall (locked 2026-06-27):** *"NO AGENT = NOT RESOLVED. NEVER 'SRG', NEVER the MLS-listing
+  agent, NEVER a placeholder."* Order: SISU agent → dotloop contract licensee → FUB Team Exit tag+notes →
+  investigation. **Ben Froeschl is never the agent of record.** We keep the departed agent — SRG owns the
+  client relationship.
+- **The MLS-ID attribution law (locked 2026-07-18)** — supersedes all name-matching on the sale side. The
+  ours-test is the **list-side MLS agent ID** ∈ `{ANASPRAD, SPRADLINGGP}`. **Any other lister = lost listing,
+  including a departed SG agent.**
+- **The disposition engine (locked 2026-07-18):** four deterministic tokens computed from SISU dates + the
+  MLS sheet across Residential + Multifamily + Land.
+- **The Bazalgette rule:** a lost listing is ONLY a home *we bought for them* that they later sold via a
+  non-SRG agent. If we sold it, it is never lost.
+
+---
+
+## 6 · Every canonical table (the SSOT map)
+
+**If a table name or number anywhere disagrees with this section, THIS section wins.** Re-audit and update
+here; never fork a second map.
+
+### The databases
+
+| DB | Env var | Host | Holds |
+|---|---|---|---|
+| **CRM** | `HL_CRM_DATABASE_URL` | autorack (Railway) | PEOPLE + DEALS + ledger + canonical + harvest tables |
+| **WEB** | `HOUSELOOP_DATABASE_URL` | centerbeam (Railway) | `Listing`, `hl_property`, `hl_value_history`, card tables |
+| FUB mirror (dev) | `DATABASE_URL` | Camp David 192.168.1.211 | `fub.*` raw comms |
+| FUB mirror (Railway) | `FUB_RAILWAY_DATABASE_URL` | yamabiko | `fub.*` synced copy |
+
+<Warning>
+**`DATABASE_URL` is NOT the website DB** — it is the Camp David FUB mirror. The website is
+`HOUSELOOP_DATABASE_URL`. Confirm the host before you connect.
+</Warning>
+
+### CRM database — the canonical spine
+
+| Table | Rows | Class | What it holds |
+|---|---:|---|---|
+| **`hl_srg_canonical`** | 1,932 | ⭐ CANONICAL | THE resolved output (Layer 1) — 1 row/deal, MLS#-anchored, `disposition` (0 null) + `current_value` + `verdict` |
+| **`hl_srg_deal_ledger`** | 1,946 | CANONICAL | THE deterministic client×deal match — MLS#, HLID, side, price, date, agent, tier, `verified_sources[]`, `contradiction` |
+| **`hl_srg_master_houses`** (VIEW) | 1,844 | CANONICAL | 🏠 one row/house + nested transactions + `fully_resolved`. 88 houses carry more than one transaction |
+| **`hl_srg_past_clients`** | **1,779** | CANONICAL | PARENT — person, bucket, `closings`, `website_hlid`. **The people SSOT** |
+| **`hl_srg_past_client_homes`** | **2,106** | CANONICAL | CHILD — 1 row/home, `hl_property_id` + `website_hlid`, `disposition` (now 2,106 non-null, pushed from canonical) |
+| `hl_srg_deal_overrides` | 143 | CANONICAL | human verdicts — fields WIN on rebuild; `verify_status` drives the verify queue |
+| `hl_srg_mls_deals` | 2,042 | CANONICAL | our downloaded Heartland MLS (unit-bearing address + agents + status) |
+| `hl_srg_dotloop_contracts` | 13,257 | EVIDENCE | contract price/date/parties/licensees — source of record for OFF-MARKET deals with no MLS# |
+| `hl_srg_dotloop_loops` | 17,455 | EVIDENCE (raw) | raw dotloop loop index |
+| `hl_srg_agent_roster` | 136 | DIMENSION | every agent who was ever ours (canonical name/aliases/departed) |
+| `sisu_transactions` | 11,636 | UPSTREAM (frozen) | SISU closing spine. **Frozen — SISU shut down 2026-06** |
+| `hl_srg_fub_note_quarantine` | 654 | LOG (undo) | the injected-note quarantine — intel only, never client history |
+
+**Disposition census** (`hl_srg_canonical`, 0 null): still_owns **1,323** · sale_side 418 ·
+lost_opportunity 149 · sold_repped_by_us 42.
+
+### WEB database — homes, cards, value
+
+| Table | Rows | Class | What it holds |
+|---|---:|---|---|
+| **`hl_pastclient_resolved`** (VIEW) | 1,949 | ⭐ CANONICAL | THE card-coverage truth — per-home `has_photos` / `has_hlvalue` / `has_pricehistory` / `has_valuehistory` / value_bucket |
+| **`Listing`** | 368,564 | CANONICAL | the home record the card renders — MANY rows per home. Value, photos, priceHistory, taxHistory live here |
+| **`hl_property`** | 358,387 | CANONICAL | the HOME identity SSOT — 1 row per `identity_key`, names the keeper via `active_listing_hlid` |
+| `hl_value_history` | 345,153 | CANONICAL | the monthly value-history series (the graph) |
+| `hl_market_index` | 401,118 | CANONICAL | the ZHVI series — the appreciation trajectory |
+| `hl_geo_market_stats` | **297** | CANONICAL | neighborhood stats. ⚠️ **exists and is unused** — wiring it is cheap |
+| `hl_hlid_alias` | 364,561 | MAP | rename-forward (old HLP→HLID, superseded listing→keeper) — no URL break |
+| `hl_home_claim` | — | CANONICAL | owner claims (see §7.3) |
+| `hl_past_client_homes` | 1,949 | CACHE | CRM→home worklist the monthly value jobs iterate |
+| `hl_pastclient_card_audit` | 1,951 | AUDIT | per-card QA verdict |
+
+**Key `Listing` value columns:** `zestimate` (+`Low`/`High`) · `redfinEstimate` (+`Low`/`High`/`Url`/`At`) ·
+`hlEstimate` (+`Low`/`High`/`At`/`Source`) · `valueHistory` · `quarantinedAt` · `photosCached`.
+
+<Warning>
+**Photos live in `Listing.photosCached`** (the R2 cache), **not** the frequently-empty `photos` jsonb column.
+Reading the wrong column produced a false "1,086 hero-only" alarm — the harvest had been complete all along.
+</Warning>
+
+### 🗄️ Drift / archive ledger — do NOT query these as truth
+
+| Table / thing | Why it is not truth | Use instead |
+|---|---|---|
+| `hl_transactions` (CRM) | EMPTY — the future native-TC table, not wired | `hl_srg_deal_ledger` |
+| `hl_srg_pch_staging` / `hl_srg_pch_quarantine` | scratch clones of the child | `hl_srg_past_client_homes` |
+| `hl_srg_resolver_stage2` / `_quarantine` / `_s2` | old LLM resolver run-logs | `hl_srg_canonical` |
+| `hl_srg_loop` | interim LLM loop-enrichment (superseded) | `hl_srg_dotloop_contracts` |
+| `hl_srg_pastclient_gt` | address-correction feed (pre-canonical) | `hl_srg_past_client_homes` |
+| `hl_srg_home_valuations` | **DROPPED after migration 0136 — it does not exist.** Any doc or code citing it is stale | the WEB `Listing` |
+| tools prefixed `_` + `_ARCHIVE_BULK_2026-06-28/` | superseded resolvers / scratch | `resolve-from-mls.mjs` |
+
+---
+
+## 7 · The four surfaces
+
+### 7.1 · CRM — the Seller Report dashboard ✅ LIVE
+
+`/settings/seller-report` — a **top-level** sidebar section (between Content and Integrations), with
+Dashboard + Audit Report. The `/settings/` URL prefix is misleading: it is **not** buried under Settings.
+
+It reads `hl_srg_past_clients` (parent) joined to `hl_srg_past_client_homes` (child), pulls each home's value
+**live from the WEB `Listing`** by `website_hlid` — filtered `deletedAt IS NULL AND quarantinedAt IS NULL` —
+and computes appreciation, equity and monthly gain server-side. Paginated at 50.
+
+**The per-client modal** (`components/seller-report/SellerReportHomeModal.tsx`) renders: hero value + range ·
+four appreciation stat cards · the full transaction history grouped by home with disposition pills · the
+dossier prose · contact info.
+
+**Honest stubs — rendered as a literal "—", never fake data:** Comparable Sales · Neighborhood Avg (12mo) ·
+the value-trend chart (a dashed placeholder). The "Send Home Value Report" button is currently a no-op.
+
+### 7.2 · CRM — the Audit Report ✅ LIVE
+
+`/settings/seller-report/audit` — the **human proof surface**. Where Zach checks the engine's work: every
+house, every deal, the evidence behind each connection, and the exact dossier card that will land in Follow
+Up Boss.
+
+It reads **tables, never blobs** — the `hl_srg_master_houses` VIEW for the house tabs, and parent + child (or
+staging) for the card tabs, rendered through the ONE shared card builder
+(`lib/pastclient/card-note.mjs`) so **the audit card and the FUB note are byte-for-byte identical.**
+
+**The 5 tabs (Zach's spec, 2026-07-03):**
+
+| Tab | What it shows |
+|---|---|
+| **🏠 Master Houses** | RESOLVED houses only — one block per house (address = the `/home` link, HLID, value) with every ledger transaction beneath it: date · BOUGHT/SOLD · client · price · agent · MLS/tier · **evidence pills** |
+| **🔧 Needs Resolution** | Opens with **Contradictions — resolutions to verify** (the conflict, the proposed fix with its receipt, a **Verify ✓** button), then under-investigation, field-gap houses, unplaced deals, missing addresses. A house is here OR on Master Houses — never both |
+| **Transaction History** | Every deal we repped, from the live child — date, side, address, price, chain-of-custody agent |
+| **FUB Notes Pending** | The staged reconcile run rendered as the full card. **The surface Zach walks before the Rule #0 PROMOTE** |
+| **FUB Notes Final** | Signed-off cards only (`houseloop_resolved_at` set) — the green tab |
+
+**Trust you can see:** evidence pills on every transaction row (`✓ SISU addr · ✓ MLS name · ✓ Zach ✓`, or the
+red contradiction text) · a **"data built at"** stamp on the scoreboard so the page can never silently serve
+a stale build · every client name deep-links to their FUB profile, every address to its `/home` page.
+
+**Sign-off is CLI-only** (`resolution-gate.mjs <pc> --signoff`) — there is no sign-off button, by design. The
+**Verify ✓** button settles verification metadata only; identity changes go through overrides + a ledger
+rebuild, never a hand-edit.
+
+### 7.3 · Website — Home Claim & the Owner's View ✅ SPINE LIVE
+
+> **"When they type in their address, that home is claimed."** (Zach, 2026-07-06)
+
+A claim = one `User` owning one rooftop (`hlPropertyId`, the permanent HLID), persisted in **`hl_home_claim`**
+(WEB DB) — the source of truth. The claimed home becomes the owner's view: their home's profile card with the
+real Home Value Report inside it.
+
+**The table** — created idempotently by `lib/home-claim.ts`:
+
+| Column | Meaning |
+|---|---|
+| `user_id` + `hl_property_id` | UNIQUE — one claim per user per rooftop |
+| `email` | indexed on `lower(email)` — the CRM↔web join key |
+| `status` | `claimed` / `released` — releasing is a status flip, **never a DELETE** (reversible) |
+| `source` | `self-claim` / `pcsoi-reconciled` |
+| `pc_id` | the `hl_srg_past_clients` id when the CRM pre-claimed it |
+
+**Two ways a claim is born:** (1) **self-claim** — a logged-in visitor completes the Get Report flow →
+`POST /api/home/claim`. (2) **PCSOI pre-claim** — the CRM pre-claims a verified past client's ledger-owned
+home. ⚠️ Today this runs as a one-off script; Inngest-izing it is an open ruling.
+
+**The APIs:**
+
+| Route | Contract |
+|---|---|
+| `GET /api/home/claim?hlid=…` | Is this rooftop claimed by the session user? (drives the CTA state) |
+| `POST /api/home/claim` | Create the claim for the session user |
+| `GET /api/home/hvr?hlid=…` | **Claim-gated** — only the session user holding a live claim gets data. 403 otherwise. Builds `HvrData` from live read paths: `getListing()` value tiers + `hl_value_history` + the home's own `priceHistory` (latest Sold event = the purchase anchor) |
+
+**The front end** — `ClaimHomeCta.tsx`, shipping inside `ListingDetail.tsx` on the live `/home/<slug>` page:
+
+```
+unclaimed → (Get Report flow: modal steps "report" → "profile") → claimed
+claimed   → owner badge → "View report" → fetch /api/home/hvr → HomeValuationReportModal
+```
+
+<Note>
+**FACT-OR-NOT rule — constitutional for this surface.** Fields with no wired source (comps, market temp,
+zip/metro appreciation) ship as `0`/empty and the report **hides those sections — nothing is invented.**
+There is also **no sample-home fallback**: no data renders a neutral "preparing your report" state, so a
+claimed owner can never see someone else's home.
+</Note>
+
+**What is still missing:** the standalone `/my-home` **page** (today it is a modal behind a claim click), the
+3-source value row, the equity split, the ownership timeline, neighborhood stats, nearby sales, the net
+sheet, and **magic-link auth from the email** (today claiming needs an interactive sign-in).
+
+### 7.4 · The monthly email ⛔ GATED
+
+The **"Home Valuation Report (Monthly)"** email is sent to past clients from their assigned agent. It
+combines a short personal note with a full property valuation card.
+
+- **The function:** `hvrMonthlySend` (`lib/inngest/functions/hvr-monthly-send.ts`), **registered** in the
+  Inngest serve array — it is live in the dashboard.
+- **Trigger:** the event `hvr/monthly-send.run` **ONLY**. There is no cron. The `0 14 28 * *` schedule is
+  gated pending sign-off, per the Inngest law.
+- **Safety:** `dryRun` defaults **true**. A real send requires `test_limit <= 20` **or**
+  `approval === 'ZACH-TYPED-OK'`.
+- **Template:** key `home_value_report`, category `market_report`, rebuilt on the canonical `marketing_base`
+  shell by migration **0343**. Any reference to `0127` as the live template is stale.
+
+**Structure:** a personal 2-3 sentence note in the agent's voice above the card (no branding above it — it
+reads like a plain email), then the report card: lockup header · property photo · address · big estimated
+value · Low/Estimate/High distribution · value-history chart · market-temperature gauge · "beating the
+market" · appreciation cards · comparable sales · agent + CTA · brand band.
+
+**The data contract** is the `HvrData` interface in `components/listing/HomeValuationReport.tsx` — every
+surface renders this same shape, read live from the WEB `Listing` + `hl_value_history`, never from a stored
+valuation snapshot.
+
+---
+
+## 8 · The build ladder — G0 → G5
+
+Gates run in order. **Nothing ships past a gate without Zach.** The live checklist with all 84 numbered tasks
+is the [Master Build Plan artifact](https://claude.ai/code/artifact/2c63e8e3-4768-434b-8bfd-f548ead15f27).
+
+| Gate | What it is | Status |
+|---|---|---|
+| **G0** | **The deterministic foundation** — one HLID per rooftop · agents 2,106/2,106 · per-home disposition golden-gated 8/8 with zero contradictions · the client-facts view · rooftop-life harvest · orphan-resale sweep | ✅ **COMPLETE** |
+| **G1** | **100% reconciled + current** — Zach's "step one," the gate before ANY report ships | ⛔ **OPEN** |
+| **G2** | **The HVR design + the value engine** — wireframe HTML-first, Zach locks pixels before build; email + page share ONE builder | 🟡 in flight |
+| **G3** | **The CRM surfaces** — the enriched Past-Client Report + the Seller Dashboard | 🟡 partly live |
+| **G4** | **The Owner's View** — owner mode on the client's own `/home` page | 🟡 **spine live** |
+| **G5** | **The monthly loop live** — signed off → cron. One clean observed month before a full-book send | ⛔ OPEN |
+
+### G1 — what actually remains
+
+**Done:** 15 corrupt dates repaired · 7 never-ingested resales healed · all 5 disposition reviews closed
+(needs_review = 0) · full-cohort FUB re-scrape (1,668/1,686 + 18 deleted-in-FUB) · **dossier rebuilt raw-only
+(100% structured, 94% prose)** · value refresh across the book · **value-history fabrication at 0**.
+
+**Open:**
+
+1. **Fix the 65 quarantined home pins** — 20 on current-home pins. Named clients render broken cards today.
+   The keeper score must prefer **photos → value → status** and never point `active_listing_hlid` at a
+   quarantined row.
+2. **Resolve the 18 empty-render cards** — an HLID→listing resolution bug, not missing data.
+3. **Backfill 66 homes with a null build year** — the floor law cannot be enforced without it.
+4. **Close the Redfin gap** — 92.7% → 97%; stamp unresolvable addresses so the monthly run stops retrying.
+5. **57 no-photo cards** (Google Street View is the acceptable floor) and **65 contaminated price histories**.
+6. **Normalize the `pcsoi` column** — four spellings of one boolean (1,216 empty · 455 `yes` · 76 `true` ·
+   29 `PCSOI` · 3 null). Any query against it today is wrong.
+7. **Flip the rooftop-guard to its daily cron** — deployed, first run succeeded, 22 keepers repointed.
+   **Zach's typed sign-off required.** This is the structural fix for recurrence: with the cron off, every new
+   twin gets re-discovered by hand forever.
+8. **THE GATE — Zach walks N cards end to end and signs the book off.**
+
+### The five highest-leverage moves
+
+| # | Move | Why it is first |
+|---|---|---|
+| 1 | **Build the real blended estimate** | The differentiator is currently Zillow with our name on it. Every surface shows this number |
+| 2 | **Fix the 65 quarantined pins** | Named clients render broken cards. Last known correctness bug blocking G1 |
+| 3 | **Build the suppression list** | 66 clients would receive a wrong or humiliating email |
+| 4 | **Promote the owner report to a real page** | The claim gate, endpoint and modal already exist — a promotion, not a build |
+| 5 | **Ship the sell score** | Every input verified present. Turns 1,779 into a ranked worklist of 269 |
+
+---
+
+## 9 · The landmines — gate these before any send
+
+**66 clients need a human look before a single real email.**
+
+| Class | Count | Why it must be gated |
+|---|---:|---|
+| **Quarantined pin** | 34 | Renders value-less or the wrong home |
+| **Negative equity** | 19 | "Your home is up!" when it is down $226,801 is unrecoverable |
+| **No purchase price** | 10 | Gain cannot be computed — the email has a hole |
+| **Absurd appreciation** (>300%) | 3 | Lot buys and new construction read as +2,162% |
+| *(separate)* 3-source spread >25% | 73 | Needs the divergence rule before the 3-source row ships |
+
+---
+
+## 10 · The laws
+
+| Law | What it means here |
+|---|---|
+| **The table is the truth** | Every count comes from ONE query against the named table. Never a file, never memory, never a number quoted from a doc |
+| **Two databases only** | The website holds homes and value; the CRM holds people and deals. **The CRM pulls value FROM the website by `website_hlid` and never stores a copy** — no copy, no drift |
+| **No valuation table** | `hl_srg_home_valuations` was dropped after migration 0136. It does not exist |
+| **Inngest or it doesn't exist** | A recurring job that is not a registered function with a real run in the dashboard is not a pipeline. Rows existing is not proof |
+| **The wireframe is the truth** | The React build is a verbatim, node-by-node port of the signed-off HTML — never a reconstruction from prose |
+| **Reuse, never recreate** | Six things called "missing" already exist. Read the code before writing any |
+| **Fact or nothing** | An unwired field renders **nothing** — never a plausible placeholder |
+| **No dogfood** | No prior LLM artifact is ever an input. Identity comes only from the ledger |
+| **MLS# is address ground truth** | SISU addresses have typos; verify mis-links by MLS# lookup, never by string comparison |
+| **No agent = not resolved** | Never "SRG", never the MLS-listing agent, never a placeholder |
+| **Rule #0 — no destructive SQL** | Any DELETE over 100 rows, DROP, TRUNCATE, child PROMOTE or `Listing` merge needs **typed Zach approval naming the table**, in the same session |
+| **Every write dry-runs first** | `--write` gated, reversible everywhere (quarantines, reversal JSONs, `_old` columns) |
+| **Real clients are production** | No rehearsals, no synthetic sends to a real past client. The first send is one real person, watched |
+| **Scrapers never "crash"** | Banned vocabulary — they are idle-until-called. Fix the tool that says otherwise |
+| **This doc updates the same session work lands** | Zach directive |
+
+---
+
+## 11 · The tools
+
+**Re-run the truth (read-only, safe any time):**
+
+```bash
+node tools/houseloop-cards/audit-seller-engine.mjs
+```
+
+Reproduces the funnel, coverage, the blend check and the landmines — every number on this page.
+
+**Identity:** `build-deal-ledger.mjs --write` (ledger + verification pass) → `build-master-houses.mjs` (the
+VIEW + scoreboard) · `deal-ledger-detectors.mjs`.
+
+**Per-client:** `triangulate-resolver.mjs` (raw harvest) → `triangulate-stage2.mjs` (dossier, no-dogfood) →
+`persist-dossier.mjs` → `persist-reconcile.mjs` (transactions from THE LEDGER) → `resolution-gate.mjs
+--signoff` (CLI-only) → `sign-off-reconcile.mjs --write --zach-approved` (**the Rule #0 PROMOTE**) →
+`fub-publish.mjs --write` (refuses any non-resolved client).
+
+**The one card builder:** `apps/houseloop-crm/lib/pastclient/card-note.mjs` — the audit card and the FUB note
+are byte-for-byte identical.
+
+**The shared HVR builder:** `apps/houseloop-crm/lib/hvr/build-hvr.ts` (`buildHvrForClient()`) — **already
+exists and feeds the monthly send. Extend it; do not write a second one.**
+
+**Value engines (Inngest):** `zillow-research-ingest` (24th) · `past-client-zillow-cache` (26th) ·
+`value-history-persist` (27th) · `sold-data-reconcile` (daily) · `pastclient-rooftop-guard` (event; cron not
+yet flipped) · `hvrMonthlySend` (event-only, dry-run default).
+
+**Redfin (Camp David, the address-based AVM exception):** `redfin-estimate-scraper.mjs` +
+`redfin-estimate-cron.sh` (monthly) + `redfin-chrome-up.sh` (warm-Chrome watchdog, `@reboot` + every 10 min).
+**Never headless** — headless is detected and blocked.
+
+---
+
+## 12 · Related
+
+- [Property Data & Address Identity](/guides/property-data-and-address-identity) — HLID, `identityKey`, the resolver
+- [HouseLoop Home Value](/guides/houseloop-home-value) — the value fork + monthly refresh chain
+- [Sold Data & Price History](/guides/sold-data-and-price-history) — sold detection, priceHistory mechanics
+- [Lead Detail — Stages & Deals](/guides/lead-detail-stages-and-deals) — the past-client lead model
+- [Roadmap: The CMA Tool in the CRM](/listing-presentation/crm-roadmap) — AI CMA, the second Seller Tools tool
