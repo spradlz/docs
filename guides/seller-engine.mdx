@@ -694,9 +694,24 @@ Park's band said 1949-1974 and the county says **1951**; Shawnee's said 1995-200
 | **Miami KS** | — | **No public endpoint.** Cloudflare bot-walls their Beacon vendor; needs a real browser. |
 
 <Note>
-These are reverse-engineered vendor internals, not official public APIs. They can change without notice — worth a
-periodic health check rather than blind trust.
+These are reverse-engineered vendor internals, not official public APIs. They can change without notice — treat a
+miss as "the endpoint moved", not "this home has no year."
 </Note>
+
+**The tool:** `node tools/houseloop-cards/county-year-built.mjs --audit [--write]` (or a single lookup:
+`... "16441 Blair St" --county johnson`). It automates Johnson / Jackson / Clay and names the manual path for the
+other three. **Johnson takes a plain ADDRESS — no APN needed**, which is both the simplest path and how we caught a
+wrong parcel number in our own data: 16441 Blair St was stored as `CP94500002 0008`; the county says
+`CP94520000 008B`. After a `--write`, re-dispatch `value-history/persist.run` for those hlids — a newly-known build
+year moves the floor, and the stored line must be re-clamped.
+
+**The 3 that remain are documented dead ends, not skipped work:**
+
+| Address | County | Why |
+|---|---|---|
+| `Brook Haven Street`, Kearney | Clay | No house number, and **"Brooke Haven" is a subdivision, not a street** — unresolvable without going back to the source. |
+| `128 SW Nelson Dr`, Blue Springs | Jackson | County has `year_built: 0` — owner of record is a home builder, assessed as land only. **Genuinely not built yet**, not a data gap. |
+| `21736 Franklin St`, Spring Hill | Miami | Cloudflare bot-wall. MLS band puts it at 2020-2022 and its line starts 2021 at the original sale, so it reads honestly today. |
 
 <Warning>
 **THE BUG THE BUILD YEARS UNCOVERED — value lines that started before the house existed.** The floor law was applied
