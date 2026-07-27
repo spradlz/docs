@@ -61,9 +61,21 @@ Select All → Matrix Cloud CMA button → SSO handoff (`mlsnums` URL param pre-
 Key discovery: Cloud CMA's Publish page is the full CMA report as HTML — there is no "Download PDF" button.
 `page.pdf()` via Playwright/CDP calls Chrome's native `Page.printToPDF` and works on a non-headless instance.
 </Step>
-<Step title="Phase 2 — The build module (mostly done)">
-The extract → `data.json`/`photos.json` → `build-cma.py` → assemble pipeline, wrapped as a server-callable module
-that takes `{address}` and returns the branded HTML + PDF. Already generalized + env-driven.
+<Step title="Phase 2 — The build module (NEXT)">
+Wrap the downstream half of the pipeline as a server-callable module:
+
+1. **Extract from Cloud CMA PDF** — `pdfimages -png cma.pdf /tmp/imgs/img` (all comp photos) +
+   `pdftotext cma.pdf -` (comp data) → parse into `data.json` + `photos.json`. Recipe in
+   `viktor-okoth/BUILD-HANDOFF.md` — read it before touching this step.
+2. **Run the build scripts** (all in `.claude/reports/listing-presentation-work/`):
+   - `build-cma.py` — renders the CMA section (2 sections + per-comp analysis + conclusion)
+   - `build-lp-v3.py` — renders Cover + By the Numbers
+   - `build-track-record.py` — renders the track record section
+3. **Assemble** in the locked page order using `pdfseparate` + `pdfunite` → final PDF.
+4. **Wrap** as `{cmaId, pdfPath, callSheet} → {htmlPath, pdfPath}` server function.
+
+**Call sheet law:** seller name + subject property details NEVER come from Cloud CMA — they come from
+a call sheet (agent-filled form). Cloud CMA is for comps only.
 </Step>
 <Step title="Phase 3 — The CMA Tool UI">
 **Listings** left-nav → **CMA Tool**. Address bar → creates a **card** (the TC-loop create pattern, reusing our
@@ -87,8 +99,9 @@ Every step documented; the whole thing reproducible address-in → book-out; ver
 | **The chat bar** | Myli with the pipeline tools — re-run, re-extract, re-price, edit a comp's analysis, correct in real time | The AI already lives in our stack (no MCP server) |
 
 ## Honest dependencies & risks
-- **Phase 1 is the gate.** The Matrix comp-selection + Cloud CMA handoff is auth-gated, anti-bot, browser-based.
-  Until it's rock-solid it stays semi-manual (agent selects comps + exports; the tool takes it from the export).
+- **Phase 2 is the current gate.** P1 is closed — the pipeline runs fully automated. P2 (extract → build → assemble)
+  is the next hard step: pdftotext output structure varies by Cloud CMA template, so the parser needs to handle edge
+  cases. Recipe in `viktor-okoth/BUILD-HANDOFF.md`.
 - **Pricing stays judgment.** The recommended list is left blank (white write-in box) for the agent; the tool
   surfaces the range and the read, it does not auto-price.
 - **Data honesty is structural.** Real photos only, the seller name comes from the call sheet (never the Cloud CMA),
