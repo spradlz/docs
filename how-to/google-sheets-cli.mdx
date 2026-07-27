@@ -1,0 +1,124 @@
+---
+title: "Google Sheets — Read & Update from the CLI"
+description: "How to read and write Google Sheets with the gog CLI, the comma gotcha that silently writes to the wrong row, why every call is slow, and how the Master Credentials sheet maps into .env."
+---
+
+We drive Google Sheets with **`gog`** (`/opt/homebrew/bin/gog`, Homebrew). The sheet that matters most is the
+**Master Login Credentials** sheet — the source of truth for every credential, which `.env` is generated *from*.
+
+## Every command needs an account
+
+```bash
+gog sheets get --account zach@spradlingrealtygroup.com <SHEET_ID> "A1:D10"
+```
+
+Omit `--account` and it fails with *"missing --account"*. Two accounts are authorized:
+`zach@spradlingrealtygroup.com` and `myli@personli.ai`. The credentials sheet lives on **Zach's**.
+
+The sheet id is in `.env` as `MASTER_CREDS_SHEET_ID`.
+
+## 🚨 THE COMMA GOTCHA — read this before any write
+
+```
+<values> ...    Values (comma-separated rows, pipe-separated cells)
+```
+
+**`gog` splits your value on commas to make ROWS and on pipes to make CELLS.** So a note containing ordinary
+prose commas explodes into multiple rows and writes over whatever is below it.
+
+<Warning>
+**Real failure, 2026-07-27:** updating three notes cells in `D253:D255` with normal English (commas in the
+sentences) produced:
+
+```
+Google API error (400 badRequest): Requested writing within range ['Master Credentials'!D253:D255],
+but tried writing to row [256]
+```
+
+The 400 saved us. **If the range had been wider it would have silently overwritten row 256 and beyond.**
+</Warning>
+
+**The rule: never put a comma or a pipe in a value you pass to `gog sheets update`.** Use `·` or `—` or a
+semicolon instead. Write **one cell per call** for anything long.
+
+```bash
+# ✅ works — no commas, single cell
+gog sheets update --account zach@spradlingrealtygroup.com "$MASTER_CREDS_SHEET_ID" "D254" \
+  'RAILWAY_API_TOKEN — the one to use for CLI · MCP · deploys. Workspace-scoped.'
+
+# ❌ breaks — commas become new rows
+gog sheets update ... "D254" 'Workspace token, use this one, it works'
+```
+
+## It is slow — plan for it
+
+A single read or write routinely takes **2–4 minutes**. That is normal, not a hang.
+
+<Tip>
+**Run sheet calls in the background** and do other work while they finish. Do not sit and watch them, and do not
+kill and retry with different flags — that is how a five-minute job becomes an hour. A parent command timing out
+also kills backgrounded children, so use the harness's own background execution rather than a shell `&`.
+</Tip>
+
+## Commands
+
+| | |
+|---|---|
+| `gog sheets get <id> <range>` | read (aliases: `read`, `show`) |
+| `gog sheets update <id> <range> <values>` | overwrite a range (aliases: `edit`, `set`) |
+| `gog sheets append <id> <range> <values>` | add rows |
+| `gog sheets clear <id> <range>` | wipe a range |
+| `gog sheets metadata <id>` | tabs + sizes |
+
+Add `-j` for JSON, `-p` for TSV, `-n` for a dry run.
+
+## The Master Credentials sheet → `.env`
+
+**Columns are `A=Name · B=Email · C=Password · D=Notes`**, and `tools/credentials/sync-creds.mjs` maps them
+positionally into `.env`:
+
+```
+CRED_<SERVICE>_EMAIL     ← column B
+CRED_<SERVICE>_PASSWORD  ← column C
+```
+
+<Warning>
+**For API-key rows the convention is different — and the column names lie.** An API row puts the **secret in
+column B** (the "Email" column), the **type in column C**, and the **env-var name in column D**:
+
+```
+BossLoop OAuth Client ID | 785763829955-... | Client ID | BOSSLOOP_OAUTH_CLIENT_ID
+Railway API Token        | fd8d1e67-...     | API Key   | RAILWAY_API_TOKEN
+```
+
+So `.env` ends up with `CRED_RAILWAY_API_TOKEN_EMAIL=<the actual token>` and
+`CRED_RAILWAY_API_TOKEN_PASSWORD=API Key`. **That looks broken and is not** — it is the house convention.
+
+**Do not "fix" it by swapping B and C on one row.** Every API row in the sheet follows this pattern; swapping
+one makes it the odd one out and breaks the sync for that entry. On 2026-07-27 this nearly happened: the plan
+was to swap the Railway columns until the BossLoop rows showed the pattern was intentional.
+</Warning>
+
+**Read the real value with `--lookup`, not by guessing at a column:**
+
+```bash
+node tools/credentials/sync-creds.mjs --lookup "railway"
+node tools/credentials/sync-creds.mjs            # re-sync sheet → .env (269 creds)
+```
+
+## The law
+
+The sheet is the **source of truth**; `.env` is generated from it. So:
+
+- **Editing `.env` alone is pointless** — the next sync overwrites it.
+- A new credential goes in the **sheet first**, then sync.
+- Receiving or creating a credential means storing it **the same session** (`.claude/rules/CREDENTIAL_ACCESS.md`).
+- Never say *"I don't have access"* without checking `.env` or `--lookup` first.
+
+## Before you write
+
+1. **Back up the rows** you're about to touch — a read into a file, or paste the current values into a scratch file.
+2. **Strip commas and pipes** from every value.
+3. **One cell per call** for long text.
+4. **Dry run** (`-n`) if the range is wide.
+5. **Verify** by reading it back.

@@ -1,0 +1,126 @@
+---
+title: "Railway — Deploy & Read a Build"
+description: "How HouseLoop deploys (git push, nothing else), which Railway token to use and why the other ones look dead, how to read a real build status instead of guessing, and the gotchas that cost us a morning."
+---
+
+**Deploying is `git push`. That is the whole thing.** Everything below is about *seeing what happened after*.
+
+<Warning>
+**NEVER run `railway up`.** Railway auto-deploys the `houseloop-app` branch on every push. A manual `railway up`
+pushes your local working tree — including uncommitted junk — straight over production. Law:
+`.claude/rules/DEPLOY_PROTOCOL.md`.
+</Warning>
+
+## Deploy
+
+```bash
+git push origin houseloop-app     # that's it — Railway builds automatically
+```
+
+<Tip>
+**Batch your commits and push ONCE.** Every push starts a separate build, and they queue. On 2026-07-27 five
+pushes in six minutes queued five builds, the last took 20+ minutes to clear, and it looked like a broken deploy
+when it was just a line we created.
+</Tip>
+
+## 🔑 Which token — and why the others look dead
+
+There are three Railway tokens in the Master Credentials sheet (rows 253–255). **They are all alive.** They
+answer different questions, which is not the same thing as being broken.
+
+| Token | Scope | Answers `me{email}` | Lists projects |
+|---|---|---|---|
+| `RAILWAY_API_TOKEN` (…290b) — **use this one** | workspace | ❌ **no — and that's correct** | ✅ all 6 |
+| `RAILWAY_WORKSPACE_TOKEN` (…6a91) | workspace | ❌ no | ✅ all 6 |
+| account token (…d78b) | account | ✅ yes | ❌ none |
+
+<Warning>
+**THE GOTCHA THAT COST A MORNING (2026-07-27).** A **workspace-scoped** token returns
+`{"errors":[{"message":"Not Authorized"}]}` for `query { me { email } }`. That is **correct behavior for its
+scope — it does not mean the token is dead.**
+
+Someone tested `me{email}`, saw "Not Authorized", wrote *"the Railway token in .env is dead"* into a handoff
+file, and every session after that avoided Railway entirely. We spent months with no deploy visibility over a
+working credential.
+
+**To test a workspace token, ask it for projects — never for `me`.**
+</Warning>
+
+```bash
+# ✅ the RIGHT health check for a workspace token
+curl -s -X POST https://backboard.railway.com/graphql/v2 \
+  -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"query":"query { projects { edges { node { name } } } }"}'
+```
+
+Expect `houseloop · houseloop-esign · placedagent · realloop · kind-respect · alert-spontaneity`.
+
+## Read a real build status
+
+The `houseloop` project runs **three services** — `houseloop-crm`, `houseloop-web`, `myli-voice` — and each gets
+its own deployment per push. **A red status on one does not mean your change broke.** On 2026-07-27
+`myli-voice` was CRASHED while `houseloop-crm` was SUCCESS on the same commit.
+
+```bash
+TOK=$RAILWAY_API_TOKEN
+PID=7d393225-f8d8-4187-845c-ee49b8842e91   # houseloop
+
+curl -s -X POST https://backboard.railway.com/graphql/v2 \
+  -H "Authorization: Bearer $TOK" -H "Content-Type: application/json" \
+  -d "{\"query\":\"query(\$id:String!){ deployments(first:12, input:{projectId:\$id}) { edges { node { status createdAt service { name } meta } } } }\",\"variables\":{\"id\":\"$PID\"}}"
+```
+
+Statuses: `BUILDING` → `DEPLOYING` → `SUCCESS` · `CRASHED` (built, died on boot) · `REMOVED` (superseded by a
+newer deploy — normal) · `SKIPPED` (no changes for that service — normal).
+
+## ✅ The fastest check is not the API at all
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" https://crm.houseloop.ai/login   # expect 200
+curl -s -o /dev/null -w "%{http_code}\n" https://houseloop.ai/            # expect 200
+```
+
+<Tip>
+**Ask the website, not the status API.** On 2026-07-27 twenty minutes went into polling a deployment endpoint
+that said `in_progress` while production was serving 200 the entire time. One `curl` would have ended it.
+Poll a status only when you actually need the *reason* a build failed.
+</Tip>
+
+## Verify before you blame the code
+
+```bash
+cd apps/houseloop-crm
+lsof -ti :3020 | xargs -r kill      # the dev server MUST be off or it corrupts .next
+npm run build                        # the real answer on whether it compiles
+bash ../../tools/houseloop-crm/restart-dev.sh
+```
+
+`npx tsc --noEmit` is faster but weaker — it catches types, not bundling. When you have touched anything
+structural, run the real build.
+
+## The CLI
+
+Installed (`railway --version` → 4.30.4) but **logged out**. It needs an interactive browser login:
+
+```bash
+railway login    # Zach must run this — it opens a browser
+```
+
+Until then, use the GraphQL API above. It needs no login and the token already works.
+
+## Other sites
+
+placedagent · joinspradling · aititans · dashboard do **not** auto-deploy. They use the script:
+
+```bash
+DEPLOY_AGENT=<you> bash tools/deploy.sh <site> "one sentence on what changed"
+```
+
+Never `deploy.sh vercel` with no site name — that cross-contaminates projects.
+
+## If it really is broken
+
+1. `curl` the site — is it actually down, or just mid-build?
+2. Query deployments — **which service**, and what status?
+3. `npm run build` locally — does it even compile?
+4. Only then read logs / suspect Railway.
