@@ -1,0 +1,286 @@
+---
+title: "Activity Catalog"
+description: "THE inventory of every single thing that can happen in the CRM — one row per activity, ordered by integration. A toggle promotes an activity into a Trigger Event; a trigger's category runs a Playbook. This is the layer above Trigger Events, and the reason the two vocabularies drifted."
+---
+
+**In the app:** Settings → **Activity Catalog** (new — sits directly above Trigger Events)
+
+<Info>
+**THE LAW (Zach, 2026-07-27): the Activity Catalog is the superset. Trigger Events is a filtered view of it.**
+Every single thing that can happen in the CRM — a lead saving a home, an agent adding a note, Myli learning a
+fact, a deal going under contract — is ONE row here. A per-row toggle promotes it into a **Trigger Event**; a
+trigger's **category** runs a **Playbook**. There is no second table and no second list. If it is not in this
+catalog, it cannot be automated, and today that is why 35 real activities are dead ends.
+</Info>
+
+## The model in four lines
+
+```
+ACTIVITY CATALOG      every single thing that CAN happen          69 rows
+      │               (lead · agent · Myli · transaction)
+      │  toggle: "can this start automation?"
+      ▼
+TRIGGER EVENTS        the subset that can                          34 today
+      │               each carries a CATEGORY
+      ▼
+PLAYBOOK              the category's playbook runs
+      │
+      ▼
+TOOLS                 the playbook's hands (send, book, tag…)
+```
+
+The last two layers are the machines Adam is building (`playbooks, not workflows`). This page owns the **first**
+one — the inventory those machines draw from.
+
+<Note>
+**Why this page had to exist (the autopsy, 2026-07-27).** "Trigger event" was used as the name for *the thing*,
+but it is really the name for *the wiring on the thing*. So anything without wiring had nowhere to live — and a
+second, parallel list grew in code to hold what actually happens. Measured live: **69 activity kinds in code, 90
+trigger events in the database, and only 17 share a name.** `save_home` and `property_saved` are the same event.
+So are `property_view`/`property_viewed`, `behavior_high_intent_buyer`/`insight_high_intent_buyer`,
+`deal_closed`/`tc_closed`. **Five hardcoded code maps exist purely to translate between the two lists.** Merging
+them into this one catalog deletes those maps.
+</Note>
+
+## Where it sits in the menu
+
+Each item depends on the one above it — you cannot toggle a trigger for an activity that is not listed, and an
+activity cannot arrive through a pipe that does not exist. The menu is the model, read top to bottom.
+
+| # | Menu item | What it is |
+|---|---|---|
+| 1 | **Lead Integrations** → **Lead Sources** *(nested)* | The pipes, and the brands that arrive through them |
+| 2 | **Activity Catalog** | Everything that can happen. The toggle lives here |
+| 3 | **Trigger Events** | The toggled subset + its category and per-pipe rules |
+| 4 | **Playbooks** | One per goal. Categories point here |
+| — | ~~Workflows~~ | Retiring into Playbooks |
+| 5 | **Stages** · 6 **Tags** | Lead attributes — they describe the *lead*, not the system |
+
+**Lead Sources is nested under Lead Integrations, never a sibling.** A brand arrives *through* a pipe. Creating a
+source from inside its integration is what prevents `fub_zillow` and `zillow_com` existing as two rows for one
+brand (the live bug this ordering fixes).
+
+## How to read a row
+
+Every activity carries three facts. **The sections below are generated from them — they are never hand-maintained.**
+
+| Field | Values | Why it exists |
+|---|---|---|
+| **Who** | `lead` · `agent` · `system` (Myli/derived) | Drives the "what a lead can do" vs "what an agent can do" split |
+| **Where** | which integrations can deliver it, or `internal` | An activity we generate has no pipe — nobody sent it, we did it |
+| **Trigger?** | on / off + category | On = it appears in Trigger Events and can run a playbook |
+
+Add Realtor.com as an integration and every activity tagged to it appears in the right section **automatically**.
+That is the whole point of deriving sections instead of authoring them.
+
+---
+
+# THE CATALOG — ordered by integration
+
+## 🌐 HouseLoop.ai only
+
+Our own website. These have no Follow Up Boss equivalent.
+
+| Activity | Key | Who | Trigger today |
+|---|---|---|---|
+| Registered on the site | `registration` | lead | ✅ as `direct_registration` |
+| Requested a home value | `home_value_report` | lead | ✅ |
+| Started the seller flow | `seller_get_started` | lead | ✅ |
+| Liked a home | `like_home` | lead | ⚠️ exists as `property_liked` |
+| Ran a search | `search` | lead | ❌ none |
+| Searched in plain words | `home_searched` | lead | ❌ none |
+
+## 🔗 Follow Up Boss only
+
+Zillow's signals reach us **only** through Follow Up Boss. This is the pipe we cannot replace until HouseLoop
+carries its own traffic.
+
+| Activity | Key | Who | Trigger today |
+|---|---|---|---|
+| Inquired about a home | `property_inquiry` | lead | ✅ |
+| Inquired about a rental | `rental_inquiry` | lead | ✅ |
+| Asked about selling | `seller_inquiry` | lead | ✅ |
+| Toured virtually | `virtually_toured` | lead | ✅ |
+| Zillow in-app message | `in_app_message` | lead + agent | ✅ |
+| **Got pre-approved** | `pre_approval` | lead | ❌ **none — not in the dictionary at all** |
+| Un-saved a home | `unsave_home` | lead | ❌ none |
+| Hid a listing | `hide_home` | lead | ❌ none |
+| High-intent buyer | `behavior_high_intent_buyer` | system | ⚠️ as `insight_high_intent_buyer` |
+| High-intent seller | `behavior_high_intent_seller` | system | ⚠️ as `insight_high_intent_seller` |
+| Actively looking | `behavior_active` | system | ❌ none |
+| Fixed on one home | `behavior_specific_home_interest` | system | ❌ none |
+| Pre-qualified (Zillow Home Loans) | `behavior_zhl_prequalified` | system | ❌ none |
+| Went quiet | `behavior_window_closed` | system | ❌ none |
+
+<Warning>
+**Three events are wired on Follow Up Boss but missing from the catalog entirely** — `pre_approval`,
+`registration`, and the `_global` master switch. Pre-approval is the strongest buyer signal Zillow sends us and
+**nothing can react to it.** This is the concrete cost of the catalog never being written down.
+</Warning>
+
+## 🌐 + 🔗 Both pipes
+
+The model working correctly — **one activity, delivered by either integration.** This is what every row should
+eventually look like.
+
+| Activity | Key | Who | Trigger today |
+|---|---|---|---|
+| Requested a tour | `tour_request` | lead | ✅ |
+| Asked an agent to reach out | `contact_request` | lead | ✅ |
+| Viewed a home | `property_view` | lead | ⚠️ as `property_viewed` |
+| Saved a home | `save_home` | lead | ⚠️ as `property_saved` |
+| Shared a home | `share_home` | lead | ⚠️ as `property_shared` |
+| Saved a search | `saved_search` | lead + agent | ✅ |
+| Texted us | `text_received` | lead | ✅ |
+| We texted them | `text_sent` | agent + AI | ⚠️ as `text_message` |
+| Call logged | `call_logged` | agent | ⚠️ as `phone_call` |
+| Emailed us | `email_received` | lead | ✅ |
+| Re-engaged | `behavior_reengaged_buyer` | system | ⚠️ as `insight_re_engaged` |
+| Viewing repeatedly | `behavior_repeat_views` | system | ⚠️ as `insight_viewed_10x_7d` |
+| Interested in a new area | `behavior_area_interest` | system | ⚠️ as `insight_new_area` |
+
+<Note>
+**"Text Received" and "Text Message (FUB)" are the same event split in two** — the pipe is literally in the second
+one's name. Same for "Phone Call Received" / "Phone Call (FUB)". That is what happens when an event can only
+belong to one integration. In this catalog they are ONE row that lists both pipes.
+</Note>
+
+## 🏠 Internal — the agent works the lead
+
+**No integration.** Nobody sent these; your team did them. This is the largest gap in the system: **only 2 of 15
+agent actions can start anything.**
+
+| Activity | Key | Trigger today |
+|---|---|---|
+| Added a note | `note_added` | ❌ **none — and it is the most common agent action** |
+| Moved the stage | `stage_changed` | ✅ |
+| Added a tag | `tag_added` | ✅ |
+| Removed a tag | `tag_removed` | ❌ none |
+| Created a task | `task_created` | ❌ none |
+| Completed a task | `task_completed` | ❌ none |
+| Booked an appointment | `appointment_created` | ⚠️ as `appointment_set` |
+| Rescheduled | `appointment_updated` | ❌ none |
+| Cancelled an appointment | `appointment_cancelled` | ❌ none |
+| Logged the outcome | `appointment_dispositioned` | ⚠️ as `appointment_completed` |
+| Scheduled a follow-up | `followup_scheduled` | ❌ none |
+| Updated contact info | `contact_updated` | ❌ none |
+| Renamed the lead | `name_changed` | ❌ none |
+| Edited a note | `note_updated` | ❌ none |
+| Looked up a property | `property_looked_up` | ❌ none |
+| Sent an image | `image_sent` | ❌ none |
+| Call note | `call_note` | ❌ none |
+
+<Warning>
+**Notes are the single most common thing an agent does and nothing can react to one.** There is no way to build
+*"the note says pre-approved → move the stage"* or *"task completed → schedule the next touch."* Closing this gap
+is the highest-value part of merging the two lists.
+</Warning>
+
+## 🤖 Internal — Myli works the lead
+
+**No integration.** None of Myli's own actions can currently start anything — including learning a fact, which she
+does more than anything else.
+
+| Activity | Key | Trigger today |
+|---|---|---|
+| Learned a fact | `fact_captured` | ❌ none |
+| Rebuilt its context | `context_built` | ❌ none |
+| Reviewed a home | `home_reviewed` | ❌ none |
+| A human stepped in | `clone_stepped_in` | ❌ none |
+| Handover scheduled | `clone_takeover_scheduled` | ❌ none |
+| Ran a search | `ai_search` | ❌ none |
+| Skipped — no persona | `ai_skipped_no_persona` | ❌ none |
+| Director decision | `director_move` | ❌ none |
+| Inbound to the agent lane | `agent_lane_inbound` | ❌ none |
+
+<Note>
+The dictionary holds **20 "AI tool" trigger events** (`ai_send_home`, `ai_schedule_appointment`…). Those describe
+what Myli **may do** — they are the Tools machine, not activities. They belong to Playbooks, not here. **An AI
+tool is a capability; an activity is a fact.** Do not merge the two.
+</Note>
+
+## 📄 Internal — the deal progresses
+
+The healthiest family. Documents work end to end; the deal milestones are a straight `deal_*` ↔ `tc_*` rename.
+
+| Activity | Key | Trigger today |
+|---|---|---|
+| Document sent | `document_sent` | ✅ |
+| Document opened | `document_opened` | ✅ |
+| Document signed | `document_signed` | ✅ |
+| All parties signed | `document_completed` | ⚠️ as `document_signed` |
+| Under contract | `deal_under_contract` | ⚠️ as `tc_under_contract` |
+| Closed | `deal_closed` | ⚠️ as `tc_closed` |
+
+Transaction coordination adds more milestones (`tc_lost`, `tc_assigned`, `tc_date_approaching`,
+`tc_milestone_reached`, `tc_status_changed`, `tc_loop_created`) that are trigger events with no activity row yet —
+the mirror image of the gaps above.
+
+---
+
+# The rules that keep it true
+
+## 1. One name per thing
+
+**The 17 duplicate pairs are the bug.** An activity and its trigger must share a key. Where they differ today, the
+**activity's name wins** — it is what the feed, the badges and the lead timeline already read, and it is the one a
+human recognises (`save_home`, not `property_saved`).
+
+<Warning>
+**Do the foreign keys BEFORE any rename.** The event dictionary has **zero foreign keys** — every reference to an
+event is unvalidated text. **244 notifications (17%) already point at events that no longer exist**, and nothing
+ever errored. A rename today adds silently to that pile. Keys first, then renames become a database operation
+that either succeeds completely or fails loudly.
+</Warning>
+
+## 2. Categories are derived, never invented
+
+A **category is a goal**, and a goal is a playbook. Categories are named **from the catalog**, when a playbook
+actually needs one — never designed as a separate list, which is how a third vocabulary starts.
+
+**Today there is exactly ONE category**, because there is exactly one playbook being built:
+
+> **Tour** — the goal is *"get them in a house."* It covers `tour_request` from HouseLoop, `tour_request` from
+> Follow Up Boss, and `virtually_toured`. **One category, three activities, one playbook.**
+
+This is also the test of the model: if the tour playbook can be driven by a **category** rather than by three
+separate wirings, the design holds. Better to prove that on one playbook than on twelve.
+
+## 3. The maintenance rule
+
+- **New activity** → add ONE row here, with its who / where. It appears in the right section automatically.
+- **Want to automate it** → flip the toggle, give it a category. It appears in Trigger Events.
+- **New integration** (Realtor.com direct) → tag the activities it can deliver. **No new table, no new page.**
+- **Never** create a parallel list of event kinds in code. That is the exact defect this catalog replaces.
+
+## 4. What a section is NOT
+
+Sections are **generated** from `who` + `where`. Do not hand-author a section, and do not add a `section` column —
+that is a second place to remember, and it will drift the way the two event lists did.
+
+# Where the numbers come from
+
+Every count on this page was queried live on 2026-07-27, not remembered.
+
+| Measure | Count |
+|---|---|
+| Things that can happen | **69** |
+| Have actually been recorded | **47** |
+| Can start a workflow today | **34** (17 by exact name + 17 under a different name) |
+| **Cannot be automated at all** | **35** |
+
+<Note>
+**A zero count is not a health check.** HouseLoop is in beta — no users, no advertising, no traffic. On the
+website side, "never recorded" measures the absence of an audience, not the absence of a feature. Never render a
+missing count as a verdict.
+</Note>
+
+## Related
+
+| Doc | Covers |
+|---|---|
+| [Trigger Events](/guides/trigger-events) | The wiring on a toggled activity — the four toggles, the two arms, the gates |
+| [Workflows](/guides/workflows) | The engine being retired into Playbooks |
+| [Lead Sources](/guides/lead-sources) | The brands that arrive through an integration |
+| [Follow Up Boss](/integrations/follow-up-boss) | The pipe that carries every Zillow signal |
+| [Lead Activity Log](/guides/lead-activity-log) | `hl_lead_activity` — where the *instances* land |
