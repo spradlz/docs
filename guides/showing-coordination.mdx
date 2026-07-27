@@ -65,6 +65,38 @@ announce the text:
 outlines our compensation (the seller pays us), and that if you write an offer we're working for you. No
 cost to you."*
 
+## Calendar appointments — scheduling, invites, and cancellation
+
+Appointments live in `hl_appointments` and are managed via `POST/PATCH/DELETE /api/calendar/events/[id]`.
+From the lead-detail Appointments tab, the **Schedule** button opens `CreateEventModal` for creating a new
+appointment; the **Edit** button on each appointment card opens the same modal in edit mode.
+
+**Cancel Appointment (2026-07-24).** The Edit modal has a left-aligned red **Cancel Appointment** button (only
+for `type=appointment` in edit mode). Clicking it:
+1. Prompts for confirmation.
+2. If there are guest emails, shows the Google-style "Send/Don't send cancellation?" dialog.
+3. `DELETE /api/calendar/events/appt-<uuid>?send_invite=true` — sets `status='cancelled'` and sends a
+   Google Calendar cancellation email to guests if opted in.
+
+**Calendar invite template (2026-07-24).** The modal's "Calendar invite message body" field (bottom of the
+appointment section) has a **template picker** scoped to the "Calendar Invites" folder. Merge fields resolve
+live from the modal's current values:
+
+| Token | Resolves from |
+|---|---|
+| `{{contact.first_name}}` / `{{contact.phone}}` | the picked Related Lead |
+| `{{appointment.datetime}}` / `{{appointment.location}}` | the date/time/location fields |
+| `{{showing_partner.name}}` / `{{showing_partner.phone}}` | **first non-lead invitee** (Trish); falls back to the Assigned To user if no invitee |
+
+**Invitee-first partner resolution (2026-07-24).** `{{showing_partner.*}}` checks the **Invitees list first**
+(the first guest email that isn't the lead) — so "Assigned To" stays as the booker (Zach) while adding Trish
+as an invitee makes the template say "Trish Redenbaugh." Only if there are no non-lead invitees does it fall
+back to the assigned user. Code: `resolveAttachedPartner()` in `CreateEventModal.tsx`.
+
+**Guest email validation.** Server-side validation (POST and PATCH routes) rejects any guest email with more
+than one `@` sign, preventing concatenated-address corruption (e.g. `lucyhartman@trishredenbaugh@gmail.com`
+must be entered as two separate entries).
+
 ## The signature watcher — the 1-hour flake-catch
 
 **LIVE — the "esign nudge."** When the agreement is sent, a scheduled action is set keyed to the showing:
