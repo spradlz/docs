@@ -4,7 +4,7 @@ description: "THE working document for HouseLoop Seller Tools — your past clie
 ---
 
 <Note>
-**🕐 WORKING DOCUMENT — last measured 2026-07-27, 20:40 CDT.**
+**🕐 WORKING DOCUMENT — last measured 2026-07-27, 22:55 CDT.**
 
 This is the **one page Zach and Caleb work off of** until the Seller Engine is done. It replaces four
 separate guides that had drifted apart. Every number below was measured **live against both databases and
@@ -644,6 +644,55 @@ yet flipped) · `hvrMonthlySend` (event-only, dry-run default).
 Every entry below maps to a numbered task in the
 [Master Build Plan](https://claude.ai/code/artifact/2c63e8e3-4768-434b-8bfd-f548ead15f27). **This section is
 the record — if it was built, it is written down here.** Newest first.
+
+### 2026-07-27 · Tasks 45-49 — the G1 data block, closed with answers
+
+| # | Task | Before | After |
+|---|---|---:|---|
+| 45 | Build years | 94 missing | **59** |
+| 46 | Redfin coverage | 92.7% | **94.5%** (re-scrape running) |
+| 47 | No-photo cards | 7 | **4 — at the floor** |
+| 48 | Price histories | 6 | **3 — correctly empty** |
+| 49 | pcsoi spellings | 4 | **2** |
+
+**45 · Build years.** 35 filled from `hl_srg_mls_deals` — the CRM child only carried it on 1 of 94, so the MLS
+deal row joined by `mls_number` is the real source. Of the 59 remaining, **50 are Residential** with no source
+anywhere in our data and 9 are Land/Farm, which **correctly have no build year** and are no longer counted as a
+gap. 50 of the 59 do carry a value history — those are the only homes where the floor law still cannot be clamped.
+
+**47 · Photos — and what "good enough" means.** The photo engine harvested **7 of 7 with zero misses** (145
+photos to R2: 5 Redfin, 2 Realtor, including a Google Street View fallback). Two things worth knowing: the
+engine **only writes R2 and never touches `Listing.photosCached`**, so a separate writeback is always required
+or the photos are invisible; and the writeback is **improvement-only**, so it declined to replace an existing
+hero with a single image. The last 4 each returned one image. **Street View is the documented acceptable
+floor — these are at it. Closed.**
+
+**48 · The 3 remaining price histories are CORRECT.** All three are **CANCELLED listings**
+(`status=Cancelled`, `roles=list-ana`, no sale price, no close date). **They never sold**, so there is no
+transacted price to render. Empty is the right answer; a history is never invented.
+
+<Warning>
+**49 · What PCSOI actually is — and a correction I have to own.**
+
+**I reported that this column was dead and should be dropped. That was wrong**, and Rule #0 is the only reason
+it was caught. It is very much alive: the **live Seller Report** selects `pc.pcsoi`
+(`settings/seller-report/page.tsx:208`), `build-past-client-table.mjs` **writes** it, and the Audit Report
+renders a `pcsoi_dnc` pill. Its supposed replacement is not in use — `hl_lead_relationships` has **0 rows**.
+**Dropping it would have broken the Seller Report.**
+
+**PCSOI is a FUB TAG, not a lead source.** Computed as `tags.some(t => /pcsoi/i.test(t))` — Past Client /
+Sphere Of Influence. The distribution shows exactly what it marks — **Ana's personal sphere**:
+
+| Bucket | has pcsoi |
+|---|---|
+| ana-only | **349 / 432** |
+| ana-handoff | **82 / 83** |
+| team | 126 / 1,249 |
+
+**Nothing branches on the value** — it is a marker, not a driver — which is what made normalizing safe.
+105 rows (`true`, `PCSOI`) → `yes`. Two states now: `yes` (560) and empty (1,219). Any query filtering
+`pcsoi='yes'` was previously missing 105 people.
+</Warning>
 
 ### 2026-07-27 · Task 40 — empty-render cards, and WHY A HOUSE GETS TWO HOUSELOOP IDs
 

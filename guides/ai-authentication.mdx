@@ -1,0 +1,221 @@
+---
+title: "AI Authentication"
+description: "How an AI is allowed to communicate at HouseLoop — the actor model, the five altitudes, the one evaluator, the gateway, commit-time re-authorization, and the tests that keep it honest. THE LAW: no playbook, no voice. Supersedes and absorbs the old AI Safety Toggles page."
+---
+
+<Info>
+📌 **Last updated: July 27, 2026.** This page **supersedes `guides/ai-safety-toggles`**, which described a
+wall that had four holes in it and claimed "ungated is impossible." One subject, one page — two documents on
+one subject is how this got re-solved three times.
+</Info>
+
+## THE LAW
+
+> **No playbook, no voice.** Every AI communication — text, email, or (when the lane ships) a phone call, to a
+> lead **or to a teammate** — is proposed, authorized, and re-authorized before it reaches a provider.
+
+An AI outside a playbook has no goal, no state, and no history. It is a model guessing with a phone. The
+playbook is the only thing that makes it *not* guessing, so **the playbook run is the authorization scope.**
+
+---
+
+## Why the old model kept failing
+
+An AI **clone deliberately sends as a human** — the same number, the same inbox, the same name. That is a
+feature, not a bug. And a clone is **not a user row**: it is a mode on a human
+(`hl_agent_clone_config`, keyed by the human's id).
+
+So every previous design did one of two impossible things:
+
+| Approach | Why it failed |
+|---|---|
+| **Infer** AI-ness from the sending identity | Impossible — it is identical to the human by design |
+| **Ask the caller** to declare it | Fails the moment any code path forgets |
+
+That is not three separate bugs. It is **one unanswerable question, asked three times.** The fix was to stop
+asking it.
+
+<Warning>
+**The real incidents this exists to prevent.** **Faduma** — a clone texted a live lead while clones were
+"off." **Allison** — a muted lead was nudged at 9:52pm and cooled off. **Nickolas Loring** — a clone task
+texted a muted lead with the master off. Every one of them was a send path that skipped a check nobody knew
+was separate.
+</Warning>
+
+---
+
+## The actor model
+
+Four things that used to be blended into one. **Separating them is the fix.**
+
+| Concept | Answers | Example |
+|---|---|---|
+| **Actual actor** | Who is really causing this? | Myli — **always the AI**. The authorization principal. |
+| **Role** | What class of employee? | Inside Sales Agent |
+| **Playbook run** | **Why**, and in what scope? | Tour Request, step `acknowledge` |
+| **Presented identity** | Whose name does the recipient see? | Zach's SMS line — **never the principal** |
+
+<Warning>
+**The presented identity must never become the authorization principal.** Resolving a clone to Ana's user row
+and evaluating *Ana* is **privilege escalation by impersonation** — if Ana is an admin, her clone inherits
+admin. The clone is an envelope, not an actor.
+</Warning>
+
+Every audit line reads: *actual actor* Myli · *under playbook* Tour Request · *presented as* Zach Spradling ·
+*channel* SMS. **Two columns, never conflated.**
+
+---
+
+## The five altitudes
+
+One question — *is this AI allowed to act?* — asked at five scopes. **Deny overrides: a child can only ever be
+more restrictive than its parent, never less.**
+
+| # | Scope | Where it lives |
+|---|---|---|
+| 1 | The whole roster | `hl_settings.ai_master` |
+| 2 | A lane | `hl_settings.ai_clones` · `ai_conversations` |
+| 3 | One employee | `hl_users.is_active` · `hl_agent_clone_config.enabled` |
+| 4 | One lead — **the mic** | `hl_leads.ai_responder = 'none'` |
+| 5 | One playbook | `hl_playbooks.enabled` + an **open run** |
+
+Plus the delegation check: **may this actor present as this identity, on this channel?**
+(`hl_ai_identity_delegation`). An absent row is a denial — which is why **voice is off today**: nobody has
+written a voice delegation row.
+
+<Info>
+**Fail-closed, always.** Missing context, an unknown row, a malformed value, or a thrown query all **deny**.
+There is no `?? true` anywhere in this path, and no way to ask for fail-open — the parameter was deleted so it
+cannot be reintroduced. A missing `ai_master` row means **off**.
+</Info>
+
+---
+
+## The flow
+
+```
+AI actor
+   │  proposes
+   ▼
+CommunicationIntent  ──►  authorizeCommunication()   ← the ONE evaluator
+   │                          (proposal-time decision)
+   ▼
+AICommunicationGateway  ──►  authorizeCommunication()  ← AGAIN, at commit
+   │                          (current policy, not the old decision)
+   ▼
+SMS · Email · iMessage · Voice
+```
+
+**Nothing sends that was not written down first.** The intent row exists before any provider is contacted, so
+"what was it about to say, and was it allowed?" is always answerable — including for messages we blocked,
+which are the most valuable rows in an audit.
+
+### Commit-time re-authorization
+
+<Warning>
+**An authorization decision is evidence of a past decision, never standing authority.** Myli drafts → the gate
+approves → you flip the master off → the queued job fires two minutes later. Without a re-check at the
+provider boundary, **it sends.** So the evaluator runs twice: once at proposal, once immediately before the
+wire.
+</Warning>
+
+---
+
+## The modules
+
+| File | Job |
+|---|---|
+| `lib/ai/comms-security.ts` | **The one evaluator.** `authorizeCommunication()` · the pipe-level `actorMayAct()` · the content check · propose · commit |
+| `lib/ai/comms-gateway.ts` | **The gateway.** The only component permitted to dispatch to a provider |
+| `lib/ai/can-act.ts` | The actor **resolver** — *who* is the authorized actor for this lead (a different question, kept deliberately) |
+
+<Info>
+**Deleted on 2026-07-27:** `gated-send.ts`, `actor-gate.ts`, `speak.ts`. In a single day this codebase grew
+**six overlapping authorization modules** — roughly 1,100 lines, about 700 of them written that day and called
+by **nothing**. That is exactly the unconnected-wire disease the arc exists to kill, committed four more times
+while writing the cure. They were deleted, not deprecated: **a deprecated gate is still a gate somebody will
+call.**
+</Info>
+
+### One request, one decision — never a function per event
+
+There is exactly one request shape and one decision shape. There is deliberately **no**
+`canSendNewLeadText()` / `canSendFollowUpEmail()` / `canCallAfterShowing()`. That abstraction guarantees
+whack-a-mole: a new event means a new function and a new place to forget a rule.
+
+Reason codes: `ALLOWED` · `MASTER_AI_DISABLED` · `CLONE_LANE_DISABLED` · `EMPLOYEE_DISABLED` ·
+`NO_ACTIVE_PLAYBOOK` · `PLAYBOOK_NOT_RUNNING` · `PLAYBOOK_WRONG_LEAD` · `PLAYBOOK_DISABLED` ·
+`IDENTITY_NOT_DELEGATED` · `LEAD_MUTED` · `LEAD_MISSING` · `QUIET_HOURS` · `DUPLICATE_ACTION` ·
+`POLICY_CONTEXT_MISSING`.
+
+---
+
+## The data
+
+| Table | What it holds |
+|---|---|
+| `hl_ai_identity_delegation` | Which AI actor may present as which identity, **per channel**. Absent = denied. |
+| `hl_communication_intent` | Every proposed message, its decision, its reason, and its outcome. Idempotency key prevents double-sends. |
+| `hl_playbook_runs` | The authorization scope. A unique partial index enforces **one open run per lead** — in Postgres, not by convention. |
+| `hl_playbook_turn_trace` | Every decision, spoken or blocked, with its reason. |
+
+Migrations: `0461_playbook_runs_and_turn_trace.sql` · `0465_ai_communication_security.sql`.
+
+---
+
+## Runbook — how to actually stop the AI
+
+| You want to stop… | Do this |
+|---|---|
+| **Everything, now** | Set `hl_settings.ai_master` → `{"enabled": false}`. Effective within ~2 seconds (the master is the one thing that may not be cached longer). |
+| **All clones** | `ai_clones` → disabled |
+| **One AI employee** | `hl_users.is_active = false` |
+| **One agent's clone** | `hl_agent_clone_config.enabled = false` |
+| **One lead** | `hl_leads.ai_responder = 'none'` — the mic |
+| **One playbook** | `hl_playbooks.enabled = false` |
+| **One channel for one actor** | `hl_ai_identity_delegation.enabled = false` |
+
+**A queued message already approved will still be blocked** — commit-time re-authorization catches it.
+
+---
+
+## The tests
+
+```bash
+npm run test:ai-security   # the twelve
+npm run test:ai-schema     # the schema contract
+```
+
+The twelve cover: master off blocks everything · **the happy path still works** · no playbook denied ·
+completed/disabled playbook denied · wrong lead denied · muted lead denied · undelegated identity denied ·
+undelegated channel denied · disabled employee denied · duplicate refused · **flipping the switch after
+queueing blocks the send**.
+
+<Info>
+**Test 2 matters as much as the denials.** It asserts the happy path *works* — a wall that blocks everything
+is just a broken system with good test coverage.
+</Info>
+
+**The schema guard** reads `information_schema` and fails the build if the security path references a column
+that does not exist. It exists because the authorization code once queried
+`hl_agent_clone_config WHERE user_id` when the column is `agent_user_id`. **That query threw, the throw was
+swallowed, and the send was allowed** — a fail-open hiding inside a fail-closed function, invisible to
+TypeScript because SQL is just a string. "Be more careful" is not a fix; a failing build is.
+
+---
+
+## Known-open, stated plainly
+
+- **Voice is not gated.** The phone lane checks the voice toggle and the master — **not the per-lead mic**. A
+  muted lead who calls in still gets answered. The lane is unfinished; the rule is written down so it cannot
+  be built wrong. **The call will be the playbook run** — permission asked once at answer-time.
+- **Per-step capabilities** ("one SMS, this step, expires in 15 minutes") are not built. The evaluator checks
+  the run and the playbook, not a per-step grant.
+- **Shadow / convert / enforce** are not done. The machinery is live and proven, but **most AI call sites have
+  not been migrated to propose an intent yet** — that happens as each vibe-coded mouth is absorbed into its
+  playbook.
+
+**Build plan:** the AI Programming master blueprint —
+[artifact 5b202c8e](https://claude.ai/code/artifact/5b202c8e-ea8a-4655-ae41-f5fb37b98f49), the
+🕳 *AI Communication Security* rabbit hole. Conversation design lives in
+[AI Programming](/guides/ai-programming).
