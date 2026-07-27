@@ -4,7 +4,7 @@ description: "THE working document for HouseLoop Seller Tools — your past clie
 ---
 
 <Note>
-**🕐 WORKING DOCUMENT — last measured 2026-07-27, 15:42 CDT.**
+**🕐 WORKING DOCUMENT — last measured 2026-07-27, 18:10 CDT.**
 
 This is the **one page Zach and Caleb work off of** until the Seller Engine is done. It replaces four
 separate guides that had drifted apart. Every number below was measured **live against both databases and
@@ -617,6 +617,162 @@ yet flipped) · `hvrMonthlySend` (event-only, dry-run default).
 **Redfin (Camp David, the address-based AVM exception):** `redfin-estimate-scraper.mjs` +
 `redfin-estimate-cron.sh` (monthly) + `redfin-chrome-up.sh` (warm-Chrome watchdog, `@reboot` + every 10 min).
 **Never headless** — headless is detected and blocked.
+
+---
+
+## 11b · Build log — what shipped, by task number
+
+Every entry below maps to a numbered task in the
+[Master Build Plan](https://claude.ai/code/artifact/2c63e8e3-4768-434b-8bfd-f548ead15f27). **This section is
+the record — if it was built, it is written down here.** Newest first.
+
+### 2026-07-27 · Task 36 — the 65 quarantined home pins
+
+**Symptom:** 97 past-client pin rows (65 distinct targets) pointed at a `Listing` row whose
+`quarantinedAt` was set, so the card rendered value-less. Named clients affected: Megan L. Hawks,
+Therese Foster, Erin Odom, Rick Lucas, Colby Peterson, Abagale Brown.
+
+**Why it recurred nine times.** Archaeology found **nine separate one-off repair passes since 2026-07-02**
+— unquarantine-batch, defork-keeper, ledger-repoint, card-history-recover, thin5, Aaron-Johnson-adopt,
+active-listing-repoint, rich-keeper-swap, Bergin-keeper-swap. Every one a scratch script; most no longer
+exist in the tree, only their reversal receipt survives.
+
+The mechanism nobody closed:
+
+1. Quarantine is a **WEB-local event**. `lib/listings/defork.ts` merges a fork pair, sets the loser's
+   `quarantinedAt`, and logs `loser_hlid → winner_hlid` in `hl_dedup_quarantine` — with **zero CRM
+   awareness** (no CRM connection exists in that file).
+2. The CRM's `website_hlid` columns are **static text snapshots** written once by a backfill and never
+   re-resolved. The Seller Report renders from those columns.
+3. So every merge silently stranded a card, and a human re-found it later.
+
+<Warning>
+**A correction to the previous guidance.** This guide used to say "flip the `pastclient-rooftop-guard`
+cron" was the structural fix for recurrence. **It was not, for this bug.** Steps ①-③ of that guard maintain
+`hl_property.active_listing_hlid` (WEB side). The Seller Report reads `website_hlid` (CRM side). Different
+pointers — the cron alone would never have fixed a single value-less card.
+</Warning>
+
+**Why hand-fixes kept failing:** the winner usually lives under a **different `identityKey`**, because the
+merge was across address variants — `604 W 90th Ter` → a Heartland row, `818 N 84th Dr` vs `818 NE 84th St`,
+`14813 W 149th Ter` keyed as `…149th court`. Anyone hunting a keeper *within* the loser's identityKey finds
+zero live rows and concludes the data is gone. It is not — the forward pointer was in the quarantine trail
+the whole time, and it has to be followed **transitively** (a winner can itself be merged later).
+
+**What shipped:**
+
+| | |
+|---|---|
+| `tools/houseloop-cards/repoint-quarantined-pins.mjs` | The repair. Dry by default, `--write` gated, writes a reversal to `.claude/reports/`. Two recovery paths: the dedup trail (transitive, cycle-guarded), then a fallback to the richest live sibling under the same identityKey (value → photos → not-archive — the Bergin keeper rule). |
+| `pastclient-rooftop-guard` — quarantine filter | `resolve-keepers` had **no** `quarantinedAt` filter, so a quarantined row could rank #1 and *become* the keeper. That is the Bergin mechanism. Filtered now. |
+| `pastclient-rooftop-guard` — new `sync-crm-pins` step | The loop nobody closed. Follows the quarantine trail transitively and repoints **both** CRM pin columns onto the live winner. Idempotent — 0 repoints on a healthy book. |
+| **Cron ON** — `0 6 * * *` | Zach's typed sign-off 2026-07-27. Event trigger kept for manual re-runs. |
+
+**Verified by a real Inngest run** (the only proof that counts) — run `01KYJBXNFGJ7RCS3TXZSFR2MT3`, status
+`success`, in the Run Log:
+
+```json
+{ "rooftops": 1921,
+  "crmPins": { "checked": 1958, "brokenFound": 2, "repointed": 0, "unresolved": 2 },
+  "keepersRepointed": 4,
+  "adopted": 0 }
+```
+
+`repointed: 0` on a healthy book proves it is **idempotent** — it does not thrash rows that are already
+correct. `keepersRepointed: 4` is the new quarantine filter doing real work on its first run: four WEB-side
+keepers were pointing at quarantined rows and were corrected automatically. `adopted: 0` means no
+past-client re-listing is currently orphaned. From tomorrow this runs at 06:00 daily, unattended.
+
+**Result:** quarantined pins **97 → 2** (the 2 remaining are true dead ends — the winner is itself
+quarantined). Sell-score suppressions **156 → 126**; **30 past clients returned to the sellable list**
+(1,115 → 1,145).
+
+### 2026-07-27 · The address-identity question — measured, not theorised
+
+Zach: *"I just want one canonical home with a HouseLoop ID. When a new MLS listing comes on, it becomes a
+row under our ID."* **That system already exists and is working.** Measured live across the past-client book:
+
+| | |
+|---|---:|
+| Past-client home listings | **1,903** |
+| Distinct HouseLoop IDs | **1,903** |
+| Listings with **no** HouseLoop ID | **0** |
+| Orphan re-listings that forked away | **0** |
+
+`identityKey()` (`apps/houseloop-web/lib/listings/address-identity.ts`) = canonical street + unit + ZIP5.
+City is deliberately excluded — the ZIP pins the geography, so "Baldwin" and "Baldwin City" collapse to one
+key. Units **are** part of the key, so unit A and unit B in one building stay separate homes.
+
+An audit of "same house number + same ZIP, different identityKey" returned 33 groups — and **most are
+genuinely different houses** (`13205 King Street` vs `13205 W 129th Street`; `721 W Shawnee Court` vs
+`721 N Walnut Street`; `9304 N Charlotte Court` vs `9304 N Kenwood Avenue`). Only a handful are true forks:
+a duplex written both as `6506-6508 Marsh Avenue` and `6506 Marsh Ave`, and a condo that lost its unit
+letter (`10240 W 96th Ter` unit F vs no unit).
+
+**Conclusion: the identity model is not the problem and does not need rebuilding.** The gap was maintenance —
+the ADOPT step that files a past-client re-listing under the existing ID never ran on a schedule. It does now.
+
+### 2026-07-27 · Tasks 37 + 39 — the sell score and the suppression list
+
+`tools/houseloop-cards/sell-score.mjs` — turns 1,779 names into a ranked call list. Read-only by default;
+`--write` stamps `hl_srg_past_clients.sell_score`, `--csv` exports.
+
+**The score is 0-100 across four explainable parts — never a black box:** TENURE 0-40 (peaks at 6-10 years
+owned, the strongest signal) · EQUITY 0-30 (blends % gain and absolute dollars) · MOMENTUM 0-20 (real
+12-month year-over-year) · REACHABLE 0-10 (contactable, and do we know them well enough to sound human).
+Every row prints its own breakdown (`T40 E30 M17 R9`) so a human can argue with it.
+
+**Suppression is a hard gate applied BEFORE scoring** — a landmine is **removed with its reason printed**,
+never merely ranked low, so nobody can accidentally work one: quarantined pin · negative equity · no
+purchase price · absurd appreciation (>300%) · not a current owner · no email · agent-dnc/internal.
+
+Result after the pin repair: 1,271 owners → **126 suppressed** → **1,145 scored** · 167 HOT (75+) · 142 WARM.
+
+<Note>
+**A bug worth remembering.** The first version read `Listing.valueHistory` — the *column*, which is empty on
+most homes. It silently defaulted ~75% of rows to "no trend" and quietly collapsed the score into
+tenure+equity. The real series is the **`hl_value_history` table** (345k rows). Reading a column that looks
+right but is empty is the kind of failure that produces a plausible, wrong answer.
+</Note>
+
+### 2026-07-27 · The value rule — highest trusted source
+
+Zach: *"We don't blend — we make ours look the best."* The HouseLoop Estimate is now
+`MAX(trusted portal AVMs) × 1.005` (`apps/houseloop-web/lib/valuation/zestimate-value.ts`), so ours sits a
+hair above **every** portal a homeowner could check, not just Zillow. This **extends** the 2026-06-18 "hair
+above Zillow" lock rather than breaking it: measured across 1,665 homes, **0 land below Zillow**, 696 go
+higher (median +4.2%).
+
+**Found on the way in:** `redfinEstimate` and its siblings existed in the database but were **never declared
+in `schema.prisma`**, so Prisma's select never returned them — **the value fork could not see Redfin at
+all.** That is why it was "scraped onto 1,600 homes and used on one." Declared 2026-07-27 (schema-only sync,
+the columns already existed). A second bug: the robust fallback path was Zillow-only and would have kept the
+lower number even after the rule changed. Both paths now use one shared helper.
+
+⚠️ **Deploy of this value rule is HELD** pending the Redfin data verification below.
+
+### 2026-07-27 · Task 1/35 — Redfin column verified against the live site
+
+Zach checked **3730 Ditzler Ave** and reported Redfin had no value for it, while our database held
+**$336,621**. Verified on Camp David's warm Chrome: Redfin prints *"Unfortunately, we don't have enough data
+to generate an accurate Estimate at this time"* and the page carries **zero** `predictedValue`. **We stored a
+fabricated number.**
+
+Two defects, root cause first:
+
+1. **Settle too short (the cause).** The estimate JSON hydrates well after `domcontentloaded`, but the
+   scraper extracted ~2.2s after landing. On slower pages the primary read **missed** and fell through to the
+   text fallback. Measured: `11443 W 105th Ter` read null at 3.8s and the correct **$503,150** at 5.2s. Now
+   waits for a **terminal signal** — the value is present *or* Redfin states it has none — capped at 9s. This
+   also recovers legitimate values the monthly sweep has been silently missing.
+2. **Unanchored fallback (the symptom).** The regex matched *any* "Redfin Estimate" occurrence followed by a
+   `$` within 80 characters, so on a no-estimate page it scanned past the apology into another module.
+   Returns null immediately now when Redfin states it has no estimate.
+
+**Verified live, 5 cases:** both Ditzler homes → null (fabrication killed); `11443 W 105th Ter` $503,150,
+`4809 W 70th St` $419,666, `5523 Sutton Ave` $287,153 all preserved exactly. **Context: 28 of 28 other
+sampled homes matched Redfin exactly**, so the column is broadly sound — this was a narrow but real defect on
+no-estimate homes. A full re-scrape with the fixed extractor is running on Camp David.
 
 ---
 
