@@ -195,6 +195,43 @@ Needs expiry plus single-use or rotation before step 5 above ships.
 
 ## Dev Log
 
+<Update label="2026-07-27 12:35 PM CT — Benji" description="ARC 3 SHIPPED — Create Search is now an action on the lead detail. Verified by Zach on production.">
+**Items 10, 11 and 12 are live. Zach ran the flow on the Zach Brownling test lead in production and confirmed
+it carries through to the HouseLoop website.**
+
+- **`+ Search` is the 6th composer tab** (`components/leads/detail/LeadComposer.tsx`), alongside Summary ·
+  + Text · + Email · + Call · + Note. A saved search is something you DO to a lead, so it lives with the
+  compose actions — not two clicks down under Website Activity.
+- **New `components/leads/detail/SearchComposer.tsx`** — name + email cadence, inline (no modal), same
+  pattern as `NoteComposer`. The four cadence labels are lifted **verbatim** from the website's
+  `FREQ_OPTIONS` (Immediately / Once a day / Once a week / Monthly) so the lead reads the same words on
+  houseloop.ai. The hint line under the pills swaps with the selection. Primary button is disabled until
+  the search is named. A lead with neither phone nor email gets an explanatory empty state instead of a
+  form that can't submit (0 of 32 leads today — built anyway).
+- **The handoff is query params ONLY** — `/listings?forLead=<id>&name=…&freq=…&sort=newest`. Verified by
+  stubbing `window.open` and reading the emitted URL: **no `ml=`, no `token=`, no `/auth/magic`.** This is
+  the structural fix — with no lead session there is nothing for the pixel to misattribute.
+
+**Tab row — three passes, recorded because the reasoning matters.** Side-by-side labels measured **599px of
+button inside a 473px card**, so the browser scrolled the nearest scrollable *ancestor* to reveal the focused
+tab and dragged the composer body sideways (labels clipped). Double-stacking icon-over-label (ported verbatim
+from `FeedFilterRow`, CenterLane.tsx:2800-2813) fixed the look but still measured 599px — `+ Search` stayed
+off-screen. The shipped answer is **stacked + `+ verb` labels + `flex:1 1 0`**: 425px of content spread to
+exactly **72px per tab**, edge to edge, nothing scrolls.
+
+The leading `+` is load-bearing: the feed row directly below reads *Messages · Calls · Emails · Notes*, so
+bare "Text / Email / Call / Note" stacked above it would be two near-identical word sets meaning opposite
+things (compose vs. filter). `Summary` gets no plus — it is the one tab you read rather than create. Note the
+composer **expands** while `FeedFilterRow` **scrolls**: that row is locked "scroll, never shrink" because 13
+tabs can't fit; six fit with 48px to spare.
+
+**Not yet built past the handoff** (arc 4, items 13-17): the website has no `forLead` banner, no verify
+screen, and saving there still writes to whoever is logged in. **Next is arc 2 item 7** — unblocking
+`createSavedSearchForLead()` so a lead can own a saved search at all. Today that fails for 30 of 32 leads.
+
+Commits: `d1c271fd8f` (composer) → `3d067ad196` (stack + labels) → `680e0f6f56` (full width).
+</Update>
+
 <Update label="2026-07-27 11:45 AM CT — Benji" description="Full live re-audit + the locked Create Search build plan. Contamination already cleaned; the real bottleneck is the account wall, not the impersonation.">
 **Re-audited every claim on this page against both production databases and the codebase. Three of them were wrong.**
 
