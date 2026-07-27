@@ -16,11 +16,102 @@ the CRM's **Saved Search Listing Alerts** workflow (`sys_saved_search_digest`) a
 on the workflow canvas + in the Run Log (see *Inngest or it doesn't exist*).
 </Note>
 
-## 🔴 2026-07-26 — PLAN OF ACTION — SAVED SEARCH IS THE ZILLOW BRIDGE
+## 🟢 2026-07-27 11:45 AM CT — LOCKED BUILD PLAN (supersedes the 07-26 plan below)
+
+<Info>
+**Locked with Zach 2026-07-27 (Benji).** Full audit re-run live against both production databases **and**
+the codebase. Master build plan — audit + signed-off UI + a 24-item tracker across 7 arcs — is the
+**Saved Search Master Build Plan** artifact (`2d947522`). Supporting artifacts: the flow audit (`11391e7e`)
+and the UI wireframe (`ab2e7e5c`). **The wireframe is the build spec** (`UI_ITERATION_HTML_FIRST`) — the
+React is a verbatim port, not a reconstruction.
+</Info>
+
+### What the live audit corrected (2026-07-27)
+
+The 07-26 plan below is directionally right but wrong on three material facts. Corrected record:
+
+| Claim (07-26) | Measured 07-27 | Verdict |
+|---|---|---|
+| Contamination on Norma Herra (14 views + 2 searches) | **0** pixel events bound to her; all 1,298 remaining rows are legitimate `source='fub'` Zillow imports | **Already cleaned** — no data-cleanup workstream |
+| Cross-lead contamination risk | **0** visitors carrying >1 lead; **1** of 204,849 visitors bound at all | Latent architecture risk, not a live mess |
+| Instant alerts / engine health | Weekly cron ran **13:00:02 UTC 07-27**, matched **100** homes | **Healthy** — starved, not broken |
+| `sys_saved_search_digest` runs | **0 in 30 days** | Starvation, downstream of the account wall |
+| Agent/system origins are live trigger events | `saved_search_agent` + `saved_search_system` are **`is_active = false`** | Switched off since the 07-01 build |
+| Name + frequency UI "to build" | Shipped 2026-07-01 (`SaveSearchModal` `NameStep`, `FREQ_OPTIONS`) | **Already built**, only reachable via impersonation |
+
+### 🔒 The real bottleneck — one line, not the impersonation
+
+`createSavedSearchForLead()` (`apps/houseloop-crm/lib/leads/create-saved-search.ts:76-78`) is the clean
+server-side path — no browser, no session, no pixel. It **bails**:
+
+```ts
+const u = await qWeb(`SELECT id FROM "User" WHERE lower(email) = lower($1) LIMIT 1`, [email]);
+if (!userId) return { ok: false, reason: 'lead has no website account (cannot own a saved search)' };
+```
+
+Only **2** website accounts exist in production (one a test account), so this fails for every real lead —
+which is why the impersonation door was the only one left. `seedStarterSavedSearch`
+(`lib/lead-intake/process-intake.ts:68`) carries the identical bail. **The impersonation bug is the symptom;
+this check is the disease.**
+
+### The production numbers (live, 2026-07-27)
+
+| Metric | Value |
+|---|---|
+| Web `SavedSearch` rows | **1** (owned by `lee-v4-arms@test.houseloop.ai`) |
+| Web `User` rows | **2** |
+| CRM `hl_leads` (active) | 32 · **26** with email · **32** with phone · **6** phone-only |
+| Phone numbers shared by 2+ leads | **0** |
+| Zillow saved searches imported from FUB | **176** across **17** leads — **100%** carry usable criteria |
+| Real leads with a HouseLoop saved search | **0** |
+
+### The locked design (Zach 2026-07-27)
+
+1. **`Create Search` is an ACTION, not a place** — the 6th tab in the lead-detail composer row, after
+   Create Note (`LeadComposer.tsx:21`). Inline, no modal. Captures **name + frequency** only.
+2. **It opens the real website** — `houseloop.ai/listings?forLead=<id>`, the same map/filters a buyer uses.
+   A fixed banner reads *"Creating saved search for Norma Herra."* **No magic link, no lead session** — the
+   lead is named in the URL, never in the session. That is the structural fix.
+3. **Save → Verify → Save Search as Agent** — the verify screen reads back name, frequency, criteria and a
+   live match count. Saving writes server-side via `createSavedSearchForLead()` with `createdBy='agent'`.
+4. **Send-now lives at the END** (there is nothing to link to before the search exists) — a prefilled,
+   editable text carrying the magic link, plus optional "email the N matches now" via the existing
+   `/api/leads/saved-searches/send`.
+5. **Website Activity keeps the saved-search card, view-only** — Edit / Send now / Duplicate / Delete all
+   stay. Only the "Create Saved Search as Agent" button and its route are removed.
+6. **Phone becomes the account key.** `phone` gains a normalized unique index; `email` becomes nullable.
+   The account is minted silently (`findOrCreateWebUserForLead`) — the lead never sees a signup form.
+   **Password is set only from inside an already-authenticated session** (arriving via the texted link
+   proves phone ownership); setting a password from a bare phone number would let anyone claim a lead's
+   account. "Text me a link" is the fallback for anyone who never sets one.
+
+<Note>
+**Magic-link expiry is NOT being changed.** The forever/reusable token is Zach's explicit directive
+(2026-06-16, quoted in `apps/houseloop-web/lib/auth/magic-token.ts`). Surfaced again 07-27 because we are
+about to text these to every Zillow lead — still Zach's call, unchanged.
+</Note>
+
+### The 7 arcs (24 items — full tracker in the artifact)
+
+| Arc | What | Items |
+|---|---|---|
+| **1 · Unload the gun** | Delete the create-as-agent button + `agent-search-link` route; rotate `hl_visitor_id` on identity change | 3 |
+| **2 · Identity** | Phone unique index · email nullable · `findOrCreateWebUserForLead` · **unblock `createSavedSearchForLead` (★)** · same for `seedStarterSavedSearch` · phone login | 6 |
+| **3 · Create Search action** | 6th composer tab · `SearchComposer` · handoff with `forLead` | 3 |
+| **4 · Website side** | Banner · seeded filters · verify screen · server-side save · send-now | 5 |
+| **5 · Engine on** | Activate the 2 dormant trigger events · move the create button out · prove the digest E2E | 3 |
+| **6 · Zillow bridge** | Map Zillow criteria → ours · offer them as a starting point in Create Search | 2 |
+| **7 · Docs** | This page · pin the wireframe to `docs/wireframes/` | 2 |
+
+**Arc 2 item 7 is the unlock** — it takes the eligible book from 2 leads to 32. Nothing downstream works first.
+
+---
+
+## 🔴 2026-07-26 — the original plan of action (superseded by the block above)
 
 <Warning>
-**THIS IS THE NEXT BUILD AFTER the mobile CRM / lead-detail / Follow Up Boss work in flight.**
-Locked with Zach 2026-07-26. Nothing below is built yet. Read this block before touching saved searches.
+**Superseded 2026-07-27** by the locked build plan above. Kept for the root-cause trace, which is still
+accurate. Where the two disagree on numbers or damage, **the 07-27 block wins** (it was measured live).
 </Warning>
 
 ### The thesis (Zach, 2026-07-26) — say it out loud before designing anything
@@ -104,7 +195,37 @@ Needs expiry plus single-use or rotation before step 5 above ships.
 
 ## Dev Log
 
-<Update label="2026-07-26 — Lee" description="Create Saved Search as Agent attributes the AGENT's browsing to the lead — full root-cause trace. Not fixed; plan is at the top of this page.">
+<Update label="2026-07-27 11:45 AM CT — Benji" description="Full live re-audit + the locked Create Search build plan. Contamination already cleaned; the real bottleneck is the account wall, not the impersonation.">
+**Re-audited every claim on this page against both production databases and the codebase. Three of them were wrong.**
+
+- **The contamination is gone.** Norma Herra has **0** pixel events bound to her; the 1,298 rows on her
+  timeline are all legitimate `source='fub'` Zillow imports dating to 2025-11-05. Across the whole CRM:
+  **0** visitors carry more than one lead, and only **1** of 204,849 visitors is bound to a lead at all.
+  The 07-26 plan's item 6 ("decide what to do with the contaminated rows") is **closed — nothing to fix.**
+- **The engine is healthy, not broken.** The weekly cron fired **13:00:02 UTC today** and matched 100
+  homes. `sys_saved_search_digest` has **0 runs in 30 days** purely because there is nothing to run for.
+- **The real bottleneck is one line.** `createSavedSearchForLead()` bails when the lead has no website
+  `User` (`create-saved-search.ts:78`). Production holds **2** accounts total, one of them a test account,
+  so the clean server-side path fails for every real lead — leaving impersonation as the only door.
+  `seedStarterSavedSearch` (`process-intake.ts:68`) has the identical bail.
+- **More is built than the plan assumed.** The name + frequency UI, agent-mode copy, send-now (today / 2d /
+  7d / since-last), edit, duplicate, delete and the god-tier card with open/click tracking are all shipped
+  and working — reachable only through the impersonation door or two clicks deep under Website Activity.
+- **Two of the three origins are switched off.** `saved_search_agent` and `saved_search_system` are
+  `is_active = false` in `hl_trigger_events`; only the base `saved_search` fires. That was on the 07-01
+  checklist and never closed.
+- **Found: 176 Zillow saved searches** imported from FUB across **17 of 32 leads**, **100% carrying usable
+  structured criteria** (beds/baths/price/location/propertyTypes) — and **0** converted into HouseLoop
+  searches. Half the book's stated criteria are sitting unused in the run log.
+- **Phone beats email as the account key:** 32/32 leads have a phone, 26/32 an email, **6 are phone-only
+  and cannot own an account at all** today (`User.email` is unique + required). **0** shared phone numbers.
+
+**Design locked with Zach the same day:** Create Search becomes an action in the composer row, opens the
+real website with a `forLead` banner and no lead session, verify → save server-side → send a prefilled
+text. Full plan + wireframe: see the 07-27 block at the top of this page. Nothing built yet.
+</Update>
+
+<Update label="2026-07-26 — Lee" description="Create Saved Search as Agent attributes the AGENT's browsing to the lead — full root-cause trace. Superseded by the 07-27 audit; the root-cause trace remains accurate.">
 **Found while auditing lead source attribution. Zach reproduced it live and confirmed the sequence.**
 
 **Symptom.** Lead **Norma Herra** shows 14 property views + 2 searches on her timeline. None are hers. She has
