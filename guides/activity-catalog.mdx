@@ -434,6 +434,46 @@ identity, so a second pipe needs a second brand row (`zillow_com`, which already
 
 # The rules that keep it true
 
+## 0. It is impossible to invent a kind (shipped 2026-07-27)
+
+Zach: *"There has to be a way that you can't just vibe code and write something new unless it's one source
+of truth in the list."* **Four layers — and only the first is a rule. The rest are machines.**
+
+| # | Layer | What it is |
+|---|---|---|
+| **1** | **The DB is the list** | `hl_trigger_events` + **6 foreign keys** (mig 0464 / 0465) |
+| **2** | **Generate a type FROM it** | `scripts/generate-event-kinds.mjs` → `lib/leads/event-kinds.generated.ts` |
+| **3** | **Writers take the type** | `logActivity({ kind: 'saved_a_home' })` — **does not compile** |
+| **4** | **A drift test** | `npm run test:event-kinds` — exit 1 if the file and the table disagree |
+
+```bash
+npm run gen:event-kinds     # regenerate after adding a row
+npm run test:event-kinds    # CI gate — fails on drift
+```
+
+**Verified:** hand-editing the generated file exits 1; clean exits 0. 55 active kinds are emitted, plus
+`asEventKind()` for runtime validation of webhook and API strings that cannot be typed at compile time.
+
+<Info>
+**A new kind can only be born by adding a ROW.** Every other path is a compile error or a red test. That is
+the whole point — it stops being a rule someone has to remember and becomes a machine. Deactivated rows are
+excluded from the union: they keep their history and their foreign keys, but nobody may write them again.
+</Info>
+
+## 0b. THE NAMING LAW — `object_verbPast`
+
+> `home_saved` · `tour_requested` · `note_added` · `stage_changed` · `document_signed` · `deal_closed`
+
+**This was not invented — it was measured.** 40 of the 55 active kinds already followed it, and the
+notification classes already say **`home_saved`, never `save_home`**. We enforce the convention that had
+already won rather than imposing a new one.
+
+**`home_`, never `property_`** — property is Zillow's word. HouseLoop calls them homes, everywhere in the UI.
+
+The 15 that drifted sit in a `GRANDFATHERED` list inside the generator. **That list may only ever SHRINK**,
+and the script prints stale entries so it cannot rot. A new kind that breaks the law is a review
+conversation, not a silent addition.
+
 ## 1. One name per thing
 
 **The 17 duplicate pairs are the bug.** An activity and its trigger must share a key. Where they differ today, the
