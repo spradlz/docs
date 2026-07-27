@@ -676,8 +676,47 @@ comes back. Fixed 2026-07-27 in `ninja-enrich.ts` (extract) + `zillow-enrich.ts`
 remains the better source and is never overwritten).
 </Warning>
 
-Of the 24 remaining, 7 are Land/Farm which **correctly have no build year**. **14 residential still carry a value
-history the floor law cannot clamp** — that is the live risk set.
+A fourth pass took it to **12** using the **county assessors of record** (11 homes). Left: 7 Land/Farm, which
+correctly have no build year, and **5 residential — only 3 of which carry a value history.**
+
+**Heartland MLS has no build year at all.** It publishes an age BAND (`HMS_AgeDescription`, e.g. `"76-100 Years"`),
+which is why every MLS-number-keyed lookup returned zero. The bands are still useful as a *cross-check*: Roeland
+Park's band said 1949-1974 and the county says **1951**; Shawnee's said 1995-2004 and the county says **2002**.
+
+### County assessor year-built lookups — verified working, free, no login
+
+| County | Mechanism | Gotcha |
+|---|---|---|
+| **Jackson MO** | ArcGIS `ParcelsAscendRelate` → table 2 `Ascend_GisInfo`, field `year_built` | Cleanest of the six. Queryable by parcel **or** address. |
+| **Johnson KS** | `POST ims.jocogov.org/locationservices/ajaxreq.aspx`, body `type=&id=<APN>` → XML `<YearBuilt>` | The modern `aims.jocogov.org` endpoint is **dead**. The APN's dash must become a **space**. |
+| **Clay MO** | `/pub/rest/parcel/<prop_id>/dwelling` → `actual_year_built` | Requires a `Referer: https://gisweb.claycountymo.gov/ps/` header or it 403s. |
+| **Wyandotte KS** · **Douglas KS** | Appraisal-card **PDF** generator | Year is only in the PDF text — needs a `pdftotext` parse. |
+| **Miami KS** | — | **No public endpoint.** Cloudflare bot-walls their Beacon vendor; needs a real browser. |
+
+<Note>
+These are reverse-engineered vendor internals, not official public APIs. They can change without notice — worth a
+periodic health check rather than blind trust.
+</Note>
+
+<Warning>
+**THE BUG THE BUILD YEARS UNCOVERED — value lines that started before the house existed.** The floor law was applied
+only to the **no-sale** path. `isSaleEvent()` deliberately counts `'Listed for sale'` and `'Price change'` as
+for-sale (not rental) prices — correct for its own job — but used as the line's **anchor** it means a new build
+anchors to a **during-construction list price**. Measured: **26 past-client homes**, each starting ~1 year early.
+12454 Meadow Lane (built 2021) anchored to a `2020-12-25 Price change` at $284,619, so its line started Dec 2020.
+Missing build years never caused this; they only hid it.
+
+**Zach's call 2026-07-27: clamp the anchor to the build year.** An anchor dated before `yearBuilt` is now rejected
+on **both** the priced-event and fallback paths, falling through to the build-floored ZHVI line
+(`lib/listings/get.ts`). Verified before push: Meadow Lane **Dec 2020 → Jan 2021**; 7100 NE 115th Terrace rejected
+its pre-build 2017 anchor and correctly fell through to its **real 2019 sale**. Homes with no known `yearBuilt` are
+unaffected.
+</Warning>
+
+**One address is unrecoverable.** `Brook Haven Street, Kearney MO` has **no house number** — our MLS deal row reads
+literally `" BROOK HAVEN STREET"`. Worse, **"Brooke Haven" is a SUBDIVISION, not a street**; the real streets in that
+plat are Renea Ct, Amber Ln, Lauren Ln, Kathleen Way and others. So the record uses a subdivision name as a street
+name *and* drops the house number. Contained, though: only **2 of 2,042** MLS deal rows have no leading house number.
 
 **46 · The Redfin gate, and why the value rule shipped.** The re-scrape finished on Camp David:
 **1,818 of 1,902 pinned homes attempted (95.6%), 1,797 with a real value**; 84 were never reachable. The number

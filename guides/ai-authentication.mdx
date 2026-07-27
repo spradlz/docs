@@ -44,6 +44,104 @@ was separate.
 
 ---
 
+## THE SEVER — nothing AI can send, and that is the correct state
+
+<Warning>
+**Verdict, 2026-07-27: every AI send path in this codebase was built before the playbook model existed
+and none of them is usable.** Not "needs gating" — **unusable.** There is no workflow, no playbook, no
+goal, no context and no permission behind any of them. Auditing them one at a time and patching
+whichever forgot to declare itself is whack-a-mole with a nicer vocabulary.
+</Warning>
+
+So the wire was **severed**, not gated. `lib/ai/authorized-send.ts` runs inside every provider module —
+Twilio, BlueBubbles, Resend, Gmail — and refuses any AI-attributed send that cannot present a
+**committed communication intent**. There is no parameter left to forget: **absence of the slip is
+absence of permission.**
+
+```
+AI → SMS        ⛔ no_intent
+AI → iMessage   ⛔ no_intent          ← this wire had NO actor context at all until today
+AI → email      ⛔ no_intent
+AI, no role     ⛔ no_intent          ← the actor lookup convicts it regardless
+HUMAN → SMS     ▶ allowed
+SYSTEM notify   ▶ allowed
+```
+
+**Essentially nothing the AI does can send today.** That is intended. None of it should have been
+sending. Each path earns its voice back when it is rebuilt behind a playbook — and not one moment
+sooner.
+
+**Unaffected, deliberately:** humans clicking send, and system notifications to our own team
+(`kind: 'notification'`). An alert to an agent is not an AI talking to a customer.
+
+---
+
+## THE GROUND TRUTH — the AI is always inside a playbook
+
+> **An AI is never idle and never freelancing. It is always operating out of a playbook, and the
+> authorization to communicate lives INSIDE that playbook — what it may send, to whom, as whom, how
+> many times, and for how long.**
+
+This is why "no playbook, no voice" is not a slogan. The playbook step **is** the permission. A step
+does not grant "may send texts" — it grants a **narrow, expiring capability**:
+
+```json
+{
+  "key": "buyer_tour_request",
+  "label": "Secure the showing",
+  "goal": "A confirmed, calendared showing with the agreement out",
+  "steps": [
+    {
+      "id": "acknowledge",
+      "goal": "Confirm the requested time still works",
+      "authorization": {
+        "allowedActions":            ["sms.send"],
+        "allowedRecipients":         ["playbook_lead"],
+        "allowedPresentationModes":  ["human_clone"],
+        "maxSends":                  1,
+        "expiresAfterMinutes":       15
+      }
+    },
+    {
+      "id": "coordinate_partner",
+      "goal": "Confirm availability with the showing partner",
+      "authorization": {
+        "allowedActions":            ["sms.send"],
+        "allowedRecipients":         ["routing_rule_partner"],
+        "allowedPresentationModes":  ["ai_identity"],
+        "maxSends":                  2,
+        "expiresAfterMinutes":       60
+      }
+    }
+  ]
+}
+```
+
+Read that second step carefully: Myli may text **the showing partner**, **as herself**, **twice**,
+**within an hour**. She may not text the lead from that step. She may not present as Zach. She may not
+send a third time. **The scope is the grant.**
+
+### What must be true for a single message to leave the building
+
+| # | Condition | Where it is enforced |
+|---|---|---|
+| 1 | A playbook run is **open** for this lead | `hl_playbook_runs`, unique index: one open run per lead |
+| 2 | The run is on the **step** that permits this action | the step's `authorization` block |
+| 3 | The action is in `allowedActions` | the evaluator |
+| 4 | The recipient is in `allowedRecipients` | the evaluator |
+| 5 | The presented identity is **delegated** for this channel | `hl_ai_identity_delegation` |
+| 6 | `maxSends` for this step is not exhausted | `hl_communication_intent` idempotency |
+| 7 | The grant has **not expired** | `expiresAfterMinutes` from step entry |
+| 8 | Every switch is on — roster · lane · employee · lead mic · playbook | the evaluator |
+| 9 | An **intent** was proposed and recorded | `hl_communication_intent` |
+| 10 | It **re-authorized at commit**, against current policy | the gateway |
+| 11 | The content passes constraints + the leak guard | the evaluator |
+
+**Eleven conditions. Miss any one and nothing leaves.** And the eleven live in *one* evaluator, so a
+new rule is one change in one place and applies to every channel at once.
+
+---
+
 ## The actor model
 
 Four things that used to be blended into one. **Separating them is the fix.**
@@ -118,6 +216,112 @@ approves → you flip the master off → the queued job fires two minutes later.
 provider boundary, **it sends.** So the evaluator runs twice: once at proposal, once immediately before the
 wire.
 </Warning>
+
+---
+
+## Voice — why it is a separate codebase, and why that changes nothing
+
+The voice agent (`apps/myli-voice-agent`) is **Python** — Pipecat + LiveKit, containerised, deployed to
+**Pipecat Cloud** rather than Railway. That separation is legitimate engineering:
+
+- A live call needs a **persistent bidirectional audio stream** at sub-second latency. Next.js route
+  handlers are request/response and cannot hold a streaming audio session.
+- The realtime-voice SDKs are mature in Python.
+- It ships as a container, on its own release cycle, to a different platform.
+
+**A voice bot genuinely cannot run inside the CRM process.**
+
+<Warning>
+**But a different runtime justifies a different PROCESS — never different RULES.** The bot already calls
+`https://crm.houseloop.ai` at call start to fetch its persona. The pipe to ask permission has existed the
+whole time. **It asks "who am I?" and has never once asked "may I speak?"** That is not a technical
+limitation; it is a missing HTTP call.
+</Warning>
+
+### How voice joins the law — the protocol
+
+The evaluator cannot be imported across a process boundary, so it is **served**. `POST /api/ai/authorize-call`
+is live (`app/api/ai/authorize-call/route.ts`).
+
+**Auth** — the same two doors as the persona route: the in-app internal secret
+(`x-hl-internal-secret`), or the DB-stored voice secret (`x-myli-voice-secret`, from
+`hl_settings.myli_voice`). The DB secret exists because a Railway env var and a local `.env` drifted
+once and 403'd every worker call.
+
+**The worker asks BEFORE it answers:**
+
+```json
+POST /api/ai/authorize-call
+x-myli-voice-secret: ••••
+
+{
+  "callerPhone": "+19135551234",
+  "actorUserId": "…myli…",
+  "direction":   "inbound"
+}
+```
+
+**Allowed:**
+
+```json
+{
+  "allowed":          true,
+  "reasonCode":       "ALLOWED",
+  "leadId":           "…",
+  "playbookRunId":    "…",          // THE CALL IS THIS RUN
+  "playbookKey":      "buyer_tour_request",
+  "expiresAt":        "2026-07-28T01:20:00Z",
+  "stampOnEveryTurn": { "playbook_run_id": "…", "lead_id": "…" }
+}
+```
+
+**Denied:**
+
+```json
+{
+  "allowed":     false,
+  "reasonCode":  "NO_ACTIVE_PLAYBOOK",
+  "explanation": "…",
+  "leadId":      "…"
+}
+```
+
+### The worker's obligations
+
+| Rule | Why |
+|---|---|
+| **Ask before answering.** Never after. | A denial must be able to prevent the call becoming an AI call at all |
+| **On `allowed: false`, do not answer as AI** — forward to a human or take a voicemail | A denial is a routing instruction, not a warning |
+| **Stamp `playbook_run_id` on every turn** written back | A voice conversation that left no record did not happen |
+| **Never cache an allow across calls** | The grant is call-scoped. A new call is a new question |
+| **Treat a non-200 as DENY** | The CRM being unreachable is not permission |
+
+<Warning>
+**An unknown caller is not authorized here.** If no lead matches the caller ID the endpoint returns
+`LEAD_MISSING` — an AI does not hold a conversation with someone it has no record of. The cold-receptionist
+path is a separate decision and is deliberately **not** covered by this endpoint.
+</Warning>
+
+**Today every call denies**, two ways over: `hl_ai_identity_delegation` has no `voice` row for any actor, and
+there are no open playbook runs. Both are correct. Voice earns its voice back when someone writes the
+delegation row on purpose and a playbook is running.
+
+**The call IS the playbook run.** A live conversation cannot round-trip the database per sentence, so
+permission is asked **once, at answer-time**, and the run scopes the entire call. A denial means it never
+becomes an AI call at all — it forwards to a human or to voicemail.
+
+**Provenance is non-negotiable:** every call opens a run and every turn lands in the trace, exactly as text
+does. A voice conversation that left no record did not happen as far as the audit is concerned.
+
+<Info>
+**Today, voice is denied by construction** — `hl_ai_identity_delegation` has no `channel = 'voice'` row for
+any actor. Nobody wrote one. **The absence of the row is the denial**, which is what fail-closed-by-design
+looks like: a new channel is off until someone turns it on deliberately.
+
+**Known gap, stated plainly:** the phone webhook checks only the voice toggle and the AI master — **not the
+per-lead mic.** A muted lead who calls in still gets answered. The lane is unfinished; the rule is written
+here first so it cannot be built wrong.
+</Info>
 
 ---
 
