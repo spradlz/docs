@@ -980,10 +980,20 @@ lawful, gated, and Inngest-visible:
    every person ordered by their last in-app message, with the timestamp. Reliable, no browser, cursor-pageable.
    (The FUB inbox web endpoint `/api/v1/inbox/…/conversations` **hangs** on any direct/replay fetch and its
    virtualized list won't page on scroll — only the app's own live XHR ever fires; the people-sort is the robust
-   surface.) Incremental takes only people newer than our mirror's newest `zillow_inapp`; backfill takes all.
+   surface.) **Incremental compares each person's FUB `lastInboxAppMessage` against OUR newest message for THAT
+   PERSON** (a per-person watermark), walking back a `LOOKBACK_DAYS` (45d) floor; backfill takes all.
    The registered Inngest cron **`fub-inapp-sweep-tick`** (Run Log `comms` lane; cron `*/3` ARMED since
    2026-07-09 sign-off) enqueues one sentinel `inbox_sweep` job into the Railway FUB mirror queue —
    `UNIQUE(resource_type,resource_id)` = at most one sweep pending (no pile-up).
+
+   <Warning>
+   **⚠ NEVER re-introduce a GLOBAL watermark here.** From 2026-07-09 to 2026-07-28 discovery used ONE cursor —
+   `max(fub_created)` across ALL people — and **broke out of the walk at the first person at/below it**. Because
+   the API is sorted `-lastInboxAppMessage`, one person's fresh message raised the bar for **everyone**: Evelyn
+   Morales' Jul 28 message made Shamyah Matthews' Jul 23 tour interest permanently undiscoverable, and the sweep
+   printed `0 in-app people to extract` while three leads sat invisible. A person who falls behind can never be
+   caught up by a cursor that only moves away from them. **The watermark is per-person, or it is broken.**
+   </Warning>
 2. **Extract (reuse, never reinvent):** the Camp David `fub-body-recovery` consumer claims the job and runs
    **`tools/fub-scraper/fub-inapp-sweep.mjs`**, which — for each discovered person — reuses the proven extractor
    in `fub-scraper-lib.mjs` (`scrapePersonFull` + `matchAndUpdateMessages`: `scrapeTextContainers` classifies a
