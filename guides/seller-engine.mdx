@@ -243,6 +243,59 @@ Every surface, every query, every send reads **through canonical**. Never the ra
 If canonical does not have it, the answer is **"re-run the resolver"** — never "go find it another way."
 </Warning>
 
+## 🔐 THE LOCKED SCHEMA — person → transactions → homes
+
+**This is the answer to "where is it locked in".** Three levels, two tables, one key. Nothing else is truth.
+
+```
+PERSON          hl_srg_book              1,697 rows   ← THE BOOK. one row per client.
+   │                                                    pc_id · name · bucket · agent · fub_id
+   │                                                    deal_count · total_volume · first/last_close
+   │  pc_id
+   ▼
+TRANSACTION     hl_srg_canonical         1,931 rows   ← one row per DEAL. UNIQUE(pc_id,hlid,our_side)
+   │                                                    our_side · our_price · our_close · our_agent
+   │                                                    mls_number · disposition · status
+   │  hlid
+   ▼
+HOME            WEB "Listing"/hl_property             ← the house. value · photos · price history
+                                                        home_url = /home/<slug>/<HLID>
+```
+
+**A client has MANY transactions. A home can appear on more than one of them.**
+
+| Level | Cardinality |
+|---|---|
+| clients with 1 deal | 1,498 |
+| 2 deals | 173 |
+| 3 deals | 18 |
+| 4 deals | 7 |
+| 5 deals | 1 |
+
+### The locked record, rendered — Kyle & Karlie Nations (`pc_id 1`, 5 deals, $1,876,700)
+
+| Close | Side | Price | HLID | Address | Disposition |
+|---|---|---:|---|---|---|
+| 2020-01-29 | buy | $330,300 | `HLID100956` | 23309 W 45th Terrace, Shawnee | sold_repped_by_us |
+| 2020-07-24 | buy | $345,000 | `HLID100350` | 816 E Saddlewood St, Gardner | **still_owns** |
+| 2021-09-22 | **sell** | $400,000 | `HLID100956` | 23309 W 45th Terrace, Shawnee | sale_side |
+| 2021-12-03 | buy | $450,000 | `HLID100879` | 801 W Poplar St, Olathe | **still_owns** |
+| 2023-01-19 | buy | $351,400 | `HLID100424` | 301 E 68 Terrace, KC | lost_opportunity |
+
+<Note>
+**Read the 1st and 3rd rows.** Same `HLID100956` — bought in 2020, sold through us in 2021. **The HouseLoop
+ID persists across transactions**; the *deal* is what repeats. That is why the deal key is
+`(pc_id, hlid, our_side)` and not the address, the MLS#, or the name. David Mettman shows the same pattern
+on 609 W Edgewood Drive: bought `HLID100565` for $197,000 in 2020, sold the same HLID for $255,000 in 2022.
+</Note>
+
+### Why this kept feeling unresolved
+
+**It was resolved. It was never RENDERED.** The audit printed counts, the guide held tables, but no human
+could open a client and see their transactions. Every session re-derived the same answer from raw tables
+because the resolved shape had no surface. **The fix is not more resolving — it is reading `hl_srg_book`
+joined to `hl_srg_canonical` on `pc_id`.** That query is the whole system.
+
 ## Where the artifact lives
 
 The working surface is the **[Seller Engine build plan](https://claude.ai/code/artifact/2c63e8e3-4768-434b-8bfd-f548ead15f27)**,
