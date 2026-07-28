@@ -84,6 +84,52 @@ architecture is **one resolved table per grain, and ONE key (`hlid`) between the
 That is already built and already 100% populated.
 </Note>
 
+## 🔢 THE COVERAGE NUMBER — locked, and it comes from a command
+
+<Warning>
+**Never re-derive this by hand. Run the command:** `node tools/houseloop-cards/audit-seller-engine.mjs`
+(section 5, CANONICAL COVERAGE). It was re-derived from scratch at least four times across sessions —
+each from a different table combination, each producing a different **wrong** answer. The number now
+comes from the script, and this page quotes the script.
+</Warning>
+
+**Measured 2026-07-28** · last resolver run `2026-07-16 22:49`
+
+| Measure | Value |
+|---|---|
+| past-client rows | **1,779** |
+| **CANONICAL-BACKED — what renders + sends** | **1,697 · 95.4%** |
+| unbacked residue | **82 · 4.6%** |
+
+### ⛔ 100% IS NOT REACHABLE BY RE-RUNNING THE RESOLVER
+
+**77 of the 82 existed BEFORE the last resolver run.** It saw them and produced nothing — because the
+evidence needed to join them does not exist. Re-running produces the identical 82. The residue is a
+**known, named, categorised set** with one disposition each. **Do not re-investigate it.**
+
+| Cat | N | What it is | The ONLY disposition |
+|---|---:|---|---|
+| **A** | 11 | The deal already resolved to a **different** canonical client | **Retire — never send.** Usually the *other side* of our client's deal (Kurtz → Alex Murrell). |
+| **B** | 56 | A SISU closing exists, but **no `hl_srg_mls_deals` row** to anchor it | Recover an MLS#, or a human verdict in `hl_srg_deal_overrides`. |
+| **C** | 4 | Placeholder — no real surname (`"Brody ."`) | Retire, or get the real name from FUB. |
+| **D** | 11 | **No upstream evidence at all** — neither SISU nor MLS | Human decision: was this ever our client? |
+
+<Note>
+**Why the ledger cannot fix category B.** The ledger's primary edge is
+`sisu_transactions ↔ hl_srg_mls_deals` on **surname + price ±$3k + close date ±20d** (§5). We hold
+**11,636** SISU closings but only **2,042** MLS deal rows — so a real closing with no MLS row has
+nothing to join to. That is a *missing input*, not a broken matcher.
+
+**⚠ Corollary — a trap that already cost a session:** `hl_srg_past_clients.closings` (jsonb) is **NOT an
+input to the ledger.** 221 of its 2,204 entries have lost their year (`"Wed May 22"`), which looks like
+the cause and is not. Repairing that JSON changes **zero** match outcomes. It is a dead display field.
+</Note>
+
+<Warning>
+**Rule #0 — `resolve-from-mls.mjs` runs `TRUNCATE hl_srg_canonical` (line 130).** Rebuilding canonical
+requires Zach's typed approval naming the table, in session, every time. No agent runs it autonomously.
+</Warning>
+
 ## The three known defects — this is the entire remaining problem
 
 1. **`hl_srg_canonical` is read by ZERO application files.** The Seller Report, the deals route and the
