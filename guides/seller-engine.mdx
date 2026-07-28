@@ -11,27 +11,58 @@ description: "THE working document for HouseLoop Seller Tools — your past clie
 # 🔒 READ THIS FIRST — BEFORE ANYTHING
 
 <Warning>
-### ⛔ STOP. Read this whole section before you touch anything past-client related.
+### ⛔ STOP. Do not write a single SQL query until you have read this.
 
-**Locked 2026-07-28, 9:40 AM CDT** · measured live against both databases · owner **Caleb**
+**Locked 2026-07-28, 4:15 PM CDT** · measured live against both databases · owner **Caleb**
 
-**Do not run a query. Do not write a script. Do not open a scraper. Do not query SISU, the MLS, dotloop,
-or a county record.** Not until you have read this section top to bottom.
+**THE SIX RULES:**
 
-**Why this exists:** on 2026-07-27 an entire night went into re-deriving one client's identity from SISU,
-the Heartland MLS, dotloop, Follow Up Boss and the Clay County tax roll. **`hl_srg_canonical` already had
-the answer and had held it since 2026-07-16**, matched by `match_method = price-date-unique` — the exact
-key that got "re-discovered" by hand nine days later.
+**1 · Do not hand-write a query. Run the command.**
+```
+node tools/houseloop-cards/audit-seller-engine.mjs
+```
+Every number about this system comes from there. It was hand-derived at least five times across
+sessions — each from a different table combination, each producing a **different wrong answer**.
 
-**The engine was never broken. The table was never read.** Everything below is the lock that stops that
-from happening a second time.
+**2 · SISU IS ONLY TRUTH WHERE `status = 'Closed'`.** 11,636 rows, **1,945 closings.** Everything else is
+Appt Met (5,178) / Appt Set (3,388) / Signed (417) / Lost (309) / Pipeline (282). Omitting that filter is
+**the single most expensive mistake in this system** — it counts *appointments* as closings and
+manufactures a crisis every time. `build-deal-ledger.mjs:55` filters correctly; hand queries did not.
 
-**The four rules, in one breath:**
-1. **`hl_srg_canonical` is the past-client SSOT.** A past client is real only if it has a row there.
-2. **If canonical does not have it → RE-RUN THE RESOLVER.** Never "go find it another way."
-3. **`hlid` is the only key** that crosses from the CRM to the website.
-4. **The MLS never names our client** — on a buy-side deal that field is the *seller*.
+**3 · `hl_srg_canonical` is the past-client SSOT.** A past client is real only if it has a row there.
+
+**4 · If canonical does not have it → RE-RUN THE RESOLVER.** Never "go find it another way." No scraper,
+no county record, no ad-hoc join.
+
+**5 · `hlid` is the only key** that crosses from the CRM to the website.
+
+**6 · The MLS never names our client** — on a buy-side deal that field is the **seller**.
 </Warning>
+
+<Note>
+**Why these rules exist — three real failures, in order.**
+
+**(a) The wasted night.** 2026-07-27: an entire night re-deriving one client's identity from SISU, the
+MLS, dotloop, FUB and the Clay County tax roll. `hl_srg_canonical` had held the answer since 2026-07-16,
+matched by `price-date-unique` — the exact key that got "re-discovered" by hand nine days later.
+**The engine was never broken. The table was never read.**
+
+**(b) The fabricated crises.** Three different wrong numbers were published from three different bad
+ad-hoc joins: *"82 wrong-person clients"* (matched on price alone — price collides constantly),
+*"119 suspect identities"* (better key, wrong table), and a surname join that returned **4,406 rows for
+56 people** because "Brown" matches everything.
+
+**(c) The one that broke it open.** Zach: *"Mark Tallent is an old inside sales agent — he never closed
+anything."* The filter confirms him exactly:
+
+| Agent | SISU rows | `status='Closed'` |
+|---|---:|---:|
+| Mark Tallent | 42 | **0** |
+| Zach Spradling | 529 | **1** |
+| Ana Spradling | 701 | **547** |
+
+Every "this person has a SISU closing" claim made without the filter was counting **appointments**.
+</Note>
 
 ## The four tables that are TRUTH. Nothing else is.
 
