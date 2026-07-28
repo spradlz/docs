@@ -3,6 +3,110 @@ title: "The Seller Engine"
 description: "THE working document for HouseLoop Seller Tools — your past clients are your next listings. One page: the end goal, the live funnel, the full past-client reconciliation engine, every canonical table, the value model, all four surfaces (CRM dashboard, Audit Report, Owner's View, monthly email), and the G0-G5 build ladder. Consolidates the former Home Value Report, Seller Report, Audit Report, Home Claim / Owner's View, and SRG Reconciliation Master guides."
 ---
 
+{/* ══════════════════════════════════════════════════════════════════════════════════════════
+     READ THIS FIRST — the lock. Added 2026-07-28 after a full night was spent re-deriving an
+     answer that hl_srg_canonical already held. Do not edit without re-measuring live.
+     ══════════════════════════════════════════════════════════════════════════════════════════ */}
+
+# 🔒 READ THIS FIRST — the lock
+
+<Warning>
+**Do not run a single query, write a single script, or open a single scraper for anything past-client
+related until you have read this section.** On 2026-07-27 a full night went into re-deriving a client's
+identity from SISU, the MLS and county tax records. **`hl_srg_canonical` already had the answer, and had
+had it since 2026-07-16.** That is the failure this section exists to prevent.
+</Warning>
+
+## The four tables that are TRUTH. Nothing else is.
+
+There are **26 past-client objects** in the CRM database. **Four** are truth. The rest are dead scratch
+from getting to those four.
+
+| # | Object | Grain | Rows | It answers |
+|---|---|---|---:|---|
+| **1** | **`hl_srg_canonical`** ⭐ | one row per **DEAL** (client × house × side) | **1,932** | **THE past-client SSOT.** Who the client was, which house, which side, what price, what date, which agent, do they still own it, and the HLID + URL of the home. |
+| **2** | **`hl_srg_master_houses`** (VIEW) | one row per **HOUSE** | **1,844** | The same truth collapsed to the rooftop, with `fully_resolved` + `txn_count`. 88 houses carry more than one transaction. |
+| **3** | **`hl_srg_past_clients`** | one row per **PERSON** | 1,779 | **ONLY for `bucket`** (ana-only / ana-handoff / team) and contact fields. **It is NOT the truth about a deal.** |
+| **4** | **`Listing`** *(WEB db)* | one row per **listing** | 368,564 | The house itself — value, photos, price history. Reached from canonical by `hlid`. |
+
+## The state of resolution — measured 2026-07-28
+
+| Measure | Value |
+|---|---|
+| `hl_srg_canonical` rows with `verdict = RESOLVED` | **1,932 of 1,932 — 100%** |
+| `hl_srg_master_houses` with `fully_resolved = true` | **1,844 of 1,844 — 100%**, zero gap fields |
+| Canonical rows carrying `hlid` + `home_url` + `identity_key` | **1,932 of 1,932 — 100%** |
+| `disposition` nulls in canonical | **0** |
+
+**The reconciliation is DONE.** Every resolved deal is already linked to a website home. If work feels
+unresolved, the cause is one of the three known defects below — not missing resolution.
+
+## How a past client resolves — the whole flow, once
+
+```
+SISU (closings, frozen)  ─┐
+Heartland MLS deals      ─┼─►  hl_srg_deal_ledger  ─►  hl_srg_canonical  ─►  hl_srg_master_houses
+dotloop contracts        ─┤    (the MATCH: mls#,       (the RESOLVED         (same truth, per HOUSE)
+human overrides          ─┘     hlid, side, price,      answer, 1/deal)
+                                date, agent, tier,             │
+                                verified_sources[],            │  hlid
+                                contradiction)                 ▼
+                                                        WEB db: Listing / hl_property
+                                                        (value · photos · price history)
+```
+
+- **The ledger MATCHES** (`match_method`, e.g. `price-date-unique`; `verified_sources[]`; `contradiction`).
+- **Canonical is the ANSWER** — one resolved row per deal.
+- **`hlid` is the ONE key** that crosses from the CRM to the website. There is no other join.
+- **`bucket` is the only thing you fetch from the parent**, joined on `pc_id`.
+
+<Note>
+**Why it is not one single table** — and it cannot become one. HouseLoop is **exactly two databases**
+(constitutional): people/deals in CRM, homes in WEB. You cannot join across them in SQL. And a *person*,
+a *deal*, and a *house* are three different grains — "one row" would have to pick one. So the real
+architecture is **one resolved table per grain, and ONE key (`hlid`) between the two databases.**
+That is already built and already 100% populated.
+</Note>
+
+## The three known defects — this is the entire remaining problem
+
+1. **`hl_srg_canonical` is read by ZERO application files.** The Seller Report, the deals route and the
+   audit route all read the raw parent `hl_srg_past_clients` instead. The resolved truth sits unused.
+2. **82 parent rows have no canonical row** (1,779 parent − 1,697 backed). **79 of them still carry a
+   `website_hlid`**, so they render a card and can be emailed. They cluster in id 3440–3550 — one import
+   batch the resolver was never re-run over — plus placeholder rows like `"Crislaine ."`.
+3. **`hl_srg_master_houses` (canonical) is built on `hl_srg_pastclient_gt` (listed as deprecated).**
+   An architectural contradiction: a truth view cannot stand on a drift table. Repoint or reclassify.
+
+## THE LAW
+
+<Warning>
+**A past client is real only if it has a row in `hl_srg_canonical`.**
+Every surface, every query, every send reads **through canonical**. Never the raw parent, never
+`sisu_transactions`, never `hl_srg_mls_deals`, never a scraper, never a county record.
+
+If canonical does not have it, the answer is **"re-run the resolver"** — never "go find it another way."
+</Warning>
+
+## The dead list — never query these as truth
+
+`hl_srg_pastclient_gt` · `hl_srg_pch_staging` · `hl_srg_pch_quarantine` · `hl_srg_resolver_stage2` ·
+`hl_srg_resolver_quarantine` · `hl_srg_resolver_quarantine_s2` · `hl_srg_loop` ·
+`hl_pastclient_resolve_quar_parent` · `hl_pastclient_resolve_quar_child` · `hl_pastclient_url_quar` ·
+`hl_pastclient_gold_snapshot` · `hl_srg_home_valuations` *(dropped — does not exist)* ·
+`hl_transactions` *(empty)*
+
+**Upstream evidence — inputs to the ledger, never read directly for an answer:** `sisu_transactions`
+(frozen, SISU shut down 2026-06) · `hl_srg_mls_deals` · `hl_srg_dotloop_contracts` · `hl_srg_dotloop_loops`.
+
+<Note>
+**⚠ `hl_srg_mls_deals.client_first / client_last` is NOT our client.** On a **buy-side** deal that MLS
+field carries the *listing* side's client — the seller. Reading it as our client is what produced the
+phantom "Christopher Kurtz" record. **SISU names the client; the MLS never does.**
+</Note>
+
+---
+
 <Note>
 **🕐 WORKING DOCUMENT — last measured 2026-07-27, 22:55 CDT.**
 
