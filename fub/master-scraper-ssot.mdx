@@ -1006,7 +1006,47 @@ lawful, gated, and Inngest-visible:
    `_global` on + `in_app_message` Notify on + recency. The legacy realloop `notify-scraper` Twilio path is
    retired (behind `REALLOOP_SCRAPER_NOTIFY`, off) so there is exactly ONE notification per message.
 4. **Backfill is silent:** `fub-inapp-sweep.mjs --backfill` pulls every in-app message into the mirror + All
-   feed with **zero** notifications (no 1,198-card flood). `--measure` prints the FUB-vs-mirror gap.
+   feed with **zero** notifications (no 1,198-card flood). `--measure` prints **`people_behind`** — how many
+   people FUB has newer in-app activity for than we do. (It used to print `gap_people = fub_people −
+   mirror_people`, which clamped to 0 forever because our mirror holds 2,806 in-app people historically vs FUB's
+   1,307 current. It answered a question nobody asked and read "no gap" through an 11-day outage.)
+
+<Warning>
+**⚠ THE 11-DAY SILENT OUTAGE — 2026-07-17 → 2026-07-28 (read before touching this pipeline).**
+
+Zach missed **17 inbound Zillow in-app messages, 11 of them tour requests**, and nearly lost two deals. Every
+health signal we had stayed GREEN throughout. Four defects compounded — each one alone was enough to hide it:
+
+1. **The jam.** The sweep blew the consumer's 8-min `JOB_TIMEOUT_MS` 3× (a full `scrapePersonFull` costs
+   60-90s/person). The reaper marked the sentinel `status='error'`. Because `UNIQUE(resource_type,
+   resource_id)` carries **no status predicate**, that dead row owned the `('inbox_sweep', 0)` slot forever —
+   nothing in the system clears a terminal sentinel. **The anti-flood property became a permanent deadlock.**
+2. **The lying heartbeat.** `fub-inapp-sweep-tick` hit `ON CONFLICT DO NOTHING` and returned
+   `{ok:true, enqueued:'already pending (no-op)'}` — **~5,300 consecutive green runs while zero sweeps ran.**
+   The signal measured *the tick firing*, not *the sweep running*. Every prior investigation concluded "the
+   scraper is fine" because **by that metric it was fine**. A health check that can't tell working from jammed
+   argues against the truth.
+3. **The unreachable notifier.** `if (!persons.length) process.exit(0)` sat *above* the decoupled `notified_at`
+   notify pass — the very mechanism built 2026-07-14 so notification could not depend on scrape timing. Since
+   discovery is empty on most healthy runs, the good code was unreachable almost always.
+4. **The global watermark** (see the Warning above) — which meant even an unjammed sweep found nobody.
+
+**The invariants now enforced in code — do not soften any of them:**
+- The tick **DELETEs** any `error`/`done` sentinel on sight, so a jam cannot persist past one tick.
+- The tick **THROWS (run goes RED)** when the sentinel has sat undrained > 20 min. Green now means *a sweep is
+  cycling*, not *the tick fired*.
+- Capture and notify are **independent**; neither may short-circuit the other. No early return above the
+  notify pass, ever.
+- A **wall-clock budget** (5 min) + count backstop (6 people) keeps a backlog from blowing the job timeout —
+  the run finishes on its own terms and clears its own sentinel. Both **log what they defer**; the result JSON
+  carries `behind_total` / `deferred`. **No silent caps** — a truncated run must never read as full coverage.
+- The sweep's notify lookback (48h) is aligned to the CRM's `FUB_NOTIFY_RECENCY_HOURS`, so the two gates can't
+  disagree and silently drop a lead.
+
+**The one-line lesson:** *every instrument pointed at this pipeline was measuring the wrong noun.* When
+diagnosing it, verify the **data** (is a message we can name actually in the mirror and in the CRM?) — never
+the status of the thing that reports on itself.
+</Warning>
 
 <Note>
 **Live proof (2026-07-09, dark run).** `--measure`: FUB **1,303** in-app people vs our mirror **2,464** people /

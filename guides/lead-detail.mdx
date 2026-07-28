@@ -153,6 +153,71 @@ means capturing the sender in the scraper — see
 which also owns the import layer (how both halves of a thread reach this feed) and the outstanding 678-lead backlog.
 </Note>
 
+## The card catalog — every card the feed can render
+
+One table, one contract per card. **A card is chosen by the row's CANONICAL event token**, resolved through
+`canonicalEventType()` from the catalog in `lib/leads/activity-badges.ts` — never by a raw string typed into a
+component. Renderers: `components/leads/detail/CenterLane.tsx` (the lead feed) and `PixelFeedStream.tsx`
+(website activity), both assembling `ActivityHeroCard`.
+
+| Card | Canonical token | Picture | Body / quote | Link row |
+|---|---|---|---|---|
+| **Zillow in-app message** | `in_app_message_received` | Zillow mark. **With** a home → hero card w/ photo tile; **without** a home → ordinary message row (see below) | **ALWAYS renders the message body** in the quote block | **Single: "View in Follow Up Boss"** — Zillow has no per-lead page and the address doesn't resolve to a HouseLoop home |
+| **Tour request / inquiry** | `tour_requested`, `contact_requested`, `seller_inquiry`… | Home photo, else the portal mark | The buyer's typed message | "View on HouseLoop │ View on Zillow" |
+| **Text / email received** | `text_received`, `email_received` | Channel icon | The message body, never truncated | "View in HouseLoop" |
+| **Home saved / viewed / shared** | `home_saved`, `home_viewed`, `home_shared` | The home photo | — (no message exists) | "View on HouseLoop │ View on Zillow" |
+| **Saved search** | `saved_search` | Representative home photo, else the HouseLoop tile | The criteria summary | **Single: "View on HouseLoop"** |
+| **Registration** | `registration` | HouseLoop tile (direct/no-home) else the home photo | The registration message if one was typed | "View on HouseLoop" |
+| **Call** | `call_completed`, `missed_call`, `voicemail` | Channel icon | Disposition / transcript | "View in HouseLoop" |
+
+### The in-app card contract (Zach, locked across three sessions)
+
+1. **2026-07-16 — the body is the point.** An in-app message carries a home, but its *point* is the MESSAGE.
+   It routes to the hero row (photo + home + **the quoted message**), never the bare home card that drops the text.
+2. **2026-07-23 — one action.** No "Look up on HouseLoop" (the address doesn't resolve) and no "View on Zillow"
+   (Zillow has no per-lead page). The ONE action is **"View in Follow Up Boss"** → the lead's FUB profile.
+   Falls back to no link row when the lead has no FUB id.
+3. **2026-07-27 — a message with no house reads like a message** (found on Renita Ford). "Hi Dean, could you
+   reach out to me?" — a plain sentence with nothing attached — must NOT render as a giant card with a Zillow
+   logo where the photo should be. No home ⇒ the ordinary message row, still headlined "… sent an in-app
+   message" with the VIA chip.
+
+<Warning>
+**⚠ THE SILENT RENDER REGRESSION — found 2026-07-28, and why a renamed token must break the BUILD.**
+
+All three rules above stopped working and **nothing failed, threw, or logged.** The card simply went quiet:
+no message body, no Zillow-circle branch, and the wrong link row.
+
+**Root cause — one token, seven dead comparisons.** The event was renamed `in_app_message` →
+`in_app_message_received` under the `object_verbPast` naming law, and the `ALIAS` map was correctly pointed at
+the new name. But `canonicalEventType()` therefore **always** returns the new token, while seven UI comparisons
+still tested the old literal:
+
+```js
+canon === 'in_app_message'          // ← can never be true again
+a.kind === 'in_app_message'         // ← same, in CenterLane
+```
+
+Each dead branch removed one signed-off behaviour:
+
+| Dead comparison | What the user lost |
+|---|---|
+| `PixelFeedStream:690` `buyerMessage` | **The message body.** The quote block had nothing to render — rule 1 gone |
+| `PixelFeedStream:856` `heroLinks` | The "View in Follow Up Boss" action — rule 2 gone; fell through to HouseLoop/Zillow |
+| `CenterLane:2305/2307` `inAppWithHouse` / `isHome` | The no-house message row — rule 3 gone |
+| `PixelFeedStream:728`, `CenterLane:2205/2346` | Hero routing + the source chip |
+
+**The fix, and the law it establishes:** compare against the exported constant **`IN_APP_MESSAGE`** from
+`lib/leads/activity-badges.ts`, and canonicalize raw kinds (`canonicalEventType(a.kind) === IN_APP_MESSAGE`)
+before comparing. **A renamed token must produce a compile error, not a card that quietly stops showing what
+the lead said.** A string literal compared against a catalog-derived value is invisible drift — this is the
+same class of bug as the FUB in-app sweep outage the same week (green signal, dead behaviour). See
+[the FUB Master Scraper SSOT](/fub/master-scraper-ssot).
+
+**The lesson for reviewers:** when you rename an event token, `grep` the OLD literal across `components/`,
+`app/`, and `lib/` before shipping. The alias map keeps *data* working; it does nothing for *comparisons*.
+</Warning>
+
 ## The AI page (the ✦ AI lens)
 
 The **AI** lens (`LeadContextPanel`, `components/leads/detail/LeadContextPanel.tsx`) is a single cohesive
