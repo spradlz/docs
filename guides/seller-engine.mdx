@@ -13,7 +13,7 @@ description: "THE working document for HouseLoop Seller Tools — your past clie
 <Warning>
 ### ⛔ STOP. Do not write a single SQL query until you have read this.
 
-**Locked 2026-07-28, 4:15 PM CDT** · measured live against both databases · owner **Caleb**
+**Locked 2026-07-28, 5:05 PM CDT** · measured live against both databases · owner **Caleb**
 
 **THE SIX RULES:**
 
@@ -24,19 +24,30 @@ node tools/houseloop-cards/audit-seller-engine.mjs
 Every number about this system comes from there. It was hand-derived at least five times across
 sessions — each from a different table combination, each producing a **different wrong answer**.
 
-**2 · SISU IS ONLY TRUTH WHERE `status = 'Closed'`.** 11,636 rows, **1,945 closings.** Everything else is
+**2 · THE BOOK IS `hl_srg_book`.** The resolved past-client set — **1,697 clients · 1,931 deals**, one row
+per client, already joined to canonical. Everything not in it is parked in **`hl_srg_not_in_book`** with a
+`reason`. Read the book. Never rebuild it with your own join.
+
+**3 · SISU IS ONLY TRUTH WHERE `status = 'Closed'`.** 11,636 rows, **1,945 closings.** Everything else is
 Appt Met (5,178) / Appt Set (3,388) / Signed (417) / Lost (309) / Pipeline (282). Omitting that filter is
 **the single most expensive mistake in this system** — it counts *appointments* as closings and
 manufactures a crisis every time. `build-deal-ledger.mjs:55` filters correctly; hand queries did not.
 
-**3 · `hl_srg_canonical` is the past-client SSOT.** A past client is real only if it has a row there.
+**4 · `hl_srg_canonical` is the deal SSOT.** One row per DEAL. `hl_srg_book` is the client-level view of it.
 
-**4 · If canonical does not have it → RE-RUN THE RESOLVER.** Never "go find it another way." No scraper,
-no county record, no ad-hoc join.
+**5 · If the book does not have it → it is NOT a past client.** Never "go find it another way." No scraper,
+no county record, no ad-hoc join. 100% is not reachable and never will be: 59 of the 82 parked rows are
+**sphere contacts who never closed with us.**
 
-**5 · `hlid` is the only key** that crosses from the CRM to the website.
+**6 · `hlid` is the only key** that crosses from the CRM to the website.
 
-**6 · The MLS never names our client** — on a buy-side deal that field is the **seller**.
+**7 · The MLS never names our client** — on a buy-side deal that field is the **seller**.
+
+**8 · IDENTITY LIVES IN A CONSTRAINT, NEVER IN A STRING.** Every recurring failure in this system was one
+bug wearing different clothes: a *string* used as an identity with nothing enforcing uniqueness — forked
+HouseLoop IDs (`identity_key`), the phantom client (MLS name), 1,758 duplicate deals (`ledger_key`), the
+bad SISU joins (surname). **A string describes; a constraint enforces.** `hl_srg_canonical` now carries
+`UNIQUE (pc_id, hlid, our_side)`. Add the constraint, or the fork comes back.
 </Warning>
 
 <Note>
