@@ -45,6 +45,32 @@ per-event timing rule.
 cell — the TEXT toggle for these three events is disabled (you can't turn it off). This matches how
 `ALWAYS_SMS_CLASSES` works in the dispatch layer (`dispatch.ts`).
 
+#### How a toggle becomes a text — the delivery resolution chain (locked 7/29/2026)
+
+The chain, end to end: **event fires → notification row created (its `notification_class` is derived at
+INSERT, mig 0465) → dispatch resolves YOUR toggles by that CLASS → sends on each enabled channel →
+stamps `channels_sent` on the row.** Two laws came out of the 7/28–29 incident:
+
+1. **Toggles are keyed by the notification CLASS, and dispatch resolves through the class first.** The
+   class rides down from creation inside the dispatch input — it is never re-queried on a second
+   connection. Both the class key and the raw event key are checked, so a vocabulary rename can never
+   make a saved toggle unfindable again. (The incident: events renamed `tour_request` →
+   `tour_requested`; dispatch looked up the toggle under the new name, found nothing, and read the miss
+   as OFF — five live tour requests rang the bell and sent zero texts while the toggle said `sms: true`.)
+2. **A notification that sends nothing leaves a trail.** Every pre-send gate that stops delivery writes a
+   `dispatch-drop` run-log row with the reason (`channel_master_off` / `prefs_off` / `no_channel` /
+   `no_template`) **plus the resolved `classKey` and `prefKeys`** — so the next drop diagnoses itself in
+   one row instead of looking identical to "gates said no."
+
+**The anti-storm dedup:** identical same-class signals on one lead inside ~5 minutes collapse into ONE
+notification (a busy thread pings you once, not eleven times). Operator replays must be staggered past
+that window or only the first delivers.
+
+**Catch-up replay (operator runbook):** a message whose notification was missed (outage, race) is
+re-delivered through the registered Inngest event `fub/body.recovered` with `catchUp: true` — this
+waives ONLY the staleness gate; the global master and your per-class toggles still gate. Dispatch via
+`apps/houseloop-crm/scripts/inngest-dispatch.ts`. Never a raw SQL or hand-rolled send.
+
 ---
 
 ### Event sections
