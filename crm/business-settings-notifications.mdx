@@ -184,3 +184,57 @@ the internal `outbound_sms` alert line so leads don't see your internal (913) 80
   nudge function at fire time.
 - **Sent counts** come from `/api/notification-sends` (run-log source='notification'). Click the count
   → drill-down modal with who + when.
+
+## ⚠ THE SILENT-BELL BUG — `inAppOnly` defaulted your alerts to bell-only (found 2026-07-28)
+
+**Symptom.** Zillow in-app messages — including live tour requests — created a bell card and **never reached
+Zach's phone or inbox**. Every gate read GREEN: `_global` on, `in_app_message` Notify on for both arms, per-user
+prefs `{sms:true, email:true}`, two channels configured, not muted. The only evidence anywhere was
+`hl_notification.channels_sent = []`.
+
+**The proof that killed every "check your settings" theory** — two rows, same recipient, same `event_key`,
+same prefs, minutes apart:
+
+```
+"Unknown Caller texted back"   pref {sms:true,email:true}  #chan 2  →  channels_sent ["sms","email"]
+"💬 Evelyn Morales sent a…"    pref {sms:true,email:true}  #chan 2  →  channels_sent []
+```
+
+**Root cause — an inherited default two layers away.** `createNotification` only dispatches inside
+`if (!args.inAppOnly)`. `notifyLeadEvent` (`lib/notifications/lead-events.ts:69`) defaults
+`inAppOnly: opts.inAppOnly ?? true` — correct for incidental CRM chatter nobody asked to be paged about. But
+`routeFubNotification` called it **without passing the flag**, so it inherited `true`:
+
+- A lead **with an assigned agent** → `notifyLeadEvent` → `inAppOnly: true` → **bell only, forever.**
+- The native text path (`notifyInboundMessage`) calls `createNotification` **directly** → dispatches → sms+email.
+
+So the two paths diverged on a default, not on a decision. Every FUB-routed notification for an **owned** lead
+was silently bell-only.
+
+**Fix.** `routeFubNotification` now passes `inAppOnly: false` explicitly. The rule it encodes:
+
+> **If the gates said FIRE, we DELIVER.** The router runs *after* the `_global` master and the per-type Notify
+> toggle have already decided. Channel choice belongs to the recipient's own prefs in `dispatchNotification` —
+> never to a default inherited from a helper two layers up.
+
+**Second fix — a thrown dispatch now names itself.** `dispatchNotification`'s outer `catch` only did
+`console.warn`, so a throw produced a bell row with `channels_sent = []` and **zero database trace** —
+indistinguishable from "the gates said no". It now writes a `dispatch-error` row to `hl_run_log`
+(source `notification`), alongside the existing `dispatch-drop` rows that record pre-send gate reasons
+(`channel_master_off` · `prefs_off` · `no_channel` · `no_template` · `muted`).
+
+<Note>
+**Debugging a missing notification — the order that actually works.** `channels_sent = []` means *nothing was
+delivered*, not *nothing happened*. Read `hl_run_log WHERE source='notification'` for that minute:
+`sms-dispatch`/`email-dispatch` = an attempt (success or failed) · `dispatch-drop` = a gate blocked it, with
+the reason · `dispatch-error` = it threw · **nothing at all** = the dispatcher was never called, so look for an
+`inAppOnly` upstream. Do **not** start by re-checking the user's toggles — that was the wrong first move here
+and it cost days while real tour requests went unanswered.
+</Note>
+
+**Known-open (next):** Zillow in-app messages still resolve to the generic `new_message` notify class
+(`lib/notifications/router.ts` → `FUB_EVENT_CLASS`), whose subline is `{{event.time}}`. That is why the card
+reads *"💬 Evelyn Morales sent a message"* with no property and no body, while `property_inquiry` renders
+`{{listing.address}}`. A dedicated `in_app_message` class needs a row in `hl_notify_classes` **and** seated
+email/SMS templates — switching the class without seating templates makes `dispatch` log
+`NO TEMPLATE REGISTRY ENTRY` and send nothing, so the two must land together.

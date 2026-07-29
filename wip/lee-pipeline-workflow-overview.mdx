@@ -5,7 +5,7 @@ description: "Work-in-progress dossier — Lee · Infra · Pipeline & Workflow �
 
 <Info>Live dossier — auto-generated from `.claude/state/wip/lee/pipeline-workflow-overview.md` on every push. **Progress: 9/21 done (43%).** _Updated 2026-07-09._</Info>
 
-<Warning>⚠ **Possibly stale:** this work-stream file was last written 460h ago. If Lee has shipped since, this dossier under-reports — refresh `.claude/state/wip/lee/pipeline-workflow-overview.md`.</Warning>
+<Warning>⚠ **Possibly stale:** this work-stream file was last written 463h ago. If Lee has shipped since, this dossier under-reports — refresh `.claude/state/wip/lee/pipeline-workflow-overview.md`.</Warning>
 
 **Owner:** Lee — Infra · Pipeline & Workflow · FUB · Notifications
 
@@ -311,79 +311,51 @@ No inventing sources beyond the real 3. Grows by ROWS.
 
 AGENT: Lee
 ROLE: Chief of Staff / Systems Architect
-LAST_UPDATED: 2026-07-28 ~22:00Z
+LAST_UPDATED: 2026-07-28 ~21:15 CT (Fable 5, incident-recovery session)
 
-##### ⛔ READ FIRST — LIVE INCIDENT, AND THE SYSTEM IS DELIBERATELY PAUSED
-Monica Zinn got "We got your request to list this home" on Jul 27 17:16 — TWELVE DAYS after
-her Jul 15 inquiry, in the present tense. I caused it: I re-ran fub-lead-import believing it
-was read-only. It RE-FIRED seller_inquired -&gt; matched via the AGNOSTIC tier -&gt; ran a workflow
--&gt; emailed a real person.
+##### ⛔ CONTEXT — THE 2026-07-28 TAXONOMY INCIDENT (recovery night)
+My taxonomy work (migs 0475-0489) broke prod 4 ways. Zach ordered a revert; Adam's manifest
+(.claude/state/LEE-REVERT-MANIFEST-2026-07-28.md) proved a code-only revert is WORSE (DB already
+renamed/deleted; no pre-day backup). Recovery went FORWARD, surgically. THE TAXONOMY / CATALOG
+PROJECT IS FROZEN until Zach green-lights it. No renames. No new migrations beyond fixes.
 
-CURRENTLY PAUSED (mig 0487, fully reversible):
-  23 workflows status='paused' · ai_conversations email+voice off · ai_mode_enabled off on
-  17 leads (ids snapshotted in hl_settings key 'ai_mode_snapshot_0487')
-STILL RUNNING ON PURPOSE (Zach): fact capture · AI summaries · team notifications.
-DO NOT un-pause without Zach. The gates below are still broken.
+##### RECOVERED TONIGHT (all verified on prod with my own eyes)
+1. LEADS MINT AGAIN — root cause: classifyFubEvent emits canonical tokens (tour_requested) while
+   hl_fub_webhook_settings keys old spellings (tour_request); exact-match lookup missed → fail-closed
+   read Zach's ON toggles as OFF. Fix: alias-closure lookup (both sides canonicalize through
+   hl_trigger_event_alias) in fub-lead-import.ts (cfg + notifyCfg) + canonical keys added to both
+   KIND_TO_TRIGGER maps. Adam separately restored 2 dropped creates_lead toggles on the FUB source.
+2. HOUSELOOP SECTION BACK on Trigger Events — page contract (mig 0380): section=NULL means "group
+   by source"; my migrations filled section on every row → every door diverted to custom folders.
+   Fix: mig 0490 (section=NULL, idempotent) + applied live. Verified: 🌐 HouseLoop.ai Website band renders.
+3. MESSAGES/CARDS RENDER — Adam repointed badge catalog + writers to 0488 names (ec06703ce2).
+   Verified on Evelyn Morales: 9 messages w/ bodies + house cards + via-Zillow chips; Website pills
+   All 1306 / Views 844 / Saves 338 / Shares 104.
+4. PURPLE-HAND ICON FIX (Zach's screenshot 8:51 PM): rowKindForActivity canonicalized then compared
+   OLD tokens → sms_*/phone_call_* fell to 'request' (Hand). All CenterLane comparisons now
+   canonicalize + accept both generations. Pushed ~21:05 CT — VERIFY ON PROD after deploy (Lucy's lead).
+5. BRADLEY BENGEL MINTED — lead 37a6106c-c2ce-4635-adb9-045a3f4292f4 (FUB 44854), via the
+   single-person pull-in, 4 tour requests for Jul 29.
 
-##### THE ARTIFACTS — open these, do not reconstruct
-LEAD ENGINE (the one document): https://claude.ai/code/artifact/209ff52e-468f-46e1-a9da-8d763217c547
-  83/192. Big red STOP block at the top. Last rabbit hole = the audience model.
-SCHEMA (six nouns):           https://claude.ai/code/artifact/159a79ef-b3dd-4d20-84e5-70e0e776f82e
-GROUND-UP ARCHITECTURE:       https://claude.ai/code/artifact/f1ea04dd-0046-49e7-9219-9a6a8e5d9ccf
-SNAPSHOT (19,934 rows, 7 tables): .claude/reports/schema-rebuild-2026-07-28/
+##### STILL PAUSED ON PURPOSE (mig 0487 — do NOT un-pause without Zach)
+23 workflows · AI email+voice · ai_mode on 17 leads (snapshot hl_settings 'ai_mode_snapshot_0487').
+Zach asked for notifications + lead flow + rendering back (done). Outbound-to-lead workflows stay
+paused until his explicit word. The audience-gate rebuild (authorized-send re-key) is still the real fix.
 
-##### WHY ZACH'S TOGGLES DIDN'T STOP THE EMAIL — he did not miss one
-1. The binding he could toggle is on the WEBSITE source; Monica came via FUB.
-2. runtime.ts:330 — the AGNOSTIC FALLBACK fires any workflow matching trigger_type and NEVER
-   reads workflow_active. A workflow with NO binding still fires and no row on the Trigger
-   Events page represents it. THE PAGE IS NOT A COMPLETE LIST OF WHAT CAN RUN.
-3. hl_lead_source_events.workflow_active and hl_workflows.status are two columns on two tables.
-4. aiMasterEnabled() FAILED OPEN by design ("fail-open so a settings hiccup can never silence
-   production"). A query error TURNED THE AI ON. Fixed today — fails closed.
-5. authorized-send.ts:77 `if (!looksAi) return ALLOW` — a workflow is not AI, so it walks through.
-   Line 63: anything that CALLS ITSELF a notification is exempt.
+##### KNOWN REMAINING (not tonight)
+- ~500 code sites still name old tokens; tsc shows type-union errors (builds pass via
+  ignoreBuildErrors; logActivity canonicalizes at write time so runtime is safe). The sweep is the
+  FROZEN project — needs Zach's go.
+- "AI Cockpit 12 failed" tile seen in sidebar — triage.
+- Likes pill = 0 forever (nothing writes home_liked) — pre-existing.
+- RETIRED- sources (Agent Referral / Google PPC / HouseLoop PPC / Webinars): verify no other
+  toggles were dropped by the consolidation (Adam flagged).
+- Verify Bradley notification fired + tour_requested minting works end-to-end on the NEXT live webhook.
 
-##### THE TARGET MODEL (Zach + Lee, tonight) — gate on AUDIENCE, not actor
-You can lie about what you are. You cannot lie about who receives it.
-  ① NOBODY (facts, summaries, vision tags, SEO drafting) -&gt; NO GATE. Never belonged near the AI switch.
-  ② OUR TEAM (notifications) -&gt; ALWAYS ON. A pause that silences your alerts hides what it stopped.
-  ③ A PERSON -&gt; THE GATE. Splits on ONE question: WHY DOES THIS MESSAGE EXIST?
-       they asked for it (receipt, subscription) -&gt; FLOWS   [+ freshness clock]
-       we chose to send it                       -&gt; needs a playbook
-  ④ THE PUBLIC (SEO, social) -&gt; its own switch.
-FRESHNESS = the Monica rule: a receipt is only a receipt if it is immediate. Past ~15 min it is
-outreach wearing a receipt's clothes. Nothing anywhere currently asks how old the trigger is.
-AI-AS-INGREDIENT: an AI paragraph inside a subscribed alert does NOT reclassify it. AI off -&gt;
-the alert still goes, without the paragraph. Component fails SOFT; initiated fails CLOSED.
-
-##### SHIPPED TODAY — migs 0475-0487
-0475 hl_lead_platform() — fixed a LIVE 500 on Add Lead. 0476 source text reconciled to the FK.
-0477 is_selectable — only Sign Call Line proves origin. 0478 fub_ prefix off the brand keys.
-0479 channel (SUPERSEDED — channel IS source_type). 0480 inbound_call source.
-0481 A SOURCE HAS NO LANE. 0482 label==key on 48 rows + THE MISSING FK on hl_lead_activity.kind.
-0483 call_received/placed/logged are three events (41 rows said received+outbound).
-0484-0486 deleted 9 non-activities + 32 dead rows. Catalog 129 -&gt; 88.
-0487 THE PAUSE.
-
-##### COMPLETENESS — measured, and this is the real problem
-Every table with a lead_id is an event source. 54 of them. Coverage into the activity log:
-  tags 381 -&gt; 0%   ·  inbound emails 2,847 -&gt; 0%  ·  pixel 374,988 -&gt; 0%
-  email events 2,404 -&gt; 1%  ·  texts 1,867 -&gt; 44%  ·  calls 60%  ·  stage moves 65%
-ROOT CAUSE: logActivity is a SECOND, OPTIONAL call. Nothing fails when it is missing.
-THE FIX: the transactional outbox — state + event in ONE transaction, one service function.
-Until that lands, every naming fix is cosmetic.
-
-##### MY OWN FAILURES TONIGHT — all one direction
-I ADD concepts that should not exist: SourceLane · is_door · channel-as-door · defended two
-dead rows because each had a code comment. A comment justifying a thing is not evidence it
-should exist. I also hand-picked an "audit" list and missed tag_added, which Zach named in
-five seconds. AUDIT MECHANICALLY, NEVER FROM MEMORY.
-
-##### NEXT
-1. Docs collapse — leads has ~7 overlapping pages (leads table, lead detail, CRM deep link,
-   stages/deals, audit trail, activity log, dedup, deletion). Collapse to ONE per left-nav item.
-2. Re-key authorized-send on AUDIENCE.
-3. The outbox.
+##### THE LESSON (again, in writing)
+A rename is done when: rows migrated + union regenerated + catalog repointed + EVERY reader AND
+writer repointed + parity gate green — in ONE commit. An alias map protects reads, never comparisons.
+"Referenced by no table" ≠ "read by no code." AUDIT MECHANICALLY.
 
 ## Related documentation
 

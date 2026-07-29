@@ -739,9 +739,32 @@ remaining **759 have never been scraped by Redfin** — that sweep is **RUNNING 
 Early result: of the first 90, **35 real galleries** (669 photos) and **53 homes that genuinely have ONE
 Redfin photo** — Zach hand-checked three and confirmed it. One photo is a real answer, not a broken scraper.
 
-**Writeback is improvement-only:** `tools/houseloop-photos/writeback-r2-gap.mjs` prefers the HLID prefix,
-falls back to the legacy slug, and only writes when R2 holds MORE than the card shows. Reversal saved to
-`.claude/reports/`.
+**⚠ THE ENGINE NEVER WRITES THE DATABASE.** It uploads to R2 and stops. The card is linked by a separate
+writeback — `tools/houseloop-photos/writeback-redfin-759.mjs`. Forgetting this is how "we scraped it" and
+"it shows on the card" drifted apart for weeks. **Scraped ≠ linked. Always verify the card, not the bucket.**
+
+**Tell the writers apart by the FILENAME — it is the writer's signature:**
+
+| R2 path | Writer | Quality |
+|---|---|---|
+| `past-clients/<HLID>/photo-NN.jpg` | **Redfin engine** (current, correct) | avg **142 KB** |
+| `past-clients/<street-slug>/photo-NN.jpg` | Redfin engine, legacy key | avg 142 KB |
+| `past-clients/<full-address-slug>/NNN.jpg` | **Ninja / Zillow** writeback | avg **49 KB** |
+| `listings/<mls-id>/NNN.jpg` | MLS / Repliers | varies |
+
+**REDFIN-ALWAYS — locked by Zach 7/28/2026.** A real Redfin gallery **replaces** a Zillow one *even when the
+counts tie*. Measured across 40 homes where the count was identical: card **49 KB/photo** vs Redfin
+**142 KB/photo** — same number of pictures, ~3× the resolution. Run with `--redfin-always`. Three guards
+survive the flag, and they are not optional:
+1. **Only `source: redfin | realtor`** may overwrite. An aerial / Street-View **floor never replaces a gallery** —
+   it exists so a card is not blank.
+2. **Never replace a Redfin gallery with a smaller Redfin gallery** (re-run idempotence).
+3. **ADDRESS GUARD** — the house number Redfin resolved must equal the house number we queued, or the home is
+   skipped and logged. This is what stops a resolution slip from putting the neighbor's house on a client's card.
+
+Every run HEAD-verifies each URL is a live 200 before storing it, writes `photosCached` as **objects**
+(`{hlCdnUrl, source, cachedAt}` — never bare strings; the site reads `->0->>'hlCdnUrl'`), stamps
+`source: redfin-engine:redfin`, and saves a **per-run reversal file** to `.claude/reports/`.
 </Warning>
 
 ### 🗄️ Drift / archive ledger — do NOT query these as truth
