@@ -1048,6 +1048,59 @@ diagnosing it, verify the **data** (is a message we can name actually in the mir
 the status of the thing that reports on itself.
 </Warning>
 
+<Warning>
+**🔴 THE NOTIFY PASS HAD NEVER RUN — NOT ONCE (found + fixed 2026-07-28, same night).**
+
+After the sweep itself was revived, it still reported `"notified": 0` on every run. **Every in-app
+notification Zach had ever received came from a manual replay.** The automatic path had never worked, and it
+had reported SUCCESS the entire time. Two silent layers, stacked:
+
+**① THE LEDGER COLUMN WAS ON THE WRONG DATABASE.** `fub.text_messages.notified_at` existed on the **Railway
+mirror** and had **never been added to Camp David** — and the sweep reads Camp David. So the pending query
+threw `column "notified_at" does not exist` on every run, hit a bare `.catch(() => ({ rows: [] }))`, became an
+empty list, and printed `"notified": 0`. No DDL for that column exists anywhere in the repo; it had been added
+to Railway by hand.
+
+**② THE SECRET WASN'T IN pm2's ENVIRONMENT.** Once the query worked, the POST hit
+`[notify] HL_INTERNAL_SECRET unset — POST skipped` — **and the run still printed `"notified": 0` and exited
+SUCCESS.** `FUB_API_KEY` in that same file already resolved from the sibling `.env`; the secret did not.
+
+### ⚠️ THE LANDMINE THAT MAKES THIS UNDIAGNOSABLE BY HAND — READ BEFORE DEBUGGING ANYTHING ON CAMP DAVID
+
+```
+/Users/lee/.env      DATABASE_URL → yamabiko.proxy.rlwy.net:40035/railway   ← RAILWAY (mirror)
+pm2 fub-body-recovery DATABASE_URL → localhost:5432/bossloop                 ← CAMP DAVID (ground truth)
+```
+
+**They point at DIFFERENT DATABASES.** Anyone who debugs by `. ./.env && psql "$DATABASE_URL"` is querying
+**Railway**, while the running process queries **local**. That is how "I verified the 4 rows are eligible, the
+sweep should have sent them" was reported as fact — twice — when the sweep was looking at a table that did not
+even have the column.
+
+**Rule: to reproduce what a pm2 process sees, take its env from the PROCESS, never from the .env file:**
+```bash
+ps eww $(pgrep -f fub-body-recovery-consumer | head -1) | tr ' ' '\n' | grep '^DATABASE_URL='
+# then run the script with THAT value and nothing sourced:
+cd /Users/lee && DATABASE_URL='postgresql://bossloop:***@localhost:5432/bossloop' node fub-inapp-sweep.mjs
+```
+
+### The fix (2026-07-28)
+- `notified_at timestamptz` added to **Camp David** `fub.text_messages` — ground truth per the `fub-relay`
+  header (*"column list is read from Camp David's information_schema at runtime… Ground truth = Camp David,
+  Railway = mirror"*), so the relay carries it to Railway automatically.
+- **402,346 existing rows backfill-marked notified** so the first working sweep could not blast 13,461
+  historical messages. Verified `pending = 0` before going live.
+- `HL_INTERNAL_SECRET` now resolves from the sibling `.env` exactly like `FUB_API_KEY` already did.
+- **Both failure modes now log loudly.** A query that cannot RUN is an **outage**, not "nothing to do".
+
+**Proof:** run with pm2's exact environment, nothing sourced → `"notified": 1`, and
+`hl_notification.channels_sent = ["sms","email"]`. First automatic in-app notification this system has ever
+sent.
+
+**The invariant:** anything this script needs must resolve from the **file** too — never from pm2's env alone.
+And `"notified": 0` is only trustworthy if the run also proves the query *executed*.
+</Warning>
+
 <Note>
 **Live proof (2026-07-09, dark run).** `--measure`: FUB **1,303** in-app people vs our mirror **2,464** people /
 **10,588** messages (coverage gap 0). Incremental sweep: discovered 1 person newer than the cursor → reused
