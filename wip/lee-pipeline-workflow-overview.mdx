@@ -5,7 +5,7 @@ description: "Work-in-progress dossier — Lee · Infra · Pipeline & Workflow �
 
 <Info>Live dossier — auto-generated from `.claude/state/wip/lee/pipeline-workflow-overview.md` on every push. **Progress: 9/21 done (43%).** _Updated 2026-07-09._</Info>
 
-<Warning>⚠ **Possibly stale:** this work-stream file was last written 478h ago. If Lee has shipped since, this dossier under-reports — refresh `.claude/state/wip/lee/pipeline-workflow-overview.md`.</Warning>
+<Warning>⚠ **Possibly stale:** this work-stream file was last written 479h ago. If Lee has shipped since, this dossier under-reports — refresh `.claude/state/wip/lee/pipeline-workflow-overview.md`.</Warning>
 
 **Owner:** Lee — Infra · Pipeline & Workflow · FUB · Notifications
 
@@ -502,6 +502,104 @@ user_reassigned &#123;from_agent, to_agent&#125; (per-row; bulk = N rows; the bi
 calendar_invite_sent &#123;appt_id, to&#125; → Work/appointments.
 REC pending nod: settings_updated &#123;scope: business|profile, field, from, to&#125; — ONE kind per payload
 law, covering his business_settings_updated + profile_settings_updated pair.
+
+##### 2026-07-29 — GATE 2 SITTING, ROUND 7
+settings_updated &#123;setting: &lt;json path&gt;, from, to&#125; — LOCKED (one kind, JSON says which setting).
+FOLLOWUP FAMILY KILLED — follow-up is a TASK TYPE, not an object. Task payload schema (from UI):
+&#123;type: call|text|email|follow_up|send_listing|other, name, status: pending|in_progress|completed|
+cancelled, due_date, due_time, assigned_to, priority: low|medium|high|urgent, description&#125;.
+Events stay task_created/edited/completed/deleted; cancellation = task_edited&#123;status→cancelled&#125;
+(a cancelled task is a field change; a cancelled APPOINTMENT is a business event — asymmetry deliberate).
+APPOINTMENT payload schema (from UI): &#123;title, event_details, event_type: &lt;from appt-type settings&gt;,
+status: scheduled|completed|no_show|cancelled (READ-MODEL — derived from the events), created_by, date,
+time, duration, all_day, location, people, related_lead, assigned_to, invitees, invite_message&#125;.
+NODS REMAINING: ai_toggle_&#123;scope&#125; · ai_send_blocked&#123;reason&#125; — then catalog COMPLETE.
+
+##### 2026-07-29 — GATE 2 SITTING, ROUND 8 (Zach caught Lee's asymmetry — two unifying RECs pending)
+REC A — THE STATE-MACHINE LAW: every object with a status enum emits ONE transition event
+X_status_changed &#123;from, to, detail?&#125; — the pattern stage_changed and transaction_status_changed
+already use. Consequences if nodded: task_completed dies (→ task_status_changed to=completed) ·
+appointment_cancelled + appointment_dispositioned die (→ appointment_status_changed
+&#123;to: completed|no_show|cancelled, detail: listing_signed|listing_not_signed&#125;) ·
+appointment_rescheduled dies (a time change = appointment_edited &#123;field: time, from, to&#125;).
+Playbooks stack filters (WHEN appointment_status_changed IF to=cancelled) — importance never hardcoded.
+REC B — THE TOGGLE REGISTRY: kinds stay TWO (ai_toggle_enabled/disabled); every UI toggle gets a
+unique IDENTITY in the payload &#123;toggle: master|receptionist|inside_sales|clones|nurture|
+database_manager|transaction_coordinator|content_manager|clone with lead_id, by, reason&#125; + a toggle
+REGISTRY config table (itself covered by config-lifecycle events) defining each toggle + cascade
+parent. Mirrored toggles across 3 surfaces = ONE toggle id = lock-step by construction (separate keys
+per surface COULD drift — one identity cannot). New AI role next year = a registry row, zero catalog
+changes (the Ylopo test). Fold ai_clone_enabled/disabled in as &#123;toggle: clone, lead_id&#125; for full
+consistency (Zach may keep it separate — his call).
+
+##### 2026-07-29 — GATE 2 SITTING, ROUND 9 — THE CATALOG IS COMPLETE
+STATE-MACHINE LAW LOCKED (final form): one transition event per state machine, VALUES AS PAYLOAD,
+suffix follows the UI's own noun — stage_changed · task_status_changed &#123;from,to&#125; (task_completed dies) ·
+appointment_dispositioned &#123;outcome: &lt;from the appointment_outcomes CONFIG TABLE — open set:
+showed_up|no_show|cancelled|rescheduled|...&gt;, from_time?, to_time?&#125; · transaction_status_changed.
+Appointment lifecycle FINAL: created · edited · deleted · dispositioned (cancelled + rescheduled are
+OUTCOMES — rescheduled carries the time pair; the outcomes list is CONFIG DATA, never an enum in code).
+TOGGLE LAW LOCKED (Zach verbatim: "it can only be ai_toggle... otherwise we will drift"):
+ai_toggle_enabled / ai_toggle_disabled are the ONLY toggle kinds. ai_clone_enabled/disabled KINDS DIE —
+clone = payload &#123;toggle: clone, lead_id&#125;. Toggle registry = config table (each toggle id + surfaces +
+cascade parent); mirrored toggles = one id = lock-step by construction.
+ai_send_blocked &#123;reason&#125; LOCKED under the blocks-get-rows ruling + the payload law.
+CATALOG COMPLETE at ~138 rows. NEXT: Zach reads the package top-to-bottom → #31 signature → Gate 2
+CLOSES → Gate 3 builds hl_activity_catalog + payload schemas + ONE WRITE from this exact table.
+
+##### 2026-07-29 — TASK STATUS UI BUG (Zach, sitting round 10 — LOGGED, fix later, not now)
+Zach: task CREATE modal shows a status dropdown, but the RENDERED task only offers a "Completed"
+button — no way to move a task through any other status after creation. Lead-detail task rows have
+edit + trash but no status control. So the UI exposes ONE transition (→completed) of a state machine
+that officially has several. This VALIDATES task_status_changed &#123;from,to&#125;: completed is just one
+status, and the vocabulary already models what the UI can't do yet. FIX BELONGS with the Gate 3+
+catalog work (when ONE WRITE lands, the task UI gets a real status control that emits
+task_status_changed; today's Completed button becomes a shortcut for to=completed — same event, same
+door). Lane: Adam (CRM) builds the control when scheduled; do NOT hotfix mid-Gate-2.
+
+##### 2026-07-29 — GATE 2 SITTING, ROUND 10 (transaction docs + ai_ prefix + atomicity line)
+EVIDENCE FIRST (hl_lead_activity, live): fact_captured=375 · context_built=14 · property_looked_up=2
+(all source=ai, Myli toolbox) · property_reviewed=0 EVER (garage phantom) · lead_added_to_list=0 EVER.
+RULINGS APPLIED:
+- Document lifecycle ADDED per the lifecycle law: document_created/edited/deleted &#123;doc_id, form/field,
+  loop_id&#125;. sent/opened/signed STAY as moments (repeat per person, not one-way status flips).
+- transaction_loop_edited ADDED &#123;loop_id, field: participants|price|address|…, action?, user?&#125; —
+  add/remove an agent on a loop = field:participants. Scale answer: any future doc-loop capability is
+  lifecycle + status + moment + payload — never new vocabulary.
+- AI PREFIX LAW: AI-NATIVE actions (only the machinery does them) carry ai_ → ai_fact_captured,
+  ai_context_built, ai_property_looked_up. SHARED actions keep the plain kind with actor=ai (Zach round-5
+  Myli saved-search ruling preserved — needs his explicit nod that the distinction stands).
+- property_reviewed DELETED (0 rows ever). property_looked_up ≠ property_searched: it is Myli pulling
+  property data (AI toolbox) — person on search bar = property_searched, person on a home page =
+  property_viewed (both already locked).
+- phone_number_added/deleted DELETED as kinds — they were the BUSINESS comms numbers (twilio/bluebubbles/
+  gmail carriers), NOT lead fields → fold to settings_updated &#123;section: comms_numbers, action, number,
+  carrier&#125; per his settings ruling. Lead fields were never atomic kinds: lead_edited &#123;field: phone|email|name&#125;.
+- lead_added_to_list DELETED (0 rows, ambiguous garage token; campaign membership = campaign_enrolled;
+  real lists later = config object with lifecycles).
+- JSON-trust answer given: payload schema enforced per row at the ONE WRITE (Gate 3), jsonb is indexed +
+  queryable, and the alternative IS the atomic explosion. The kind is the sentence; payload is the details.
+Catalog holds at 138. Awaiting: ai-prefix-distinction nod + package read + #31 signature.
+
+##### 2026-07-29 — GATE 2 SITTING, ROUND 11 (Zach correction — LOCKED)
+- property_looked_up is DEAD in EVERY form (incl. my ai_property_looked_up rename — wrong). Myli hits
+  the same search door as a human, just via API → property_searched with user_type = ai. The 2 legacy
+  ai rows remap property_looked_up → property_searched in the Gate 3 data migration.
+- TERMINOLOGY LOCKED: not "actor" — the USER model. Every event row carries user_id → hl_user, which
+  carries type (ai | lead | human/agent...) + role + id. Shared action = standard key + user_type=ai.
+  AI-native machinery (only the machine does it) = ai_ prefix: ai_fact_captured, ai_context_built,
+  ai_director_move_chosen, ai_send_blocked, ai_toggle_*.
+- Catalog at 137. Remaining: package read + #31 signature.
+
+##### 2026-07-29 — GATE 2 SITTING, ROUND 12 (the missed twin + email lists)
+Zach caught lead_removed_from_list still present (I killed lead_added_to_list in round 10 and missed
+the sibling — the exact one-shovel-at-a-time failure this sitting exists to prevent). KILLED.
+RULING: the email list IS a real config object → email_list_created / email_list_edited /
+email_list_deleted. Membership (the add/remove-member button) is PART OF EDITING THE LIST:
+email_list_edited &#123;field: members, action: added|removed, lead_id&#125;. Zach verbatim: otherwise "we get
+into the same shit of moving every atomic json object outside of the key and it turns into 10,000
+hardcoded lines." Same shape as transaction_loop_edited &#123;field: participants&#125; — membership of a
+container is a FIELD EDIT on the container, everywhere, forever.
 
 ## Related documentation
 
