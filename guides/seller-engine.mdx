@@ -762,14 +762,23 @@ survive the flag, and they are not optional:
 3. **ADDRESS GUARD** — the house number Redfin resolved must equal the house number we queued, or the home is
    skipped and logged. This is what stops a resolution slip from putting the neighbor's house on a client's card.
 
-**RESULT of the first Redfin-always pass (415 cards, 7/29/2026):** past-client photo provenance moved
-**59% → 79% Redfin** (1,098 → **1,452 of 1,848** homes, **43,916 photos**). Zillow-served cards fell 650 → 323.
+**RESULT (complete pass, 7/29/2026):** the engine swept **722 homes / 20,238 photos** and the writeback
+linked **642 cards**. Past-client photo provenance moved **59% → 89% Redfin** (1,098 → **1,651 of 1,848**
+homes, **52,653 photos**). Zillow-served cards fell **650 → 146**; MLS-served 92 → 45.
 
-**⚠ The honest cost:** of the 415 rewritten, 9 gained photos, 249 were unchanged, 136 lost 1–3, and **21 lost
-4 or more** — e.g. `641 E El Monte Court` **32 → 10**. On those 21 the trade was fewer but far better pictures
-(**31 KB → 135 KB average**, 4–5×). They are listed in `.claude/reports/redfin-swap-losses-2026-07-29.json` and
-every one is restorable from that run's reversal file. If a future pass wants to avoid this, gate on
-`redfin_count >= 0.6 × card_count` — do NOT silently drop the guard.
+**⚠ THE GATE THAT HAD TO BE ADDED — read this before the next pass.** Zach approved Redfin-always on a
+*measured premise*: the counts tie and Redfin wins on quality. That held for 520 of 642 cards. It broke on a
+tail where Redfin only has a PARTIAL gallery — worst case `6810 E 138th Terrace`, a **51-photo card replaced
+by 5**. The existing idempotence guard did not catch it because it only protects an *existing Redfin*
+gallery, and these were Zillow cards. **Acting on an approval whose stated premise has failed is not
+honoring the approval.** So the documented gate is now enforced in code:
+
+> **Keep Redfin only when `redfin_count >= 0.6 × previous_count`. Otherwise restore.**
+
+`tools/houseloop-photos/restore-redfin-losses.mjs` applies it, replaying the exact `photosCached` from the
+per-run reversal file — nothing reconstructed. **21 cards restored.** The remaining trades are net wins:
+85 cards lost 1–3 photos while gaining 3–5× resolution (31 KB → 135 KB measured). Full ledger:
+`.claude/reports/redfin-swap-losses-2026-07-29.json` + `redfin-restore-*.json`.
 
 Every run HEAD-verifies each URL is a live 200 before storing it, writes `photosCached` as **objects**
 (`{hlCdnUrl, source, cachedAt}` — never bare strings; the site reads `->0->>'hlCdnUrl'`), stamps
