@@ -44,7 +44,31 @@ Appt Met (5,178) / Appt Set (3,388) / Signed (417) / Lost (309) / Pipeline (282)
 **the single most expensive mistake in this system** — it counts *appointments* as closings and
 manufactures a crisis every time. `build-deal-ledger.mjs:55` filters correctly; hand queries did not.
 
-**5 · `hl_srg_canonical` is the deal SSOT.** One row per DEAL. `hl_srg_book` is the client-level view of it.
+**5 · `hl_srg_canonical` is the deal SSOT.** `hl_srg_book` is the client-level view of it.
+
+**5b · A HUMAN VERDICT CAN NOW CREATE A DEAL — the path that never existed** (fixed 7/29/2026).
+`hl_srg_deal_overrides` was keyed `pc_id:sisu_id` and applied INSIDE the SISU loop, so a verdict could only
+**edit a deal SISU already found — never add one SISU never saw.** 150 override rows existed and not one
+could mint a deal. That is why real past clients stayed parked no matter how many times a call was "locked in."
+
+> **Bryce & Amy Hullet** — Jamie Munden (`mjunden@spradlingrealtygroup.com`) repped BOTH sides: sold 415
+> Timbercreek and bought **27479 Mission Belleview, Louisburg** one day later, 10/2022. SISU carries only a
+> stale *"Listing Expired"* row under a different agent, and **MLS 2401328 / 2404016 are absent from
+> `hl_srg_mls_deals` entirely.** Zach: *"that has been locked in like 10 times."* It never could be.
+
+**THE PATH, end to end:** write the verdict to `hl_srg_deal_overrides` with `tier='promote'` and a **negative
+synthetic `sisu_id`** (so it can never collide with a real SISU row) → `build-deal-ledger.mjs` **PROMOTE PASS**
+resolves the home (`o.hlid`, else MLS→HLID via `hl_mls_property_history`) and mints a ledger row →
+`resolve-from-mls.mjs --write` materialises it into `hl_srg_canonical`. **A promote with no resolvable home is
+reported, never silently dropped.**
+
+**Result of the first run: 7 verdicts promoted · book 1,705 → 1,711 clients · canonical 1,941 → 1,963 deals ·
+parked 74 → 68.**
+
+**5c · A person Zach has retired is SETTLED, not an open question.** `hl_srg_not_in_book` now reports
+`Z_retired_by_zach` for anyone with `contact_status IN ('do_not_contact','dnc')`, so the
+"needs a verdict" bucket means an OPEN item and never re-asks a question already answered.
+ One row per DEAL. `hl_srg_book` is the client-level view of it.
 
 **6 · If the book does not have it → it is NOT a past client.** Never "go find it another way." No scraper,
 no county record, no ad-hoc join. 100% is not reachable and never will be: 59 of the 82 parked rows are
