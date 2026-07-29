@@ -5,7 +5,7 @@ description: "Work-in-progress dossier — Lee · Infra · Pipeline & Workflow �
 
 <Info>Live dossier — auto-generated from `.claude/state/wip/lee/pipeline-workflow-overview.md` on every push. **Progress: 9/21 done (43%).** _Updated 2026-07-09._</Info>
 
-<Warning>⚠ **Possibly stale:** this work-stream file was last written 482h ago. If Lee has shipped since, this dossier under-reports — refresh `.claude/state/wip/lee/pipeline-workflow-overview.md`.</Warning>
+<Warning>⚠ **Possibly stale:** this work-stream file was last written 483h ago. If Lee has shipped since, this dossier under-reports — refresh `.claude/state/wip/lee/pipeline-workflow-overview.md`.</Warning>
 
 **Owner:** Lee — Infra · Pipeline & Workflow · FUB · Notifications
 
@@ -712,6 +712,72 @@ NEXT GATE-3 PASS (Zach soft-confirmed interest): convert 142 payload hints → m
 schemas; validation at logActivity in WARN-FIRST mode (log would-be rejections, break nothing), then
 hard-enforce on Zach's word. Config-table-driven values (outcomes, statuses) validate against their
 tables at runtime, never hardcoded enums.
+
+##### 2026-07-29 evening — SCREEN-WALK RULINGS SHIPPED + ONE REC PENDING
+Shipped off Zach's live walk (v2→v5): payload column = real JSON layout · Lens→"Website Pill" ·
+Emits→"In Use" · "Live Runs" clickable → drill-down /settings/activity-catalog/[kind] · alphabetical +
+double-wide live search · PageShell wide (full browser width — the sanctioned /leads lever, NOT the
+global token) · Activity col 320/grow 2 · mig 0493 zillow_insight_* rename (readiness: zero refs
+anywhere; payloads carry &#123;integration: follow_up_boss, source: zillow, ...&#125;; moat/capture chain in the
+migration text). Railway chewing the stack: full-width BUILDING, zillow-rename QUEUED behind it.
+REC PENDING ZACH'S NOD — THE INSIGHT LAW: "facts share keys and differ by source; conclusions carry
+their author in the key." property_viewed stays ONE key (fact). Insights = author-owned conclusions:
+zillow_insight_* (shipped) + houseloop_insight_* family to ADD on nod (viewed_10x_7d, new_area,
+buyer_reengaged, actively_searching, high_intent_buyer, high_intent_seller — Coming Soon, payloads
+carry receipts &#123;view_count, window, threshold, definition_ver&#125;, source houseloop). Interchangeability
+test: if every playbook would ALWAYS stack a filter to separate two spellings, they were never one kind.
+
+##### 2026-07-29 ~17:45 CT — THE INSIGHT LAW SHIPPED END TO END (commit 21cfc74df1)
+Zach nodded the law (facts share keys/differ by source; conclusions carry their author in the key) and
+ordered the HouseLoop family REAL, not Coming Soon. DISCOVERY: the insight engine ALREADY EXISTS —
+lib/inngest/functions/insight-engine.ts, ACTIVE hourly cron since Zach's 7/11 sign-off, computing his
+exact four (viewed_10x_7d · new_area · re_engaged · high_intent_buyer[7/27]) from our pixel data. It
+had never fired in prod (beta thresholds; all live *_flagged rows measured source=fub = Zillow's).
+SHIPPED ONE-COMMIT: mig 0494 (4 houseloop_insight_* rows, emitted=true, engine-matching payload hints
++ definition_ver) + INSIGHT_KIND repoint (engine now writes houseloop_insight_*, was *_flagged) +
+reengageQuietDays 14→15 (Zach: "15+ days of zero activity") + definition_ver:1 stamped on fires +
+engine comment updated (old "same canonical kind as Zillow's" philosophy struck, law recorded).
+Door keys + hl_trigger_fire ledger keys (insight_*) DELIBERATELY untouched — workflow wiring lives
+there; converges at the FK-move pass. Union 188, drift green, insight-family naming exemption
+generalized to /(^|_)insight_/. FLAGGED FOR ZACH VETO: high_intent_buyer kept as 4th (his 7/27-locked
+definition, engine fires it) though tonight he said "three".
+
+##### 2026-07-29 — ZACH CONFIRMED: all FOUR HouseLoop insights stand ("use the 4 that are actually
+##### built, keep the high intent buyer definition"). No changes needed — shipped that way in 0494.
+
+##### 2026-07-29 — #34 RECONCILED BY ZACH'S RULINGS (the "conflict" dissolves under the signed model)
+- manual_entry: a DOOR, never a source ("we manually input a lead, then select its source" — like a
+  phone call is a door). Door row ON = correct (Add Lead works); trigger row OFF = the automation
+  toggle, a choice. THE LAW: lead_source_events.is_active answers "does this door mint";
+  trigger_events.is_active answers "can it start automation". Two questions — no single-answer forcing.
+- buyer/seller_intent_flagged = the pre-sitting names for ZILLOW's high-intent insights (all rows
+  source=fub). Zach: "banned language" — rename to zillow_insight_high_intent_buyer/seller queued in
+  the FK-move/rename pass. Trigger ON (Zillow intent fires notifications) + source-event OFF (insights
+  never mint) = coherent, not a mismatch.
+- GUARD for #35: the clone delete may touch ONLY the ten clone trigger rows — never the live
+  manual-entry door row, never history. #35 still awaits Zach explicitly lifting no-destroy for those ten.
+
+##### 2026-07-29 late — *_FLAGGED PROVENANCE + ORIGIN ANSWERED (mig 0495 applied + pushed)
+Zach: "I did not sign off on anything flagged" — CORRECT, receipts: the 7 *_flagged trigger rows were
+created 7/03–7/27 (the 0488-era taxonomy — see commit ec06703ce2 "EVERY MESSAGE VANISHED - repoint
+catalog + writers to the 0488 names"). Never signed; queued for the zillow_insight_* remap.
+His pair ruling applied: ALL 175 flagged activity rows now read integration=follow_up_boss ·
+source_name=zillow (24 null-provenance rows filled; 151 were already right). Row `source` column
+stays 'fub' = the TRANSPORT trail (a different question, per the run-log schema + the Benji/Zach
+pair law: integration = the system that carried it · source = the brand, flat list, no lane).
+
+##### 2026-07-29 late — ZACH CORRECTION: "there is no source = fub; twilio is not a source"
+I wrongly blessed hl_lead_activity.source (twilio|fub|gmail|crm) as a "transport trail". THE ARTIFACT
+MODEL (item 10, corrected Jul 28): Channel · Integration · Source are THREE fields — the LEAD keeps
+integration + source; the ACTIVITY carries the CHANNEL (from/to). Transports = CARRIER (the platform
+word replacement triple: integration · source_type · carrier). FUB is an INTEGRATION. Twilio is a
+CARRIER. The legacy run-log `source` column is a pre-model mashup → SENTENCED, decomposes in the
+platform→integration pass (board items #94–#104, esp. #99 "a phone number has a carrier, not a
+platform"). Schema comment in log-activity.ts corrected (do-not-add-values warning). NO data repaint
+tonight (17k rows; no-destroy; ships with that pass).
+FLAG FOR ZACH: the Activity Catalog page column I labeled "Source" is the sitting's FAMILY grouping
+(appointments · loops · ai · config · zillow · houseloop) — if "source" is reserved for brands, one
+word and I relabel it "Family".
 
 ## Related documentation
 
