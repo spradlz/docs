@@ -232,6 +232,58 @@ the reason · `dispatch-error` = it threw · **nothing at all** = the dispatcher
 and it cost days while real tour requests went unanswered.
 </Note>
 
+## 🔴 THE IN-APP NOTIFY PASS HAD NEVER RUN — NOT ONCE (found + fixed 2026-07-28)
+
+Fixing the silent-bell bug above made delivery work — but **only for notifications someone fired by hand.**
+The automatic path that is supposed to notice a new Zillow in-app message and notify you had **never worked,
+and reported `"notified": 0` + SUCCESS on every run since it was built.**
+
+Zach's words when he realised: *"I got those alerts from FUB and Premier Agent and my own software that I work
+18 hours a day on for the past year refuses to notify me."* Four tour requests from Bradley Bengel for the next
+morning sat un-sent.
+
+**Two silent layers, stacked — each one alone enough to hide the other:**
+
+| # | Layer | Why nothing failed |
+|---|---|---|
+| ① | **The ledger column was on the wrong database.** `fub.text_messages.notified_at` existed on the **Railway mirror**, never on **Camp David** — and the sweep reads Camp David. | The query threw `column "notified_at" does not exist`, hit a bare `.catch(() => ({ rows: [] }))`, and became an empty list. No DDL for that column exists anywhere in the repo — it had been added to Railway by hand. |
+| ② | **`HL_INTERNAL_SECRET` was absent from pm2's environment.** | Once ① was fixed, the POST hit `[notify] HL_INTERNAL_SECRET unset — POST skipped` — **and the run still printed `"notified": 0` and exited SUCCESS.** `FUB_API_KEY` in that same file already resolved from the sibling `.env`; the secret did not. |
+
+<Warning>
+**⚠️ THE LANDMINE — a hand-run check queries a DIFFERENT DATABASE than the running process.**
+
+```
+/Users/lee/.env        DATABASE_URL → yamabiko.proxy.rlwy.net:40035/railway   ← RAILWAY (mirror)
+pm2 fub-body-recovery  DATABASE_URL → localhost:5432/bossloop                 ← CAMP DAVID (ground truth)
+```
+
+Debugging with `. ./.env && psql "$DATABASE_URL"` reads **Railway**, while the sweep reads **local**. That is
+how *"I verified 4 rows are eligible, the sweep should have sent them"* got reported as fact — twice — when the
+sweep was querying a table that did not even have the column.
+
+**To reproduce what a pm2 process sees, take its env from the PROCESS, never the .env file:**
+```bash
+ps eww $(pgrep -f fub-body-recovery-consumer | head -1) | tr ' ' '\n' | grep '^DATABASE_URL='
+```
+</Warning>
+
+**The fix:** `notified_at` added to **Camp David** (ground truth per the `fub-relay` header — the relay reads
+its column list from CD's `information_schema`, so it flows to Railway automatically); **402,346 rows
+backfill-marked notified** so the first working sweep could not blast 13,461 historical messages (`pending = 0`
+verified first); `HL_INTERNAL_SECRET` given the same `.env` fallback `FUB_API_KEY` already had; and **both
+failure modes now log loudly** — a query that cannot RUN is an outage, not "nothing to do."
+
+**Proof:** run with pm2's exact environment, nothing sourced → `"notified": 1` and
+`hl_notification.channels_sent = ["sms","email"]`.
+
+<Note>
+**The pattern behind all four notification bugs found this night** — the silent bell, the thrown dispatch, the
+missing column, the missing secret — is identical: **an error swallowed into a green result.** `"notified": 0`,
+`channels_sent = []`, and `{ok:true}` all meant "nothing happened" and "everything is fine" at the same time,
+and nothing in the system could tell them apart. When auditing this pipeline, the only trustworthy question is
+*"can I name a message that reached the phone?"* — never *"did the job report success?"*
+</Note>
+
 **Known-open (next):** Zillow in-app messages still resolve to the generic `new_message` notify class
 (`lib/notifications/router.ts` → `FUB_EVENT_CLASS`), whose subline is `{{event.time}}`. That is why the card
 reads *"💬 Evelyn Morales sent a message"* with no property and no body, while `property_inquiry` renders
