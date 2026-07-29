@@ -1088,12 +1088,30 @@ pm2 fub-body-recovery DATABASE_URL → localhost:5432/bossloop                 �
 sweep should have sent them" was reported as fact — twice — when the sweep was looking at a table that did not
 even have the column.
 
-**Rule: to reproduce what a pm2 process sees, take its env from the PROCESS, never from the .env file:**
+**Rule: to reproduce what a pm2 process sees, take its env from pm2, never from the .env file:**
 ```bash
-ps eww $(pgrep -f fub-body-recovery-consumer | head -1) | tr ' ' '\n' | grep '^DATABASE_URL='
+pm2 list                                                       # find the id (fub-body-recovery)
+pm2 env <id> | grep -E '^(DATABASE_URL|RAILWAY_DATABASE_URL|HL_INTERNAL_SECRET)'
 # then run the script with THAT value and nothing sourced:
 cd /Users/lee && DATABASE_URL='postgresql://bossloop:***@localhost:5432/bossloop' node fub-inapp-sweep.mjs
 ```
+
+<Warning>
+**❌ `ps eww` DOES NOT WORK FOR THIS — and an earlier revision of this page said it did.** On macOS `ps eww`
+prints only the command line and returns **no environment**. The 2026-07-28 revision of this section cited
+*"`ps eww` on the live procs shows `HL_INTERNAL_SECRET=0`, `DATABASE_URL=0`"* as its evidence. That was never a
+reading — it was the **absence** of a reading, treated as a zero. `DATABASE_URL` was set the entire time.
+The recipe was published as the rule and would have led the next person to the exact same wrong conclusion.
+**Use `pm2 env <id>`** — which is what the 2026-07-16 entry at the top of this page already prescribed, thirteen
+days earlier. Corrected 2026-07-29 (Adam).
+
+**What IS true, re-measured 2026-07-29 with `pm2 env 12`:** the consumer's env carries 35 variables,
+`DATABASE_URL` = Camp David ✅, `RAILWAY_DATABASE_URL` = the mirror ✅, and `HL_INTERNAL_SECRET` is genuinely
+**absent** — because `ecosystem.config.cjs` never defined it. So the documented restart procedure
+(`pm2 start ecosystem.config.cjs --only fub-body-recovery`) produces a process that cannot POST unless the
+script falls back to the sibling `.env`. **That fallback is load-bearing, not belt-and-braces.** The proper
+root fix is to add the secret to `ecosystem.config.cjs`.
+</Warning>
 
 ### The fix (2026-07-28)
 - `notified_at timestamptz` added to **Camp David** `fub.text_messages` — ground truth per the `fub-relay`
