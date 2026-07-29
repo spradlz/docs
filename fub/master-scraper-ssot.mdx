@@ -1128,7 +1128,91 @@ sent.
 
 **The invariant:** anything this script needs must resolve from the **file** too — never from pm2's env alone.
 And `"notified": 0` is only trustworthy if the run also proves the query *executed*.
+
+**Root-fixed 2026-07-29:** `ecosystem.config.cjs` now reads `HL_INTERNAL_SECRET` and the mirror URL from
+`/Users/lee/.env` itself, so `pm2 start ecosystem.config.cjs --only fub-body-recovery` is **self-sufficient** —
+no secret in git, no "remember to export it first." Verified with `pm2 env 14` from a shell with nothing
+exported. The per-script file-fallbacks stay as the safety net.
 </Warning>
+
+<Warning>
+**🔴 THE LIVE-FIRE TEST — what a real end-to-end rehearsal found (2026-07-29, Zach's call).**
+
+Zach's instruction was: *"clear out her in-app history in the FUB mirror or anywhere it has it and let the
+tick find it and run on its own — that's the true way."* Deleting a real lead's history and letting the
+pipeline rebuild it from nothing is a far harsher test than replaying a message, and it immediately found
+**four defects that every green signal had been hiding.**
+
+| # | Defect | How it presented |
+|---|---|---|
+| 1 | **The synthetic id generator used a row COUNT where it needed the highest id used.** `synthOffset = existingDomOnly.length` — but ids are POSITIONAL. Any hole (a deleted row, a dedup `continue`, the cross-person guard) makes count < max, so it re-issues ids that already exist. | `ON CONFLICT (id) DO NOTHING` swallows it. Lucy Hartman: 252 rows spanning offsets 7..258 → every new id minted at 252 collided. The sweep re-scraped her **every 3 minutes** and wrote **zero rows** while reporting `inapp_inserted: 5`. |
+| 2 | **`inserted++` fired regardless of `rowCount`.** | The count measured attempts, not rows. Third instance of this exact disease in 24 hours. |
+| 3 | **A collision DROPPED the message** instead of trying the next slot. | Silent, permanent, per-person. |
+| 4 | **Each person owns only 1,000 synthetic slots** (`900000000 + personId*1000`), so message #1001 lands inside the NEXT person's block. | **4,934 rows already sit outside their own person's block** across 8 people (worst: 2,842 messages). A neighbour's future message collides with them and is dropped forever. |
+
+**Fixed:** next slot = `max(id used) + 1`; `inserted` counts `rowCount`; a collision retries the next free
+slot and says so if it cannot place the message; past slot 1000 it allocates from a collision-free **overflow
+region at 1.2B** (above every person block — highest is 950,543,000 — and far below int4's 2,147,483,647)
+rather than bleeding into a neighbour.
+
+**Proof (rounds 2 and 3, identical, fully unattended):** delete → `1 in-app people to extract` → scrape →
+`awaiting_mirror: 2` → relay lands → `notified: 2` → `hl_notification.channels_sent = ["sms","email"]`.
+~8 minutes cold, twice, from the exact state round 1 died in. Only the two messages inside the 48h window
+notified; the Jul-24/Feb/Jan history was captured and stayed correctly silent.
+
+<Note>
+**A re-scrape does NOT fully restore deleted history.** The scraper reads what FUB's timeline currently
+renders. Of Lucy's 11 in-app messages, **5** came back; the other **6** — including the outbound agent reply
+and a separate tour request — existed only in the pre-test CSV snapshot and had to be restored from it.
+**Snapshot before you delete message history; you cannot re-scrape your way out of it.**
+</Note>
+</Warning>
+
+<Warning>
+**⚠️ THE MIRROR RACE — never POST a row the CRM cannot read yet (locked 2026-07-29).**
+
+Both capture paths write the recovered body to **Camp David** and immediately POST `/api/fub/body-recovered`.
+The CRM function reads the **Railway mirror**. The relay between them is a cursor loop — and it is *not*
+reliably fast: **measured 8 minutes 43 seconds** on Lucy Hartman's 2:21pm messages. `fub-body-recovered`
+throws *"recovered row not yet visible on the mirror"*, Inngest burns all 3 retries in ~4 seconds, and the
+message is silently lost. That is what cost Zach both of her messages.
+
+**Retrying was patching the symptom. The cause is announcing data before it exists where the reader looks.**
+
+Both paths now ASK THE MIRROR FIRST:
+- `fub-inapp-sweep.mjs` — one batched presence query; a row that isn't there is **not offered** (no POST, no
+  ledger stamp) and is picked up next sweep. Surfaced as `awaiting_mirror` in the result JSON.
+- `fub-body-recovery-consumer.mjs` — `waitForMirror()` polls the mirror (bounded, `BODY_MIRROR_WAIT_MS`,
+  default 90s) before POSTing. On expiry it posts anyway but logs **`RELAY LAGGING`**, because a relay taking
+  >90s is itself the finding.
+
+**The A/B, same message, same code path, one hour apart:**
+```
+17:50:55  FAILED   'recovered row not yet visible on the mirror (text 296374)'   ← gate off
+17:53:03  [NOTIFY] mirror caught up after 12s (text:296374)                      ← gate on
+17:53:07  SUCCESS  → channels_sent ["sms","email"]
+```
+
+**Also fixed:** the sweep's re-offer window for a POSTed-but-unconfirmed message dropped **45 min → 6 min**
+(safe now that a POST implies readability), the reconcile counter now reports rows CHANGED instead of rows
+found (it printed `reconciled 2` every 3 minutes for a full day while updating nothing), and a notify query
+that cannot RUN exits non-zero so the job goes **red** instead of green-with-`notified: 0`.
+
+**And the delivery gap it explained:** Msale Olongo's masked text arrived 12:50:47, the router enqueued Lane 2
+in **9 seconds** — then the consumer recovered the body at 12:54:54 and **skipped the notify emitting no
+output at all** (the old warn-once-per-process latch on a missing `HL_INTERNAL_SECRET`). He got the alert at
+13:40, 48 minutes late, only because a human restarted the process. Both halves are now fixed: the secret
+comes from `ecosystem.config.cjs`, and a skipped POST logs **every time**.
+</Warning>
+
+<Note>
+**Two repo↔box drift vectors closed the same day.** `deploy.sh` did not ship **`fub-inapp-sweep.mjs`** — the
+single script that delivers every Zillow in-app message had **no deploy path**, so the only way to change it
+was hand-editing the box, which this page's own SSOT law forbids. It also did not ship
+**`ecosystem.config.cjs`**, so the pm2 config could differ between repo and box with nothing to catch it.
+Both are now in `FILES` and in the backup. ⚠ A change to `ecosystem.config.cjs` does **not** take effect on
+`pm2 reload` — it needs `pm2 delete` + `pm2 start ecosystem.config.cjs --only <app>`.
+</Note>
 
 <Note>
 **Live proof (2026-07-09, dark run).** `--measure`: FUB **1,303** in-app people vs our mirror **2,464** people /
