@@ -1,38 +1,83 @@
 ---
 title: "Forms & E-Sign"
-description: "The TC Loop contract forms — the closed catalog, how a form fills from lead + property data, the one-call send API (createFillSend), the Documenso e-sign flow, and how the AI clone sends a Single Property Showing Agreement."
+description: "The ONE doc for TC Loop contracts end-to-end: the closed form catalog, how blanks and signature/initials/date boxes are anchored from the PDF, how a form fills from lead + property data, the one-call send API, the self-hosted Documenso e-sign lifecycle, and the R2 archive that is the system of record."
 ---
 
-**In the app:** TC Loop → **Forms** (on a loop). One loop → attach a property → send an agreement → it goes out
-for e-signature and the loop shows **Waiting on Signatures** until it's signed.
+**In the app:** TC Loop → **Forms & E-Sign** (on a loop). Attach a property → send an agreement → it goes out
+for e-signature and the loop shows **Waiting on Signatures** until it is signed.
 
-This page is the developer reference for that flow — the contract catalog, how fields auto-fill, the send API
-the AI clone calls, and the e-sign/reminder lifecycle.
+<Note>
+**This page absorbed the old `guides/esignature` doc (merged 2026-07-30, Zach: "combine them into one forms
+and esign document — I don't need two that can drive").** Forms and e-signature are one pipeline, so they are
+one page. `/guides/esignature` now redirects here.
+</Note>
 
 ## The one sentence
 
-A **form** is a real Missouri/eXp PDF whose blanks + signature boxes are mapped once in a catalog
-(`lib/tc/contract-forms.ts`); we **fill** those blanks from the lead + the loop's attached property, **send** it
-to Documenso for multi-party signature, and track it on the loop until it's signed.
+A **form** is a real Missouri/Kansas eXp PDF whose blanks and signature boxes are **mapped once** from the PDF
+itself; we **fill** those blanks from the lead and the loop's attached property, **send** it for multi-party
+signature on our own e-sign engine, pull the **executed PDF** back, and **archive it to our own R2**.
+
+Every layer is **$0/month** — self-hosted, open-source, no per-document fees, no third-party branding.
+
+## Why we own the signing layer
+
+**dotloop has e-signature in its product but NOT in its public API.** The dotloop API can read/write loops,
+folders, documents, and participants, and can *download* a signed PDF — but there is **no endpoint to initiate
+or track a signature request** (see [dotloop Integration](/guides/dotloop-integration)). So to make TC
+AI-driven end-to-end, we run our own engine:
+
+- **Self-hosted** → $0/document, unlimited volume, no SaaS dependency.
+- **White-labeled** → signers see *HouseLoop eSignature*, not a third-party "powered by".
+- **API-first** → the AI clone can create a document, place fields, add signers, and send, fully
+  programmatically. That is impossible through dotloop's API and is the whole point.
+
+The engine is [Documenso](https://documenso.com) (open-source, AGPL-3.0), cloned, rebranded to **HouseLoop
+eSignature** (HouseLoop logos, brand navy, emails from `noreply@houseloop.ai`), self-hosted at
+`esign.houseloop.ai`.
+
+## The pipeline
+
+```
+Contract PDF
+  → 1. Map fields         (extracted from the PDF — never typed)
+  → 2. Fill from lead     (pdf-lib — name, price, term, address)
+  → 3. Send for signature (HouseLoop eSignature — self-hosted Documenso)
+  → 4. Signer signs       (browser / mobile, HouseLoop branded)
+  → 5. Pull executed PDF  (signed doc + audit trail)
+  → 6. Archive to our R2  (permanent — THE system of record) · optional backup mirror → dotloop
+```
+
+The executed PDF on **HouseLoop R2** (`doc.file_url`) is the **system of record**. Pushing it into a dotloop
+loop folder is an **optional backup mirror** for eXp/SkySlope compliance, never the destination of record
+(Documenso-first locked by Zach 2026-07-06).
+
+| Layer | Technology | Cost |
+|---|---|---|
+| Signature/initials/date mapping | `anchor-sig-fields.mjs` (pdftocairo + pdftotext, deterministic) | $0 |
+| Data-field mapping (not yet wired) | `vision-field-builder.mjs` (pdftotext + Claude vision) | ~cents / new form |
+| Field fill | pdf-lib (embedded font) | $0 |
+| E-signature | HouseLoop eSignature (Documenso, self-hosted) | $0 |
+| Archive (system of record) | HouseLoop R2 | $0 |
+| Backup mirror (optional) | dotloop API | $0 |
 
 ## The closed catalog — `lib/tc/contract-forms.ts`
 
-Every sendable agreement is ONE entry in `CONTRACT_FORMS`, resolved by key with `contractFormByKey(key)`. You do
-not hand-build a PDF anywhere else — add a form = add a catalog entry (PDF path + field map + signature boxes).
+Every sendable agreement is ONE entry in `CONTRACT_FORMS`, resolved with `contractFormByKey(key)`. You do not
+hand-build a PDF anywhere else — add a form = add a catalog entry (PDF path + field map + signature boxes).
 
 | Form key | Name | When |
 |---|---|---|
 | `exclusive_buyer_agency` | Exclusive Buyer Agency Agreement | The standard Spradling buyer-rep path |
-| `single_property_buyer_rep` | **Single Property Buyer-Broker Representation Agreement** | The **showing agreement** — one specific house |
+| `single_property_buyer_rep` | Single Property Buyer-Broker Representation | The **showing agreement** — one specific house |
 | `non_exclusive_buyer_rep` | Non-Exclusive Buyer-Tenant Broker Rep | Exists; not the standard path |
 
-Each entry carries: `pdfPath`, `pageWidth/Height`, a `fields[]` list (the printed blanks), and `signatureFields[]`
-(the signature/initials/name/date boxes per party).
+Each entry carries `pdfPath`, `pageWidth/Height`, a `fields[]` list (the printed blanks), and
+`signatureFields[]` (the signature / initials / name / date boxes per party).
 
 ## How fields fill — source expressions
 
-Each `fields[]` entry has a `source` string that the fill engine (`lib/tc/fill-loop-document.ts`) resolves from
-the lead + the loop. The ones in use:
+Each `fields[]` entry has a `source` the fill engine (`lib/tc/fill-loop-document.ts`) resolves:
 
 | `source` | Fills from |
 |---|---|
@@ -40,24 +85,119 @@ the lead + the loop. The ones in use:
 | `deal.address` | **the loop's attached property** (`hl_transactions.property_address`) |
 | `lead.search.location` | the lead's saved-search area |
 | `lead.budget.low` / `lead.budget.high` | the lead's price range |
-| `today` / `today+90d` | filled at send time (term begin / end) |
+| `today` / `today+90d` | filled at fill time (term begin / end) |
 
-So the **Single Property Showing Agreement** puts the specific house on the contract via `deal.address` — which
-means **the loop must have a property attached** before you send it. Attach it in-app with the Property search on
-the loop, or programmatically via `createLoop({ propertyAddress })`.
+So the Single Property Showing Agreement puts the specific house on the contract via `deal.address` — the
+**loop must have a property attached** before you send. Attach it with the Property search on the loop, or
+`createLoop({ propertyAddress })`.
 
-## Signatures — anchored, never hand-typed
+## Signature, initials, and DATE placement — read from the PDF, never typed
 
-`signatureFields[]` places each party's SIGNATURE / INITIALS / NAME / DATE boxes. Parties are
-`buyer · co_buyer · agent · broker` (broker = Chris Cribb / eXp, pre-printed on these forms). **Coordinates are
-EXTRACTED from the PDF, never eyeballed** — run `tools/houseloop-contracts/anchor-sig-fields.mjs <form.pdf>` and
-paste its output. See the **Signature Anchoring** law (`.claude/rules/SIGNATURE_ANCHORING.md`): a hand-typed
-`yTop` is a bug.
+> **The law:** these coordinates are **extracted from the PDF itself**, never hand-typed or eyeballed.
+> Full rule: `.claude/rules/SIGNATURE_ANCHORING.md`. A hand-authored `yTop` is a bug.
+
+### The bug that kept coming back
+
+For months the coordinates were measured by hand — re-tuned **~15 times** and still wrong. Root cause: the
+initials box sits at a **different Y on every page** of the Exclusive Buyer Agency:
+
+| Page | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|
+| Initials box top (yTop) | **722** | **718** | **695** | **702** | **697** |
+
+The code used one hardcoded `yTop: 706` for all five pages — mathematically impossible to be right. The PDF
+held the exact answer the whole time; nobody read it.
+
+### The process — run it, don't guess
+
+```bash
+node tools/houseloop-contracts/anchor-sig-fields.mjs <form.pdf> --write apps/houseloop-crm/lib/tc/field-maps/<key>.json
+```
+
+The dotloop-exported forms are **flat PDFs** (zero AcroForm fields). dotloop flattens its e-sign boxes into the
+page as **~27pt-tall vector rectangles** (the form's own data underlines are ~11pt), and the printed party
+labels sit just *under* each signing line. So the extractor reads both:
+
+1. `pdftocairo -svg` per page → the axis-aligned rectangles; keep the ~27pt e-sign boxes, drop the ~11pt underlines.
+2. `pdftotext -bbox` per page → the printed labels, to know **who** signs each box.
+3. Classify: a narrow (`w<70`) bottom pair → **initials** (buyer left, co-buyer right); a wide box with a party
+   label under it → that party's **signature**.
+4. **Derive the DATE** (added 2026-07-30) — see below.
+5. Write the field map. `contract-forms.ts` already imports `field-maps/<key>.json`, so the fill picks it up.
+
+For a form whose text layer is obfuscated, pass `--order buyer,co_buyer,broker,agent` to assign boxes by
+top-to-bottom order instead of by label. If it warns `⚠ unassigned sign box`, add `--order` or **one**
+`partyForBox()` rule — never a typed coordinate.
+
+### The DATE on the document (fixed 2026-07-30)
+
+<Warning>
+**A signing certificate is not a date on the contract.** Zach, on a fully executed agreement: *"Title companies
+and our brokers don't care about a signing certificate. What they care about is the date on the document."*
+</Warning>
+
+**What was wrong.** `exclusive_buyer_agency.json` had 14 fields — 10 INITIALS + 4 SIGNATURE and **zero DATE**.
+The dotloop template has no date e-sign *box*: each signature underline is ONE wide box with the party label
+("BUYER") at its left end and "DATE" at its right. The extractor only emitted boxes, so no DATE field existed,
+so Documenso was never asked to place one, so **every executed contract came back blank on those lines**.
+
+**The fix, in the extractor** (so it is read, never typed): `anchor-sig-fields.mjs` now derives a DATE field
+from the printed **DATE label** under each signature line, at that label's `x` and the signature line's `y`,
+and **narrows the SIGNATURE** to stop 8pt short so cursive and date can never overlap on the shared underline.
+No DATE label on a line → a **warning**, never an invented coordinate. Exclusive Buyer Agency: 14 → 17 fields.
+
+**How the date actually gets stamped.** The signer never types it. Documenso computes it **server-side** and
+ignores whatever the client submits (`packages/lib/server-only/field/sign-field-with-token.ts`):
+
+```ts
+if (field.type === FieldType.DATE) {
+  customText = DateTime.now()
+    .setZone(documentMeta?.timezone ?? DEFAULT_DOCUMENT_TIME_ZONE)
+    .toFormat(documentMeta?.dateFormat ?? DEFAULT_DOCUMENT_DATE_FORMAT);
+}
+```
+
+So a signer cannot backdate, typo, or skip it. Each party's line carries the moment **that party** signed.
+
+<Warning>
+**`meta.timezone` is legally load-bearing, not a display preference** — it IS the date printed on the contract.
+Both create paths were sending `America/New_York`. Kansas City is **Central**, so anything signed between
+11:00 PM and midnight CT would have printed the **next day** on an executed contract. Fixed 2026-07-30 to
+`BUSINESS_TZ` (`America/Chicago`, `lib/datetime.ts`). Same "1 hour ahead" bug already written into
+`lib/business-profile.ts`. **Never Eastern.**
+
+Documenso's *default* `dateFormat` is `yyyy-MM-dd hh:mm a` — which would print `2026-07-30 01:25 PM` on a
+signature line. We override it to `MM/dd/yyyy` → `07/30/2026`.
+</Warning>
+
+### The fill engine
+
+`lib/tc/fill-contract.ts` (`drawSignaturePlaceholders`) draws signature/initials as **page content** (not form
+fields) in an embedded **Great Vibes** cursive — baked content renders identically in every viewer, whereas a
+form field gets re-rendered by the viewer in its own font (which is why cursive-in-a-field showed as a block).
+Initials are vertically centered in the ~27pt box. **DATE fields are deliberately skipped at fill time**
+(`fill-contract.ts`) — they belong to the signing step, where Documenso stamps the real signing date.
+
+## Who signs — the loop People / Signers roster
+
+The roster (Buyer 1, Buyer 2, Buyer's Broker, Designated Agent) is resolved by `resolveLoopSigners()`
+(`lib/esign/resolve-sender.ts`); the last three can be overridden per-loop with an `hl_tc_loop_participant`
+row. **The email on each signer is who actually signs** — Documenso routes by email and stamps that account's
+identity onto the signature line.
+
+**The Designated Agent must be a real team member — name and email can never diverge (Zach 2026-07-22).**
+A roster showing *"Ana Spradling"* next to `zach@houseloop.ai` sent Ana's agent line to Zach's account, so
+Zach's signature landed on Ana's line. Enforced in two places: the **Change modal** (`AddPersonModal.tsx`)
+renders the Designated Agent as a **picker of active team members** and locks the email; the **participant
+API** re-resolves the email server-side and rejects anything that isn't a real member.
+
+**Licensing is checked here too.** Picking an agent who is not licensed in the property's state raises a
+warning — see [Transaction Coordination → Licensing](/guides/transaction-coordination).
 
 ## The send API — what the AI clone calls
 
-`createFillSend(leadId, formKey, opts)` — `lib/esign/create-fill-send.ts` — is the **ONE call** for "send this
-agreement to this lead." It composes the same three engines the TC UI uses (no fork):
+`createFillSend(leadId, formKey, opts)` (`lib/esign/create-fill-send.ts`) is the **ONE call** for "send this
+agreement to this lead." It composes the same engines the TC UI uses — no fork.
 
 ```ts
 import { createFillSend } from '@/lib/esign/create-fill-send';
@@ -65,66 +205,90 @@ import { createFillSend } from '@/lib/esign/create-fill-send';
 const res = await createFillSend(leadId, 'single_property_buyer_rep', {
   side: 'purchase',            // buyer agreement (default)
   agentUserId,                 // the human agent who signs
-  senderUserId: agentUserId,   // whose Documenso account it sends AS (name + headshot on the sign page)
-  includeBroker: false,        // true = full 3-way (adds Chris Cribb)
+  senderUserId: agentUserId,   // whose Documenso account it sends AS
+  includeBroker: false,        // true = full 3-way (adds the broker of record)
   message: 'Please review + sign.',
 });
-// → { loopId, docId, esignDocId, signingUrl, sentTo, sentAs }
+// → { loopId, docId, esignDocId, signingUrl, sentTo, sentAs, license }
 ```
-
-It **reuses the lead's newest matching loop or creates one**, fills the form, and multi-party sends. Returns the
-loop, the doc, the Documenso id, and the buyer's `signingUrl`.
 
 <Warning>
 `createFillSend` does NOT set the property. For `single_property_buyer_rep`, `deal.address` must already be on
-the loop — otherwise the Property line fills blank. Attach the house first: create the loop with
-`createLoop({ leadId, side:'purchase', propertyAddress:'14637 Crystal Place, Grandview, MO 64030', ... })`, then
-call `createFillSend` (it reuses that loop), OR fill+send explicitly on that loop:
-`fillLoopDocument({ loopId, formKey })` then `sendLoopDocument(loopId, docId, { senderUserId, agentUserId, includeBroker })`.
+the loop or the Property line fills blank. Create the loop with `propertyAddress` first (it reuses that loop),
+or fill+send explicitly: `fillLoopDocument({ loopId, formKey })` then `sendLoopDocument(loopId, docId, {...})`.
 </Warning>
 
 ### AI-clone recipe — send a Single Property Showing Agreement
 
-1. Resolve the lead + the house (a HouseLoop `Listing`, e.g. by address/HLID).
-2. `createLoop({ leadId, side:'purchase', propertyAddress: <the house address>, assigneeUserId: <agent> })`.
+1. Resolve the lead + the house (a HouseLoop `Listing`, by address or HLID).
+2. `createLoop({ leadId, side:'purchase', propertyAddress: <the house>, assigneeUserId: <agent> })`.
 3. `createFillSend(leadId, 'single_property_buyer_rep', { agentUserId, senderUserId, includeBroker:false })`.
-4. Deliver the `signingUrl` however the clone communicates — e.g. text it with `sendTextAs(toNumber, msg, leadId, identity)`.
+4. Deliver the `signingUrl` however the clone communicates.
 
 That is the whole tool surface. The clone never touches PDFs, coordinates, or Documenso directly.
 
-## The e-sign lifecycle (Documenso)
+## The e-sign lifecycle
 
-We e-sign on **self-hosted Documenso** (`esign.houseloop.ai`, client `lib/esign/documenso.ts`). On send:
+On send:
 
-- A `hl_tc_loop_document` row is written with `status='sent'` + `esign_doc_id` (the Documenso id), and the loop's
-  stepper reads it as **Agreement Sent**.
-- Documenso emails the branded signing link to each recipient; the buyer's `signingUrl` is returned so you can
-  also text it.
-- Signature events land on **`/api/esign/webhook`** (opened / signed / completed) and advance the loop
-  (`status='signed'`, `signed_at`, the stepper's Agreement Signed node).
+- A `hl_tc_loop_document` row is written with `status='sent'` + `esign_doc_id`; the loop stepper reads it as
+  **Agreement Sent**.
+- Documenso emails the branded signing link to each recipient; the buyer's `signingUrl` is returned so it can
+  also be texted.
+- Webhooks (`document.opened` / `signed` / `completed`) land on **`/api/esign/webhook`** and advance the loop
+  (`status='signed'`, `signed_at`, the Agreement Signed node). No polling.
 
 ### Waiting on Signatures — the loop control
 
-While a doc is `sent` and unsigned, the loop band **and** the Loops list show a green **Waiting on Signatures**
-strip: the sent date, days-waiting, a **reminder toggle**, and **Cancel document**.
+While a doc is `sent` and unsigned, the loop band and the Loops list show a **Waiting on Signatures** strip:
+sent date, days waiting, a **reminder toggle**, and **Cancel document**.
 
-- **Reminders** are HouseLoop-owned (Documenso's own auto-reminder is off — we own on/off + cadence). The Inngest
-  `esign-reminder-sweep` re-nudges the unsigned signer every ~2 days while the toggle is on
-  (`hl_tc_loop_document.reminders_enabled`).
-- **Cancel document** voids the agreement (Documenso `Envelope` becomes `CANCELLED`) and reminders stop.
-- Deleting the lead auto-cancels its outstanding agreements (`purgeLead`), so a dead lead never keeps nagging.
+- **Reminders are HouseLoop-owned** (Documenso's auto-reminder is off — we own on/off + cadence). Inngest
+  `esign-reminder-sweep` re-nudges every ~2 days while `reminders_enabled` is true.
+- **Cancel document** voids the agreement (Documenso envelope → `CANCELLED`) and stops reminders.
+- Deleting the lead auto-cancels its outstanding agreements (`purgeLead`) — a dead lead never keeps nagging.
+
+## AI summary — e-sign ground truth
+
+`buildLeadContext` (`lib/ai/extract-context.ts`) reads the **real** document status from `hl_tc_loop_document`
+before building a summary. A document shows as **SIGNED (date)** only when `signed_at IS NOT NULL`; otherwise
+it shows its actual status. A hard system-prompt rule prevents fabrication: *a buyer/seller agreement is signed
+ONLY when the E-SIGN DOCUMENTS section shows SIGNED with a date.* Before this, the AI read "Document Sent" and
+hallucinated "buyer agreement signed."
+
+Priority: `signed_at` → `status` → **never** conversation inference.
+
+## Status — what is proven, what is open
+
+**Proven:**
+- Full fill → sign → archive pipeline verified end-to-end live; executed PDF pulled back and archived to R2.
+- Deterministic signature/initials mapping generated from the PDF and wired for all 3 forms (the ~15× hand-tuning era is over).
+- HouseLoop eSignature white-labeled and live on `esign.houseloop.ai`.
+- **DATE fields on `exclusive_buyer_agency`** (2026-07-30) — overlay-verified placement; Central timezone.
+
+**Open — named, not hidden:**
+
+| Gap | Detail |
+|---|---|
+| **DATE on the other 2 forms** | `non_exclusive_buyer_rep` and `single_property_buyer_rep` still have **zero DATE fields**. Their text layer is **garbled** (a custom font encoding — `pdftotext` returns `W\9X`, not words), so DATE-label anchoring cannot reach them, and neither template contains a date box to extract. They need vision (below) or a per-form rule. |
+| **Migrating ~100 dotloop templates** | `vision-field-builder.mjs` exists and is the intended answer ("run it ONCE per form version") but has **never been run and is not wired to the app**. Tested 2026-07-30 on the Single Property form: vision **detected 23 fields but resolved 0**, because the final step matches vision's anchor labels back to the **text layer** — which is garbled on exactly the forms that need it. **The fix is to use the vision pixel-box fallback when label matching fails.** Until then there is no scalable path for a large template migration. |
+| **Data-field coordinates** | Name / price / term / address blanks are still authored per form, not deterministically extracted. |
 
 ## Files
 
 | Piece | Path |
 |---|---|
-| Form catalog (keys, field maps, sig boxes) | `apps/houseloop-crm/lib/tc/contract-forms.ts` |
-| Field-map JSONs (extracted sig coords) | `apps/houseloop-crm/lib/tc/field-maps/*.json` |
-| Fill engine | `apps/houseloop-crm/lib/tc/fill-loop-document.ts` |
+| Form catalog | `apps/houseloop-crm/lib/tc/contract-forms.ts` |
+| Field-map JSONs (extracted coords) | `apps/houseloop-crm/lib/tc/field-maps/*.json` |
+| Fill engine | `apps/houseloop-crm/lib/tc/fill-loop-document.ts` · `lib/tc/fill-contract.ts` |
+| Licensing check | `apps/houseloop-crm/lib/tc/license-check.ts` |
 | One-call send | `apps/houseloop-crm/lib/esign/create-fill-send.ts` |
 | Multi-party send | `apps/houseloop-crm/lib/esign/send-loop-document.ts` |
 | Documenso client | `apps/houseloop-crm/lib/esign/documenso.ts` |
-| Sig-coordinate extractor | `tools/houseloop-contracts/anchor-sig-fields.mjs` |
+| Signature/date extractor | `tools/houseloop-contracts/anchor-sig-fields.mjs` |
+| Vision field builder (not wired) | `tools/houseloop-contracts/vision-field-builder.mjs` |
 | E-sign webhook | `apps/houseloop-crm/app/api/esign/webhook/route.ts` |
 
-See also: [Transaction Coordination](/guides/transaction-coordination) for how Forms fits the whole loop.
+Deps: `poppler` (`pdftocairo`, `pdftotext`, `pdfinfo`) — `brew install poppler`.
+
+See also: [Transaction Coordination](/guides/transaction-coordination) · [dotloop Integration](/guides/dotloop-integration).
