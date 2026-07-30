@@ -163,6 +163,68 @@ MILESTONES    CLIENT: JESSICA MOORE    BUYER · NEW LEAD · JUL 31    SELLER · 
   `components/leads/detail/MilestoneBand.tsx`, `app/(crm)/leads/[id]/page.tsx` (the `?loop` seam),
   `app/api/tc/loops/route.ts`, `lib/tc/loop-engine.ts`.
 
+## ⚖️ WHO SIGNS — a licensing rule, not a preference (LOCKED 2026-07-30)
+
+<Warning>
+**Every contract prints and is signed by the configured licensed signer — currently Ana Spradling — no
+matter who is assigned to the loop.** This is a real-estate licensing requirement, not a UI default. Do
+not "fix" it by falling back to the loop assignee.
+</Warning>
+
+**Chris Cribb, Designated Managing Broker (MO & KS), eXp Realty — 2026-07-29:**
+
+> Ana has an active MO and KS license to be able to sell real estate and can sign any forms or be
+> designated for sales in either state. Zach has **ONLY a KS license** and can be designated to sign and
+> show property in the state of KS, but **can NOT show, write contracts or be designated for properties
+> in MO.**
+
+### What was wrong
+
+The contract's designated agent resolved to `COALESCE(tc_assignee, lead.assigned_user)` — whoever happened
+to be on the loop. **There is no license model anywhere in the system**: `hl_users` has no license column
+and no state column, so nothing could tell that an agent wasn't licensed where the property is.
+
+Measured 2026-07-30, before the fix — **two live Missouri loops had an unlicensed agent as the contract
+agent**: `117 N Boardman Street, Pleasant Hill, MO` and `5388 N Palmer Avenue, Kansas City, MO`.
+
+### How it works now
+
+`lib/tc/contract-signer.ts` → `getContractSigner()` reads **`hl_settings.tc_contract_signer`** and
+re-resolves name/email live from `hl_users` (so a rename or email change follows automatically). It is
+wired into **both** sides, which must always move together:
+
+| Surface | File | What it controls |
+|---|---|---|
+| What **prints** on the form | `lib/tc/fill-loop-document.ts` (`buildLoopFillContext`) | the `agent.name` stamped into `f_designatedAgent` |
+| Who actually **signs** | `lib/esign/create-fill-send.ts` | the agent recipient on the Documenso envelope |
+
+A document that **names** one agent and is **signed by** another is worse than either problem alone.
+
+### To change the signer
+
+Update one row — no deploy:
+
+```sql
+UPDATE hl_settings
+   SET value = jsonb_set(value, '{user_id}', '"<hl_users.id>"'), updated_at = now()
+ WHERE key = 'tc_contract_signer';
+```
+
+<Note>
+**Why a setting and not a hardcoded name.** Chris's email names the exact condition that will make this
+stale: *"If you change this process and Zach reinstates his MO licenses, both could be done and sign."* A
+name buried in a SQL `COALESCE` would keep working and be **silently wrong** that day — the worst kind of
+failure, because nothing breaks. `getContractSigner()` also logs loudly when the setting is missing or
+points at an inactive user, rather than quietly falling back to a possibly-unlicensed agent.
+</Note>
+
+<Warning>
+**NOT state-aware — deliberately (Zach 2026-07-30).** Ana signs *everything*, KS included. Making it
+state-aware would need two things that do not exist: a structured property state (today it is only
+parseable from the `hl_transactions.property_address` string) and a per-user license model. Both are real
+builds — **ask Zach before starting**, this is legal-document behavior.
+</Warning>
+
 ## Forms — the Contract Engine
 
 The **Forms** page turns the brokerage's flat dotloop contract PDFs into **fillable forms** HouseLoop
