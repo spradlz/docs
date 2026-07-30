@@ -136,6 +136,22 @@ re-edits the body to current truth — no stacked superseded blocks, ever (git h
 
 ## Update log
 
+- **2026-07-30** — **READ THIS FIRST section added + the health check fixed (Adam; Zach: *"anytime an agent goes
+  to check the FUB scraper I say read that doc"*).** A live end-to-end verification found the pipeline **healthy**
+  (webhook-router 57 runs/2h, the 3-min in-app tick cycling, all 6 canonical procs online, `zillow_home_activity`
+  landing 4,978 rows/2h) but found **four things this page asserted that were not true of the live system**:
+  ① the two "interchangeable" health checks returned **GREEN and 🔴 STALLED in the same minute** — the
+  `fub_scraper_status` MCP tool ran `psql localhost` from Zach's Mac against a database that lives on Camp David,
+  so the query ALWAYS threw and the throw was rendered as a dead pipeline (**a check that cannot RUN reported as
+  a verdict** — fixed: it now delegates to the canonical script and returns `check_failed` when it cannot run);
+  ② the health law says *fresh data in `fub.*`* but the check sampled only the 5 **lowest-volume** comms tables,
+  omitting `zillow_home_activity` entirely (fixed, + loud probe failures, + an `⚠️ CHECK BROKEN` verdict);
+  ③ the "ONE Chrome" prose contradicted both the live box and this page's own roster (**`fub-backfill-b` is
+  online**) — body rewritten to current truth with the reversal explained; ④ relay lag is asserted as
+  "milliseconds" in two places and measured at **8m43s** in another. Also documented the top signals that LIE —
+  most importantly **`fub.webhook_event_log` is a RETIRED table** (dead since 07-09 19:36, the hour the pollers
+  were ripped) which reads exactly like a 3-week webhook outage, and **`fub.scraper_heartbeat` is 2 months stale
+  while the scraper works** (F4), so *"trust the heartbeat"* was corrected.
 - **2026-07-29** — **THE MIRROR RACE, closed in both directions (Lee; root causes Lee + Adam).** Two live
   failures traced to the same shape — a Railway reader racing the Camp David → Railway relay: ① a LIVE
   webhook for a brand-new FUB person died `not found in fub.people` because the API-seed fallback was
@@ -1639,13 +1655,20 @@ Camp David Postgres  fub.*   ── MASTER (host 192.168.1.211, db bossloop)
 - **Railway `fub.*`** (`FUB_RAILWAY_DATABASE_URL`) — what the **CRM reads**. The CRM never reads Camp David directly. Railway (the CRM) has **no route to LAN postgres** — this is why the Lane-2 queue had to live on the mirror.
 - Most tables sync via the **relay** (`fub-relay`), a 30s one-way CD→Railway loop over a 16-table allowlist, **upsert-only, never deletes** (by design, Rule #0). Measured lag: **milliseconds**. **`fub.zillow_home_activity` is OFF the relay** — the scraper is its **single writer to the mirror** (a per-person full-replace right after it scrapes). So a home's photo reaches the CRM **only when the scraper runs for that person**. Blank photo in the CRM → check the **mirror**, then re-run the scraper for that lead.
 
-**ONE Chrome (Zach LOCKED 2026-07-08 — "go down to one chrome, harden it up").** A single persistent Chrome —
-**Chrome A** on CDP port **18800** (`~/.chrome-fub-profile`), holding a live Google session — runs the scrape.
-`fub-parallel-scraper.mjs` fans out `FUB_WORKERS` (default 3) worker *pages* inside that one Chrome. The old
-second Chrome (B, `:18802`) + its `fub-backfill-b` worker are **retired**: two Chromes plus a watchdog meant
-multiple processes reaching into shared browsers over CDP and closing each other's pages — the exact contention
-that crash-looped the scraper. One browser, one boss. (The watchdog runs with `FUB_SINGLE_CHROME=1`, which skips
-all Chrome-B logic.)
+**TWO Chromes — Chrome A `:18800` + Chrome B `:18802` (current truth, verified live 2026-07-30).**
+`fub-parallel-scraper.mjs` runs as **`fub-backfill-a`** (Chrome A, `~/.chrome-fub-profile`) **and
+`fub-backfill-b`** (Chrome B, `~/.chrome-fub-profile-2`, cookies injected from A so there is no second SSO),
+`FUB_WORKERS=5` each. Both hold a live Google session. `fub-chrome-guard` caps both ports.
+
+<Note>
+**History, so the reversal is legible (do not re-apply the older rule).** Zach locked **ONE Chrome** on
+2026-07-08 (*"go down to one chrome, harden it up"*) because two Chromes plus a watchdog meant multiple
+processes reaching into shared browsers over CDP and closing each other's pages. That contention was then fixed
+directly — the watchdog got a passive probe + fresh-log guard, and each scraper's startup only resets
+`in_progress` rows older than 15 min so it can never clobber its sibling's live claims. With the actual cause
+removed, **Chrome B and `fub-backfill-b` were revived 2026-07-11 for ×2 throughput**, and that is what runs
+today (`pm2 id 9`, online). `FUB_SINGLE_CHROME=1` is legacy and no longer describes the deployment.
+</Note>
 
 ## The login (this is what "stuck / can't log in" means)
 
@@ -1706,8 +1729,9 @@ Live reading 2026-07-09 (audit of record). **Read the heartbeat, not pm2 "online
 | **fub-watchdog** | `fub-backfill-watchdog.mjs` | self-healing (`FUB_SINGLE_CHROME=1`) — passive websocket probe, fresh-log guard, relaunches a dead Chrome A, auto-logs-in. **Watches passively; never closes/relaunches a Chrome with a live worker.** | ✅ online |
 | **fub-relay** | `tools/fub-sync/fub-relay.mjs` | Camp David `fub.*` → Railway `fub.*` mirror — 30s loop, 16-table allowlist, upsert-only, never deletes. Measured lag: ms. | ✅ online |
 | **fub-body-recovery** | `fub-body-recovery-consumer.mjs` | **Lane 2 consumer (shipped C1, 2026-07-09)** — polls `fub.body_recovery_queue` on the mirror, scrapes the one masked body, flips `content_status` + bumps `synced_at`. | ✅ online |
-| **fub-webhook-scraper** | `fub-webhook-scraper.mjs` | the OLD "real-time" rehydrator — **DEAD ~6 weeks / online-but-WEDGED** (see below). Its whole path is retired by the Lane-2 plan. | 🔴 wedged / retiring |
-| ~~fub-backfill-b~~ | ~~`fub-parallel-scraper.mjs`~~ | **RETIRED 2026-07-08** — the 2nd Chrome (B `:18802`) was removed; one browser, one boss | ⛔ |
+| **fub-backfill-b** | `fub-parallel-scraper.mjs` | THE second scraper — Chrome B `:18802`, revived 2026-07-11 for ×2 throughput. High restart count = the designed empty-queue exit/relaunch (F6), **not** a crash loop. | ✅ online |
+| **fub-chrome-guard** | chrome guard | OOM cap on BOTH ports (`MAX_CHROME`/`MAX_TABS`); never touches the MLS/billing Chromes. | ✅ online |
+| **fub-webhook-scraper** | `fub-webhook-scraper.mjs` | the OLD "real-time" rehydrator — retired by the Lane-2 plan. **Correctly STOPPED** (verified 2026-07-30). Reading its "down" as a failure is a known trap; do not restart it. | 🛑 stopped on purpose |
 | ~~fub-webhook-sink~~ | `fub-webhook-scraper.mjs` | **deliberately stopped** — redundant duplicate, no mem cap → OOM crash-loop. Reading its "down" as a failure is a known trap. | 🛑 stopped on purpose |
 | ~~fub-sync~~ | `fub-complete-sync.mjs` | manual full sync — normally stopped | 🛑 |
 
@@ -1784,10 +1808,21 @@ public-API fetch returns `401`).
   Read `health` and compare `last_crash_at` vs `last_deploy_at` — a crash older than the last deploy means the fix is holding.
 - `mcp__camp-david__fub_chrome_restart` — the session-expired fix (relaunch + re-login).
 
-**Healthy =** `fub-backfill-a` + `fub-body-recovery` + `fub-relay` + `fub-watchdog` all `online` **and beating a
-fresh heartbeat**; the pending backfill backlog trends down. A big `hidden` count is **not** automatically bad
-(UI-hidden emails). **Trust the heartbeat, not pm2 "online"** — F2 proved a wedged process can report online for
-6 weeks. `fub-webhook-scraper`, `fub-webhook-sink`, and `fub-sync` are dead/retired — don't restart them.
+**Healthy = FRESH DATA LANDING** (`node tools/fub-scraper/scraper-health.mjs` → GREEN). That is the whole test.
+A big `hidden` count is **not** automatically bad (UI-hidden emails). `fub-webhook-scraper`, `fub-webhook-sink`,
+and `fub-sync` are dead/retired — don't restart them.
+
+<Warning>
+**⚠️ "Trust the heartbeat" is NO LONGER safe advice — corrected 2026-07-30 (Adam).** This line used to read
+*"Trust the heartbeat, not pm2 online."* That was right about pm2 (F2: a wedged process reported online for 6
+weeks) but it is now wrong about the heartbeat: **`fub.scraper_heartbeat` last beat 2026-05-30** — two months
+stale, `persons_pending = -6461` — **while the scraper was demonstrably working** (4,978 `zillow_home_activity`
+rows landed in the previous 2 hours). That is audit finding **F4**, still unfixed.
+
+**So both process status AND the heartbeat can lie, in opposite directions.** The only signal that has never
+lied is **fresh data landing in `fub.*`**. The heartbeat is CONTEXT — it may never downgrade a healthy
+fresh-data verdict (the canonical script enforces this in code).
+</Warning>
 
 ## Audit of record — Fable-5 end-to-end (2026-07-09)
 
