@@ -163,12 +163,12 @@ MILESTONES    CLIENT: JESSICA MOORE    BUYER · NEW LEAD · JUL 31    SELLER · 
   `components/leads/detail/MilestoneBand.tsx`, `app/(crm)/leads/[id]/page.tsx` (the `?loop` seam),
   `app/api/tc/loops/route.ts`, `lib/tc/loop-engine.ts`.
 
-## ⚖️ WHO SIGNS — a licensing rule, not a preference (LOCKED 2026-07-30)
+## ⚖️ LICENSING — the agent carries their license, and a mismatch WARNS (LOCKED 2026-07-30)
 
 <Warning>
-**Every contract prints and is signed by the configured licensed signer — currently Ana Spradling — no
-matter who is assigned to the loop.** This is a real-estate licensing requirement, not a UI default. Do
-not "fix" it by falling back to the loop assignee.
+**An agent may only be designated on a contract in a state they are actively licensed in.** HouseLoop now
+knows each agent's licensed states and **warns** — loudly, with the broker's own words — when the
+designated agent is not licensed where the property is. It **warns, it never blocks**: a human decides.
 </Warning>
 
 **Chris Cribb, Designated Managing Broker (MO & KS), eXp Realty — 2026-07-29:**
@@ -181,49 +181,92 @@ not "fix" it by falling back to the loop assignee.
 ### What was wrong
 
 The contract's designated agent resolved to `COALESCE(tc_assignee, lead.assigned_user)` — whoever happened
-to be on the loop. **There is no license model anywhere in the system**: `hl_users` has no license column
-and no state column, so nothing could tell that an agent wasn't licensed where the property is.
+to be on the loop — and there was **no license concept anywhere in the system**.
 
-Measured 2026-07-30, before the fix — **two live Missouri loops had an unlicensed agent as the contract
-agent**: `117 N Boardman Street, Pleasant Hill, MO` and `5388 N Palmer Avenue, Kansas City, MO`.
-
-### How it works now
-
-`lib/tc/contract-signer.ts` → `getContractSigner()` reads **`hl_settings.tc_contract_signer`** and
-re-resolves name/email live from `hl_users` (so a rename or email change follows automatically). It is
-wired into **both** sides, which must always move together:
-
-| Surface | File | What it controls |
-|---|---|---|
-| What **prints** on the form | `lib/tc/fill-loop-document.ts` (`buildLoopFillContext`) | the `agent.name` stamped into `f_designatedAgent` |
-| Who actually **signs** | `lib/esign/create-fill-send.ts` | the agent recipient on the Documenso envelope |
-
-A document that **names** one agent and is **signed by** another is worse than either problem alone.
-
-### To change the signer
-
-Update one row — no deploy:
-
-```sql
-UPDATE hl_settings
-   SET value = jsonb_set(value, '{user_id}', '"<hl_users.id>"'), updated_at = now()
- WHERE key = 'tc_contract_signer';
-```
+Measured 2026-07-30, before the fix: **two live Missouri loops had an unlicensed agent as the contract
+agent** — `117 N Boardman Street, Pleasant Hill, MO` and `5388 N Palmer Avenue, Kansas City, MO`.
 
 <Note>
-**Why a setting and not a hardcoded name.** Chris's email names the exact condition that will make this
-stale: *"If you change this process and Zach reinstates his MO licenses, both could be done and sign."* A
-name buried in a SQL `COALESCE` would keep working and be **silently wrong** that day — the worst kind of
-failure, because nothing breaks. `getContractSigner()` also logs loudly when the setting is missing or
-points at an inactive user, rather than quietly falling back to a possibly-unlicensed agent.
+**A retired stopgap.** The first fix (morning of 2026-07-30) forced *every* contract to print and sign as
+one globally-configured signer via an `hl_settings.tc_contract_signer` row. Zach rejected it: *"Don't
+hard-code anything. Don't put it on the backend. It needs to be driven off of the user's payload."*
+`lib/tc/contract-signer.ts` and that settings row are **deleted**. If you find a doc or comment citing
+`getContractSigner()`, it is stale.
 </Note>
 
+### The model — licensing lives on the USER
+
+`hl_user_license` (migration `0509`), **one row per agent per state**:
+
+| Column | Meaning |
+|---|---|
+| `user_id` | FK to `hl_users`, cascades on delete |
+| `state` | two-letter code, CHECKed against the 50 states + DC |
+| `status` | `active` or `not_active` — **the broker's ruling** |
+| `renewal_date` | a human reminder only |
+
 <Warning>
-**NOT state-aware — deliberately (Zach 2026-07-30).** Ana signs *everything*, KS included. Making it
-state-aware would need two things that do not exist: a structured property state (today it is only
-parseable from the `hl_transactions.property_address` string) and a per-user license model. Both are real
-builds — **ask Zach before starting**, this is legal-document behavior.
+**`status` is never derived from `renewal_date`.** A past renewal date does **not** flip a license to
+inactive — only a broker does. The date is a reminder; the status is the truth.
 </Warning>
+
+Status is **per state** by design: Zach is KS-active and MO-inactive *at the same time*, so a single
+"license state + license status" pair could not represent even the first real user.
+
+### Where it is edited — Team → member → Profile → Licensing
+
+One repeatable row per state: **License state** · **License status** (Active / Not active) · **Renewal
+date**, plus **+ Add state**. Shown for agent-role members; **admin-only to edit** — a license is the
+broker's ruling about a person, never self-declared. Change a license here and every warning below
+follows immediately: **no deploy, no code change**.
+
+### How the property's state is resolved
+
+1. **The listing (structured, preferred)** — `hl_transactions.website_hlid` → the web `Listing.state`.
+   The Create Loop property search always knew the exact home; until 2026-07-30 the HLID was posted by the
+   modal, declared by the API, and then **dropped on the floor**. It is now persisted.
+2. **The address (fallback)** — a trailing `, MO` / `, KS 66085` parsed off `property_address`, for the
+   six loops that predate the column.
+
+If neither yields a state, the verdict is **ok** — an unknown state is not evidence of a violation, and a
+warning that fired on every hand-typed address would train everyone to ignore it.
+
+### Where the warning appears
+
+`lib/tc/license-check.ts` is the **one** resolver — never re-implement the comparison. The verdict is
+computed once in `buildLoopFillContext`, where the property and the agent are both in scope, so every
+caller inherits it.
+
+| Surface | File | When |
+|---|---|---|
+| Agent picker | `components/leads/detail/AddPersonModal.tsx` | the instant an agent is selected, before a document exists |
+| Fill Review modal | `components/leads/detail/FillReviewModal.tsx` | before the PDF is stamped |
+| Share / send modal | `components/leads/detail/SendForSignatureModal.tsx` | before the e-sign envelope goes out |
+| Myli headless | `lib/esign/create-fill-send.ts` | no UI — logs loudly and returns `license` on the result |
+
+All three UI surfaces render the same `LicenseWarning` component, which shows **nothing** when the agent
+is licensed — so its presence always means something real. The replacement agent it suggests is **looked
+up from the table**, never a name in code: the day Zach reinstates his MO license, the warnings simply
+stop, with no deploy. That is the exact staleness Chris's email predicted — *"If you change this process
+and Zach reinstates his MO licenses, both could be done and sign."*
+
+### Verified live 2026-07-30
+
+All six loops with a property address, through the authenticated API:
+
+| Loop | Verdict |
+|---|---|
+| 10000 Knox Dr, Overland Park **KS** | silent |
+| 1601 N 49th St, Kansas City **KS** | silent |
+| 18275 Canterbury Rd, Stilwell **KS** | silent |
+| 7410 Delmar St, Prairie Village **KS** | silent |
+| 117 N Boardman St, Pleasant Hill **MO** | **warns** — names Ana as licensed |
+| 5388 N Palmer Ave, Kansas City **MO** | **warns** — names Ana as licensed |
+
+<Note>
+**Scope: signing only.** The broker's email also says Zach may not *show* MO property. Showings run
+through a different path (appointments / showing partners) and are **not** covered here (Zach 2026-07-30).
+</Note>
 
 ## Forms — the Contract Engine
 
