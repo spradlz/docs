@@ -16,7 +16,85 @@ the CRM's **Saved Search Listing Alerts** workflow (`sys_saved_search_digest`) a
 on the workflow canvas + in the Run Log (see *Inngest or it doesn't exist*).
 </Note>
 
-## 🟢 2026-07-27 11:45 AM CT — LOCKED BUILD PLAN (supersedes the 07-26 plan below)
+## ⏸ 2026-07-30 — PAUSED AT 17 OF 23 (handoff)
+
+<Info>
+**Saved Search is paused, not abandoned** — Zach pivoted to TC Loop documentation hygiene on 2026-07-30.
+Living plan + 5 rabbit-hole write-ups: artifact `2d947522` (handoff block at the top).
+Full handoff: `.claude/state/benji-handoff.md` · scope lock: `.claude/state/session-scope-saved-search.lock`.
+</Info>
+
+### The flow WORKS end to end — verified by Zach on the Zach Test lead
+
+**+ Search** on the lead → name + cadence → opens the **real** houseloop.ai with a
+*"Creating saved search for `<lead name>`"* banner → build filters on the live map → hands the criteria back to
+the CRM → **verify screen (name + cadence editable)** → saves to the lead → the **real `TextComposer`
+embedded in the modal** with a short link (`houseloop.ai/s/<code>`) and ONE saved-search AI button.
+
+### What's left
+
+| # | What | Blocker |
+|---|---|---|
+| **19** | **Watch one real listing alert land in a real inbox** | Needs **Zach** to confirm the received email. Chain verified wired: the engine doesn't filter by `createdBy`, the digest gate is open, `sys_saved_search_digest` is active. |
+| **17** | Alert by **text** when the lead has no email | Real build — see the gap below |
+| **20** | Phone login + texted 6-digit code. **No passwords stored** (Zach locked) | Also collapses the 3 phone matchers onto `digits10` |
+| **21-22** | Map the 176 Zillow criteria → pre-fill `+ Search` from them | 17 of 32 leads, 100% usable criteria |
+| **23** | Pin the signed-off wireframe into `docs/wireframes/` | — |
+
+### ⚠️ KNOWN GAP — 7 phone-only leads get a search that cannot send
+
+Item 11 unlocked creating saved searches for leads with a phone and **no email**. Those searches are
+**structurally silent**:
+
+- `apps/houseloop-web/app/api/saved-searches/alert/logic.ts:134` bails with `inactive_or_no_email` —
+  a phone-only account has `email = NULL`, so matches are never even computed.
+- `apps/houseloop-crm/lib/inngest/functions/saved-search-digest-due.ts:32` resolves the lead with
+  `WHERE lower(email) = lower($1)`. No email → no lead → nothing fires.
+
+**The alert IS an email.** Item 20 (phone login) does NOT fix this — signing in isn't the same as having
+somewhere to send. Those leads DO get the search + a texted link today; they get no automatic alerts.
+Honest fix = alert-by-TEXT, which is now item 17.
+
+### Shipped this build
+
+| Items | What | Commits |
+|---|---|---|
+| 1-3 | `+ Search` composer tab · name + cadence · **token-free** handoff | `d1c271fd8f` → `3d067ad196` → `680e0f6f56` |
+| 5-7 | Deleted the impersonation button + `agent-search-link` route; `hl_visitor_id` rotates on identity change | `e2f63f3b8c`, `fb4de3765f` |
+| 8-9 | Phone key → **reverted** → `User.leadId` (unique); `email` nullable | `5d0df68e93`, `cc23a736eb` |
+| 10-11 | `findOrCreateWebUserForLead` + **THE UNLOCK** + phone-only-safe lead delete | `fe8899233c` |
+| 12 | Registration auto-seed unblocked (was failing silently) | `346f059fd7` |
+| 13-16 | Compose banner + hand-back · verify (editable) · server-side save · real composer | `9d8740b4c8`, `618c4e5928`, `b7b59efdfc` |
+| — | Short links + ONE saved-search AI button | `4895b9667c` |
+| 17-18 | `search_alert_sent` (mig 0473) · Alerts column fixed · Website Activity read-only | `6a428e87ad`, `59a7f8c5a5` |
+
+### 🔒 Laws locked — do not re-litigate
+
+**IDENTITY** (full write-up: artifact `9f951cca`)
+- **A phone number is a CONTACT POINT, not an identity.** Identity is an opaque minted id; contact points
+  resolve TO it — the same principle as HLID for homes.
+- **NEVER a unique constraint on a phone number, anywhere.** `guides/lead-deduplication` is explicit that
+  shared numbers are legitimate. A first attempt DID add one and would have permanently blocked a second
+  spouse from having an account — caught by Zach, reverted, and proven fixed.
+- **The cross-database join is `User.leadId` = `hl_leads.id`.** The website account stores **no copy** of
+  any contact value for identity purposes. No copy, no drift.
+- No lead MERGE machinery exists, so `hl_leads.id` never dies. **If merge is ever built it needs an alias
+  table mirroring `hl_hlid_alias`.**
+
+**TAXONOMY** (Lee's, enforced in code — mig 0464-0472)
+- `hl_trigger_events` is THE list; 6 FKs enforce every reference; `logActivity({kind})` is typed to it so
+  **an invented kind does not compile**; `npm run test:event-kinds` fails on drift.
+- **Adding a kind = add the ROW, then `npm run gen:event-kinds`. That is the only door.**
+- **Naming law: `object_verbPast`** — `search_saved`, `search_alert_sent`. Never `property_`.
+- **Ping Lee before touching `activity-badges.ts` or `hl_trigger_events`** — he rebuilt both.
+
+**THE WEBSITE DOESN'T SAVE** (Zach 2026-07-27): *"The website doesn't save the search. The CRM saves the
+search. The website is just the surface you save it ON."* The website has no write path at all — which is
+also why it needs no new authentication.
+
+---
+
+## 🟢 2026-07-27 11:45 AM CT — LOCKED BUILD PLAN (the build record)
 
 <Info>
 **Locked with Zach 2026-07-27 (Benji).** Full audit re-run live against both production databases **and**
