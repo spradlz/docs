@@ -3,6 +3,127 @@ title: "⭐ FUB — Scraper & Lead Intake — Single Source of Truth"
 description: "THE one document for the entire Follow Up Boss pipeline: how a Zillow lead's signal reaches HouseLoop, lead import & minting, the lock-step activity sync, signal capture + the four toggles, the Camp David scraper runbook, the FUB follow-up widget, and the departed-agent Zillow binding. Consolidated from six docs 2026-07-17 so it can never drift. The FUB trigger-event CATALOG lives on the canonical Trigger Events page."
 ---
 
+# 🛑 READ THIS FIRST — how it works, and how to check it
+
+<Warning>
+**If you are here to answer "is the FUB scraper working?" — read this section and nothing else. It is 60
+seconds. Every false "the scraper is down" in this system's history came from skipping it.**
+</Warning>
+
+## The architecture in five lines (the part everyone gets wrong)
+
+**Webhooks do NOT go to Camp David. They go to Railway. Railway then hands Camp David a job.**
+
+```
+FUB  ──webhook──►  crm.houseloop.ai/api/fub/webhook        (RAILWAY — the CRM)
+                        │  fubWebhookRouter sorts into 3 lanes
+                        │  Lane 2 (masked body) writes a job row ↓
+                   fub.body_recovery_queue                  (RAILWAY MIRROR — because Railway
+                        │                                    cannot reach Camp David's LAN postgres)
+                        │  Camp David POLLS that Railway queue
+                        ▼
+              CAMP DAVID scraper  ── does the job (reads the one hidden body / sweeps the inbox)
+                        │  writes fub.*  (Camp David = ground truth, where the scraper WRITES)
+                        │
+                   fub-relay  ──30s cursor loop, upsert-only, NEVER deletes──►
+                        ▼
+              RAILWAY MIRROR fub.*   ── THE ONLY THING THE CRM READS
+```
+
+**Why this matters:** the scraper is a **dumb helper**. It never decides what's new. It takes a job and does
+it. The webhook (on Railway) is what decides *what happened*. So "is the scraper running?" and "are webhooks
+arriving?" are **two different questions with two different answers** — check both.
+
+## ✅ HOW TO CHECK IT — in this order, stop when one answers you
+
+**1. Is the pipeline alive?** (the ONE health law — fresh data landing in `fub.*`)
+```bash
+node tools/fub-scraper/scraper-health.mjs
+```
+GREEN = alive, done. It prints per-table freshness so you can see *what* is landing. The
+`mcp__camp-david__fub_scraper_status` MCP tool now **delegates to this exact script** (fixed 2026-07-30 — see
+the conflicts below), so the two can no longer disagree.
+
+**2. Are webhooks actually arriving?** (this is NOT the scraper — it is Railway)
+```sql
+-- CRM database (HL_CRM_DATABASE_URL)
+SELECT fn, count(*) FILTER (WHERE started_at > now()-interval '2 hours') AS h2,
+       to_char(max(started_at),'MM-DD HH24:MI') AS newest
+FROM hl_run_log WHERE fn ILIKE '%fub%' GROUP BY 1 ORDER BY h2 DESC;
+```
+Healthy reading (measured 2026-07-30 18:15): `fub-webhook-router` **57/2h** · `fub-lead-import` **62/2h** ·
+`fub-inapp-sweep-tick` **40/2h** (= exactly every 3 min) · `fub-activity-sweep-tick` **40/2h**.
+
+**3. Is the 3-minute in-app sweep really cycling?** (the tick that catches Zillow in-app messages)
+```bash
+# on Camp David
+tail -20 /Users/lee/.pm2/logs/fub-body-recovery-out.log
+```
+You want `[JOB] #NNNN inbox_sweep` lines **~3 minutes apart**, each ending `in-app sweep complete`, with
+`"notify_query_failed": false`. `0 in-app people to extract` is **normal and healthy** — it means it looked and
+there was nothing new.
+
+**4. Are the right processes up?** (LAST — pm2 is the least trustworthy signal)
+```bash
+sudo -H -u lee bash -lc 'pm2 list'
+```
+**ONLINE (6):** `fub-backfill-a` · `fub-backfill-b` · `fub-body-recovery` · `fub-watchdog` · `fub-chrome-guard` ·
+`fub-relay`. **STOPPED ON PURPOSE (not failures):** `fub-webhook-scraper` · `fub-webhook-sink` ·
+`fub-home-refresh` · `fub-sync`.
+
+## 🚨 SIGNALS THAT LIE — verified lying, with the measurement
+
+| Signal | The lie | The truth |
+|---|---|---|
+| **`fub.webhook_event_log`** | 224,867 rows, newest **2026-07-09 19:36**, nothing since. Reads as *"webhooks died 3 weeks ago."* | **RETIRED TABLE.** It belonged to the old dashboard receiver + the 4 mirror-reading pollers, which were **ripped 2026-07-09** — the same hour it stopped. `fub-notes-poll` / `fub-inapp-poll` / `fub-comms-poll` / `fub-events-poll` all last ran `07-09 19:04`. Webhooks now land on Railway and are logged in **`hl_run_log`** (check #2 above). **Do not read this table for health.** |
+| **`fub.scraper_heartbeat`** | `last_beat = 2026-05-30` (two months stale), `persons_pending = -6461` (nonsense) | Stale/abandoned row while the scraper demonstrably works (4,978 home-activity rows landed in 2h the day this was measured). This is audit finding **F4**, still unfixed. **The heartbeat can be stale while data pours in** — never downgrade a healthy fresh-data verdict because of it. |
+| **"texts in the last 2 hours = 0"** | Reads as a dead pipeline | **Inbound text baseline is 1-16 per DAY** (measured over 10 days: 07-29=16, 07-28=2, 07-27=3, 07-25=2, 07-22=1). Zero texts in a 2h window is the *normal resting state*. Judge on the whole fresh-data set — `zillow_home_activity` alone runs **4,000-5,700 rows/hour**. |
+| **pm2 status / restart counts** | `fub-backfill-b` showing 2,388 restarts | The **designed** empty-queue exit + relaunch self-heal (F6). 🚫 **BANNED VOCABULARY:** never say the scraper "crashed" or is "crash-looping." |
+| **`fub.rehydration_queue` depth** | ~49k pending forever | Deprecated graveyard (retired ~2026-05). The ACTIVE queue is `fub.body_recovery_queue`. |
+| **An empty `body_recovery_queue`** | "nothing is running" | Jobs are **DELETEd after completion**, so the queue is transient. Absence of rows proves nothing. Read the consumer log (#3) instead. |
+
+## ⚠️ CONFLICTS FOUND 2026-07-30 (Adam) — measured against this doc, live
+
+Zach asked for the scraper to be verified end-to-end. It **is** working — but four things this page asserted
+did not survive contact with the live system. Two are fixed in code; two are corrected in the body below.
+
+**① FIXED — the two "interchangeable" health checks gave opposite answers in the same minute.**
+This page said *"Run `scraper-health.mjs` — **or** call the `fub_scraper_status` MCP tool."* They were not
+interchangeable:
+```
+scraper-health.mjs                   → 🟢 GREEN  (451 texts/2h, data 0m old)
+mcp__camp-david__fub_scraper_status  → 🔴 STALLED — NO fresh data in ∞
+```
+**Root cause:** the MCP tool ran `psql postgresql://…@localhost:5432/bossloop` — but the MCP server runs on
+**Zach's Mac**, while that database is on **Camp David**. 30 other tools in that same file reach the box via
+`ssh()`; this one did not. The query always threw `role "bossloop" does not exist`, which left
+`dataAgeSec = Infinity`, which the verdict printed as **"🔴 STALLED."** *A check that could not RUN was
+reported as a dead pipeline* — the exact disease this SSOT is written against. **Fix:** the MCP tool now
+delegates to the canonical script (one law, one implementation) and a failed check returns
+`health: "check_failed"` saying *"this says NOTHING about the scraper."*
+
+**② FIXED — the health law says "fresh data in `fub.*`" but the check sampled only the 5 comms tables.**
+`zillow_home_activity` — the deep browse-list scrape, **the highest-volume signal in the system** — was not
+sampled at all, while the tables that *were* sampled are the lowest-volume corner of the pipeline. **Fix:**
+`zillow_home_activity` + `saved_searches` added; a table probe that throws is now reported loudly instead of
+silently skipped, and an all-probes-failed run prints **`⚠️ CHECK BROKEN`**, never a colour.
+
+**③ STALE PROSE — "ONE Chrome" contradicts the live box and this page's own roster.** The runbook section
+still reads *"ONE Chrome (Zach LOCKED 2026-07-08) … the old second Chrome (B, :18802) + its `fub-backfill-b`
+worker are **retired**"*, and its process table marks `fub-backfill-b` **⛔ RETIRED**. **Live: `fub-backfill-b`
+is ONLINE** (pm2 id 9), matching the CANONICAL ROSTER at the top of this page (*"TWO Chromes is correct"*,
+revived 2026-07-11). The correction banner exists but the wrong prose was left in place — which violates this
+page's own **running-document law** (*"every change … re-edits the body to current truth — no stacked
+superseded blocks, ever"*). Same section marks `fub-webhook-scraper` **"✅ online / wedged"**; it is **stopped**,
+correctly.
+
+**④ SELF-CONTRADICTION — relay lag is stated as both "milliseconds" and "8 minutes 43 seconds."** Two places
+assert *"Measured lag: **milliseconds**"* as unqualified fact; the mirror-race section measures **8m43s** on
+Lucy Hartman's messages — the lag that cost Zach two real leads. Both are true of different conditions
+(idle vs. under bulk write), but the unqualified "milliseconds" is what made it trustworthy enough to build
+on. **Treat relay lag as load-dependent and never assume a row is readable on the mirror — ASK the mirror
+first** (both capture paths now do).
+
 <Info>
 **THE ONE FUB DOC (consolidated 2026-07-17, Zach directive: "compose those into one document… so it can
 never drift").** This page absorbed and retired `fub/lead-import`, `fub/trigger-events`, `fub/scraper`,
