@@ -1148,7 +1148,7 @@ pipeline rebuild it from nothing is a far harsher test than replaying a message,
 | 1 | **The synthetic id generator used a row COUNT where it needed the highest id used.** `synthOffset = existingDomOnly.length` — but ids are POSITIONAL. Any hole (a deleted row, a dedup `continue`, the cross-person guard) makes count < max, so it re-issues ids that already exist. | `ON CONFLICT (id) DO NOTHING` swallows it. Lucy Hartman: 252 rows spanning offsets 7..258 → every new id minted at 252 collided. The sweep re-scraped her **every 3 minutes** and wrote **zero rows** while reporting `inapp_inserted: 5`. |
 | 2 | **`inserted++` fired regardless of `rowCount`.** | The count measured attempts, not rows. Third instance of this exact disease in 24 hours. |
 | 3 | **A collision DROPPED the message** instead of trying the next slot. | Silent, permanent, per-person. |
-| 4 | **Each person owns only 1,000 synthetic slots** (`900000000 + personId*1000`), so message #1001 lands inside the NEXT person's block. | **4,934 rows already sit outside their own person's block** across 8 people (worst: 2,842 messages). A neighbour's future message collides with them and is dropped forever. |
+| 4 | **Each person owned only 1,000 synthetic slots** (`900000000 + personId*1000`), so message #1001 landed inside the NEXT person's block. | **5,192 rows were sitting outside their own person's block** across 11 people (worst: 1,842 from one person, spread over TWO neighbours). A neighbour's future message collided and was dropped forever. **✅ SCHEME KILLED + ROWS RE-ID'd 2026-07-30 — see below.** |
 
 **Fixed:** next slot = `max(id used) + 1`; `inserted` counts `rowCount`; a collision retries the next free
 slot and says so if it cannot place the message; past slot 1000 it allocates from a collision-free **overflow
@@ -2182,3 +2182,95 @@ the key `general_inquiry` for breaking the `object_verbPast` law (renamed `gener
 `home_inquired` / `seller_inquired` / `rental_inquired`), then rejected the catalog label for lying about the
 key. Fixed both rather than grandfathering either. **Run the gates before the push, not after the incident.**
 </Note>
+
+---
+
+# ═ THE 1000-BLOCK SYNTHETIC-ID SCHEME IS DEAD (2026-07-30, Zach-approved) ═
+
+> Zach, verbatim: **"yes clean the rows and get rid of the 1000 block bullshit."**
+
+## What the scheme was, and why it had to die
+
+A message we **scrape** (Zillow in-app, group SMS — anything not fetched from FUB's API) has no FUB id, so we
+mint one. The old scheme gave every person a private block of exactly **1,000 slots**:
+`900000000 + personId × 1000`.
+
+**Message #1,001 landed inside the NEXT person's block.** And because the insert is
+`ON CONFLICT (id) DO NOTHING`, the collision was **swallowed with no error** — the message simply never
+existed. Same silent-loss shape as everything else this week.
+
+<Warning>
+**Widening the block would NOT have fixed it.** Any fixed per-person capacity is a bet on how much a person
+will ever say, and when the bet loses the failure is silent. 10,000 slots just moves the cliff. **A monotonic
+pool has no cliff** — ids only go up, collisions are impossible by construction, and `id` is int4 (max
+2,147,483,647) against a pool based at 1.2B: ~947M slots, versus ~150k synthetic rows after five years of
+scraping.
+</Warning>
+
+## The damage, measured before the fix
+
+**5,192 rows across 11 people were squatting on 10 OTHER people's blocks.**
+
+| Person | Misplaced | Squatting on |
+|---|---|---|
+| 50211 | 1,842 | blocks 50212 **and** 50213 |
+| 50032 | 1,295 | blocks 50033 **and** 50034 |
+| 247 | 644 | 248 |
+| 21634 | 614 | 21635 |
+| 38246 | 377 | 38247 |
+| 36436 · 3523 · 3522 · 5374 · 610 | 418 | their neighbours |
+| 933 | 2 | *below every block* — someone else's spill landed on them |
+
+Every one of those squatted-on people was one Zillow message away from silent loss.
+
+## How it was executed (no DELETEs, no CRM writes)
+
+1. **Snapshot both databases** → `/Users/lee/reversals/reid-{CD,RW}-2026-07-30.csv` (the rollback).
+2. **Map written to a file BEFORE any write** → `.claude/reports/reid-map-2026-07-30.json`, 5,192 pairs.
+3. **`fub-relay` STOPPED** so CD and RW could not diverge mid-write.
+4. **`UPDATE … SET id` in place** on both, from the same map. Old range 900M–950M, new range 1.2B — they
+   cannot overlap, so no self-collision.
+5. **Relay restarted**, verified `bootstrap ok · CONTINUOUS`, no errors.
+6. **`fub-backfill-a/b` restarted** so they drop the old lib from memory (the hold-the-lib rule above).
+
+| | Camp David | Railway |
+|---|---|---|
+| Rows moved | 4,970 | 5,192 |
+| **Still squatting after** | **0** ✅ | **0** ✅ |
+| Table total (nothing lost) | 402,402 | 451,607 |
+
+Content verified intact — all 4,970 overflow rows still carry a body; three spot-checked at random.
+
+<Note>
+**The 4,970 vs 5,192 delta is pre-existing F3 drift, not damage from this job.** The relay never deletes, so
+Railway carries rows Camp David no longer has. Cleaning *that* up is a genuine bulk DELETE and needs Zach's
+typed approval — deliberately left alone.
+</Note>
+
+## ⚠ THREE TRAPS — read before touching synthetic ids again
+
+**① CRM `source_id`s are PREFIXED.** They look like `inapp:950454003`, not `950454003`. A `^[0-9]+$` regex
+matches **nothing** and returns a confident, wrong **zero references** — which would have green-lit a re-ID
+that orphaned live message history. Re-measured correctly: 316 `inapp:` refs exist, zero touch an affected
+person, and that was confirmed a *second* way by sampling 25 **real** misplaced ids and searching for them
+verbatim. **Always sample real ids; never trust a pattern you haven't proven matches.**
+
+**② The relay upserts BY ID — changing an id creates a duplicate, not a move.** `fub-relay` carries CD → RW
+keyed on `id`, and it **never deletes**. Re-ID on Camp David alone ⇒ the relay INSERTs the new id on Railway
+while the old row stays ⇒ 5,192 duplicates ⇒ a bulk DELETE to clean up (Rule #0). **Stop the relay for the
+write.** This job performed zero deletes because of it.
+
+**③ The verification predicate is the trap.** The obvious check —
+`id >= 900000000 AND (id - block) NOT BETWEEN 0 AND 999` — counts the **overflow rows as misplaced**, because
+they are outside every person block. That is the *point*, but it reads as total failure. The correct test is:
+```sql
+id >= 900000000 AND id < 1200000000 AND (id - (900000000 + person_id*1000)) NOT BETWEEN 0 AND 999
+```
+A wrong success test is as dangerous as a wrong fix — it nearly reported a clean run as a failure, and could
+just as easily do the reverse.
+
+## The rule now
+
+`fub-scraper-lib.mjs` allocates **every** new synthetic id from the monotonic overflow pool (`OVERFLOW_BASE =
+1200000000`). `baseId` and the per-person offset cursor are **deleted**. Per-person blocks are frozen legacy —
+existing ids stay valid, nothing is ever minted into a block again.
