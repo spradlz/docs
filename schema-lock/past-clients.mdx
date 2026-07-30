@@ -1,0 +1,54 @@
+---
+title: "Past-Client Schema (locked)"
+description: "The locked reconciliation schema — the truth spine, the evidence tables, the value provenance, and the rulings that ended the two-month grind. Locked Lee × Caleb 2026-07-30 under Zach's directive."
+---
+
+<Info>
+**Locked 2026-07-30** (Lee × Caleb, under Zach's directive: *"that data needs to match our activity schema"*). Caleb's measured table map: `.claude/reports/caleb-pastclient-table-map-2026-07-30.md`. Anything below marked **⚖️ Sitting** goes to Zach's Table Sitting for final sentence. Everything else is LAW now — queries follow this page, not habit.
+</Info>
+
+## The shape in one breath
+
+**One truth spine, everything else is evidence or a pointer.** `hl_srg_canonical` (one row per DEAL: client × house × side, keyed `pc_id:hlid:our_side` — never MLS in the key) is THE deal record. `hl_srg_past_clients` (one row per PERSON) carries who they are and their bucket. `hl_srg_past_client_homes` (one row per person × home) carries the relationship to each rooftop. Every value number lives on the **WEB `Listing`** — the CRM points by `website_hlid` and **never copies** (no copy = no drift).
+
+## The rulings (the lock session's verdicts)
+
+### 1. ONE disposition vocabulary — and it is NOT transaction status
+The child table's four words are canonical: **`owns` · `sold_moved` · `lost_listing` · `lost_buy`** (matches the deterministic disposition engine). The canonical table's synonyms (`still_owns`/`sale_side`/`lost_opportunity`/`sold_repped_by_us`) MAP onto these — one migration, alias-documented.
+**Deliberately NOT merged into the transaction ladder**: `transaction_status` (pending → closed → lost) answers *"what happened to a deal"*; disposition answers *"what is this rooftop's relationship to us now."* Two questions, two vocabularies — forcing them together would be a false merge (the interchangeability test).
+
+### 2. The `verified` gate values — SIGNED
+`PASS · WARN_NO_ADDRESS · WARN_UNIT_DROPPED · FAIL_WRONG_UNIT · FAIL_WRONG_HOUSE · FAIL_NOT_SOLD · FAIL_PRICE`
+Locked as a CHECK constraint on `hl_srg_canonical.verified`. The resolver door refuses non-PASS. These are QA-gate values (technical vocabulary), signed at this lock; Zach countersigns at the Sitting.
+
+### 3. `identity_key` format — LOCKED
+**`street::unit?::zip5`** — unit is the optional MIDDLE segment. The **columns are the source; the key derives** — when a column repair (like the 7/27 zip fix) makes key and column disagree, the KEY regenerates by migration, collisions resolve oldest-wins with the quarantine trail. Key-vs-column drift is a red-flag query in the reconciliation gate.
+
+### 4. The three words, applied here
+The canonical row IS a **transaction** · "deal" is display language · `hl_srg_loop` is the **loop** (the immutable party/document record). Existing table names that predate the law (`hl_srg_deal_ledger`) are **grandfathered in place** — registered here, renamed only if a natural migration touches them. No churn renames.
+
+### 5. `hl_srg_master_houses` repoint — ASSIGNED
+A truth view must not stand on a deprecated table (`hl_srg_pastclient_gt`). Caleb repoints it onto the canonical spine; the gt table then joins the dead list.
+
+### 6. Value provenance — CONFIRMED COMPLIANT + one addition
+All value lives on WEB `Listing`: `hlEstimate(+Low/High/Source/At)` · `zestimate(+Low/High)` · `redfinEstimate(+Low/High/Url/At)`. The signed `hlEstimateSource` provenance list gains **`zestimate_spread_rule`**: `zestimate · zhvi_floor · sold_floor · sold_price · fresh_contract · closing_price · zestimate_spread_rule`. Trend series = **`hl_value_history`** (the `Listing.valueHistory` COLUMN is a dead lookalike — never read it). Photos = `photosCached` objects, never the empty `photos` jsonb.
+
+### 7. ⚖️ Sitting — the dead weight
+The parent's `current_home_*` columns + the `closings` jsonb (221 entries with lost years — display-only, never a ledger input) and section D's dead tables (`hl_srg_pastclient_gt`, the staging/quarantine litter, empty `hl_transactions`) go to **Zach's Table Sitting** for Rule-0 sentences. Marked deprecated here so nobody builds on them meanwhile.
+
+## The truth spine (query THESE, in this order)
+
+| Question | The ONE object | Never instead |
+|---|---|---|
+| What deals did we do? | `hl_srg_canonical` (1,987) | closings jsonb, MLS sheets directly |
+| Who is in the book? | `hl_srg_book` view (1,730) | hand-joins |
+| Who is this person / which bucket? | `hl_srg_past_clients` (1,779) — bucket is SISU-derived | FUB tags, `is_ana` |
+| Which homes do they touch? | `hl_srg_past_client_homes` (2,106) | address string matching |
+| Which sources agree? | `hl_srg_deal_ledger` (tiers GREEN/YELLOW/RED) | re-deriving |
+| What did a human rule? | `hl_srg_deal_overrides` (negative sisu_id = promote) | editing evidence tables |
+| The home's identity | WEB `hl_property` (`identity_key`) + `hl_hlid_alias` | address regex |
+| The home's value | WEB `Listing` by `website_hlid` + `hl_value_history` | any CRM copy |
+
+## Evidence tables — inputs only, with their traps
+
+`hl_srg_mls_deals` (only `Sold` is a closing; buy-side rows name OUR client, list-side rows name the BUYER) · `sisu_transactions` (frozen; absence proves nothing; address is veto-only) · `hl_srg_loop` (party truth; agent fields are JSONB objects — read `.name`) · `hl_srg_dotloop_contracts` (a contract is NOT a closing) · `fub.*` (dossier inputs only — the no-dogfood law). **An answer is never read from an evidence table.**
