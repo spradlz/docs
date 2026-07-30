@@ -114,13 +114,13 @@ SELECT account_email, is_active, watch_expiry, (watch_expiry > now()) AS watch_l
 `watch_live = false` means mail is **not** flowing in, however green the screen looks.
 
 <Warning>
-**⚠️ WHAT THIS INTEGRATION DOES NOT DO YET — the honest gap (audited 2026-07-30).**
+**⚠️ THE GAP THAT WAS HERE — FOUND AND FIXED 2026-07-30. Read this; it explains the design.**
 
 Zach's expectation, and the correct one: *"FUB has an email section with connected email, which is basically
 what we have, and it should sync all emails between a lead and the user in HouseLoop and pull them in."*
-**It does not do that today.** Capture works; **attribution and content do not.**
+Capture always worked. **Attribution and content did not.**
 
-**The case that proved it.** On 2026-07-29 21:06 the lender emailed a pre-approval letter:
+**The case.** On 2026-07-29 21:06 the lender emailed a pre-approval letter:
 
 ```
 From:    jnelson@fountainmortgage.com
@@ -129,31 +129,49 @@ To:      Trish.redenbaugh@gmail.com, zach@houseloop.ai,
 Subject: Bradley Bengel Pre-Approval Letter
 ```
 
-The watch **caught it** — it is in `hl_inbound_emails`. But `lead_id` is **NULL**, so it never appeared on
-Bradley Bengel's lead, and FUB's own copy is `[CONTENT HIDDEN]` (a FUB user-privacy setting the scraper
-**cannot** recover — waiting on FUB for this content waits forever). Five distinct defects, all in
-`lib/email/gmail-realtime.ts`:
+The watch **caught it** — but it landed with `lead_id` NULL, no body, no attachment, and **twice**. FUB's own
+copy is `[CONTENT HIDDEN]` (a FUB user-privacy setting the scraper **cannot** recover), so waiting on FUB for
+this content waits forever. Five defects, all now fixed in `lib/email/gmail-realtime.ts` **and** the per-lead
+backfill `app/api/email/inbound-sync/route.ts`:
 
-| # | Defect | Consequence |
+| # | Was | Now |
 |---|---|---|
-| 1 | Inbound matches the **sender only** — `leadIdForEmail(fromEmail)` | The lender is not a lead, so nothing matched. **Bradley's address is right there in `To` and is never checked.** This is exactly the "I'm cc'd on an email to a lead" case FUB handles. |
-| 2 | `addr()` parses **one** address | A multi-recipient `To` line is passed whole to the lookup and matches nothing. |
-| 3 | **`Cc` is never requested** — `metadataHeaders=From,To,Subject` | Anyone CC'd is invisible to matching. |
-| 4 | Fetch is **`format=metadata`** | Headers only. `hl_inbound_emails.body_text` exists but is **always empty**; you get Gmail's ~100-char `snippet`. |
-| 5 | **No attachments, at all** | No fetch, no storage, no table. The pre-approval PDF is simply not captured. |
+| 1 | Matched the **sender only** — `leadIdForEmail(fromEmail)` | Matches the lead as **any participant**: From, To, Cc, Bcc. Bradley was the *third recipient*. |
+| 2 | `addr()` parsed **one** address | `addrs()` parses the whole comma-separated list, splitting outside quotes/angle brackets so `"Bengel, Bradley" <b@x.com>` survives. |
+| 3 | **`Cc` never requested** | Cc **and** Bcc parsed. |
+| 4 | `format=metadata` — headers only, `body_text` **always empty** | `format=full`; the MIME tree is walked for `text/plain`, `text/html`. |
+| 5 | **No attachments anywhere** | Attachment metadata + Gmail's `attachmentId` stored (`attachments` jsonb) — fetched on demand, **never** blobbed into Postgres. |
 
-**Plus a duplicate:** the same email produced **two** rows — one per receiving mailbox. Each mailbox assigns
-its own `gmail_message_id`, and the dedupe key *is* `gmail_message_id`, so it cannot collapse them. Deduping
-on the RFC `Message-ID` header (stable across mailboxes) is the fix.
+Plus the duplicate: deduped on the **RFC `Message-ID`**, not Gmail's per-mailbox id. (Gmail assigns a
+different `gmail_message_id` in *each* mailbox, so one email received by `zach@` and `ana@` made two rows and
+the old key could not collapse them.)
 
-**What "first-class email" requires** — the shape of the work, in dependency order:
-1. Match the lead across **From + To + Cc**, every address, not just one.
-2. Fetch `format=full`; persist real `body_text` (and HTML), not a snippet.
-3. Fetch and store **attachments**, so a pre-approval letter is on the lead.
-4. Dedupe on RFC `Message-ID`, not Gmail's per-mailbox id.
-5. Suppress the FUB `[CONTENT HIDDEN]` twin once we hold the native copy, so one email is one row.
+<Note>
+**THE MATCHING LAW (Zach, 2026-07-30):** *"We should be matching email address only, not parsing any body.
+If any email in my inbox contains the lead's email and has my email on it — in the To, the From, the Cc or
+the Bcc — that should be pulled in."*
 
-Until 1–3 land, an email between a teammate and a lead is captured but **orphaned, bodyless, and without its
-attachment**. Treat "Connected" as *"we can send as you, and we are recording inbound mail"* — **not** as
-"your correspondence with a lead is on the lead."
+Matching is **header addresses only**. The body is fetched for **storage and display** — so the email is
+readable and the attachment reachable — and is **never** scanned to decide which lead an email belongs to.
+Conflating the two is how a quoted signature in a forwarded thread attaches mail to the wrong person.
+
+*"Has my email on it"* is satisfied structurally: we only ever read **our own** connected mailboxes, so every
+message we see is already one we are on.
+
+**Bcc caveat — SMTP, not our code:** a Bcc recipient is stripped from the copy every other recipient
+receives, so on inbound mail the header is usually absent. It earns its keep on mail **we** send, where our
+own Bcc header survives in the Sent copy.
+</Note>
+
+**Collaborators see one email, not one each.** Ana, Trish and Zach all being on that thread is normal and
+correct. The Message-ID dedupe means it stores as **ONE row on the lead**, so everyone with access to that
+lead sees the same thread, body and attachment — instead of a copy per mailbox attached to nobody.
+*Seeing* it and being *notified* about it are different: storage is shared; who gets pinged is governed by
+the lead's care team and notification scope, which this change does not touch.
+
+**Backfilling a lead's history:** `POST /api/email/inbound-sync { lead_id, from_email? }` (internal-secret
+auth) queries Gmail for `from:lead OR to:lead` and pulls the thread in. It carried the identical defects
+until 2026-07-30 — it *discarded* any message the lead had not personally sent — so it could never have
+recovered this thread either. Both paths now share the same `addrs()` / `walkPayload()` helpers: one parser,
+one behaviour, no drift.
 </Warning>
