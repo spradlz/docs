@@ -310,6 +310,80 @@ reading documents from closed loops.**
 SOLD/UNDER_CONTRACT loops then recovered real designated agents (Jodie Brethour, Alisha Hanks,
 Kathy Shen, Jessica Rich, …) that `/participant` had dropped.
 
+## HOW TO GET IN — the 60-second path (verified 2026-07-30)
+
+<Note>
+**You do not need to re-authorize, and you do not need a browser.** Read this before touching OAuth —
+2026-07-30 an agent spent 40 minutes concluding "dotloop is dead" and asking Zach to log in. It was never
+down.
+</Note>
+
+**Step 1 — wake the connection. This is the whole trick.**
+
+```
+https://crm.houseloop.ai/api/dotloop/status?probe=1
+```
+
+Hit that in the browser (you're already signed in to the CRM). It calls `getValidAccessToken()` **on the
+server**, which auto-refreshes an expired token **and writes the fresh one back to
+`hl_dotloop_connection`**. A healthy response proves the whole chain:
+
+```json
+{"ok":true,"connected":true,"scopes":"account:* profile:* loop:* contact:* template:* admin:read document:*",
+ "probe":{"ok":true,"account":{"id":5177309,"email":"ana@spradlingrealtygroup.com"},"profiles":9,"loopTotal":17035}}
+```
+
+**Step 2 — use that fresh token from anywhere.**
+
+```bash
+U=$(grep -m1 '^HL_CRM_DATABASE_URL=' .env | cut -d= -f2- | tr -d '"')
+AT=$(psql "$U" -X -q -t -A -c "SELECT access_token FROM hl_dotloop_connection ORDER BY updated_at DESC LIMIT 1;")
+curl -s -H "Authorization: Bearer $AT" https://api-gateway.dotloop.com/public/v2/account
+```
+
+<Warning>
+**`DOTLOOP_CLIENT_ID` / `DOTLOOP_CLIENT_SECRET` are NOT in the local `.env`** — they live only in the
+Railway environment. So a **refresh attempted from a local shell returns `401` and looks exactly like a
+dead integration.** It isn't. The refresh must happen server-side (step 1); after that the stored token
+works fine from a local `curl`. The `CRED_DOTLOOP_API_CLIENT_*` entries in `.env` are the *credential
+record*, not the runtime pair — do not try to refresh with them.
+
+Only re-run `/api/dotloop/oauth/start` when the **refresh token itself** is dead (a real `invalid_grant`
+after step 1 fails), or when re-consenting to widen scopes.
+</Warning>
+
+## Finding a form or a document (the path shape that actually works)
+
+The download path needs **profile → loop → folder → document**. Omitting the `folder` segment (or the
+`profile` prefix) returns the **dotloop marketing HTML page**, not JSON and not a 404 — which reads like a
+broken token when it is really a malformed URL.
+
+```bash
+A="https://api-gateway.dotloop.com/public/v2/profile/$PROFILE_ID"
+curl -s -H "Authorization: Bearer $AT" "$A/loop?batch_size=20&sort_by=updated&sort_direction=desc"   # find a loop
+curl -s -H "Authorization: Bearer $AT" "$A/loop/$LOOP/folder?include_documents=true"                 # folders + docs + IDs
+curl -s -H "Authorization: Bearer $AT" -H "Accept: application/pdf" \
+     "$A/loop/$LOOP/folder/$FOLDER/document/$DOC" -o out.pdf                                          # the bytes
+```
+
+**Key IDs (Spradling, verified 2026-07-30)**
+
+| Thing | Value |
+|---|---|
+| Account | `5177309` — ana@spradlingrealtygroup.com |
+| **Team profile** (has the templates + brokerage loops) | **`12451292`** — Spradling Realty Group |
+| Loop templates | `217364` 2026 Spradling Buyer Template · `217365` Seller · `143141` eXp Referral |
+
+**A blank brokerage form is not a template — it lives inside a real loop.** `GET …/loop-template/:id`
+returns only header metadata (name, transactionType), never its document list. To get a standard form,
+open a recent loop of that type and download it from its folder. That is how the two state disclosures
+were retrieved:
+
+| Form | Loop | Folder | Doc |
+|---|---|---|---|
+| KS Real Estate Brokerage Relationships (F323) - Buying | `116090826` | `86376717` | `500659618` |
+| MO Broker Disclosure (F318) - Buying | `116090826` | `86376717` | `500659620` |
+
 ## Downloading document content (PDFs)
 
 ```
