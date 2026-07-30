@@ -85,3 +85,75 @@ No Inngest functions are involved; all writes are synchronous CRM API calls.
 ## How it fits
 
 Profile Settings is the User Settings entry point into HouseLoop's single member model: every teammate — human or AI agent — is one row edited through one page, and "your profile" is just your own row in it. Because your profile is your own member record, the same editor governs access levels, comms connections, and AI-clone configuration, keeping signing-in identity (name/phone/time zone, Google-managed email), permissions, and channels in one place rather than a separate account screen.
+
+## Connections — the Gmail integration
+
+**In the app:** the member editor → **Connections** → **Email**. This is the "connected email" control, the
+HouseLoop equivalent of Follow Up Boss's Connected Email.
+
+### What being "connected" actually means
+
+Connecting a mailbox stores a Google OAuth row in **`hl_oauth_connections`** (`provider='google'`,
+`is_active=true`) holding the access + refresh token and the `gmail.readonly` scope. Two capabilities hang off
+that one connection:
+
+| Capability | How it works |
+|---|---|
+| **Sending as you** | A 1:1 composer email goes out through **your real Gmail** (`sendViaGmail`), so it lands in your Sent folder and threads normally. See [Email Settings](/guides/email-settings). |
+| **Receiving into the CRM** | Gmail has no webhook, so we use `users.watch()` → a GCP Pub/Sub topic → push to `/api/email/webhook`. **Watches expire after 7 days**, so an Inngest cron re-arms them daily. That keep-alive is mandated by Gmail — it is *not* polling for mail. |
+
+**Multi-account:** every connected mailbox gets its own watch, and each keeps its **own** history cursor
+(`watch_history_id` + `watch_expiry` on its row) — no shared cursor, no cross-account bleed. Live today:
+`zach@`, `ana@`, `myli@houseloop.ai`.
+
+**To verify a connection is genuinely live** — "Connected" in the UI only proves a token exists:
+```sql
+SELECT account_email, is_active, watch_expiry, (watch_expiry > now()) AS watch_live
+  FROM hl_oauth_connections WHERE provider = 'google' AND recruiter_id IS NULL;
+```
+`watch_live = false` means mail is **not** flowing in, however green the screen looks.
+
+<Warning>
+**⚠️ WHAT THIS INTEGRATION DOES NOT DO YET — the honest gap (audited 2026-07-30).**
+
+Zach's expectation, and the correct one: *"FUB has an email section with connected email, which is basically
+what we have, and it should sync all emails between a lead and the user in HouseLoop and pull them in."*
+**It does not do that today.** Capture works; **attribution and content do not.**
+
+**The case that proved it.** On 2026-07-29 21:06 the lender emailed a pre-approval letter:
+
+```
+From:    jnelson@fountainmortgage.com
+To:      Trish.redenbaugh@gmail.com, zach@houseloop.ai,
+         bradleybengel@gmail.com, Ana@houseloop.ai
+Subject: Bradley Bengel Pre-Approval Letter
+```
+
+The watch **caught it** — it is in `hl_inbound_emails`. But `lead_id` is **NULL**, so it never appeared on
+Bradley Bengel's lead, and FUB's own copy is `[CONTENT HIDDEN]` (a FUB user-privacy setting the scraper
+**cannot** recover — waiting on FUB for this content waits forever). Five distinct defects, all in
+`lib/email/gmail-realtime.ts`:
+
+| # | Defect | Consequence |
+|---|---|---|
+| 1 | Inbound matches the **sender only** — `leadIdForEmail(fromEmail)` | The lender is not a lead, so nothing matched. **Bradley's address is right there in `To` and is never checked.** This is exactly the "I'm cc'd on an email to a lead" case FUB handles. |
+| 2 | `addr()` parses **one** address | A multi-recipient `To` line is passed whole to the lookup and matches nothing. |
+| 3 | **`Cc` is never requested** — `metadataHeaders=From,To,Subject` | Anyone CC'd is invisible to matching. |
+| 4 | Fetch is **`format=metadata`** | Headers only. `hl_inbound_emails.body_text` exists but is **always empty**; you get Gmail's ~100-char `snippet`. |
+| 5 | **No attachments, at all** | No fetch, no storage, no table. The pre-approval PDF is simply not captured. |
+
+**Plus a duplicate:** the same email produced **two** rows — one per receiving mailbox. Each mailbox assigns
+its own `gmail_message_id`, and the dedupe key *is* `gmail_message_id`, so it cannot collapse them. Deduping
+on the RFC `Message-ID` header (stable across mailboxes) is the fix.
+
+**What "first-class email" requires** — the shape of the work, in dependency order:
+1. Match the lead across **From + To + Cc**, every address, not just one.
+2. Fetch `format=full`; persist real `body_text` (and HTML), not a snippet.
+3. Fetch and store **attachments**, so a pre-approval letter is on the lead.
+4. Dedupe on RFC `Message-ID`, not Gmail's per-mailbox id.
+5. Suppress the FUB `[CONTENT HIDDEN]` twin once we hold the native copy, so one email is one row.
+
+Until 1–3 land, an email between a teammate and a lead is captured but **orphaned, bodyless, and without its
+attachment**. Treat "Connected" as *"we can send as you, and we are recording inbound mail"* — **not** as
+"your correspondence with a lead is on the lead."
+</Warning>

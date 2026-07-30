@@ -2093,3 +2093,92 @@ is the single landing spot for:
 
 - [FUB Scraper](/fub/master-scraper-ssot) · [FUB Lead Import](/fub/master-scraper-ssot) · [FUB Trigger Events](/guides/trigger-events)
 - [Phone Numbers & Call Routing](/comms/calls) — the Legacy Agents routing group
+
+---
+
+# ═ FUB IMPORT NOTIFICATIONS — the 2026-07-29/30 pass (Adam) ═
+
+Four defects, found by Zach on real leads, all in the seam between **a FUB signal arriving** and **Zach being
+told about it**. Every one is the same shape: **an absence read as a decision.**
+
+## ① `peopleCreated` carried no `webhookType` — the MINT arm could never notify
+
+`fub-webhook-router` dispatched `{ trigger: 'new_lead' }` with **no `webhookType`** — the only branch in the
+router that omitted one. The dispatch drops falsy fields, and `fub-lead-import` gates its **entire** notify
+block on `if (!backfill && webhookType && notifyOn)`. **The import that MINTS a brand-new lead was structurally
+incapable of notifying.** Not gated off by a toggle — silently skipped.
+
+It bites hardest on the highest-intent signal, because a new Zillow tour fires **two** webhooks in the same
+second: `peopleCreated` (no type) and `eventsCreated` (`tour_requested`). The registration import wins the race
+and mints; the tour import then sees an *existing* lead. Zach's words: Bradley Bengel requested **four homes**
+and he was told someone *registered*, never that they wanted a showing.
+
+**Reproduced, then proven fixed, on real `POST /v1/events` traffic:**
+```
+BEFORE  19:58:42  lead MINTED · nativeNotified=FALSE · notifications: ZERO
+ISOLATE 02:41:45  same tour event on an EXISTING lead → class 'tour_request' → SMS   (chain is healthy)
+AFTER   02:55:06  router webhookType='registration'  ← the field that was empty
+        02:55:15  'MintArm Test500632 — 4410 Mint Arm Way' → SMS
+```
+**Fix:** `{ trigger: 'new_lead', webhookType: 'registration' }` — a real board row, so it stays
+catalog-driven and Zach-controllable.
+
+## ② The 48-hour recency gate is GONE — age no longer decides anything
+
+> Zach: *"Recency going back 48 hours is dumb. What if the system is down and pulls it in 3 days later — I
+> don't want it to silently fail. It needs to be the date, the time, of the registration event, then dedupe and
+> not send any more after it sends that one. But after it pulls in, it has to continue firing for future events."*
+
+The gate asked *"is this OLD?"*; the real question is *"have I TOLD him yet?"* Age is a proxy that fails in
+precisely the case that matters — **our own outage**.
+
+**The case:** Zachary Bell (FUB 50546) inquired 2026-07-27 — a funded investor with a buy box. He was dropped
+by ③ below, and when re-driven on 07-30 he minted correctly and then went **silent at 58h**. Not even a bell.
+
+**What replaced it (mig 0498 + `createNotification`):**
+
+| Mechanism | Job |
+|---|---|
+| `hl_leads.notify_anchor_at` | The **registration event's own timestamp** — *not* our mint time. (Bell minted 07-30 06:24 but registered 07-27 20:25; anchoring on the mint would still have silenced him.) Activity at/after it is news; before it is history and stays context. |
+| `hl_lead_activity.notified_at` | Per-signal delivery stamp. Stamped = never fires again. |
+| Exact-signal dedupe now **FOREVER**, not 5 minutes | The 5-min window was sized to beat the webhook/poller race, so *any* later re-drive re-fired the identical card. The title-heuristic branch **keeps** its 5-min window on purpose — titles legitimately repeat, and an unbounded title match would swallow a genuine second event. |
+
+**Why dropping it is safe:** the 2026-07-09 flood was mirror-reading **pollers** treating re-scraped old rows
+as new. Those pollers were **ripped**; the webhook is the sole trigger and fires on genuinely new activity, and
+historical import comes through `backfill`, which never notifies. The gate guarded a door that no longer
+exists while silencing real leads through the one that does. The **dispatch-freshness** suppressors STAY —
+they ask a different, still-valid question: was this *dispatch* live, or a queued backlog draining through?
+
+<Warning>
+**The flood guard is the whole safety of this change.** 17,006 of 17,556 existing activities were older than
+48h and had **never** been notified — flipping the rule bare would have sent ~17,000 notifications. Mig 0498
+stamps **all** existing activity delivered FIRST; `pending = 0` and zero null anchors were verified immediately
+after apply. Same sequence that made the Zillow in-app fix safe (402,346 rows marked, pending 0, then correct
+delivery). **Never enable a "fire what hasn't been delivered" rule without seeding the ledger first.**
+</Warning>
+
+## ③ The config lookup asked for a name the board doesn't store
+
+`contact_requested` (canonical) vs `contact_request` (the board row). Exact-match missed, and fail-closed read
+the miss as *"Zach turned this off."* His toggles were ON the whole time. Run log, verbatim:
+```
+07-27 20:25:14  import SKIPPED: "FUB trigger contact_requested: enabled=false creates_lead=false"
+```
+Fixed by the alias closure (`hl_trigger_event_alias` on **both** sides of the comparison). **The same bug lived
+in `email-lead-ingest`** — every lead-creating intent missed, **9 rows** stamped `skipped_toggle_off`, and
+exactly **one** lead minted by that path *ever*. Codebase swept: no exact-match `webhook_type` lookups remain.
+
+## ④ General Inquiry had no door
+
+`General Inquiry` is a live FUB type (4 in 20 days) and *was* serviced — but it returned `contact_requested`,
+so it vanished into Contact Request and the board had no row named "General Inquiry." Zach went looking for the
+control and reported it missing. **A signal you cannot see on the board is a signal you cannot govern.** It now
+has its own catalog + board row (mig 0496, kind `general_inquired`), reusing the `contact_request` notify class
+so it cards from the first fire. Full row: [Trigger Events](/guides/trigger-events).
+
+<Note>
+**The gates caught two of my own mistakes on ④, and both were right.** `generate-event-kinds --check` rejected
+the key `general_inquiry` for breaking the `object_verbPast` law (renamed `general_inquired`, matching
+`home_inquired` / `seller_inquired` / `rental_inquired`), then rejected the catalog label for lying about the
+key. Fixed both rather than grandfathering either. **Run the gates before the push, not after the incident.**
+</Note>
