@@ -40,7 +40,7 @@ is dated **2024-04-13**, logged as a fresh appointment **on the very house we so
 overwritten. See [dotloop Integration](/guides/dotloop-integration) §"Using dotloop as a confirmation source".
 
 **4 · SISU IS ONLY TRUTH WHERE `status = 'Closed'`.** 11,636 rows, **1,945 closings.** Everything else is
-Appt Met (5,178) / Appt Set (3,388) / Signed (417) / Lost (309) / Pipeline (282). Omitting that filter is
+Appt Met (5,178) / Appt Set (3,388) / Signed (417) / Lost (309) / Pipeline (282) / 1st Time Showing (39) / Listing Expired (15) / 1st Time Offer (10) / Live Listing (9) / Pending (44). Omitting that filter is
 **the single most expensive mistake in this system** — it counts *appointments* as closings and
 manufactures a crisis every time. `build-deal-ledger.mjs:55` filters correctly; hand queries did not.
 
@@ -62,17 +62,17 @@ resolves the home (`o.hlid`, else MLS→HLID via `hl_mls_property_history`) and 
 `resolve-from-mls.mjs --write` materialises it into `hl_srg_canonical`. **A promote with no resolvable home is
 reported, never silently dropped.**
 
-**Result of the first run: 7 verdicts promoted · book 1,705 → 1,711 clients · canonical 1,941 → 1,963 deals ·
-parked 74 → 68.**
+**Result of the first run (7/29 snapshot — run history, superseded by later runs): 7 verdicts promoted ·
+book 1,705 → 1,711 clients · canonical 1,941 → 1,963 deals · parked 74 → 68.**
 
 **5c · A person Zach has retired is SETTLED, not an open question.** `hl_srg_not_in_book` now reports
 `Z_retired_by_zach` for anyone with `contact_status IN ('do_not_contact','dnc')`, so the
 "needs a verdict" bucket means an OPEN item and never re-asks a question already answered.
- One row per DEAL. `hl_srg_book` is the client-level view of it.
 
 **6 · If the book does not have it → it is NOT a past client.** Never "go find it another way." No scraper,
-no county record, no ad-hoc join. 100% is not reachable and never will be: 59 of the 82 parked rows are
-**sphere contacts who never closed with us.**
+no county record, no ad-hoc join. 100% is not reachable and never will be. Live 2026-07-30 the parked set is
+**49**: `D_sphere_of_influence_never_closed` **41** · `Z_retired_by_zach` **5** ·
+`A_duplicate_of_a_resolved_client` **3** — every one with a written verdict in `hold_reason`.
 
 **7 · `hlid` is the only key** that crosses from the CRM to the website.
 
@@ -117,10 +117,10 @@ from getting to those four.
 
 | # | Object | Grain | Rows | It answers |
 |---|---|---|---:|---|
-| **1** | **`hl_srg_canonical`** ⭐ | one row per **DEAL** (client × house × side) | **1,932** | **THE past-client SSOT.** Who the client was, which house, which side, what price, what date, which agent, do they still own it, and the HLID + URL of the home. |
-| **2** | **`hl_srg_master_houses`** (VIEW) | one row per **HOUSE** | **1,844** | The same truth collapsed to the rooftop, with `fully_resolved` + `txn_count`. 88 houses carry more than one transaction. |
+| **1** | **`hl_srg_canonical`** ⭐ | one row per **DEAL** (client × house × side) | **1,987** | **THE past-client SSOT.** Who the client was, which house, which side, what price, what date, which agent, do they still own it, and the HLID + URL of the home. |
+| **2** | **`hl_srg_master_houses`** (VIEW) | one row per **HOUSE** | **1,859** | The same truth collapsed to the rooftop, with `fully_resolved` + `txn_count`. 101 HLIDs carry more than one deal. |
 | **3** | **`hl_srg_past_clients`** | one row per **PERSON** | 1,779 | **ONLY for `bucket`** (ana-only / ana-handoff / team) and contact fields. **It is NOT the truth about a deal.** |
-| **4** | **`Listing`** *(WEB db)* | one row per **listing** | 368,564 | The house itself — value, photos, price history. Reached from canonical by `hlid`. |
+| **4** | **`Listing`** *(WEB db)* | one row per **listing** | 370,813 | The house itself — value, photos, price history. Reached from canonical by `hlid`. |
 
 ## The state of resolution — measured 2026-07-30
 
@@ -179,7 +179,7 @@ comes from the script, and this page quotes the script.
 **⛔ SISU IS ONLY TRUTH WHERE `status = 'Closed'`. (Zach, locked 2026-07-28.)**
 
 `sisu_transactions` holds **11,636 rows but only 1,945 closings.** The rest are the pipeline:
-Appt Met 5,178 · Appt Set 3,388 · Signed 417 · Lost 309 · Pipeline 282 · Pending 44.
+Appt Met 5,178 · Appt Set 3,388 · Signed 417 · Lost 309 · Pipeline 282 · 1st Time Showing 39 · Listing Expired 15 · 1st Time Offer 10 · Live Listing 9 · Pending 44.
 
 **Querying `sisu_transactions` without `status='Closed'` is the single most expensive mistake in this
 system.** It was made repeatedly across sessions and produced a string of fabricated crises. The proof
@@ -194,47 +194,38 @@ it is wrong, in one table — Zach named these agents from memory and the filter
 The ledger already filters correctly (`build-deal-ledger.mjs:55`). **Any hand-written query must too.**
 </Warning>
 
-**Measured 2026-07-28** · last resolver run `2026-07-16 22:49`
+**Measured 2026-07-30** · last resolver run `2026-07-30 12:07`
 
 | Measure | Value |
 |---|---|
 | **SISU closings (`status='Closed'`) — THE BOOK** | **1,945** |
-| `hl_srg_canonical` rows | **1,932 · 99.3% of the book** |
-| `hl_srg_deal_ledger` rows | 1,946 |
+| `hl_srg_canonical` rows | **1,987** |
+| `hl_srg_deal_ledger` rows | 2,034 |
 | `hl_srg_mls_deals` rows | 2,042 |
 | past-client PARENT rows | 1,779 |
-| **CANONICAL-BACKED — what renders + sends** | **1,697 · 95.4%** |
-| unbacked residue | **82 · 4.6%** |
+| **CANONICAL-BACKED — what renders + sends** | **1,730 · 97.2%** |
+| unbacked residue | **49 · 2.8%** |
 
-### The 82 are not a data failure — they are the wrong noun
+### The 49 are not a data failure — they are the wrong noun
 
 The tag is **`PCSOI` = Past Client / Sphere Of Influence.** The parent table holds **both**, and only the
-Past-Client half has a closing.
+Past-Client half has a closing. Live 2026-07-30 the parked set is **49**, every one with a verdict:
 
-| | Count |
-|---|---:|
-| unbacked rows with a **closed** SISU deal (exact first+last) | 9 |
-| …by surname only (loose, unreliable) | 28 |
-| **…with NO closed SISU deal at all** | **54** |
-| *control:* BACKED rows with a closed SISU deal | **1,672 of 1,697 · 98.5%** |
+| Cat | N | What it is | The disposition |
+|---|---:|---|---|
+| **D** | 42 | `D_sphere_of_influence_never_closed` — arrived via `fub-address-sweep` / `reverse-recon` | Correctly gated out of every send. Not a bug. |
+| **Z** | 5 | `Z_retired_by_zach` — retired by typed verdict | Settled, never re-ask. |
+| **A** | 3 | `A_duplicate_of_a_resolved_client` — the *other side* of our client's deal (Kurtz → Alex Murrell) | Retire — never send. |
 
-**54 of the 82 never closed anything with us.** They arrived via `fub-address-sweep` (41) and
-`reverse-recon` (22) — sphere contacts, not clients. Compare the backed book, whose `closings[].source`
-is `sisu` on 1,915 of its rows. **A sphere contact must never receive a past-client home-value email**;
-the canonical gate already excludes them, which is exactly the behaviour we want.
+**Category B (a SISU closing with no MLS anchor) went 56 → 4 → 0-open** — the PROMOTE path (rule 5b) plus
+the 7/29 deal-edge resolver cleared what was once the biggest bucket. That is the single largest movement
+of the last two days.
 
 ### ⛔ 100% IS NOT REACHABLE BY RE-RUNNING THE RESOLVER
 
-**77 of the 82 existed BEFORE the last resolver run.** It saw them and produced nothing — because the
-evidence needed to join them does not exist. Re-running produces the identical 82. The residue is a
-**known, named, categorised set** with one disposition each. **Do not re-investigate it.**
-
-| Cat | N | What it is | The ONLY disposition |
-|---|---:|---|---|
-| **A** | 11 | The deal already resolved to a **different** canonical client | **Retire — never send.** Usually the *other side* of our client's deal (Kurtz → Alex Murrell). |
-| **B** | 56 | A SISU closing exists, but **no `hl_srg_mls_deals` row** to anchor it | Recover an MLS#, or a human verdict in `hl_srg_deal_overrides`. |
-| **C** | 4 | Placeholder — no real surname (`"Brody ."`) | Retire, or get the real name from FUB. |
-| **D** | 11 | **No upstream evidence at all** — neither SISU nor MLS | Human decision: was this ever our client? |
+The residue predates the resolver runs — it saw them and produced nothing, because the evidence needed to
+join them does not exist. Re-running produces the identical set. It is a **known, named, categorised set**
+with a verdict each. **Do not re-investigate it.**
 
 <Note>
 **Why the ledger cannot fix category B.** The ledger's primary edge is
@@ -258,13 +249,16 @@ Passing rows are stamped `verified='PASS'` + `verified_at`. Gate classes:
 The acceptance query: `SELECT verified, count(*) FROM hl_srg_canonical GROUP BY 1` → ONE row reading `PASS`.
 </Warning>
 
-## The three known defects — this is the entire remaining problem
+## The open defect classes — this is the entire remaining problem
 
-1. **`hl_srg_canonical` is read by ZERO application files.** The Seller Report, the deals route and the
-   audit route all read the raw parent `hl_srg_past_clients` instead. The resolved truth sits unused.
-2. **82 parent rows have no canonical row** (1,779 parent − 1,697 backed). **79 of them still carry a
-   `website_hlid`**, so they render a card and can be emailed. They cluster in id 3440–3550 — one import
-   batch the resolver was never re-run over — plus placeholder rows like `"Crislaine ."`.
+1. ~~`hl_srg_canonical` is read by ZERO application files~~ — **CLOSED 7/28.** Three app files now read it:
+   `lib/srg/canonical-gate.ts` (the shared `CANONICAL_BACKED` predicate), the Seller Report page (uses the
+   gate, surfaces `gate.unbacked`), and the lead-detail deals route (`FROM hl_srg_canonical`).
+2. **49 parent rows have no canonical row** (1,779 parent − 1,730 backed). **46 still carry a
+   `website_hlid`**, so they render a card — the canonical gate keeps them out of sends.
+2b. **42 canonical rows fail the entry gate** (no-address / unit-dropped / wrong-unit / wrong-house) —
+   held out of The Book, driven to PASS by the NOW-block write batch in the
+   [build plan](https://claude.ai/code/artifact/2c63e8e3-4768-434b-8bfd-f548ead15f27).
 3. **`hl_srg_master_houses` (canonical) is built on `hl_srg_pastclient_gt` (listed as deprecated).**
    An architectural contradiction: a truth view cannot stand on a drift table. Repoint or reclassify.
 
@@ -283,12 +277,12 @@ If canonical does not have it, the answer is **"re-run the resolver"** — never
 **This is the answer to "where is it locked in".** Three levels, two tables, one key. Nothing else is truth.
 
 ```
-PERSON          hl_srg_book              1,697 rows   ← THE BOOK. one row per client.
+PERSON          hl_srg_book              1,730 rows   ← THE BOOK. one row per client.
    │                                                    pc_id · name · bucket · agent · fub_id
    │                                                    deal_count · total_volume · first/last_close
    │  pc_id
    ▼
-TRANSACTION     hl_srg_canonical         1,931 rows   ← one row per DEAL. UNIQUE(pc_id,hlid,our_side)
+TRANSACTION     hl_srg_canonical         1,987 rows   ← one row per DEAL. UNIQUE(pc_id,hlid,our_side)
    │                                                    our_side · our_price · our_close · our_agent
    │                                                    mls_number · disposition · status
    │  hlid
@@ -301,9 +295,9 @@ HOME            WEB "Listing"/hl_property             ← the house. value · ph
 
 | Level | Cardinality |
 |---|---|
-| clients with 1 deal | 1,498 |
-| 2 deals | 173 |
-| 3 deals | 18 |
+| clients with 1 deal | 1,512 |
+| 2 deals | 188 |
+| 3 deals | 22 |
 | 4 deals | 7 |
 | 5 deals | 1 |
 
@@ -342,8 +336,9 @@ Searchable. **Chevron down on any client** to open every transaction they did wi
 **Rebuild it:** the query is `hl_srg_book` → `hl_srg_canonical` on `pc_id` → WEB `Listing` on
 `hl_property.hl_property_id = <hlid>` taking `active_listing_hlid` as the keeper.
 
-**Card coverage across the 1,844 homes:** hlEstimate 1,829 · Zestimate 1,784 · Redfin 1,712 ·
-photos 1,835 · price history 1,843 · value history 1,756 · **1 quarantined keeper**.
+**Card coverage across the 1,877 distinct canonical HLIDs (7/30):** hlEstimate 1,861 · Zestimate 1,815 ·
+Redfin 1,736 · **10 quarantined keepers**. **Photo depth census:** 1,755 cards with 10+ photos · 25 with
+6-9 · 19 thin (2-5) · **74 one-photo** · 4 none — "has photos" and "has ENOUGH photos" are different claims.
 
 ### Why this kept feeling unresolved
 
@@ -380,7 +375,7 @@ phantom "Christopher Kurtz" record. **SISU names the client; the MLS never does.
 ---
 
 <Note>
-**🕐 WORKING DOCUMENT — last measured 2026-07-27, 22:55 CDT.**
+**🕐 WORKING DOCUMENT — last measured 2026-07-30.**
 
 This is the **one page Zach and Caleb work off of** until the Seller Engine is done. It replaces four
 separate guides that had drifted apart. Every number below was measured **live against both databases and
@@ -438,31 +433,29 @@ quarantined record.
 | Stage | Count | Drop |
 |---|---:|---|
 | Past clients in the book (`hl_srg_past_clients`) | **1,779** | baseline |
-| Still **own** a home we track (`disposition='owns'`) | **1,275** | −504 sold & moved / lost |
-| Reachable + permitted (email + HLID, not DNC/internal) | **1,187** | −88 |
-| Home has a trustworthy live value (not quarantined) | **1,163** | −24 |
-| **Clean enough to auto-send** | **1,114** | −49 landmines |
-| Full 3-source value (Zillow + Redfin + HouseLoop) | **1,083** | 61% of book |
+| Still **own** a home we track (`disposition='owns'`) | **1,276** | −503 sold & moved / lost |
+| Reachable + permitted (email + HLID, not DNC/internal) | **1,218** | −58 |
+| Home has a trustworthy live value (not quarantined) | **1,206** | −12 |
+| **Clean enough to auto-send** | **1,206** | −5 need a human look |
+| Full 3-source value (Zillow + Redfin + HouseLoop) | **1,117** | 63% of book |
 
-**Launch capacity is 1,114 homes — 63% of the book.** Every gap above has a numbered task in the build plan.
+**Launch capacity is 1,206 homes — 68% of the book.** Every gap above has a numbered task in the build plan.
 
 ### Coverage on current-home pins (1,726 resolved listings)
 
 | Signal | Count | % |
 |---|---:|---:|
-| HouseLoop Estimate | 1,722 | 99.8% |
-| Zillow Zestimate | 1,683 | 97.5% |
-| Redfin Estimate | 1,600 | **92.7%** |
-| Value history | 1,643 | 95.2% |
-| **Quarantined pins** (bug) | **20** | — |
+| HouseLoop Estimate | 1,721 | 99.8% |
+| Zillow Zestimate | 1,682 | 97.5% |
+| Redfin Estimate | 1,604 | **93.0%** |
+| Value history | 1,645 | 95.4% |
+| **Quarantined pins** (bug) | **1** | Matt Barker — in the NOW batch |
 | Value-less | 3 | — |
-
-Across **all** past-client homes (1,905 distinct HLIDs) the quarantined count is **65**.
 
 ### The book's economics
 
-**$70.8M** total equity gain · median gain **$34,112** · 147 homes up more than 50% · 23 more than doubled ·
-25 in negative equity.
+**$70.8M** total equity gain · median gain **$34,112** · 147 homes up more than 50% · 23 more than doubled
+*(7/27 dollars — needs a re-measure)*. **Negative equity: 0** (the ZHVI floor law, applied 7/29).
 
 **Tenure — the strongest sell signal we hold:** 491 at 0-2yr · 563 at 2-5yr · **223 at 5-8yr** · **38 at
 8-12yr** · **8 at 12+**. The prime window (5yr+) is **269 people**. The book skews young, so this engine
@@ -531,9 +524,10 @@ returns nothing.
 <Warning>
 **🚨 THE BLOCKING FINDING — the unfair advantage is not built yet.**
 
-Measured 2026-07-27: **1,583** past-client homes carry `hlEstimateSource = "zestimate"`. **84.6%** of
-HouseLoop Estimate values sit **within 1%** of the Zillow number; only **1.9%** diverge by more than 5%.
-**Redfin is scraped on 1,600 homes and used in the estimate on exactly one.**
+Measured 2026-07-30: **1,579** past-client homes carry `hlEstimateSource = "zestimate"`. **83.3%** of
+HouseLoop Estimate values sit **within 1%** of the Zillow number; **2.8%** diverge by more than 5%.
+(The `MAX(portals) × 1.005` rule shipped 7/27 — Redfin now competes — but the STORED estimates have not
+been regenerated book-wide, which is the open "value regen after deploy" task.)
 
 Today the HouseLoop Estimate is **Zillow's Zestimate, relabeled.** Showing a homeowner three numbers where
 ours is visibly a copy reads as padding, not an advantage.
@@ -561,18 +555,20 @@ Branch 3 must run before 4 — reversing them caused a "flat forever" bug.
 **+112% "since 2012"** — a fabricated pre-existence line. It now reads **+32% since 2020**. Book-wide
 regeneration took fabricated histories from 196 → 24 → **0 (verified 2026-07-27)**.
 
-⚠️ **66 past-client homes still have a null build year**, so the floor cannot be enforced on them. That is
-the root cause of recurrence — fix the data, not the symptom.
+⚠️ Null build years are down to **3 documented dead ends** (§11b task 45) — the floor law is enforceable
+book-wide.
 
-### Divergence — an open design decision
+### Divergence — RULED (Zach 7/29) and BUILT (7/30)
 
-On **73 homes the three sources disagree by more than 25%.** Worst case: HouseLoop **$132,761** · Zillow
-**$132,100** · Redfin **$412,081** (a 211% spread). Redfin diverges from Zillow by more than 5% on **657
-homes (42%)** — it is a genuine independent signal, not noise.
-
-**Needs Zach's call before pixels lock:** show the range and say why? Suppress the weakest source? A
-confidence badge? Whatever we choose, the report must be able to answer *"why is your number different from
-Zillow's?"*
+**The rule: where the 3 sources disagree by more than 25%, SHOW THE ZESTIMATE.** Built as
+`tools/houseloop-cards/zestimate-spread-rule.mjs` (dry by default, `--write` gated, reversal saved, stamps
+`hlEstimateSource='zestimate_spread_rule'`). **Precedence:** the no-negative-equity floor
+(`zhvi_floor`/`sold_floor`) and a real transaction price (`sold_price`/`fresh_contract`/`closing_price*`)
+**outrank** the spread rule — a floored or transaction-anchored value stays. Dry run: **30 homes write**,
+8 floor-protected, 3 transaction-protected, 1 with no Zestimate (Misty Knight). **Status: pending Zach's
+write approval; zero rows carry the stamp yet.** The audit's spread landmine now counts only UNANSWERED
+rows: **29 today**, cleared by the write. The report can now answer *"why is your number different from
+Zillow's?"* — the `hlEstimateSource` stamp is the provenance ledger.
 
 ---
 
@@ -774,12 +770,12 @@ here; never fork a second map.
 
 | Table | Rows | Class | What it holds |
 |---|---:|---|---|
-| **`hl_srg_canonical`** | 1,932 | ⭐ CANONICAL | THE resolved output (Layer 1) — 1 row/deal, MLS#-anchored, `disposition` (0 null) + `current_value` + `verdict` |
-| **`hl_srg_deal_ledger`** | 1,946 | CANONICAL | THE deterministic client×deal match — MLS#, HLID, side, price, date, agent, tier, `verified_sources[]`, `contradiction` |
-| **`hl_srg_master_houses`** (VIEW) | 1,844 | CANONICAL | 🏠 one row/house + nested transactions + `fully_resolved`. 88 houses carry more than one transaction |
+| **`hl_srg_canonical`** | 1,987 | ⭐ CANONICAL | THE resolved output (Layer 1) — 1 row/deal, MLS#-anchored, `disposition` (0 null) + `current_value` + `verdict` |
+| **`hl_srg_deal_ledger`** | 2,034 | CANONICAL | THE deterministic client×deal match — MLS#, HLID, side, price, date, agent, tier, `verified_sources[]`, `contradiction` |
+| **`hl_srg_master_houses`** (VIEW) | 1,859 | CANONICAL | 🏠 one row/house + nested transactions + `fully_resolved`. 88 houses carry more than one transaction |
 | **`hl_srg_past_clients`** | **1,779** | CANONICAL | PARENT — person, bucket, `closings`, `website_hlid`. **The people SSOT** |
 | **`hl_srg_past_client_homes`** | **2,106** | CANONICAL | CHILD — 1 row/home, `hl_property_id` + `website_hlid`, `disposition` (now 2,106 non-null, pushed from canonical) |
-| `hl_srg_deal_overrides` | 143 | CANONICAL | human verdicts — fields WIN on rebuild; `verify_status` drives the verify queue |
+| `hl_srg_deal_overrides` | 231 | CANONICAL | human verdicts — fields WIN on rebuild; `verify_status` drives the verify queue |
 | `hl_srg_mls_deals` | 2,042 | CANONICAL | our downloaded Heartland MLS (unit-bearing address + agents + status) |
 | `hl_srg_dotloop_contracts` | 13,257 | EVIDENCE | contract price/date/parties/licensees — source of record for OFF-MARKET deals with no MLS# |
 | `hl_srg_dotloop_loops` | 17,455 | EVIDENCE (raw) | raw dotloop loop index |
@@ -787,21 +783,22 @@ here; never fork a second map.
 | `sisu_transactions` | 11,636 | UPSTREAM (frozen) | SISU closing spine. **Frozen — SISU shut down 2026-06** |
 | `hl_srg_fub_note_quarantine` | 654 | LOG (undo) | the injected-note quarantine — intel only, never client history |
 
-**Disposition census** (`hl_srg_canonical`, 0 null): still_owns **1,323** · sale_side 418 ·
-lost_opportunity 149 · sold_repped_by_us 42.
+**Disposition census** (`hl_srg_canonical`, live 7/30): still_owns **1,342** · sale_side 421 ·
+lost_opportunity 154 · sold_repped_by_us 44 — **plus three DRIFT tokens: `unknown` 19 · `owns` 6 ·
+`moved_away` 1** (child vocabulary leaking into the SSOT — Schema Lock agenda item #1).
 
 ### WEB database — homes, cards, value
 
 | Table | Rows | Class | What it holds |
 |---|---:|---|---|
 | **`hl_pastclient_resolved`** (VIEW) | 1,949 | ⭐ CANONICAL | THE card-coverage truth — per-home `has_photos` / `has_hlvalue` / `has_pricehistory` / `has_valuehistory` / value_bucket |
-| **`Listing`** | 368,564 | CANONICAL | the home record the card renders — MANY rows per home. Value, photos, priceHistory, taxHistory live here |
-| **`hl_property`** | 358,387 | CANONICAL | the HOME identity SSOT — 1 row per `identity_key`, names the keeper via `active_listing_hlid` |
-| `hl_value_history` | 345,153 | CANONICAL | the monthly value-history series (the graph) |
+| **`Listing`** | 370,813 | CANONICAL | the home record the card renders — MANY rows per home. Value, photos, priceHistory, taxHistory live here |
+| **`hl_property`** | 359,688 | CANONICAL | the HOME identity SSOT — 1 row per `identity_key`, names the keeper via `active_listing_hlid` |
+| `hl_value_history` | 182,476 *(7/30 — down from 345K: the 7/23 self-cleaning purged fabricated pre-build rows; keys by LISTING `hlid`, not `hl_property_id`)* | CANONICAL | the monthly value-history series (the graph) |
 | `hl_market_index` | 401,118 | CANONICAL | the ZHVI series — the appreciation trajectory |
 | `hl_geo_market_stats` | **297** | CANONICAL | neighborhood stats. ⚠️ **exists and is unused** — wiring it is cheap |
-| `hl_hlid_alias` | 364,561 | MAP | rename-forward (old HLP→HLID, superseded listing→keeper) — no URL break |
-| `hl_home_claim` | — | CANONICAL | owner claims (see §7.3) |
+| `hl_hlid_alias` | 365,315 | MAP | rename-forward (old HLP→HLID, superseded listing→keeper) — no URL break |
+| `hl_home_claim` | 20 | CANONICAL | owner claims (see §7.3) |
 | `hl_past_client_homes` | 1,949 | CACHE | CRM→home worklist the monthly value jobs iterate |
 | `hl_pastclient_card_audit` | 1,951 | AUDIT | per-card QA verdict |
 
@@ -1087,29 +1084,27 @@ is the [Master Build Plan artifact](https://claude.ai/code/artifact/2c63e8e3-476
 
 **Open:**
 
-1. **Fix the 65 quarantined home pins** — 20 on current-home pins. Named clients render broken cards today.
-   The keeper score must prefer **photos → value → status** and never point `active_listing_hlid` at a
-   quarantined row.
-2. **Resolve the 18 empty-render cards** — an HLID→listing resolution bug, not missing data.
-3. **Backfill 66 homes with a null build year** — the floor law cannot be enforced without it.
-4. **Close the Redfin gap** — 92.7% → 97%; stamp unresolvable addresses so the monthly run stops retrying.
-5. **57 no-photo cards** (Google Street View is the acceptable floor) and **65 contaminated price histories**.
-6. **Normalize the `pcsoi` column** — four spellings of one boolean (1,216 empty · 455 `yes` · 76 `true` ·
-   29 `PCSOI` · 3 null). Any query against it today is wrong.
-7. **Flip the rooftop-guard to its daily cron** — deployed, first run succeeded, 22 keepers repointed.
-   **Zach's typed sign-off required.** This is the structural fix for recurrence: with the cron off, every new
-   twin gets re-discovered by hand forever.
-8. **THE GATE — Zach walks N cards end to end and signs the book off.**
+1. ~~Fix the 65 quarantined home pins~~ — **1 remains** (Matt Barker, in the NOW batch); the daily
+   rooftop-guard cron (live since 7/27) holds the rest at zero.
+2. ~~Resolve the empty-render cards~~ — folded into the fork/repoint work in the NOW batch.
+3. ~~Backfill build years~~ — **3 documented dead ends remain** (§11b task 45).
+4. **Close the Redfin gap** — 93.0% live; §11b records the 95.6% deploy-gate clearing — reconcile on the
+   next monthly sweep; stamp unresolvable addresses so the run stops retrying.
+5. ~~57 no-photo cards / 65 contaminated price histories~~ — closed at **4** (at the Street-View floor) and
+   **3** (correctly empty — cancelled listings). Open instead: **74 one-photo + 19 thin cards** (photo run).
+6. ~~Normalize `pcsoi`~~ — **DONE** (§11b task 49): `yes` 560 · empty 1,216 · null 3.
+7. ~~Flip the rooftop-guard cron~~ — **DONE 7/27**, fires 06:00 daily, verified in `hl_run_log`.
+8. **THE GATE — Zach walks N cards off the LOCKED Book and signs it.**
 
 ### The five highest-leverage moves
 
 | # | Move | Why it is first |
 |---|---|---|
 | 1 | **Build the real blended estimate** | The differentiator is currently Zillow with our name on it. Every surface shows this number |
-| 2 | **Fix the 65 quarantined pins** | Named clients render broken cards. Last known correctness bug blocking G1 |
+| 2 | **Drive the 42 gate-failing deals to PASS** | The NOW-block write batch — the last correctness work blocking G1 |
 | 3 | **Build the suppression list** | 66 clients would receive a wrong or humiliating email |
 | 4 | **Promote the owner report to a real page** | The claim gate, endpoint and modal already exist — a promotion, not a build |
-| 5 | **Ship the sell score** | Every input verified present. Turns 1,779 into a ranked worklist of 269 |
+| 5 | **Ship the sell score** | DONE 7/27 — 1,145 scored · 167 HOT (the 269 is the 5yr+ tenure window, not the worklist) |
 
 ---
 
@@ -1134,15 +1129,15 @@ elsewhere are Zach's own sign-off gates.
 
 ## 9 · The landmines — gate these before any send
 
-**66 clients need a human look before a single real email.**
+**5 clients need a human look before a single real email** (was 66 — measured live 2026-07-30).
 
 | Class | Count | Why it must be gated |
 |---|---:|---|
-| **Quarantined pin** | 34 | Renders value-less or the wrong home |
-| **Negative equity** | 19 | "Your home is up!" when it is down $226,801 is unrecoverable |
-| **No purchase price** | 10 | Gain cannot be computed — the email has a hole |
-| **Absurd appreciation** (>300%) | 3 | Lot buys and new construction read as +2,162% |
-| *(separate)* 3-source spread >25% | 73 | Needs the divergence rule before the 3-source row ships |
+| **Quarantined pin** | 1 | Matt Barker — in the NOW batch |
+| **Negative equity** | 0 | The ZHVI floor law holds |
+| **No purchase price** | 1 | Genine Worten (retired by Zach's 7/29 verdict) |
+| **Absurd appreciation** (>300%) | 3 | Lot buys: Vadhi +2,162% · Yousufi +2,664% (his mis-pin is in the NOW batch) · Burgurt +511% is REAL (both deals in, +42% actual) |
+| *(separate)* 3-source spread >25%, UNANSWERED | 29 | Cleared by the pending spread-rule write |
 
 ---
 
@@ -1479,9 +1474,8 @@ correct. `keepersRepointed: 4` is the new quarantine filter doing real work on i
 keepers were pointing at quarantined rows and were corrected automatically. `adopted: 0` means no
 past-client re-listing is currently orphaned. From tomorrow this runs at 06:00 daily, unattended.
 
-**Result:** quarantined pins **97 → 2** (the 2 remaining are true dead ends — the winner is itself
-quarantined). Sell-score suppressions **156 → 126**; **30 past clients returned to the sellable list**
-(1,115 → 1,145).
+**Result (7/27 run record — for current state see §2):** quarantined pins **97 → 2**. Sell-score
+suppressions **156 → 126**; **30 past clients returned to the sellable list** (1,115 → 1,145).
 
 ### 2026-07-27 · The address-identity question — measured, not theorised
 
@@ -1505,8 +1499,14 @@ genuinely different houses** (`13205 King Street` vs `13205 W 129th Street`; `72
 a duplex written both as `6506-6508 Marsh Avenue` and `6506 Marsh Ave`, and a condo that lost its unit
 letter (`10240 W 96th Ter` unit F vs no unit).
 
-**Conclusion: the identity model is not the problem and does not need rebuilding.** The gap was maintenance —
-the ADOPT step that files a past-client re-listing under the existing ID never ran on a schedule. It does now.
+**Conclusion (7/27): the identity model is not the problem and does not need rebuilding.**
+
+⚠️ **PARTIAL RETRACTION, 7/30.** The MODEL still stands, but "0 forks" did not survive the MLS-anchored
+sweep: **154 true fork groups** (doubled suffixes, ordinal twins, `n/a`-keyed rows, zip-typo keys, the
+`HLID424xxx` city-in-street batch), **14 deals sitting on wrong twins**, and **26 canonical rows with a
+null `identity_key`**. The 7/27 measurement asked "does every listing have an ID" — it never asked "does
+each rooftop have exactly ONE." Merge plan: `.claude/reports/fork-merge-plan-refined-2026-07-30.json`,
+executing in the NOW batch. The maintenance conclusion stands; the zero-forks claim does not.
 
 ### 2026-07-27 · Tasks 37 + 39 — the sell score and the suppression list
 
