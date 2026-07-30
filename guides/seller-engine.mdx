@@ -122,17 +122,22 @@ from getting to those four.
 | **3** | **`hl_srg_past_clients`** | one row per **PERSON** | 1,779 | **ONLY for `bucket`** (ana-only / ana-handoff / team) and contact fields. **It is NOT the truth about a deal.** |
 | **4** | **`Listing`** *(WEB db)* | one row per **listing** | 368,564 | The house itself — value, photos, price history. Reached from canonical by `hlid`. |
 
-## The state of resolution — measured 2026-07-28
+## The state of resolution — measured 2026-07-30
 
 | Measure | Value |
 |---|---|
-| `hl_srg_canonical` rows with `verdict = RESOLVED` | **1,932 of 1,932 — 100%** |
-| `hl_srg_master_houses` with `fully_resolved = true` | **1,844 of 1,844 — 100%**, zero gap fields |
-| Canonical rows carrying `hlid` + `home_url` + `identity_key` | **1,932 of 1,932 — 100%** |
+| `hl_srg_canonical` rows | **1,987** (1,730 of 1,779 parents backed — 97.2%) |
+| **`verified` in the DB today (7/29 scratch stamps)** | 1,945 PASS · 17 WARN_UNIT_DROPPED · 16 WARN_NO_ADDRESS · 9 FAIL_WRONG_HOUSE |
+| **THE GATE's re-classification (7/30 dry run — the truth)** | **1,937 PASS · 16 WARN_NO_ADDRESS · 11 WARN_UNIT_DROPPED · 1 FAIL_WRONG_UNIT · 1 FAIL_WRONG_HOUSE** — 8 of the 9 "wrong house" were cosmetic (`83` vs `83RD`); only Yousufi is real |
+| Parked (`hl_srg_not_in_book`) | **49 — every one carries a written verdict in `hold_reason`** |
+| `relationship` on the parent | 1,730 `client` · 40 `cancelled_listing` · 9 unset |
 | `disposition` nulls in canonical | **0** |
 
-**The reconciliation is DONE.** Every resolved deal is already linked to a website home. If work feels
-unresolved, the cause is one of the three known defects below — not missing resolution.
+**🔒 THE BOOK IS LOCKED (Zach 2026-07-30).** The Book artifact renders **ONLY `verified='PASS'` rows** —
+1,710 clients · 1,945 deals · $603M. The 42 held-out deals are **named on the page**. The renderer is a
+committed tool (`tools/houseloop-cards/build-the-book.mjs`), rebuilt from the live query, never a saved JSON.
+Remaining non-PASS rows are the step 57–64 work in the
+[build plan](https://claude.ai/code/artifact/2c63e8e3-4768-434b-8bfd-f548ead15f27).
 
 ## How a past client resolves — the whole flow, once
 
@@ -1202,6 +1207,33 @@ yet flipped) · `hvrMonthlySend` (event-only, dry-run default).
 Every entry below maps to a numbered task in the
 [Master Build Plan](https://claude.ai/code/artifact/2c63e8e3-4768-434b-8bfd-f548ead15f27). **This section is
 the record — if it was built, it is written down here.** Newest first.
+
+### 2026-07-30 · Tasks 54-56 — THE ENTRY GATE, THE BOOK LOCK, and the three criterion sweeps
+
+**54 · The entry gate lives INSIDE the resolver.** `resolve-from-mls.mjs` now verifies every row against
+the MLS sheet on the way in and **REFUSES a failing row** (reported with a reason, never written); passing
+rows are stamped `verified='PASS'` + `verified_at`. Checks: MLS `status='Sold'` · price within $3k · a
+unit-bearing MLS address must land on a unit-bearing `identity_key` (`street::unit::zip5` — the unit is the
+middle segment) · same house by house number + ordinal-insensitive street stem. The comparison **imports
+`parseAddress` from `resolve-address.mjs`** — never a hand-rolled matcher. The redundant
+`hl_srg_book_verified` view was DELETED (one thing, one name — Zach). Found and fixed on the way: a
+**5-digit house number was being parsed as the ZIP** in `resolve-address.mjs` (`13422 W 173rd Ter` → zip
+"13422" → zero matches), which had been silently killing resolutions; and its CLI is now guarded so the
+parser is importable.
+
+**55 · The Book renders PASS-only, from a committed tool.** `tools/houseloop-cards/build-the-book.mjs`
+rebuilds the artifact from the live query (`hl_srg_book` → canonical `verified='PASS'` → WEB keeper
+listing) — 1,710 clients · 1,945 deals · $603M render; 42 held-out deals are **named on the page**. The
+scratchpad renderer that evaporated with its session is retired.
+
+**56 · Zach's criteria 4/5/6, measured:** duplicate PEOPLE = exactly **4 pairs** (Donaldson 598/3558 ·
+Luis Enrique 638/3557 · Kiem Le 982/3559 · Anders Franzon 17/46 — each pair shares the same deal; the 35xx
+ids are one late import batch of typo-twins). Forks = MLS-anchored plan
+(`.claude/reports/fork-merge-plan-2026-07-30.json`): 1,516 deals clean · **8 wrong-twin repoints** ·
+288 candidate groups needing suffix+directional-aware discrimination (96th *Terrace* vs 96th *Street* are
+different houses — string stems cannot decide, the MLS does). Missing deals = **ZERO**: all 7 SISU flags
+are known ghost classes. Two live finds: some `identity_key` zips still carry the typo the 7/27 repair
+fixed only in the `zip` column, and the `HLID424xxx` import batch has city names baked into street strings.
 
 ### 2026-07-27 · Tasks 45-49 — the G1 data block, closed with answers
 
