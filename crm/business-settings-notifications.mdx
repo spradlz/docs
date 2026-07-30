@@ -326,3 +326,86 @@ reads *"💬 Evelyn Morales sent a message"* with no property and no body, while
 `{{listing.address}}`. A dedicated `in_app_message` class needs a row in `hl_notify_classes` **and** seated
 email/SMS templates — switching the class without seating templates makes `dispatch` log
 `NO TEMPLATE REGISTRY ENTRY` and send nothing, so the two must land together.
+
+## 🔴 A NEW LEAD'S TOUR REQUEST NOTIFIED NOTHING — the mint arm had no `webhookType` (found + fixed 2026-07-29)
+
+Zach's report: *"Bradley Bengel requested like 4 homes and it did not create a lead"* — and later, on the
+notification side, he was told someone **registered** and never that they wanted to **see a house**.
+
+**A brand-new Zillow tour request fires TWO FUB webhooks in the same second:**
+
+| Webhook | Dispatched `webhookType` | Can it notify? |
+|---|---|---|
+| `peopleCreated` (the registration) | **none** — the only branch in the router that omitted one | ❌ **never** |
+| `eventsCreated` (the tour) | `tour_requested` | ✅ yes |
+
+`fub-webhook-router` dropped the field when falsy (`...(webhookType ? {…} : {})`), and `fub-lead-import`
+gates its **entire** notify block on `if (!backfill && webhookType && notifyOn)`. So the import that
+actually **mints** the lead was *structurally incapable* of notifying — not gated off by a toggle, simply
+skipped. The two imports race; the registration one wins and mints, and the tour alert is lost.
+
+<Warning>
+**Reproduced live, then proven fixed — the same scenario, before and after.**
+
+**Before** (2026-07-29 19:58, real `POST /v1/events` on a brand-new person):
+```
+19:58:37  router  trigger=tour       dispatched=true
+19:58:37  router  trigger=new_lead   dispatched=true    ← NO webhookType
+19:58:42  import  lead MINTED  created=false  nativeNotified=FALSE
+          notifications: ZERO — not even lead_created
+```
+
+**The isolating test that exonerated the rest of the chain** — the same tour event on an ALREADY-existing
+lead notified perfectly, so only the mint arm was broken:
+```
+02:41:46  import  nativeNotified=TRUE
+02:41:45  hl_notification  class='tour_request'
+          "TourGate Test235832 — 7788 Isolation Test Dr"   channels_sent=["sms"]
+```
+
+**After the fix** (2026-07-30 02:55, brand-new person, deploy live):
+```
+02:55:06  router  webhookType='registration'      ← the field that was empty
+02:55:14  router  webhookType='tour_requested'
+02:55:17  import  nativeNotified=TRUE
+02:55:15  hl_notification  class='tour_request'
+          "MintArm Test500632 — 4410 Mint Arm Way"   channels_sent=["sms"]
+```
+</Warning>
+
+**The fix:** `peopleCreated` now dispatches `{ trigger: 'new_lead', webhookType: 'registration' }`.
+`registration` is a real Trigger Events row (enabled · creates_lead · notify · `notify_class` `lead_created`),
+so the behaviour stays catalog-driven and Zach-controllable — nothing hardcoded.
+
+<Note>
+**The same disease, twice in one night, in two different files.** This one and the vendor-email capture bug
+below are both *"a lookup missed, and the miss was read as a decision."* A missing `webhookType` read as
+"don't notify"; a missing config row read as "the human turned this off." **Neither was a decision. Both were
+absences.** Any gate that cannot distinguish *"the human said no"* from *"I couldn't find it"* will eventually
+silence something that matters — see `.claude/rules/ONE_COMMIT_RENAME.md`.
+</Note>
+
+## 🔴 VENDOR-EMAIL LEAD CAPTURE DROPPED **EVERY** LEAD — the toggle gate read the wrong name (fixed 2026-07-29)
+
+Zach: *"I got this from a lead 2 days ago and it never created a lead in HouseLoop... what setting is not
+turned on?"* **Nothing was off.** `email-lead-ingest`'s Creates-Lead gate was `WHERE s.webhook_type = $1` with
+`$1 = parsed.intent`. The parser emits **canonical** kinds; `hl_fub_webhook_settings` stores the **original**
+spellings. Every lead-creating intent missed:
+
+| Parser emits | Settings row | Result |
+|---|---|---|
+| `tour_requested` | `tour_request` ✅ ON | ❌ dropped |
+| `contact_requested` | `contact_request` ✅ ON | ❌ dropped |
+| `seller_inquired` | `seller_inquiry` ✅ ON | ❌ dropped |
+| `home_inquired` | `property_inquiry` ✅ ON | ❌ dropped |
+| `rental_inquired` | `rental_inquiry` ✅ ON | ❌ dropped |
+
+`!gate[0]?.ok` then read the miss as *"Zach turned this off."* **Evidence:** 9 rows stamped
+`skipped_toggle_off` in `hl_email_lead_ingest`, and exactly **one** lead minted by this path **ever**
+(2026-07-26). One drop was a genuine Zillow Premier Agent *"You got a new tour request"* on 2026-07-28 22:50 —
+Zach's missing lead.
+
+**Fixed** with the same alias closure used by `fub-lead-import`'s `resolve-trigger-config` and
+`fub-body-recovered`'s `resolve-gates`: both sides canonicalize through `hl_trigger_event_alias` before
+comparing. A **missing row now warns loudly and separately** — `skipped_toggle_off` must mean a human chose
+off, never *"I could not find it."* Codebase swept: no other exact-match `webhook_type` lookups remain.
