@@ -125,8 +125,46 @@ labels sit just *under* each signing line. So the extractor reads both:
 4. **Derive the DATE** (added 2026-07-30) — see below.
 5. Write the field map. `contract-forms.ts` already imports `field-maps/<key>.json`, so the fill picks it up.
 
-For a form whose text layer is obfuscated, pass `--order buyer,co_buyer,broker,agent` to assign boxes by
-top-to-bottom order instead of by label. If it warns `⚠ unassigned sign box`, add `--order` or **one**
+### Two tiers — and a human never drags a box
+
+> **"This is simple assembly line AI work, not for a human to sit there and drag a freaking box over
+> something."** — Zach 2026-07-30
+
+Forms fall into two classes. **Both are automatic; neither involves typing a coordinate.**
+
+| Tier | When | Tool | Cost |
+|---|---|---|---|
+| **1 — Deterministic (preferred)** | The PDF's text layer is readable | `anchor-sig-fields.mjs` — vector e-sign rectangles + printed labels | **$0**, pixel-exact, reproducible |
+| **2 — Vision (fallback)** | The text layer is **garbled** — a custom font encoding makes `pdftotext` return junk (`W\9X`) | `vision-field-builder.mjs` (`--vision gemini`, the default) | ~cents, once per form |
+
+Tier 1 first, always — it's free and exact. The builder detects a garbled layer itself
+(`textLayerIsGarbled()`) and says so before falling back.
+
+**Tier 2 uses Gemini, and that's a technical choice, not a vendor preference.** Gemini is explicitly
+trained to emit `box_2d` — normalized 0–1000, `[yMin,xMin,yMax,xMax]`, top-left origin. It's the same
+reason Documenso's own detector uses `gemini-3-flash-preview`. We reach it with the plain Gemini API key
+already in `.env` — **no Google Cloud project, no Vertex service account, no browser session.** Normalized
+boxes also mean no DPI math and no bottom-left origin flip.
+
+**Measured 2026-07-30** on `Missouri_Non_Exclu_Single_Property` (garbled text layer):
+
+| Approach | Result |
+|---|---|
+| Text-layer anchoring | 23 detected → **0 resolved** — every field silently dropped |
+| Claude vision pixel box | 23 → 23 resolved, but visibly **high** of the lines |
+| **Gemini `box_2d`** | 23 → 23 resolved, **on the lines** |
+
+Cross-checked against ground truth: Gemini's boxes agreed with the deterministic vector extraction to
+**~1pt** on all four signature lines — and it *additionally* found all four DATE boxes, which Tier 1
+cannot, because that template contains no date boxes at all, only printed labels.
+
+<Warning>
+**A field count is not verification.** `23 resolved` says nothing about whether a box sits on its line —
+that's exactly how the Claude-vision boxes looked fine in the log and wrong on the page. **Always
+overlay-verify** (`overlay-fieldmap.mjs`) before a map touches a contract.
+</Warning>
+
+If Tier 1 warns `⚠ unassigned sign box`, add `--order buyer,co_buyer,broker,agent` or **one**
 `partyForBox()` rule — never a typed coordinate.
 
 ### The DATE on the document (fixed 2026-07-30)
