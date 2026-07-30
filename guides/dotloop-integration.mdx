@@ -352,6 +352,61 @@ Only re-run `/api/dotloop/oauth/start` when the **refresh token itself** is dead
 after step 1 fails), or when re-consenting to widen scopes.
 </Warning>
 
+## ⭐ THE TEMPLATE LIBRARY + PRE-MAPPED FIELDS (the internal REST API, found 2026-07-30)
+
+<Warning>
+**The public API cannot see blank forms.** Verified against dotloop's own docs: the Templates section
+exposes exactly two endpoints — `GET /profile/:id/loop-template` and `…/loop-template/:id` — and those are
+**LOOP** templates (which folders a new loop starts with). There is **no public endpoint for document
+templates / blank forms**, and every guess returns 404 even with `template:*` scope. This is a platform
+limit, not an auth problem. Stop trying to reach the form library through `api-gateway.dotloop.com`.
+</Warning>
+
+**The form library lives on dotloop's INTERNAL REST API** (`www.dotloop.com/my/rest/v1_0/…`), the one its
+own web UI calls. It is **session-authenticated** (browser cookies), not bearer-token — so drive it from a
+logged-in browser, not curl.
+
+```
+GET /my/rest/v1_0/folder/:folderId/document?batchNumber=1&batchSize=100   → the templates in that folder
+GET /my/rest/v1_0/document/:documentId                                    → pages[] + FIELDS[]
+GET /my/rest/v1_0/document/:documentId/page/:n                            → that page as a PNG
+```
+
+### 🔑 dotloop already stores the field map — do not re-detect it
+
+`GET /my/rest/v1_0/document/:id` returns a **`fields[]` array that IS the signature map**, authored in
+dotloop, exact:
+
+```json
+{ "pageNumber": 2, "type": "SIGNATURE", "x": 692, "y": 742, "height": 36, "width": 256,
+  "assigneeRoleId": 1, "cellNumber": "S1", "dataId": "55052764320" }
+```
+
+Type · page · x/y · width/height · **which signer role**. For a migration this is decisive: **importing
+dotloop's own coordinates beats detecting them.** No vision, no OCR, no geometry gate, no hallucination
+risk — and no per-form cost. Reserve `vision-field-builder.mjs` for forms that are NOT in the dotloop
+library (see `.claude/rules/SIGNATURE_ANCHORING.md`).
+
+⚠ Coordinates are in dotloop's own page space, not PDF points — convert against the page image
+dimensions before use, and **overlay-verify** like any other map.
+
+### The library that matters
+
+Templates → Documents → **`2026 SPRADLING REALTY GROUP MASTER FOLDER`** = folder **`227653290`** on
+profile `12451292`. **58 documents**, all eXp/KCRAR current, e.g. `Kansas Brokerage Relationships
+Disclosure (Buyers)` `1423017762` · `MO Broker Disclosure - Buyer` `1428581661` · `Exclusive Buyer Agency
+Contract` `1423017753` · the Kansas/Missouri Exclu + Non-Exclu + Single Property eXp agreements ·
+ABA Disclosures · EXP Wire Fraud Notice · Consumer Choice · Spradling Group Buyer's Offer Sheet.
+
+<Warning>
+**Do NOT harvest blank forms out of old loops.** Three sibling folders are literally named **"DO NOT USE"**
+(including *DO NOT USE - EXP DOCUMENTS*). On 2026-07-30 the two state disclosures were pulled from a real
+buyer loop and turned out to be **ReeceNichols** forms — Ana's former brokerage — complete with their logo,
+Leawood address, and *pre-checked* agency relationships. The whole `12451292` profile is the
+ReeceNichols-era account. **The master folder above is the source of truth; a loop is not.** Always check
+branding (`pdftotext | grep -i "reece\|exp realty"`) before adding any form to the catalog.
+</Warning>
+
 ## Finding a form or a document (the path shape that actually works)
 
 The download path needs **profile → loop → folder → document**. Omitting the `folder` segment (or the
