@@ -1,0 +1,110 @@
+---
+title: "Playbook — Buyer's Agency"
+description: "The buyer-representation packet end-to-end: which of the three agreements to send, the Kansas and Missouri broker disclosures that must be signed WITH it by law, the human how-to, the AI-callable path, and the licensing check that decides who may be designated."
+---
+
+**In the app:** a loop → **Forms & E-Sign** → send the buyer-representation agreement.
+
+This is the first TC Playbook: the documented process for putting a buyer under representation, written for
+both a **human** and the **AI clone** to execute from the same source.
+
+## THE LAW — the packet, not the form
+
+<Warning>
+**Ana Spradling, 2026-07-30:** *"I will need you to include with the buyers agency the Kansas brokerage
+disclosures and the MO broker disclosure with it. **Per law they have to sign with the agency.**"*
+
+A buyer-representation agreement sent **by itself is non-compliant.** The state broker disclosure is not
+optional paperwork and not a follow-up — it is signed **with** the agency agreement, in the same packet.
+</Warning>
+
+| Sent | Also required, same packet |
+|---|---|
+| Any buyer-representation agreement | **Kansas** brokerage relationships disclosure |
+| Any buyer-representation agreement | **Missouri** broker disclosure |
+
+> **Status: the disclosures are NOT yet in the form catalog.** As of 2026-07-30 the catalog holds the three
+> agreements below and nothing else, so today's send is **not** a compliant packet. Retrieving the two
+> disclosure forms from dotloop and adding them to the catalog is the open item — see **What's missing**.
+
+## The three agreements
+
+Which one to send is the first decision:
+
+| Form key | Name | When |
+|---|---|---|
+| `exclusive_buyer_agency` | **Exclusive Buyer Agency Agreement** | The standard Spradling buyer-rep path |
+| `single_property_buyer_rep` | **Single Property Buyer-Broker Representation** | The **showing agreement** — one specific house, before a tour |
+| `non_exclusive_buyer_rep` | Non-Exclusive Buyer-Tenant Broker Rep | Exists; not the standard path |
+
+The **Single Property** agreement is the one that goes out before showing a house the buyer hasn't committed
+on. The **Exclusive** agreement is the real representation agreement.
+
+## WHO may be designated — the licensing check
+
+Before any of this, the system checks the designated agent against the **property's state**. From the
+broker, Chris Cribb (Designated Managing Broker, MO & KS, eXp Realty, 2026-07-29):
+
+> Ana has an active MO and KS license and can sign any forms or be designated for sales in either state.
+> Zach has **ONLY a KS license** and can be designated to sign and show property in the state of KS, but
+> **can NOT show, write contracts or be designated for properties in MO.**
+
+HouseLoop knows each agent's per-state license (`hl_user_license`) and **warns** — it never silently
+blocks — at three points: picking the agent, filling the document, and sending it. Full model:
+[Transaction Coordination → Licensing](/guides/transaction-coordination).
+
+## FOR A HUMAN — the steps
+
+1. **Open the lead's loop.** No loop yet? Create one. For a showing agreement, attach the specific house
+   first — the property drives `deal.address` on the contract, and without it the Property line fills blank.
+2. **Check the designated agent** against the property's state. If the licensing warning appears, change the
+   agent — do not send past it.
+3. **Add Document** → pick the agreement → it lands as a **draft**.
+4. **Fill out** → review every field. The buyer's name, the property, and the term dates pre-fill from the
+   lead and the loop; complete anything blank.
+5. **Add the state disclosures** to the same packet (see the warning above).
+6. **Save & Share** → pick who gets it → send. The buyer gets a signing link by email, and you can text it.
+7. The loop shows **Waiting on Signatures** with a reminder toggle until it comes back signed.
+
+## FOR THE AI — one call
+
+`createFillSend(leadId, formKey, opts)` composes the same engines the UI uses — no fork, no separate path.
+
+```ts
+import { createFillSend } from '@/lib/esign/create-fill-send';
+
+// Showing agreement for one specific house: create the loop WITH the property first,
+// then createFillSend reuses that loop.
+await createLoop({ leadId, side: 'purchase', propertyAddress: '14637 Crystal Place, Grandview, MO 64030', assigneeUserId: agentUserId });
+
+const res = await createFillSend(leadId, 'single_property_buyer_rep', {
+  agentUserId,                 // the human agent who signs — licensing is checked against the property
+  senderUserId: agentUserId,   // whose account it sends AS
+  includeBroker: false,        // true = full 3-way (adds the broker of record)
+});
+// → { loopId, docId, esignDocId, signingUrl, sentTo, sentAs, license }
+```
+
+**Check `res.license`.** `ok: false` means the designated agent is not licensed where the property is —
+the send still happens (warn, never block), but a mismatch must never be silent.
+
+Then deliver `signingUrl` however the clone communicates.
+
+## What gets signed, and where the date comes from
+
+Each agreement carries a **SIGNATURE** and a **DATE** field per party, extracted from the PDF — never typed.
+The signer does not type the date: the signing engine computes it server-side at the moment that party
+signs, in **Central** time, formatted `MM/dd/yyyy`. Nobody can backdate or skip it.
+
+The law and the extraction process: `.claude/rules/SIGNATURE_ANCHORING.md` · [Forms & E-Sign](/tc/forms).
+
+## What's missing (open, named)
+
+| Gap | Detail |
+|---|---|
+| **The two state disclosures** | Kansas brokerage disclosure + Missouri broker disclosure are **not in the catalog**, so today's send is not the compliant packet Ana requires. They need to be pulled from dotloop ([dotloop Integration](/guides/dotloop-integration)) and added as catalog entries with their own field maps. |
+| **Packet send** | `createFillSend` sends ONE form. Sending an agreement + its disclosures as one signable packet is a build, not a config change. |
+| **Non-Exclusive form dates** | `non_exclusive_buyer_rep` still has signature fields only — no DATE fields. Its text layer is garbled, so it needs the vision path in [Forms & E-Sign](/tc/forms). |
+
+See also: [Playbook — Writing an Offer](/tc/playbook-offer-writing) · [Forms & E-Sign](/tc/forms) ·
+[Transaction Coordination](/guides/transaction-coordination)
