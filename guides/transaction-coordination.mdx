@@ -40,6 +40,178 @@ source of truth**), `hl_tc_loop_participant` (people), `hl_tc_loop_task` (per-lo
 `hl_contract_template` / `hl_contract_fill` (fillable forms + a filled contract), `hl_tc_email` (email
 queue).
 
+## ⚙️ HOW A LOOP IS RUN — the two dials (WORKED OUT 2026-07-31 · schema LOCKED)
+
+<Info>
+**Schema lives in [Transaction & Loop Model](/schema-lock/transaction-model)** — table names, columns,
+constraints, migration sequence. This guide is the OPERATING story: what Ana sees, what she may change, and
+what happens when she changes it. It never restates schema.
+</Info>
+
+Every loop carries **two dials that answer different questions**. One field could never hold both — proven
+on a live loop the morning of 2026-07-31, when a signed showing agreement produced a status that did not
+match the stage.
+
+| | **Loop status** — *where is the deal?* | **TC status** — *what does this file need?* |
+|---|---|---|
+| Who moves it | **nobody.** Derived from the stage's section | **the coordinator**, by hand |
+| Ana sees | a read-only chip | a dropdown she owns |
+| Values | Pre-Contract · Pre-Listing · Under Contract · Closed · *the exits* | Processing · Paused/Blocked · Waiting for Closing · Complete |
+| Before a TC is assigned | already correct | **empty** — then `Processing` on assignment |
+
+**Read them together and the loop tells its whole story:**
+
+```
+Under Contract   +  Waiting for Closing   deal is live, Ana's work is done, waiting on the date
+Closed           +  Processing            house closed, still chasing commission docs + compliance
+Pre-Contract     +  Processing            buyer agreement out for signature, Ana chasing it
+Archived         +  Processing            contract died, still releasing earnest money
+```
+
+<Note>
+**Why "Waiting for Closing" is not the same as the Clear-to-Close stage.** Clear to Close is the *lender*
+clearing the file. Waiting for Closing is *Ana* saying "nothing left for me until closing day." Two facts
+about the same loop, and deleting either one loses information a coordinator needs.
+</Note>
+
+## 🚪 WHEN A DEAL DIES — the exits (SEQUENCED)
+
+A loop is **one attempt at one deal**. Lawrence Guenther's listing is a loop. You did the presentation, you
+did not win it — that loop ends, permanently, with every document in it. Lawrence is still Lawrence, still
+in the pipeline, and if he calls next spring **that is a new loop**.
+
+That is why a dead deal is a loop status and never a stage: *a lead has one stage; a lead has many loops.*
+One buyer can carry four archived loops and a fifth that closes, and their pipeline position never moved
+backwards.
+
+| Ana picks | Side | Means |
+|---|---|---|
+| **Listing Not Won** | seller | did the presentation, did not get the listing |
+| Listing Expired | seller | we had it, term ran out |
+| Listing Cancelled | seller | we had it, seller cancelled |
+| Offer Not Accepted | buyer | wrote the offer, seller took another |
+| Fell Through | both | went under contract and died — inspection, financing, appraisal |
+| Archived | both | the plain catch-all — buyer changed their mind, went quiet |
+
+One dropdown, one chip: the reason **is** the status, so there is no second field to leave blank.
+
+<Warning>
+**TODAY there is no exit at all.** The seller pipeline runs Listing Appointment Met → Listing Agreement
+Sent → Listing Agreement Signed with nothing in between for a loss. Lawrence Guenther has **nowhere to be
+dispositioned right now**, and listing-presentation win rate cannot be computed. `listing_not_won` is
+sequenced EARLY for exactly this reason — it is purely additive.
+</Warning>
+
+## 🧩 ADDING A STAGE, A SECTION, OR A STATUS — no engineer (PARTIALLY SHIPPED)
+
+**Shipped 2026-07-31 (migration 0531):** sections are rows. Labels, colors and icons used to live in a
+TypeScript file, so renaming "Working the Buyer" needed a deploy. Now it is one row, edited in
+`tc/configure/stages`.
+
+Every section declares **who may edit the stages inside it**:
+
+| Section | Managed by | What Ana sees |
+|---|---|---|
+| Working the Buyer · Win the Listing · List Prep · Nurture | `pipeline` | edit stages inline |
+| **Under Contract → Close** | **`tc_milestones`** | **read-only, with a link: *Managed in TC → Milestones*** |
+
+The TC owns Under Contract → Close because **the TC owns the dates.** Those milestones carry anchors,
+offsets, business-day math and holiday rolls, and 139 task templates hang off them. No other section has
+any timing to configure — which is why it is the only one that redirects.
+
+Adding something new is a row, in the matching configure page:
+
+```
+a new SECTION   → tc/configure/stages       label, color, icon, order, managed_by
+a new STAGE     → tc/configure/stages       inside a `pipeline` section
+a new MILESTONE → tc/configure/milestones   the anchor + offset it computes from
+a new TASK      → tc/configure/tasks        the milestone it hangs off + its offset
+a LOOP STATUS   → config row                its side, and its group (active/closed/archived)
+a TC STATUS     → config row                the coordinator's dropdown
+```
+
+## 📅 MILESTONES AND TASKS — one hierarchy, not two (SEQUENCED)
+
+**Ana's ruling, 2026-07-31: a task belongs to a milestone.** Not to a phase.
+
+The data already agreed — all 139 task templates were anchored to a milestone date, and `phase` was a
+second grouping on top saying nothing the anchor did not already say. It made 81 tasks on one loop look
+like they lived in two hierarchies at once. **Phases are retired.**
+
+```
+MILESTONE  (a dated event)
+   └── TASKS  (due = the milestone's date ± an offset)
+   └── advances the STAGE, where one applies
+```
+
+A loop carries roughly **16 milestones and 81 tasks** — each milestone with its own date, its own tick, its
+own who-and-when. That is why they are a checklist and not a single field: the TC overrides individual dates
+constantly, because inspections extend and closings move.
+
+Not every milestone owns a stage, and that is deliberate: **Funded** and **Possession** happen *after* the
+deal closes, so the stage stays `Closed` while the dates keep landing. A pipeline cannot go past its own
+end; a date list can.
+
+`start` — the biggest bucket at 57 of 139 tasks — becomes a real milestone, **Loop Started**, so every task
+nests under a milestone with no special cases.
+
+<Warning>
+**THE DATE ENGINE HAS NEVER BEEN SWITCHED ON.** Measured live 2026-07-31: **0 of 487 live tasks have a due
+date**, and **0 of 30 milestones** are wired to advance a stage. The templates, anchors, offsets,
+business-day rules and holiday rolls are all built. Nothing computes. **The machine is fully assembled and
+has never been turned on** — which is why milestones and stages drifted into two hand-typed lists of nearly
+the same words.
+
+Related, and reassuring: the `is_active` toggle on a milestone is a **seed filter read once** when a loop is
+created. It fires no automation and notifies nobody. Turning one off is safe.
+</Warning>
+
+## ✅ WHAT NEEDS TO GET DONE — the ladder
+
+Sequenced by Lee 2026-07-31. **Additive first, the destructive step last.** Zach can watch this burn down.
+
+<Steps>
+  <Step title="Sections + document categories — SHIPPED 2026-07-31">
+    Migration 0531. `hl_pipeline_section` (9 rows, both pipelines, Under Contract → Close = `tc_milestones`,
+    54/54 stages linked) · `hl_tc_loop_document_category` (7 rows) · the contract-template columns for the
+    dotloop import. Additive only; nothing renamed or dropped. ✅
+  </Step>
+  <Step title="The exit rows — listing_not_won FIRST">
+    Purely additive, and it unblocks a number Zach cannot get today. Listing Not Won · Listing Expired ·
+    Listing Cancelled · Offer Not Accepted · Fell Through · Archived.
+  </Step>
+  <Step title="The dotloop form import">
+    58 forms, 3,910 fields already harvested from dotloop's own field maps. Runs as a registered Inngest
+    function, manual trigger, no cron. **Every map is overlay-verified before it touches a contract** —
+    "58 imported" is a count, not proof. Conversion is per-page: the library has two page sizes, so a
+    shared scale constant would silently mangle 20 pages.
+  </Step>
+  <Step title="The status purge — one commit, no exceptions">
+    Drop the four document rows from the TC status dropdown (they are events, already in the activity log),
+    add Complete, rename Paused → Paused/Blocked. **The e-sign webhook writes two of those names as literal
+    strings and MUST move in the same commit**, or the 0488 incident repeats in the TC lane.
+  </Step>
+  <Step title="Switch the date engine on">
+    Wire `advances_to_stage_id` (0 of 30 today) and fix `computeLoopSchedule` (0 of 487 tasks dated). This
+    is the step that makes milestones, tasks and stages one system instead of three lists.
+  </Step>
+  <Step title="Tasks move under milestones">
+    Retire phases. `start` becomes the `loop_started` milestone. Migration is 1:1 from the existing anchors.
+  </Step>
+  <Step title="The five renames — one per push">
+    Smallest reader-count first, each proved before it ships. Names in
+    [Transaction & Loop Model](/schema-lock/transaction-model).
+  </Step>
+  <Step title="Retire hl_tc_phase — LAST">
+    A DROP, so it snapshots first and **waits for Zach's typed Rule-0 approval naming the table**.
+  </Step>
+</Steps>
+
+### Still unsigned
+
+**`tc_status_changed`** — the activity kind for a TC status move. Lee approved it; it needs Zach's word
+before it enters the catalog. Nothing above is blocked by it until the purge.
+
 ## Own the whole stack — why (LOCKED 2026-06-27)
 
 TC Loop is **our own dotloop**, owned end-to-end. We do NOT hand a third party our finished documents.
@@ -58,7 +230,7 @@ loops via the read-only API in `lib/dotloop/client.ts`. See [dotloop integration
 
 | Layer | What | Where |
 |---|---|---|
-| Loop | container + status/stage | `hl_transactions` + `hl_tc_stage` |
+| Loop | container + the two status dials | `hl_transactions` + `hl_tc_stage` → renaming to `hl_tc_loop_status` ([sequenced](/schema-lock/transaction-model)) |
 | Documents | folders + document lines (**our source of truth**) | `hl_tc_loop_folder` / `hl_tc_loop_document` |
 | Forms + fill | our PDF templates + data-fill → filled PDF (R2) into a loop folder | `lib/tc/{contract-forms,fill-contract,template-store}.ts` + `POST /api/tc/loops/[id]/documents` |
 | **E-signature** | place fields · send · seal · audit | **Documenso, self-hosted** — the system of record |
