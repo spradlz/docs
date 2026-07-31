@@ -27,7 +27,7 @@ Queried live from the CRM database, 2026-07-31.
 
 | Table | Grain | Rows/notes |
 |---|---|---|
-| `hl_transactions` | one row per deal **and** per TC workspace (both) | 34 columns; carries loop fields *and* financial fields |
+| `hl_transactions` | one row per transaction **and** per TC workspace (both) | 34 columns; carries loop fields *and* financial fields |
 | `hl_tc_transaction_status` | config | **7 rows** — the dropdown |
 | `hl_tc_loop_folder` | one row per folder per loop | **free-text `name`**, no vocabulary |
 | `hl_tc_loop_document` | one row per document on a loop | has `status`, `esign_*`, `contract_key` |
@@ -128,7 +128,7 @@ From [The Table Sitting](/schema-lock/target-model), the TRANSACTIONS family:
 
 | Table | What it is |
 |---|---|
-| `transactions` | **one SIDE of one deal** — the financial record. "Deal" is its display name. |
+| `transactions` | **one SIDE of one deal** — the financial record. The catalog section is **Transactions** (Zach renamed it from "Deals", mig 0528 — sections speak the TABLE noun; "deal" survives only as prose). |
 | `loops` | **the TC workspace** — its own lifecycle, born at Appointment Set, **can exist before a transaction** |
 | `loop_milestones` | milestones inside a loop |
 | `loop_tasks` | tasks inside a loop |
@@ -348,15 +348,31 @@ to him with Zach's approval, not into code.
 
 ## Open questions — the decision list
 
+### Lee ruled (2026-07-31) — four of the seven are settled
+
+| # | Question | Ruling |
+|---|---|---|
+| 6 | Do stage moves need new activity kinds? | **YES — ONE new kind: `transaction_stage_changed`** ("moved the transaction to &lt;stage&gt;"), section **Transactions**. Do NOT fold onto the lead stage kind — different noun. On Zach's nod list. |
+| 7 | Does `loop_kind` survive the split? | **NO.** It encodes the FORM, which is the template category's fact. The loop carries `loop_side`; the 13 both-side addenda prove side belongs to the loop. Retire at the split with a data migration. |
+| — | Where do the document rows go? | **OUT of the dropdown — approved.** They are verbs masquerading as states. **Sequencing: its own Phase-B fold, NOT Phase C** — additive stage-spine columns first, dual-carry, repoint the dropdown reads, retire the doc rows last, Zach's eyes on the TC screen before and after. |
+| — | Is "rides with" a category or a relation? | **A RELATION.** Self-referencing link table `hl_contract_template_companion(template_id, companion_template_id, reason/jurisdiction)`. Never a TS array (unqueryable, hand-kept) and not a column (a form can ride with many). |
+
+<Warning>
+**The sequencing trap Lee flagged.** The e-sign webhook **writes two of those status names BY STRING** —
+`'Buyer Signed'` and `'Showing Agreement Signed'` (`app/api/esign/webhook/route.ts`). That writer has to
+move in the **same commit** as the dropdown change, or we recreate the 0488 incident in the TC lane.
+</Warning>
+
+### Still open — Zach's list
+
 | # | Question | Who decides |
 |---|---|---|
 | 1 | Do loops get a `draft`/`pre_active` stage, or are they `active` from birth? | Zach |
 | 2 | Is `Processing / Paused / Waiting for Closing` a separate TC field (A-Frame's answer) or statuses under `active`? | Zach |
 | 3 | Exactly two folders per side, or do the five real in-use folders join the vocabulary? | Zach + Ana |
-| 4 | Sign off on `hl_contract_categories` as a config table | Zach (Lee recommends yes) |
+| 4 | **The contract-forms schema package** — `hl_contract_categories` + `hl_contract_template_companion` + the `hl_contract_template` columns. **One package, one signature** (Lee recommends yes). | Zach |
 | 5 | Do the proposed 7 document buckets match how Ana actually files? | Ana |
-| 6 | Do loop stage/status moves need new activity kinds? | Lee signs, Zach approves |
-| 7 | Does `loop_kind` survive the split, or is it replaced by `loop_side` + the form's category? | Lee |
+| 6b | Sign the new kind `transaction_stage_changed` | Zach (Lee signs it in) |
 
 ## What must NOT happen
 
