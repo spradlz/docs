@@ -1,0 +1,366 @@
+---
+title: "Transaction & Loop Model"
+description: "Everything transaction-side in one place: what exists in the database today, what the approved target model says, and the three vocabularies that still need signing — loop stage, loop status, and document category. The map Zach asked for before deciding."
+---
+
+<Info>
+**Status: PROPOSAL — nothing here is signed.** This is the map, written 2026-07-31 because Zach asked
+"what exists today, what is planned, and what should we do to lock in a transaction kind catalog and a
+transaction database schema." Every AS-IS number was queried live; every PROPOSED item is marked as such
+and needs Lee's schema review + Zach's signature. Pairs with [Target Model](/schema-lock/target-model),
+[Activity Catalog](/schema-lock/activity-catalog), and [A-Frame: Data Model](/guides/aframe-data-model).
+</Info>
+
+## The one-sentence problem
+
+**We have three different concepts crammed into one status list, and no vocabulary at all for document
+categories or folders.** A-Frame — the system we reverse-engineered — keeps them deliberately separate and
+its own doc warns *"A-Frame has both; don't conflate."* We conflated them.
+
+---
+
+# PART 1 — WHAT EXISTS TODAY
+
+Queried live from the CRM database, 2026-07-31.
+
+## The tables
+
+| Table | Grain | Rows/notes |
+|---|---|---|
+| `hl_transactions` | one row per deal **and** per TC workspace (both) | 34 columns; carries loop fields *and* financial fields |
+| `hl_tc_transaction_status` | config | **7 rows** — the dropdown |
+| `hl_tc_loop_folder` | one row per folder per loop | **free-text `name`**, no vocabulary |
+| `hl_tc_loop_document` | one row per document on a loop | has `status`, `esign_*`, `contract_key` |
+| `hl_tc_loop_participant` | one row per party per loop | `role` is free text |
+| `hl_tc_loop_task` · `hl_tc_loop_event` | tasks / events on a loop | |
+| `hl_tc_stage` · `hl_tc_phase` · `hl_tc_milestone_template` · `hl_tc_task_template` | config | |
+| `hl_contract_template` | one row per contract FORM | `key, name, form_kind, pdf_b64` only |
+| `hl_contract_fill` | one row per fill of a form | |
+| `hl_tc_email` | — | **0 rows, sentenced to fold into email** |
+
+## `hl_transactions` — the columns
+
+```
+id · lead_id · stage_id · milestone · property_address · property_price · closing_date
+commission_type · commission_value · zillow_paid · agent_net · srg_net
+notes · recorded_at · recorded_by_user_id · created_at · updated_at
+voided_at · voided_by_user_id · void_reason
+loop_name · loop_kind · transaction_type · tc_stage_id
+created_by_user_id · tc_assignee_user_id
+lost_reason · lost_at_stage_id · transaction_status_id
+list_price · cover_image_url · website_hlid
+```
+
+One row is doing two jobs: `loop_name`/`loop_kind`/`tc_stage_id`/`tc_assignee_user_id` are the **TC
+workspace**; `commission_*`/`agent_net`/`srg_net`/`zillow_paid` are the **financial record**.
+
+## The status dropdown today — three concepts in one list
+
+```
+0  Processing
+1  Paused
+2  Waiting for Closing
+3  Preparing Documents
+4  Document Sent
+5  Buyer Signed
+6  Showing Agreement Signed
+```
+
+Read it again and the seam is obvious:
+
+| Rows | What they actually are | Belongs |
+|---|---|---|
+| Processing · Paused · Waiting for Closing | **TC processing state** — is the coordinator working it? | a TC status field |
+| Preparing Documents · Document Sent · Buyer Signed · Showing Agreement Signed | **document lifecycle events** — things that HAPPEN | the activity log + document state |
+| *(missing entirely)* | **the loop's own stage** — active, under contract, sold, archived | the loop spine |
+
+The four document rows are not statuses at all. They are events, already written to
+`hl_lead_activity` (`document_sent`, `document_signed`), and the webhook *also* advances this dropdown —
+so the same fact is stored twice, in two shapes.
+
+**The loop stage Zach asked about does not exist yet.** Nothing in the system can answer "is this loop
+active, under contract, sold, or archived."
+
+## Everything else that has no vocabulary
+
+<AccordionGroup>
+  <Accordion title="Folders — free text, 9 distinct names already in use">
+```
+Showing / Touring Agreements          (7 loops)
+Compliance - Missing/Fix Docs         (1)
+Contract Docs                         (1)
+Potential form for Listing Agreement  (1)
+Offer Accepted for Sellers Signature  (1)
+Post-Contract/Inspection Docs         (1)
+MLS Supplements - Sellers to Fill Out (1)
+Listing Docs                          (1)
+Commission Docs                       (1)
+```
+Typed by hand, per loop. Two loops will never agree on a folder name, and nothing can query "show me
+every buyer agency across all loops."
+  </Accordion>
+  <Accordion title="loop_kind / transaction_type — 2 combinations, no catalog">
+```
+exclusive_buyer + purchase   (7 loops)
+seller          + sale       (1 loop)
+```
+Both are free text. `loop_kind` also encodes the FORM used, which is a different fact from the SIDE.
+  </Accordion>
+  <Accordion title="Participant roles — free text, 1 value in the wild">
+```
+designated_agent  (5)
+```
+The code also uses `buyer_2` and `buyers_broker`, but nothing constrains the column.
+  </Accordion>
+  <Accordion title="Contract forms — 3 hardcoded in TypeScript">
+`lib/tc/contract-forms.ts` holds 3 forms as TS literals with hand-measured coordinates. Meanwhile
+**58 current eXp/KCRAR forms** sit in the dotloop master folder with dotloop's own exact field maps.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+# PART 2 — WHAT IS PLANNED
+
+## The approved target model (Zach signed 2026-07-30)
+
+From [The Table Sitting](/schema-lock/target-model), the TRANSACTIONS family:
+
+| Table | What it is |
+|---|---|
+| `transactions` | **one SIDE of one deal** — the financial record. "Deal" is its display name. |
+| `loops` | **the TC workspace** — its own lifecycle, born at Appointment Set, **can exist before a transaction** |
+| `loop_milestones` | milestones inside a loop |
+| `loop_tasks` | tasks inside a loop |
+| `loop_participants` | every party on a loop — **becomes the signer registry** |
+| `documents` | ONE document table — loop docs, transaction docs and contract fills merge |
+| `document_signatures` 🆕 | per-recipient signing state — 3-party signing finally has a home |
+| `commission_forms` | the DA + splits + adjustments |
+
+**Phase C of the pour:** *"`hl_transactions` splits into `loops` + `transactions`."*
+
+That split already answers the structural half of Zach's question. What it does **not** yet specify is the
+vocabulary: the loop's stages and statuses, the folder structure, and the document categories.
+
+## A-Frame's model — the pattern worth copying
+
+A-Frame separates exactly what we merged:
+
+**Stages — a fixed system enum:**
+```
+PRE_ACTIVE · ACTIVE · UNDER_CONTRACT · SOLD · NOT_SOLD
+```
+
+**Statuses — user-built, each bound to a stage:**
+
+| Status | Stage | systemType |
+|---|---|---|
+| Coming Soon | PRE_ACTIVE | — |
+| Active | ACTIVE | `SYSTEM_ACTIVE` |
+| Under Contract | UNDER_CONTRACT | — |
+| Pending | UNDER_CONTRACT | — |
+| Closed | SOLD | `SYSTEM_CLOSED` |
+| Expired | NOT_SOLD | — |
+| Cancelled | NOT_SOLD | `SYSTEM_FELL_APART` |
+| Draft | PRE_ACTIVE | `SYSTEM_DRAFT` |
+
+<Note>
+**The `systemType` trick — copy it exactly.** Statuses are renamable and recolorable by the user, but a few
+are *bound* to system behavior. The user can rename "Closed" to anything; the engine still knows which one
+is closed via the bound type. Customizable words, stable logic.
+</Note>
+
+Also on their transaction: **`xactionSide` = `BUYER | SELLER`**, and attachments are grouped in folders
+seeded per transaction from a team-level `defaultXactionFolders` list.
+
+And critically, A-Frame keeps a **separate** team-defined field for processing state
+(Processing · Paused · Waiting for Closing · Closed · Cancelled) — the same words we put in our one list.
+Their own doc says: *"distinct from the structural Status→Stage spine above. A-Frame has both; don't
+conflate."*
+
+---
+
+# PART 3 — WHAT WE SHOULD LOCK IN
+
+Everything below is **PROPOSED**. Three vocabularies, each needing a signature.
+
+## 3.1 — Loop stage (fixed spine)
+
+Zach's words, mapped onto A-Frame's spine:
+
+| Zach said | Proposed `loop_stage` | A-Frame equivalent |
+|---|---|---|
+| Active loop | `active` | ACTIVE |
+| Under contract loop | `under_contract` | UNDER_CONTRACT |
+| Sold loop | `sold` | SOLD |
+| Archived loop | `archived` | NOT_SOLD |
+
+Zach: *"An archived loop would have a type lost."* So `archived` needs a reason — `hl_transactions`
+already has `lost_reason` and `lost_at_stage_id`, which is where that lives.
+
+**Open:** A-Frame carries a fifth, `PRE_ACTIVE`, for drafts and coming-soon. Our loops are *born at
+Appointment Set*, before any transaction — that is arguably a pre-active loop. **Do we want a `draft`/
+`pre_active` stage, or is a loop `active` from birth?**
+
+## 3.2 — Loop status (user-editable, bound to a stage)
+
+The renamable layer, each row bound to one stage, a few bound to system behavior:
+
+```
+hl_loop_statuses(key, label, loop_stage, color, sort, system_type, is_active)
+```
+
+`system_type` ∈ `SYSTEM_ACTIVE · SYSTEM_UNDER_CONTRACT · SYSTEM_CLOSED · SYSTEM_LOST` — bound, so renaming
+a label never breaks the engine.
+
+**The four document rows in today's dropdown do NOT become statuses.** They are already activity kinds
+(`document_sent`, `document_signed`) and document state on `hl_tc_loop_document.status`. Keeping them as
+loop statuses is the double-write.
+
+**Open:** Processing · Paused · Waiting for Closing — A-Frame keeps these as a *separate* TC processing
+field, not on the stage spine. **Same for us, or fold them in as statuses under `active`?**
+
+## 3.3 — Side, sections, and folders
+
+Zach: *"You need to have two sections: Buyers section, Seller section."*
+
+```
+loop_side ∈ buyer | seller          (A-Frame's xactionSide)
+```
+
+Folders derive from side. Zach's structure:
+
+<CardGroup cols={2}>
+  <Card title="Buyer side" icon="user">
+    **Showing & Touring Agreements** — the agency + the disclosures required to sign with it
+
+    **Contract Documents** — the offer and everything after
+  </Card>
+  <Card title="Seller side" icon="house">
+    **Listing Documents** — the listing agreement + seller disclosures
+
+    **Contract Documents** — the offer and everything after
+  </Card>
+</CardGroup>
+
+**Open — the live data disagrees with two-per-side.** Loops in the wild already carry
+`Compliance - Missing/Fix Docs`, `Post-Contract/Inspection Docs`, `Commission Docs`,
+`MLS Supplements - Sellers to Fill Out`, and `Offer Accepted for Sellers Signature`. Those are real
+working folders. **Is the set exactly two per side, or do those five join the vocabulary?**
+
+## 3.4 — Document categories: the 58 forms, bucketed
+
+The dotloop master folder (`227653290`) holds **58 current eXp/KCRAR forms**. Here is every one, sorted
+into a proposed category. This is the bucketing Zach asked me to think through.
+
+<AccordionGroup>
+  <Accordion title="BUYER · Showing & Touring Agreements (10)">
+Exclusive Buyer Agency Contract · Non-Exclusive Buyer Agency Contract · Kansas Exclu BuyerTenant-Broker
+Rep Agreement (eXp) · Kansas Non-Exclu BuyerTenant-Broker Rep Agreement (eXp) · Kansas Non-Exclu Single
+Property Buyer-Broker Rep (eXp) · Missouri Exclu BuyerTenant-Broker Rep Agreement (eXp) · Missouri
+Non-Exclu BuyerTenant-Broker Rep Agreement (eXp) · Missouri Non-Exclu Single Property Buyer-Broker Rep
+(eXp) · Change Form Revision of Buyer Agency Agreement · Cancellation Agreement - Buyer Agency Contract
+  </Accordion>
+  <Accordion title="BUYER · Disclosures that ride WITH the agency (8)">
+Kansas Brokerage Relationships Disclosure (Buyers) · MO Broker Disclosure - Buyer · ABA Disclosures -
+Buyer · EXP Wire Fraud Notice - Buyer · Cyber Protection Notice (Buyers) · Consumer Choice in Your Real
+Estate Transaction · Referral Fee Disclosure · Referral Fee Disclosure - Zillow
+
+**Ana's law:** the first two are required BY LAW to be signed *with* the buyer agency — they are not
+optional attachments. This is why a category needs a "rides with" relationship, not just a folder.
+  </Accordion>
+  <Accordion title="BUYER · Contract Documents — writing the offer (7)">
+Real Estate Sale Contract (Residential) w/ Calculations · Real Estate Sale Contract (New Homes) w/
+Calculations · Real Estate Sale Contract (Land) w/ Calculations · Spradling Group Buyer's Offer Sheet ·
+Counter Offer Addendum w/ Calculations · Purchase Price Escalation Addendum · Buyers Estimated Expense
+Worksheet
+  </Accordion>
+  <Accordion title="SELLER · Listing Documents (9)">
+Exclusive Right to Sell Contract · Sellers Permission To Show Contract · Change Form Revision of Listing
+Agreement · Cancellation Agreement - Listing Contract · Sellers Disclosure and Condition of Property
+Addendum (Residential / Condo / Land) · Sellers Disclosure Swimming Pool - Spa Rider · Kansas Energy
+Efficiency Disclosure - New Homes · Sellers Estimated Proceeds Worksheet · Spradling Group Seller's Offer
+Sheet
+  </Accordion>
+  <Accordion title="SELLER · Disclosures that ride WITH the listing (5)">
+Kansas Brokerage Relationships Disclosure (Sellers) · MO Broker Disclosure - Seller · ABA Disclosures -
+Seller · EXP Wire Fraud Notice - Seller · Cyber Protection Notice (Sellers)
+  </Accordion>
+  <Accordion title="EITHER SIDE · Post-contract, addenda and amendments (13)">
+Addendum (Purchase / Sale) · Backup Contract Addendum · Contingency For Sale and/or Closing of Buyers
+Property Addendum · In Its Present Condition Addendum · Inspection Notice · Resolution of Unacceptable
+Conditions Amendment · Occupancy After Closing Addendum / Amendment · Occupancy Prior To Closing Addendum
+/ Amendment · Cancellation And Mutual Release Agreement · Legal Description Addendum · Wastewater System
+Addendum · Multifamily Property Disclosure Rider · Lead Based Paint Disclosure Addendum
+  </Accordion>
+  <Accordion title="REFERENCE · Not signed, handed to the client (3)">
+Protect Your Family From Lead In Your Home - LBP Pamphlet · Summary of KCRAR Form Changes for 2026 ·
+*(the second Lead Based Paint duplicate)*
+  </Accordion>
+</AccordionGroup>
+
+**What the bucketing exposes — three findings, not one taxonomy:**
+
+1. **Category and folder are not the same thing.** A buyer disclosure and a buyer agency both file under
+   *Showing & Touring Agreements*, but they behave differently: one is the contract, the other is welded
+   to it by law. Category carries behavior; folder is where it lands.
+2. **"Rides with" is a real relation.** Ana's two state disclosures must go out *in the same envelope* as
+   the agency. That is a link between forms, not a category value.
+3. **Side is not always known from the form.** 13 addenda serve both sides. Side comes from the LOOP, not
+   the form — which argues that `loop_side` is the parent and category is scoped beneath it.
+
+## 3.5 — The contract catalog (Lee already ruled)
+
+Lee approved on 2026-07-31:
+
+- **EXTEND `hl_contract_template`**, do not add a table: `dotloop_document_id`, `dotloop_folder_id`,
+  `category`, `folder`, `field_map`, `page_count`, `imported_at`. Same grain, no twin, no fork.
+- **`field_map` lives in the JSONB column** — an opaque geometry blob read whole and never queried into,
+  `pdf_b64`'s sibling, so Gate B does not bite. A file on disk would be scratch-file truth.
+- **Recommended, pending Zach:** `hl_contract_categories(key, label, folder_label, sort)` as a pure config
+  table, FK from the template. Reason: labels like `"eXp - Writing the Offer Documents"` are not
+  mechanically derivable from a key, so a CHECK constraint would force them into a hand-kept TS map.
+- **ONE vocabulary:** the filled document's loop folder DERIVES from the template's category. Category and
+  folder must not become two vocabularies for one concept.
+
+Two mandates riding along:
+1. **`SIGNATURE_ANCHORING` applies in full to imported maps.** dotloop's coordinates are a better *source*,
+   not a pass on verification — every imported map gets the overlay check before it touches a contract.
+   "58 imported" is a count, not proof.
+2. **The import runs as a registered Inngest function** — manual trigger, no cron, visible in the dashboard
+   and Run Log.
+
+## 3.6 — The transaction kind catalog
+
+Per the [Activity Catalog](/schema-lock/activity-catalog) law, verbs live in ONE signed dictionary. The
+transaction-side kinds that already exist and fire today:
+
+```
+document_sent · document_opened · document_signed
+```
+
+**Open:** stage and status moves are verbs too. A loop going `active → under_contract` should be an
+activity with a signed kind, the same way lead stage moves are. **Does that need new kinds, or does it
+fold onto an existing one via `hl_trigger_event_alias`?** Under the kind gate, only Lee signs — this goes
+to him with Zach's approval, not into code.
+
+---
+
+## Open questions — the decision list
+
+| # | Question | Who decides |
+|---|---|---|
+| 1 | Do loops get a `draft`/`pre_active` stage, or are they `active` from birth? | Zach |
+| 2 | Is `Processing / Paused / Waiting for Closing` a separate TC field (A-Frame's answer) or statuses under `active`? | Zach |
+| 3 | Exactly two folders per side, or do the five real in-use folders join the vocabulary? | Zach + Ana |
+| 4 | Sign off on `hl_contract_categories` as a config table | Zach (Lee recommends yes) |
+| 5 | Do the proposed 7 document buckets match how Ana actually files? | Ana |
+| 6 | Do loop stage/status moves need new activity kinds? | Lee signs, Zach approves |
+| 7 | Does `loop_kind` survive the split, or is it replaced by `loop_side` + the form's category? | Lee |
+
+## What must NOT happen
+
+- **No migration until 1–7 are answered.** Guessing a taxonomy onto legal paperwork is how the folder
+  free-text mess happened in the first place.
+- **No new kind in code.** The kind gate blocks it, correctly. Signed vocabulary or nothing.
+- **No third vocabulary for the same concept.** Category → folder derives; it does not duplicate.
