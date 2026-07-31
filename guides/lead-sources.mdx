@@ -15,8 +15,8 @@ description: "The Lead Sources page — one MenuTable, a tab per integration, on
 ## What this page is
 
 **Settings → Pipeline & Workflow → Lead Sources** shows every marketing source that feeds you leads, as a
-**1:1 mimic of the Trigger Events page**: ONE `MenuTable`, **tabs = integrations** in the fixed order
-**HouseLoop.ai Website · Follow Up Boss · Company Inbox**, an **Integration Defaults** band under the tabs, and
+**1:1 mimic of the Trigger Events page**: ONE `MenuTable`, **tabs = integrations** — **HouseLoop · Follow Up
+Boss** (Company Inbox retired 2026-07-31, see below), an **Integration Defaults** band under the tabs, and
 **one compact table where each source is a ROW** — `icon + name · type · status · leads · last lead · Routing ·
 Manage Rule`. (The old per-source clamshell cards + KPI skyscrapers were retired; per-source performance now
 lives on the source detail page, and the Lead Creation bands live on Trigger Events.)
@@ -24,16 +24,69 @@ lives on the source detail page, and the Lead Creation bands live on Trigger Eve
 `components/settings/lead-sources/LeadSourcesBuilder.tsx` renders it; `app/(crm)/settings/lead-sources/page.tsx`
 feeds it the sources, the integration seats, and each source's resolved defaults.
 
-## The model — Integration → Source → Lead
+## The model — Integration + Source (two independent fields)
 
-| Layer | What it is | Examples |
+<Warning>
+**`platform` IS A DEAD WORD — retired 2026-07-31 (Zach, ruled by Lee).** This page used to call the
+integration "`platform`". It doesn't any more. The surviving word is **integration**, everywhere, and it is a
+**closed set of exactly two**.
+
+`hl_leads.platform` still exists as a **legacy duplicate** (`NOT NULL DEFAULT 'houseloop'`, mig 0374). It gets
+**no new readers and no new writers** — read `integration` instead. Dropping the column is cutover surgery
+under Rule #0 typed approval, never casually: it is NOT NULL with a default, so a careless drop breaks writes.
+</Warning>
+
+| Field | What it answers | Legal values |
 |---|---|---|
-| **Lead Integration** (`platform`) | The connector a lead arrives through + the tab it groups under. Its `__platform_<int>__` **seat row** carries the DEFAULTS every source in that tab inherits (owner, AI, stage, tags). | HouseLoop.ai Website · Follow Up Boss · Company Inbox |
-| **Lead Source** | The marketing origin. `source_type` is purely the marketing type (Portal / Web / IDX / API / Phone / Sync). | HouseLoop.ai Organic · Referral · Sphere of Influence · Zillow · Google PPC · Google Organic · Phone Call — Company / Sign Call / Past Client / Ana Legacy |
-| **Lead** | A person — stamped at creation with its source **and** its integration (`hl_leads.platform`, never NULL). | — |
+| **Integration** | **WHO DELIVERED IT** — which pipe the lead/activity arrived through. | **`houseloop` · `follow_up_boss`** — exactly two, CHECK-enforced on the run log (migs 0525/0526). |
+| **Lead Source** | **WHO WROTE IT** — the marketing brand that produced the lead. | A flat brand list: `zillow` · `google_ppc` · `houseloop_organic` · `sign_call` · `phone_call` · … |
+| **Site** *(derived, never stored)* | **WHERE THE BROWSING HAPPENED.** | `follow_up_boss ⇒ Zillow` (Zillow is the only website behind that pipe) · `houseloop ⇒ HouseLoop`. |
+
+**The two fields are INDEPENDENT — a source has no lane.** `google_ppc` is legitimately valid under *both*
+pipes: a Google-PPC lead that landed in Follow Up Boss reads `follow_up_boss + google_ppc`; the same campaign
+run against our own site reads `houseloop + google_ppc`. Reading either field off the other is the bug this
+model exists to prevent.
+
+<Note>
+**Why SITE derives from the integration and not from `hl_pixel_event`:** the pixel table is being retired
+(it is the **raw tier** — write-only, and a reader querying it for lead behaviour is a bug). A rule that says
+"pixel rows are HouseLoop" dies with the table. The integration outlives it.
+</Note>
 
 **Manual is an entry *method*, not a source**, and **relationships** (Past Client is what a lead *becomes*) are
-not sources — neither appears here. Sources come **FROM an integration** — you don't mint them on this page.
+not sources — neither appears here.
+
+## ⚠️ Company Inbox is NOT an integration (retired 2026-07-31)
+
+It used to be documented as a third integration with its own tab and seat. **It never was one** — no lead was
+ever stamped with it; `hl_leads` only ever held `follow_up_boss` or `houseloop`. Zach killed the lane. Its 19
+rows re-home:
+
+| What it was | What it becomes |
+|---|---|
+| **10 phone rows** | **Sources** under `integration=houseloop`: **`sign_call`** for the Twilio sign line (a genuinely distinct origin) and **`phone_call`** for the rest. |
+| **8 email rows** | **NOT sources at all.** An email address is a **CHANNEL**, not a brand. They re-home to inbox config (`hl_inboxes`); the lead's real source still comes from the normalizer. |
+
+## ⚠️ `hl_lead_sources.platform` is DEPRECATED — do not backfill it
+
+17 sources carry no value (including live, selectable ones: **Google PPC · Referral · ChatGPT**). **That is
+not a gap to fill — the column is doomed.** Under the pair law the source is a flat brand list and **the
+integration lives on the LEAD and the ACTIVITY, never on the source row.** Backfilling it would encode the
+exact coupling the model forbids. `DROP COLUMN` is on the cutover Rule #0 list.
+
+## Where the canonicalization actually happens (all three files)
+
+Neither this page nor the FUB page named these, which is why the normalizer was repeatedly hard to find and
+nearly rewritten a second time:
+
+| File | Does what |
+|---|---|
+| `lib/fub-import/source-canonicalize.ts` | `canonicalizeFubSource()` — folds FUB's hundreds of messy source strings into the canonical buckets. **The single map.** |
+| `lib/leads/platform-source.ts` | Resolves the integration + source pair for a lead. |
+| `lib/lead-sources/resolve-defaults.ts` | `resolveSourceDefaults()` — the ONE routing resolver every creation path uses. |
+
+**The full FUB fold — the six buckets, the tag-don't-rewrite law, the backfill receipts — lives on
+[Follow Up Boss](/integrations/follow-up-boss#lead-source-canonicalization).**
 
 ## Integration Defaults — the per-tab band
 
@@ -42,8 +95,9 @@ four defaults every source in that tab inherits: **Assigned to · AI · Workflow
 opens the routing editor on the seat itself (the seat is the root — no inherit/custom toggle there, its fields
 *are* the defaults).
 
-The seats: `__platform_houseloop__`, `__platform_fub__`, `__platform_inbox__` (`source_type='platform'`,
-`is_selectable=false`, so they never show as pickable sources). Follow Up Boss's seat is set to **owner = Ana +
+The seats: `__platform_houseloop__`, `__platform_fub__` (`source_type='platform'`, `is_selectable=false`, so they
+never show as pickable sources). ⚠ The seat KEYS still carry the retired word `platform` in their literals — they
+are identifiers, not vocabulary, and renaming them is cutover work. `__platform_inbox__` is retired with the lane. Follow Up Boss's seat is set to **owner = Ana +
 her AI clone on, no standalone AI** — so every FUB lead lands on Ana and her clone covers it.
 
 ## Routing — inherit vs custom, and the non-destructive toggle
@@ -103,7 +157,7 @@ and **suspends the source layer when `use_integration_defaults` is on** (above).
 lead's owner from the resolved `default_assigned_user_id` (source override → `__platform_fub__` seat = Ana), so a
 FUB pull lands on Ana instead of minting unowned and being grabbed by the Myli ownerless-fallback.
 
-## Company Inbox — the phone NUMBER is the source
+## Company Inbox — the phone NUMBER is the source *(pre-collapse state)*
 
 Under **Company Inbox**, each company phone **line** is its own lead source, and the line's **number carries the
 attribution** (`hl_phone_numbers.lead_source_id` points at the matching source). The per-line sources
@@ -114,7 +168,9 @@ attribution** (`hl_phone_numbers.lead_source_id` points at the matching source).
 - **Phone Call — Past Client** (`phone_pastclient`)
 - **Phone Call — Ana Legacy** (`phone_analegacy`)
 
-All inbox sources inherit the `__platform_inbox__` seat (mig 0404) like any other tab.
+⚠ **These are being collapsed** (2026-07-31): they become `sign_call` + `phone_call` **sources under
+`integration=houseloop`**, and the `__platform_inbox__` seat retires with the lane. The section above is the
+current law; this list is the pre-collapse state, kept until the rows move.
 
 ## The structural guarantees (locked 2026-07-11)
 
