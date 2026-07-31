@@ -230,6 +230,54 @@ does in FUB after pull-in appears in HouseLoop. There is no reason not to.**
 
 If a pulled-in lead's HouseLoop activity is behind what FUB shows, that is a bug — every time.
 
+## 🚧 WHERE THIS IS GOING — the FUB-COMPLETENESS ARC (Zach, 2026-07-31)
+
+**"I want ALL activity pulled in."** THE ONE LAW above says a pulled-in lead stays lock-step forever. That
+law is right and it is not yet true. This section is the target so nobody has to reconstruct it from the
+[Lead Engine](/schema-lock/target-model) artifact — **Lee owns the arc; this is the reference.**
+
+### The shift: the allowlist moves from INGESTION to PROCESSING
+**Store every webhook. Spawn a run only for what we act on.** Storage costs cents — the $418/month was
+183k *runs*, not rows. Anything stored-but-unprocessed is **replayable forever**, so the history is already
+there the day a card ships. Today we filter at the door, which means a signal we do not yet render is a
+signal we can never recover.
+
+### What that changes about the pull-in
+| Today | Target |
+|---|---|
+| Communications are **not imported** (FUB history stays in the Context panel) | **Imported and ARCHIVED** — rendered teal + collapsed, stamped, **never announced** |
+| A re-import can re-announce old events | Re-imports route to the **archive path**, never the notify path |
+| Some signals are dropped at ingestion | Everything is stored; processing decides what earns a run |
+
+### The acceptance test (a measurement, not an opinion)
+> **Any lead's All tab contains every row from every other tab. The count equals the union.**
+
+### The four dropped-signal recoveries — each gets an explicit ruling
+`Viewed Property` **115,892** · `Saved Property` **3,270** · `Viewed Page` **5,780** · group texts **148,627**.
+Recover or accept — decided out loud and recorded, never left ambiguous.
+
+### 🔴 LIVE RECEIPTS (2026-07-31) — why this is not theoretical
+A caller hit the Company Line, minted correctly, and was then **stranded**. Four separate gaps, all measured:
+
+1. **The FUB id was fetched and discarded.** `callerContext()` matches an inbound number against the mirror
+   and returns `{ name, fubPersonId, fubUrl }` — that lookup is *why the caller's name is on the ring*.
+   `mintPhoneLead` took the name and dropped the id. A lead born with a NULL `fub_person_id` is **invisible
+   to the activity sweep**, which selects on that column, so it can never self-heal — and the only back-fill
+   in the codebase is on the email path. **FIXED + GATED:** the voice route now links at birth and fires
+   `fub/lead.import` immediately (via Inngest — the caller is on the line); the invariant
+   `scripts/fub-link-invariant.ts` keeps it true. 3 live leads were repaired.
+2. **The fire log hid 70% of fires.** The list INNER JOINed `hl_leads`, dropping lead-less fires while still
+   counting them — **5,783 total · 1,724 shown · 4,059 hidden** — contradicting the FIRE LEDGER law that the
+   count and the drill-down *"agree by construction."* **Fixed by Lee 2026-07-31.**
+3. **`created` was never persisted.** The routing doctrine says *minted → `created:true`, matched →
+   `created:false`*, but `hl_trigger_fire` had no such column (`matched` means *matched a workflow*, not a
+   person), so the log could not say whether a lead was created. **Approved into the signed diet; migration
+   in Lee's batch.**
+4. **The importer links but does not enrich.** The existing-lead branch writes only `fub_person_id`,
+   `source_id`, `source`, `platform`, `channel` — not email, stage or name, though the pull-in is documented
+   as applying *owner · stage · AI*. **Lee owns it, design constraint set: FILL-NEVER-CLOBBER** — write only
+   into empty fields, because a CRM edit beats the mirror.
+
 ## 🎯 The trigger-event doctrine — BUILT, one home for the law
 
 Zach's 2026-07-16 doctrine (a trigger fires on EVERY signal, 50 views = 50 fires; the trigger is the ONE
@@ -1282,7 +1330,7 @@ pipeline rebuild it from nothing is a far harsher test than replaying a message,
 
 | # | Defect | How it presented |
 |---|---|---|
-| 1 | **The synthetic id generator used a row COUNT where it needed the highest id used.** `synthOffset = existingDomOnly.length` — but ids are POSITIONAL. Any hole (a deleted row, a dedup `continue`, the cross-person guard) makes count < max, so it re-issues ids that already exist. | `ON CONFLICT (id) DO NOTHING` swallows it. Lucy Hartman: 252 rows spanning offsets 7..258 → every new id minted at 252 collided. The sweep re-scraped her **every 3 minutes** and wrote **zero rows** while reporting `inapp_inserted: 5`. |
+| 1 | **The synthetic id generator used a row COUNT where it needed the highest id used.** `synthOffset = existingDomOnly.length` — but ids are POSITIONAL. Any hole (a deleted row, a dedup `continue`, the cross-person guard) makes count &lt; max, so it re-issues ids that already exist. | `ON CONFLICT (id) DO NOTHING` swallows it. Lucy Hartman: 252 rows spanning offsets 7..258 → every new id minted at 252 collided. The sweep re-scraped her **every 3 minutes** and wrote **zero rows** while reporting `inapp_inserted: 5`. |
 | 2 | **`inserted++` fired regardless of `rowCount`.** | The count measured attempts, not rows. Third instance of this exact disease in 24 hours. |
 | 3 | **A collision DROPPED the message** instead of trying the next slot. | Silent, permanent, per-person. |
 | 4 | **Each person owned only 1,000 synthetic slots** (`900000000 + personId*1000`), so message #1001 landed inside the NEXT person's block. | **5,192 rows were sitting outside their own person's block** across 11 people (worst: 1,842 from one person, spread over TWO neighbours). A neighbour's future message collided and was dropped forever. **✅ SCHEME KILLED + ROWS RE-ID'd 2026-07-30 — see below.** |
