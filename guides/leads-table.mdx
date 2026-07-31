@@ -3,6 +3,59 @@ title: "Leads Table"
 description: "The all-leads table — Sierra-style structured system columns that all read from one aggregation, one SQL filter engine behind smart filters + Advanced Search, and per-user unread alerts."
 ---
 
+## 🚧 IN PROGRESS — the FUB-parity rebuild (2026-07-30 → 07-31, Adam)
+
+Zach: *"we are pivoting toward some work on the lead table."* Ported from the Follow Up Boss table he works in
+all day — wireframes pinned at `docs/wireframes/fub-leads-table-locked-2026-07-30.png` (+ the header-menu
+shot). **The wireframe is the truth**; this section records what shipped and what is still open.
+
+### Shipped
+
+| Feature | Detail |
+|---|---|
+| **Drag-to-reorder columns** | Grab any header. Built into the shared `DataTable` behind `reorderable` (**default OFF**, so no other table changed). Sticky columns cannot be dragged. Native HTML5 DnD — the same pattern 10 other surfaces use, no library. |
+| **Per-user layout that follows you** | Order **and** hidden columns persist to `hl_users.data->'leads_table_layout'` — **no new table, no new column, no migration** (a key inside an existing jsonb is data, not schema). Read/written through `/api/leads/table-layout`; the client never touches jsonb. Visibility never survived a refresh before this. |
+| **The two activity clocks** | **Last Web Activity** (website only) and **Last Communication** (any comm) — previously the SAME FIELD wearing two names: the sort labelled "Last Activity" secretly read `last_communication_at`. Two differently-named columns would have shown identical numbers. |
+| **Stacked 3-row cells** | `[icon] Viewed Home via HouseLoop` / `$254K · 8709 N Hull Ave 64154` / `July 29th 2026, 4:50:21 am`. Verb normal weight, **price the only bold thing**, timestamp to the second in the assignments font. |
+| **Sorting moved INTO SQL** | See the defect below. `LEAD_SORTS` registry + `?sort=`/`?dir=` in the URL — same contract as the filters. |
+| **Real-time reorder** | Subscribes to the notification stream **and** the run-log activity stream, debounced into one authoritative `router.refresh()`. |
+| **Short public IDs** | `/lead/1041` instead of a UUID. Sequential (+1, FUB ordering — lower means older), backfilled in signup order, minted once, never reused. UUID stays the PK. |
+
+### The sort key — inbound or website, never our own outbound
+
+```
+last_touch_at = GREATEST(created_at, last INBOUND conversation, last website activity)
+```
+
+Zach: *"it reorders by what comes first, either last communication **inbound from the lead**, or last website
+activity."* **Inbound-only is the point** — if our own outbound counted, every message you send would re-sort
+your own table, and the order would stop meaning *"who needs me"* and start meaning *"who did I last talk at."*
+
+A new registration floats to the top on its own, because **the registration IS the newest touch** — no pinning
+special-case fighting the sort forever.
+
+### 🐞 Defects found and fixed during the rebuild
+
+| # | Defect | Why it mattered |
+|---|---|---|
+| **1** | **Sorting happened in the BROWSER over a window the server had already truncated.** `buildLeadsQuery` always ended `ORDER BY l.created_at DESC LIMIT 500`, and the client re-sorted those 500. | A lead created two years ago who texted five minutes ago was never in the window, so **no sort could surface them**. "Newest activity first" was a claim made over an arbitrary sample. Same shape as the JS-vs-SQL filter engine deleted 2026-07-24 — **one engine, and it is SQL** now covers sorting too. *(With 37 leads the truncation is latent, not currently biting — but the reordering itself pays off today.)* |
+| **2** | **Last Activity and Last Communication were the same field.** | Two columns, one number, two names. |
+| **3** | **Web activity read `hl_pixel_event` (64 rows) instead of the run-log (13,520).** | The Zillow/FUB browse history mints into `hl_lead_activity`; the column would have shown "—" for nearly every lead. **Pixel is the RAW tier — write-only. A reader querying it for lead behaviour is a bug.** |
+| **4** | **`google_ppc` was being rendered as a WEBSITE.** | `source_name` is the **source/brand**, not the site. Site is **derived from the integration** (`follow_up_boss ⇒ Zillow`, `houseloop ⇒ HouseLoop`) — a closed set of two — and deriving it from the integration rather than from pixel means it **survives pixel's retirement**. |
+| **5** | **50% of `hl_messages` was not a conversation.** 1,274 of 2,534 rows were notification receipts sent to staff *about* a lead. Every one of the top-5 leads by `last_communication_at` had a receipt as its newest row — **the column was measuring when Zach got notified**, not when anyone spoke to the lead. | Fixed by the `hl_lead_conversations` view (mig 0521) + recomputing the column. **All 37 leads were wrong; 9 falsely showed a contact that never happened.** |
+| **6** | **A `NOT NULL` I added silently destroyed activity rows for ~7 hours.** | Full write-up on [Lead Detail](/guides/lead-detail#in-progress-cutover-the-messages-tab-and-how-a-message-goes-missing). One message lost, recovered. |
+
+### Still open
+
+- The **per-column header menu** from the FUB wireframe (Sort `Old → New` / `New → Old` · a per-column filter ·
+  Hide Column). ⚠ **Do not build a second filter engine** — those four operators are character-identical to the
+  existing date operators in `lib/leads/filter-fields.ts`, so the header filter is a **new surface onto the
+  engine that already exists**.
+- **3,275 FUB-pipe activity rows carry no source.** Probably `zillow` (the only site behind that pipe), but
+  "probably" is not good enough to write 3,275 rows — awaiting Zach.
+- `WEB_KINDS_SQL` derives from `activity-badges.ts`, which **stops existing** when the catalog gains `lens`/
+  `section` columns. Repoint to `lensKinds()` in that same pass — never a third parallel list.
+
 The `/leads` table is the operator's command center. Every column is a real,
 DB-backed metric — **nothing is hardcoded** — and every metric comes from a
 **single aggregation** in `lib/leads-query.ts`, not per-cell fetches. Columns are

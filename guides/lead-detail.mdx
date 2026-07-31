@@ -9,6 +9,49 @@ Messages lens, rebuilt AI page, Central-time tasks). **If you don't see this Jul
 you're looking at a stale/cached version — hard-refresh.**
 </Info>
 
+## 🚧 IN-PROGRESS CUTOVER — the Messages tab, and how a message goes missing
+
+<Warning>
+**A message can be captured PERFECTLY and still be invisible on this page.** That is not a hypothetical —
+it happened on 2026-07-31 and Zach found it in the product within hours.
+
+**THE NON-OBVIOUS DEPENDENCY:** the Messages tab does **not** read `hl_messages`. It reads the run-log
+(`hl_lead_activity`), which `logMessage()` writes to as a *second, separate* step via `logActivity()`. So a
+text can land in the comms table with a correct body, a correct lead, a correct `conversation_key` — fire a
+notification to your phone — and **still never appear on the lead**, because the run-log write is what the
+tab renders and that write can fail independently.
+
+**When a message is "missing," check the run-log FIRST, not `hl_messages`:**
+```sql
+SELECT a.kind, a.occurred_at, left(a.body,40)
+  FROM hl_lead_activity a
+ WHERE a.source_table = 'hl_messages' AND a.source_id = '<the hl_messages id>';
+```
+Zero rows with the message present in `hl_messages` = the run-log write failed. The message is not lost, it is
+**unrendered** — and it can be replayed (idempotent on `source_table` + `source_id`).
+</Warning>
+
+### The 2026-07-31 incident — one message, seven hours, zero errors
+
+| | |
+|---|---|
+| **Symptom** | Lucy Hartman's inbound text notified Zach's phone but was **missing from her Messages tab**, and she did not rise to the top of an activity-sorted leads table. |
+| **Cause** | A `NOT NULL` constraint added to `hl_lead_activity.integration` that morning. A column **DEFAULT does not apply to an explicit NULL** — only to an *omitted* column. `logActivity()` names `integration` in its INSERT list and `logMessage()` supplies none, so every activity write inserted an explicit NULL and was **rejected**. |
+| **Why nothing caught it** | The call is `void logActivity(...)` — **fire-and-forget**. The rejection was swallowed: no log, no throw, no error count. The schema-lock cage stayed green the whole time, because the constraint doing the damage was faithfully recorded. |
+| **Fix** | Mig **0527** — a `BEFORE INSERT` trigger that **coerces** a NULL integration to its derived value instead of rejecting the row. It applies whether the column is omitted *or* explicitly NULL, which a DEFAULT cannot do. |
+| **Recovery** | The one lost row was replayed and verified rendering. |
+
+**The rule that came out of it:** *coerce, don't reject — when the value is DERIVABLE, an absent one is a
+thing to fill, not a reason to lose the row.* `NOT NULL` is right when a value is genuinely unknowable and a
+caller must decide; it is wrong when the system can derive it, because there it turns a harmless omission
+into silent data loss.
+
+<Note>
+**Still open:** `logMessage()` does not pass an `integration` at all — the trigger fills it. That is a
+band-aid on the writer, not a fix to it. The writer should state the pipe it wrote through. Tracked with Lee
+alongside the `actor` → `user` cutover, since both touch the same INSERT.
+</Note>
+
 The lead detail page (`/leads/[id]`) is where an operator works a single lead. It is the hub for a set of
 surfaces that each have their own deep-dive doc — this page explains how they fit together, and links out to
 the detail.
