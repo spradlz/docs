@@ -229,7 +229,7 @@ uses for `hl_activity_catalog` (the dictionary) vs `hl_lead_activity` (the rows)
 
 | | **Loop status** — where the DEAL is | **TC work status** — what the FILE needs |
 |---|---|---|
-| how | **derived** from the stage's section | **explicit**, set by the coordinator |
+| how | **derived** from the stage's section while alive · **explicit** on a terminal exit | **explicit**, set by the coordinator |
 | values | `pre_contract` · `pre_listing` · `under_contract` · `closed` · `archived`(+reason) | `processing` · `paused_blocked` · `waiting_for_closing` · `complete` |
 | moved by | the agent, working the pipeline | the TC, working their board |
 | default | derived from birth | **NULL until a TC is assigned**, then `processing` |
@@ -246,6 +246,25 @@ They are independent, and these four combinations prove it:
 **`cancelled` was cut from the TC axis** (Zach). If the loop is archived, the TC isn't "cancelled" — the loop
 is. Saying it twice is the double-write this whole exercise exists to kill.
 </Note>
+
+### Derived while alive, explicit when it dies — the correction
+
+<Warning>
+An earlier draft of this page said loop status is purely derived. **It is not, and it could not be** — if
+every value came from the stage there would be no way to archive a loop at all. Nothing can compute
+"we lost the listing" from a pipeline position.
+
+```
+loop_status_key IS NULL   → derive from the stage's section
+                            pre_contract · pre_listing · under_contract · closed
+loop_status_key IS SET    → a human ended this loop on purpose. The derivation stops.
+                            listing_not_won · offer_not_accepted · fell_through
+                            listing_expired · listing_cancelled · archived
+```
+
+The column lives on the LOOP (nullable). Only the terminal exits are ever written to it; the active path is
+never stored, so it cannot drift. Corrected 2026-07-31 after Zach caught it.
+</Warning>
 
 ### The derivation is a FOREIGN KEY, not an if-statement
 
