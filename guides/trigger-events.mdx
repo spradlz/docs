@@ -198,6 +198,43 @@ it, you don't create it.
 
 ## The FUB pull-in — what `creates_lead` imports
 
+<Warning>
+**⚠️ THIS SECTION DESCRIBES TODAY, NOT THE TARGET — and the difference has already caused wrong work.**
+
+Zach 2026-07-31: *"I want ALL activity pulled in."* The **Lead Engine** artifact supersedes the pull-in table
+below, and an agent who reads this page as current law will build the **old** behaviour and believe they are
+correct. That happened on 2026-07-31: this page's "Communications — NOT imported" line was quoted back to
+Zach as intended behaviour while he was actively trying to replace it.
+
+**WHERE IT IS GOING (the FUB-completeness arc — Lee owns it):**
+- **The allowlist moves from INGESTION to PROCESSING.** Store *every* webhook — storage costs cents; the
+  $418/month was 183k *runs*. Spawn a run only for what we act on. Anything stored-but-unprocessed is
+  **replayable forever**, so the history is already there when a card ships later.
+- **The FUB archive renders teal and collapsed** — history imports, stamped, *never announced*. Re-imports
+  route to the archive path, not the notify path.
+- **The acceptance test:** *any lead's All tab contains every row from every other tab — the count equals
+  the union.*
+- Four dropped-signal recoveries get an explicit ruling: Viewed Property 115,892 · Saved Property 3,270 ·
+  Viewed Page 5,780 · group texts 148,627.
+
+**LIVE RECEIPTS (2026-07-31)** — a caller was minted correctly and then stranded, because the parts below
+are not yet true:
+1. **The FUB id was fetched and discarded.** `callerContext()` resolves an inbound number against the FUB
+   mirror (that is why the caller's name is on the ring) and `mintPhoneLead` took only the name. A lead born
+   with a NULL `fub_person_id` is **invisible to the activity sweep**, which selects on that column — so it
+   can never self-heal. *Fixed + gated (`scripts/fub-link-invariant.ts`); 3 live leads repaired.*
+2. **The fire log hides 70% of fires.** The list INNER JOINs `hl_leads`, so lead-less fires are dropped while
+   still being counted: **5,783 total · 1,724 shown · 4,059 hidden.** This contradicts the FIRE LEDGER
+   section below, which states the count and the drill-down *"agree by construction."*
+3. **`created` is never persisted.** The routing doctrine says *minted → `created:true`, matched →
+   `created:false`* — but `hl_trigger_fire` has no such column, and `matched` means *matched a workflow*, not
+   *matched a person*. The log therefore cannot say whether a lead was created.
+4. **The importer links but does not enrich.** `import-fub-lead.ts`'s existing-lead branch updates only
+   `fub_person_id`, `source_id`, `source`, `platform`, `channel` — not email, stage or name, though the
+   pull-in is documented as applying *owner · stage · AI*.
+</Warning>
+
+
 When a trigger event has **Creates-Lead ON** and the person is known to Follow Up Boss (a FUB webhook signal, or an
 inbound call/text whose number the FUB mirror recognises), the person is **pulled into HouseLoop per the routing
 rules** (owner · stage · AI). What crosses over is deliberate:
@@ -206,7 +243,7 @@ rules** (owner · stage · AI). What crosses over is deliberate:
 |---|---|
 | **Context / dossier** (who they are, their FUB summary) | the lead's **Context** panel |
 | **Browsing** — property views, saved searches, home activity | **Website History** |
-| **Communications** — past texts, calls, emails | **NOT imported** — they stay as FUB history inside the Context panel |
+| **Communications** — past texts, calls, emails | ⚠️ **BEING CHANGED — see the banner above.** Today: not imported (they stay as FUB history in the Context panel). Target: **imported and archived**, rendered teal + collapsed, never re-announced. |
 | **Everything from now on** | **native HouseLoop** (a fresh, clean conversation; nothing double-counts) |
 
 **Caller-identity precedence.** An existing HouseLoop lead ALWAYS wins — a call/text that matches one attaches to it
