@@ -18,8 +18,11 @@ shot). **The wireframe is the truth**; this section records what shipped and wha
 | **The two activity clocks** | **Last Web Activity** (website only) and **Last Communication** (any comm) — previously the SAME FIELD wearing two names: the sort labelled "Last Activity" secretly read `last_communication_at`. Two differently-named columns would have shown identical numbers. |
 | **Stacked 3-row cells** | `[icon] Viewed Home via HouseLoop` / `$254K · 8709 N Hull Ave 64154` / `July 29th 2026, 4:50:21 am`. Verb normal weight, **price the only bold thing**, timestamp to the second in the assignments font. |
 | **Sorting moved INTO SQL** | See the defect below. `LEAD_SORTS` registry + `?sort=`/`?dir=` in the URL — same contract as the filters. |
+| **Views + Saved Searches read the RUN-LOG** *(07-31)* | Both columns read `hl_lead_activity` now. They previously read `hl_pixel_event` and a website-side `SavedSearch` table joined **by email** — and rendered **0 for essentially every lead**. Norma Herra showed `0 Views / 0 Client Searches` against 1,352 views and 18 saved searches on her own feed. |
+| **One definition per column** *(07-31)* | `alert_count` had **three** definitions — the SQL one, plus two post-processing overrides that disagreed with each other (one summed client+agent+system, the other client+agent) and both silently beat the SQL. Both overrides deleted; the run-log expression is the single definition, and the parts now add up to the whole. |
+| **The vocabulary the table reads is signed** *(07-31)* | Every kind the table counts is now a signed catalog key — `property_viewed`, `property_saved`, `saved_search_created` and the rest. The `alert_count` literal moved with its fold in the same commit, which is what kept the Saved Searches column from silently zeroing. |
 | **Real-time reorder** | Subscribes to the notification stream **and** the run-log activity stream, debounced into one authoritative `router.refresh()`. |
-| **Short public IDs** | `/lead/1041` instead of a UUID. Sequential (+1, FUB ordering — lower means older), backfilled in signup order, minted once, never reused. UUID stays the PK. |
+| **Short public IDs** | `/lead/1041` instead of a UUID. Sequential (+1, FUB ordering — lower means older), backfilled in signup order, minted once, never reused. ⚠ **"UUID stays the PK" is SUPERSEDED** — Zach's ONE-ID LAW (7/31 PM) makes the sequential number the primary key and retires the UUID entirely at cutover. The column was also renamed to `houseloop_lead_id` (mig 0553, branded-id ruling: *every system's id wears its system's name*, beside `fub_person_id`). Effective now: **no new code may expose the UUID in any URL, display or export.** |
 
 ### The sort key — inbound or website, never our own outbound
 
@@ -43,14 +46,34 @@ special-case fighting the sort forever.
 | **3** | **Web activity read `hl_pixel_event` (64 rows) instead of the run-log (13,520).** | The Zillow/FUB browse history mints into `hl_lead_activity`; the column would have shown "—" for nearly every lead. **Pixel is the RAW tier — write-only. A reader querying it for lead behaviour is a bug.** |
 | **4** | **`google_ppc` was being rendered as a WEBSITE.** | `source_name` is the **source/brand**, not the site. Site is **derived from the integration** (`follow_up_boss ⇒ Zillow`, `houseloop ⇒ HouseLoop`) — a closed set of two — and deriving it from the integration rather than from pixel means it **survives pixel's retirement**. |
 | **5** | **50% of `hl_messages` was not a conversation.** 1,274 of 2,534 rows were notification receipts sent to staff *about* a lead. Every one of the top-5 leads by `last_communication_at` had a receipt as its newest row — **the column was measuring when Zach got notified**, not when anyone spoke to the lead. | Fixed by the `hl_lead_conversations` view (mig 0521) + recomputing the column. **All 37 leads were wrong; 9 falsely showed a contact that never happened.** |
+| **7** | **Views + Saved Searches read sources that could barely see a lead.** `hl_pixel_event` holds 105,928 property-view rows **attributed to exactly TWO leads**, while the run-log holds 11,342 properly attributed. The website `SavedSearch` table holds **ONE active row system-wide** against 183 saved searches in the run-log, all mirrored from Zillow via FUB. | The columns showed the side with no data and hid the side with all of it — **0 for nearly every lead in the book**. Found by a screen-walk, not a count: four folds of perfect parity numbers never touched it. |
+| **8** | **The repeat-view insight had never fired.** `repeat-views.ts` counted `hl_pixel_event WHERE event_type = 'home_viewed'` — a value that table has **never had** (its vocabulary is `page_view` / `property_view` / `search`). Zero rows matched, ever. | Third instance of one disease this week — counting a word nobody writes. Repointed to that table's real token; the deeper attribution gap is tracked separately. |
 | **6** | **A `NOT NULL` I added silently destroyed activity rows for ~7 hours.** | Full write-up on [Lead Detail](/guides/lead-detail#in-progress-cutover-the-messages-tab-and-how-a-message-goes-missing). One message lost, recovered. |
 
 ### Still open
 
-- The **per-column header menu** from the FUB wireframe (Sort `Old → New` / `New → Old` · a per-column filter ·
-  Hide Column). ⚠ **Do not build a second filter engine** — those four operators are character-identical to the
-  existing date operators in `lib/leads/filter-fields.ts`, so the header filter is a **new surface onto the
-  engine that already exists**.
+**The per-column header menu** from the FUB wireframe (Sort `Old → New` / `New → Old` · a per-column filter ·
+Hide Column) is the next build. State measured 2026-07-31 EOD — the earlier plan's "three live sort bugs" is
+**stale, two of them are already fixed**:
+
+| Prerequisite | State |
+|---|---|
+| `SORT_OPTIONS` desynced from `LEAD_SORTS` | **Fixed** — now keyed `{id,label,sort,dir}` and resolved by sort+dir together |
+| Toolbar never wrote `?dir=` | **Fixed** — the URL carries direction |
+| `sortable: true` is dead code | **Still open** — two columns declare it, `DataTable` only renders a sort header when `col.sortable && onSort`, and `LeadsTable` passes `onSort` **zero** times. Those headers advertise sorting that does nothing. |
+
+⚠ **Do not wire that third one on its own.** Fixing it standalone makes the header menu a **third** sort
+surface beside the toolbar and the dead button. The menu should own per-column sort — so it is fixed *by*
+building the menu, not before it.
+
+⚠ **Do not build a second filter engine.** The four operators are character-identical to the existing date
+operators in `lib/leads/filter-fields.ts`, so the header filter is a **new surface onto the engine that
+already exists** — it writes into the same `criteria` array Advanced Search uses.
+
+**Sort + Hide are unblocked** (pure UI). **The filter half is blocked** until the column model is locked: each
+of the 16 fields binds a column to a DB expression, and the column diet is actively renaming and dropping
+columns — `lead_number` became `houseloop_lead_id` inside one evening. Binding filters to a moving column set
+ships references to columns that will not exist.
 - **3,275 FUB-pipe activity rows carry no source.** Probably `zillow` (the only site behind that pipe), but
   "probably" is not good enough to write 3,275 rows — awaiting Zach.
 - `WEB_KINDS_SQL` derives from `activity-badges.ts`, which **stops existing** when the catalog gains `lens`/
