@@ -1,17 +1,46 @@
 ---
-title: "Adam (Adam — WIP (2026-07-18))"
-description: "Work-in-progress dossier — Adam · HouseLoop CRM · Developer Docs. Adam — WIP (2026-07-18)."
+title: "Adam (Adam — WIP (2026-07-31))"
+description: "Work-in-progress dossier — Adam · HouseLoop CRM · Developer Docs. Adam — WIP (2026-07-31)."
 ---
 
-<Info>Live dossier — auto-generated from `.claude/state/wip/adam.md` on every push. **Progress: 7/11 done (64%).**</Info>
-
-<Warning>⚠ **Possibly stale:** this work-stream file was last written 322h ago. If Adam has shipped since, this dossier under-reports — refresh `.claude/state/wip/adam.md`.</Warning>
+<Info>Live dossier — auto-generated from `.claude/state/wip/adam.md` on every push. **Progress: 7/14 done (50%).**</Info>
 
 **Owner:** Adam — HouseLoop CRM · Developer Docs
 
 ## Checklist
 
-### CURRENT (2026-07-18): AI-agnostic first-touch + FUB-inquiry clone-initiates + Mack AI-vs-AI test
+### SHIPPED 2026-07-31 — the email lead parser is DELETED (`a396f96a4f`)
+Zach: *"get rid of this email parser, everything comes through fub right now, this email parser does not work
+just get rid of it."* Removed `lib/inngest/functions/email-lead-ingest.ts` (cron `*/5 * * * *`, **2,657 runs in
+9 days**), `lib/email/parse-lead-email.ts`, its Inngest registration, and its Run Log entry. Mig 0562 marks
+`hl_email_lead_ingest` retired — **the table was NOT dropped**; it is the frozen receipt for all 55 messages.
+
+**Why:** over its whole life it minted **4** leads — 1 real (Patricia Edward), 2 internal tests, 1 junk. The junk
+row came from a Zillow *"MyAgent connection requested a tour"* email, which contains **no buyer at all** — only
+the house, the time, and the **listing agent**. The parser took `firstPhone(bodyText)` (first phone anywhere in
+the document) + trusted `Reply-To` blindly, and its guard tested **presence, not ownership**
+(`if (!email && !phone) return null`). 26 of its other outcomes were `matched_existing` — pure FUB duplication.
+
+**The rule to keep:** a vendor notification always carries the vendor's and the agent's contact info. *"There is
+a phone in here"* is never *"this is the lead's phone."* **Do not rebuild an email-scraping lead path.**
+Docs: `guides/vendor-lead-email-capture` · `guides/trigger-events` · `integrations/follow-up-boss` (+2 historical).
+
+⚠ **Known accepted trade:** FUB's webhook is now the ONLY intake path, so a dropped/missed webhook (the Kenneth
+Hunt shape) has no backstop. If it recurs the fix is FUB-side — serviced types, or a reconcile sweep against the
+FUB API — never a new parser. Written into the FUB integration doc.
+
+### OPEN (2026-07-31)
+- [ ] **FUB test rows I created still live in FUB** — persons 50550 (`MintArm Test500632`) and 50549
+      (`TourGate Test235832`). Both leads are soft-trashed in HouseLoop (safe — a soft-trash IS the tombstone,
+      the importer dedups on `fub_person_id` with no `deleted_at` filter, so they cannot resurrect). Deleting
+      them **in FUB** is an outward-facing prod delete → **ask Zach first.** `fubDeletePerson()` is built and
+      round-trip proven (`scripts/test-fub-delete-roundtrip.ts`).
+- [ ] **"Delete in Follow Up Boss too?" checkbox** — `fubDeletePerson()` proven, not yet wired to a button.
+- [ ] **Leads header menu — FILTER half** — blocked behind Lee's locked column model. Sort + hide shipped.
+
+---
+
+### PRIOR (2026-07-18): AI-agnostic first-touch + FUB-inquiry clone-initiates + Mack AI-vs-AI test
 Plan: `~/.claude/plans/sharded-roaming-whisper.md` · Handoff (resume here): `.claude/state/adam-handoff-mack-clone-test.md`
 - [x] FIX 1 (core): composeAiMessage resolves the acting actor from the lead (new `resolveLeadActor` + shared
       `CLONE_LANE_PREDICATE` in resolve-send-identity.ts) → workflow ai_message first-touch composes AS the lead's
