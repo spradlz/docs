@@ -67,17 +67,20 @@ Registration / Pre-Approval were completed in `SERVICED_FUB_EVENT_TYPES`) or MIS
 arrives — our endpoint has no auth and FUB gives no retry guarantee). Kenneth Hunt (FUB 50544) proved it: FUB
 created him and even emailed `New Lead from Zillow - Kenneth Eugene Hunt`, but HouseLoop never pulled him in.
 
-The **Email Lead Safety-Net** (`lib/inngest/functions/email-lead-ingest.ts`) is the independent backstop: FUB's
-own alert emails (`leads@followupboss.com`) + Zillow direct forward into `info@houseloop.ai`, and a 5-min cron
-parses them and mints any lead that isn't already in the CRM. It shares the FUB control surface — a mint only
-happens if the parsed intent's **Creates-Lead** toggle is ON in `hl_fub_webhook_settings`.
+<Warning>
+**There is no longer a second capture path.** The **Email Lead Safety-Net** — a 5-min cron that parsed vendor
+alert emails out of `info@houseloop.ai` and minted any lead the webhook missed — was **deleted 2026-07-31** on
+Zach's instruction: *"get rid of this email parser, everything comes through fub right now."*
 
-**It reuses this doc's dedup contract, so it can never double-count** — it calls `processLeadIntake` only after a
-pre-check finds NO existing `hl_leads` row (matched by `fub_person_id` / lower-email / last-10 phone), stamps the
-`fub_person_id` it parsed from the alert's `people/view/{id}` link so the later webhook's `importFubLead`
-reconciles onto the same row (link, never duplicate), and is idempotent per Gmail `message_id`
-(`hl_email_lead_ingest`, mig 0443). Full design: [Trigger Events → Email Lead Safety-Net](/guides/trigger-events)
-· plumbing: [Vendor Lead Email Capture](/guides/vendor-lead-email-capture).
+**So the webhook + `importFubLead` is the ONLY intake path**, and the drop/miss risk described above is real and
+uncovered. That is a deliberate trade: over 9 days the email net minted **4** leads — 1 real, 2 internal tests,
+and 1 junk row built from a **listing agent's** phone number, because it took the first phone in the email body
+as the lead's. It duplicated FUB on everything else (26 `matched_existing`). The cure was worse than the disease.
+
+If a lead is ever confirmed missing again (the Kenneth Hunt shape), the fix is on the **FUB side** — the
+webhook's serviced types, or a reconciliation sweep against the FUB API — **not** a new email parser.
+Retirement record: [Trigger Events](/guides/trigger-events) · [Vendor Lead Email Capture](/guides/vendor-lead-email-capture).
+</Warning>
 
 ## What a FUB signal becomes in HouseLoop — the 2026-07-10/11 hardening
 

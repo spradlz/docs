@@ -430,29 +430,33 @@ Backstop: see the **Email Lead Safety-Net** below.
    LANE for the full pipeline. The 3 dead subtype rows were deleted (mig 0415).
 </Warning>
 
-#### Email Lead Safety-Net — the backstop that catches what the webhook drops or misses (2026-07-22)
+#### Email Lead Safety-Net — DELETED 2026-07-31
 
-The FUB webhook is the primary path, but it can DROP a lead (an unserviced type) or MISS one (a webhook that
-never arrives — no auth, no retry). The **Email Lead Safety-Net** (`lib/inngest/functions/email-lead-ingest.ts`,
-cron every 5 min) is the second, independent capture: every vendor lead-alert email is forwarded into
-**`info@houseloop.ai`** — FUB's own `leads@followupboss.com` "New Lead from …" / "Lead Alert from …" (the
-richest signal — carries the lead's name, email, phone, message, and a `people/view/{id}` link) and Zillow's
-direct `no-reply@leads.premieragent.com`. The fn reads that inbox via domain-wide delegation, parses each alert
-(`lib/email/parse-lead-email.ts`), and reconciles it.
+<Warning>
+**⛔ REMOVED. There is no email intake path. Every lead arrives through Follow Up Boss.**
 
-**It cannot double-count — a DELAYED RECONCILER (Zach's locked design):**
-- **5-min grace window** — only acts on emails older than 5 min, so the instant webhook always wins first.
-- **Idempotent** — every Gmail `message_id` is stamped in `hl_email_lead_ingest`, processed exactly once.
-- **Mint-only-if-absent** — pre-checks `hl_leads` by `fub_person_id` / email / last-10 phone; if the lead already
-  exists (webhook or a prior email got it) it SKIPS (no mint, no trigger). It mints **only** a genuinely absent
-  lead — via `processLeadIntake` on the vendor's existing `fub_*` source.
-- **Toggle-gated** — a mint only happens when the parsed intent's **Creates-Lead** is ON in
-  `hl_fub_webhook_settings`. The board below is the ONE control surface for BOTH the webhook and the email net.
-- **Reconcile stamp** — when the alert carries a `fub_person_id`, the net stamps it on the minted lead so the
-  later webhook treats the lead as EXISTING (no double NEW-lead fire).
+Zach, verbatim: *"get rid of this email parser, everything comes through fub right now, this email parser does
+not work just get rid of it."* `lib/inngest/functions/email-lead-ingest.ts` (cron `*/5 * * * *`) and its parser
+`lib/email/parse-lead-email.ts` are **deleted**, along with the Inngest registration and the Run Log entry. The
+FUB webhook + `importFubLead` is now the **only** way a lead is minted from a vendor.
 
-Forwarding is Gmail filter → `info@` on the source mailboxes (`premieragent.com` + `leads@followupboss.com`),
-created by API via the service account — see [Vendor Lead Email Capture](/guides/vendor-lead-email-capture).
+**Why — its own ledger, over its entire 9-day life:** 26 `matched_existing` (FUB already had them), 16
+`skipped_noise`, 9 `skipped_toggle_off`, and **4 `minted`** — of which **one** was a real lead, two were
+internal test leads, and one was junk. One real lead in nine days, duplicating a path FUB already covers.
+
+**The junk row names the defect worth remembering.** A Zillow *"Your MyAgent connection requested a tour"* email
+contains **no buyer** — only the house, the tour time, and the **listing agent**. The parser took
+`firstPhone(bodyText)` (the first phone anywhere in the document) and trusted `Reply-To` blindly, minting a
+nameless lead that carried the **listing agent's** phone and Zillow's `no-reply` address. Its guard was
+`if (!email && !phone) return null` — **presence, not ownership**. Both were present; neither was the lead's.
+
+**The rule that outlives it:** a vendor notification always contains the vendor's and the agent's contact info.
+*"There is a phone in here"* is never *"this is the lead's phone."* Do not rebuild an email-scraping lead path.
+
+The Gmail forwarding into `info@houseloop.ai` still runs and is still useful as an **archive** — nothing parses
+it. Plumbing: [Vendor Lead Email Capture](/guides/vendor-lead-email-capture). The ledger table
+`hl_email_lead_ingest` is retained but frozen (mig 0562).
+</Warning>
 
 ## Behavioral signals MINT when Creates Lead is ON
 
