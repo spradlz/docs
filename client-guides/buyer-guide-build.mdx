@@ -1,0 +1,97 @@
+---
+title: "How the Buyer's Guide Is Built"
+description: "The reproducible half: the HTML source template, the image-substitution build step, the Playwright print-to-PDF command, and the page-fit checks that have to pass before a cut ships."
+---
+
+The buyer's guide is a deterministic build, the same way the
+[listing presentation](/listing-presentation/build-engine) is. One HTML source, one build step, one print
+command. Nothing is hand-assembled.
+
+<Warning>
+**Known gap: the build script is not yet in the repo.** `build-bg.mjs` and `pdf-bg.mjs` currently live in a
+session scratchpad, which is ephemeral — so today only the **source template** is durable. They belong in
+`tools/buyers-guide/` alongside the image manifest. Until that move happens, treat the commands below as
+the specification rather than a path you can run.
+</Warning>
+
+## The pieces
+
+| Piece | Where | What it is |
+|---|---|---|
+| Source template | `.claude/artifacts/buyers-guide-SOURCE-template.html` | The whole guide as one HTML file. Images are `__placeholder__` tokens, not data. **This is the file you edit.** |
+| Photos and logos | `.claude/reports/listing-presentation-work/` | Shared with the listing presentation — same brand toolkit, same photography. |
+| Build step | `build-bg.mjs` | Substitutes each `__token__` with a base64 data URI, writes the published HTML, and fails loudly if a token has no image. |
+| Print step | `pdf-bg.mjs` | Serves the file and drives Chrome to a letter-size PDF. |
+| Published HTML | `.claude/artifacts/buyers-guide.html` | The build output. Republished to the same path so the artifact URL never changes. |
+
+## The build
+
+<Steps>
+  <Step title="Edit the source template">
+    All eleven pages live in `buyers-guide-SOURCE-template.html`. Brand tokens are declared once at the top
+    (navy `#0F2153`, blue `#2D6DFF`, gold `#C7A254`, Playfair Display) and lifted from the listing
+    presentation so both deliverables match.
+  </Step>
+  <Step title="Substitute the images">
+    The build inlines every photo as a base64 data URI. It errors on any placeholder it cannot resolve —
+    a missing image fails the build instead of shipping a blank box.
+  </Step>
+  <Step title="Print to PDF">
+    Chrome renders it at exactly 8.5 x 11 in with `printBackground` on and zero margins, so the navy bands
+    and full-bleed photos survive.
+  </Step>
+</Steps>
+
+### The Chrome gotcha
+
+Playwright's bundled headless browser is **not installed** on this machine, and plain
+`chrome --headless --print-to-pdf` hangs on this file. What works is driving the real installed Chrome
+through Playwright:
+
+```js
+const browser = await chromium.launch({ channel: 'chrome' });
+```
+
+This renders a local file we authored, not a bot-detecting website, so the
+no-headless-browsers rule does not apply here.
+
+## The page-fit checks
+
+Every page has to fill its sheet without running into the footer. Two hard-won rules:
+
+**Fill with content and type size, never by stretching containers.** `margin-top: auto`, `flex: 1` and
+`justify-content: center` were all tried and every one made it visibly worse — giant hollow boxes with tiny
+text stranded in them. The working method is the opposite: set the type big first, watch the pages overflow,
+then **cut copy** until they fit.
+
+**Measure a defect, not a ratio.** A computed "percent full" number read 95 on pages that were visibly
+hollow, because it measured where the last element ended rather than whether the page read as full. The
+check that actually works is a collision test, run per page in the browser:
+
+```js
+footer.getBoundingClientRect().top - lastBlock.getBoundingClientRect().bottom
+```
+
+Negative means the content prints straight through the footer rule. The same idea catches a clipped hero
+headline: `htxt.top < hero.top`.
+
+<Note>
+**Keep `flex: 0 0 auto` on the page's direct children.** Without it, an overfull page silently *squashes*
+itself to fit and then measures as a perfect fit while reading broken. That rule prevents squashing; it does
+not stretch anything.
+</Note>
+
+**Then look at every page.** The collision test finds overlap; it does not find a flat monochrome logo, a
+photo whose own white background reads as a broken full-bleed, or a headline that wraps badly. Those were
+all caught by screenshotting all eleven pages and reading them.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="The guide itself" href="/client-guides/buyer-guide">
+    The artifact, the PDF, and the eleven-page structure.
+  </Card>
+  <Card title="The seller-side build" href="/listing-presentation/build-engine">
+    Same discipline, same brand toolkit, for the listing presentation.
+  </Card>
+</CardGroup>
