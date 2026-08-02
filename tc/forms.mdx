@@ -248,6 +248,149 @@ and a stamp under every initial. Matching that is a product decision (Ana's call
 companies have seen on every Spradling contract to date), not something to guess at.
 </Warning>
 
+## PRD — DOTLOOP PARITY: make every executed document look like ours
+
+<Note>
+**Status: SPEC, not built.** Written 2026-08-02 after an end-to-end test on the Zach Test lead
+(envelope 25, Single Property Buyer-Broker Rep, Ana as designated agent, broker excluded). Everything in
+"What a signed document is SUPPOSED to look like" above is the target; this section is the gap between
+that and what actually ships today, with the cause of each gap measured rather than guessed.
+
+**The document is legally sound today** — correct fills, correct signature placement, real Signature IDs,
+a full signing certificate, Central-time dates. Every item below is about it *looking like HouseLoop*.
+</Note>
+
+### What already works (do not rebuild it)
+
+| Behaviour | Where |
+|---|---|
+| The verification block renders at all | `stampVerification()` — real embedded TTF, fires on `DOCUMENT_COMPLETED` |
+| The code is the certificate's Signature ID | Documenso `field.secondaryId`, so the stamp cross-references the cert exactly like dotloop |
+| Positions read, never guessed | Documenso reports each field's real page + position as percentages |
+| Initials get their own block | Drawn only when `inserted === true` — never a pre-print |
+| Annotation layer stripped | Every visible mark is page content, so it renders the same in every viewer |
+| Central time | `BUSINESS_TZ` — an 11pm signature cannot print tomorrow's date |
+
+### G0 — You cannot SEE where the signatures will go before sending (do this first)
+
+**The symptom, in Zach's words (2026-08-02):** *"when I click view PDF after I fill it out before sending
+it doesn't have any signature fields… this doesn't give me a very positive feeling."*
+
+He is right, and this is a product defect rather than a misunderstanding. Today the pre-send preview shows
+**empty white boxes**. The e-sign fields are real, they are deterministic, and they land correctly — but
+they are created **inside Documenso at send time**, so nothing in the previewed PDF reflects them. The
+agent is asked to send a legal document on trust. dotloop renders its blocks *before* you send; we render
+nothing.
+
+**What NOT to do:** re-introduce the pre-printed cursive name. That was removed for good reason — the real
+mark landed on top of it and every executed contract carried two stacked marks, one of which nobody made.
+
+**The fix — an empty TAGGED BLOCK, not a signature.** At fill time, for each signature field that will
+actually be created, draw:
+
+- a light outlined rectangle at the field's exact box (the same coordinates the send uses — never a
+  second set), and
+- a small label naming the party: `Buyer 1 — sign here`, `Designated Agent — sign here`.
+
+Invariants:
+
+- **Draw only what will really be placed.** Same filter as the send: present parties, `SIGNATURE`/`INITIALS`
+  only. If the broker is excluded, no broker block. A block that does not become a field is a lie in the
+  other direction.
+- **It must be visually impossible to mistake for a mark.** Outline plus label, never cursive, never a name.
+- Drawn at fill time, so `View PDF` shows it immediately, before anything is sent.
+- It disappears under the real signature after signing (the mark is drawn over the same box), so it never
+  appears on an executed document.
+
+**Why this is first:** it is the only gap that costs confidence on every single send, and it is what makes
+every other item verifiable by eye instead of by script. Verifying placement currently requires running
+the field map through an overlay by hand — that is a tool for engineers, not a workflow for an agent about
+to send a contract.
+
+### G1 — The stamp sits ON the signature instead of in the DATE column
+
+**Measured on envelope 25:** the buyer's block overlaps the signature box; Ana's block collides with both
+her signature and the printed `(Agent's Signature)` label. All four `(Date)` lines are **blank**.
+
+**Cause**, `stamp-verification.ts`: the block is anchored to *the mark's own box* —
+
+```
+{ x: x + w - PAD, topY: boxTop - PAD - SIZE, align: 'right' }
+```
+
+That is right for dotloop's forms, where **one wide underline carries both** the signature and the date
+column. It is wrong for the eXp forms, which have **three separate columns** — `(Signature)`,
+`(Typed/Print Name)`, `(Date)` — so anchoring on the signature box lands the block on top of the signature
+and leaves the real date column empty.
+
+**Fix:** anchor on the DATE column. Those coordinates already exist — every field map keeps its DATE
+entries, and the code comment says they are retained precisely because they "document where the date
+column is." They are filtered out before Documenso (they must never become interactive fields) but the
+archive step should read them.
+
+- `stampVerification()` takes an extra argument: the form's DATE fields from `packetSignatureFields()`.
+- Pair each SIGNATURE with the DATE entry of the **same party on the same page**; draw the block there.
+- **Fallback, not silence:** no matching DATE entry → keep today's behaviour and push the party+page onto
+  the returned `skipped[]`, so a missing map entry is visible instead of a blank date line.
+- Verify by overlay, per `SIGNATURE_ANCHORING` — a stamp count is not verification.
+
+### G2 — The client is emailed the UNSTAMPED copy
+
+**This is the defect that hides every other one.** The stamped PDF is archived to R2 and nothing ever
+sends it; Documenso mails its own sealed copy. Twice now the emailed copy has been opened and the correct
+conclusion drawn — "the stamping didn't work" — when the stamp was fine and the *distribution* was not.
+
+**Fix:** on `DOCUMENT_COMPLETED`, after the stamp and the R2 upload, send the stamped copy to every party
+from HouseLoop. Attachment support does not exist (`buildRfc2822` builds html/multipart-alternative only),
+so this links to the verification page in G4 — or gains real attachments as its own scoped change.
+
+### G3 — The email and signing page are not HouseLoop
+
+Client-facing today: the signing page reads **"Personal Team on behalf of 'Personal Team' has invited you
+to sign this document"**, and the invite is Documenso's template. A buyer receiving that on a legal
+document reads it as a generic tool, or as phishing.
+
+- Rename the Documenso team so no client ever sees "Personal Team".
+- Set `distributionMethod: 'NONE'` on create so Documenso sends nothing, then send from HouseLoop using
+  the canonical email shell + `#2D6DFF` CTA. **Silence its reminder path too** — never call
+  `/documents/:id/resend`.
+- **Each recipient gets THEIR OWN signing link.** `sendLoopDocument` currently returns only the buyer's
+  and discards the rest; persist every recipient so a co-buyer is never mailed the buyer's token.
+- Templates own the markup (Blocks Engine law) — no code-built HTML.
+
+### G4 — No per-page banner and no verification page
+
+dotloop prints `dotloop signature verification: dtlp.us/XXXX-XXXX-XXXX` across the **top of every page**.
+We print nothing, so a printed page carries no way back to the record.
+
+- Draw `HouseLoop signature verification: houseloop.ai/v/<CODE>` at the top-left of every page — label in
+  ink, URL in `--hl-blue`, approx 8pt.
+- **The banner must not ship before the page exists.** A printed URL that 404s on a legal document is
+  worse than no URL.
+- The page serves the stamped PDF plus who signed and when. The code is a random unguessable token —
+  never sequential.
+
+### Sequence
+
+1. **G1** — highest visible value, self-contained, no new surface.
+2. **G3 team rename** — minutes, and it is the most embarrassing thing a client sees.
+3. **G2 + the rest of G3** — the branded send, once recipients are persisted.
+4. **G4** — page first, banner second.
+
+### Verification — this is the gate, not a checklist
+
+Test on the **Zach Test lead only**, never a real one. A run passes when:
+
+- The overlay shows every block **in the date column**, none overlapping a signature or a printed label,
+  on a page whose box Y differs from page 1.
+- Every `(Date)` line on the executed document is filled.
+- Zero Documenso emails fire — invite, reminder, or completion.
+- The copy that arrives **in the inbox** is the stamped one. Open it from the email, not from R2; that
+  distinction is the whole of G2.
+- `houseloop.ai/v/<code>` from the printed banner resolves.
+- Rendered pages are compared against a real executed dotloop contract element by element — "matches the
+  reference," never "matches my memory."
+
 ### The fill engine
 
 `lib/tc/fill-contract.ts` (`drawSignaturePlaceholders`) draws signature/initials as **page content** (not form
