@@ -7,22 +7,36 @@ The buyer's guide is a deterministic build, the same way the
 [listing presentation](/listing-presentation/build-engine) is. One HTML source, one build step, one print
 command. Nothing is hand-assembled.
 
-<Warning>
-**Known gap: the build script is not yet in the repo.** `build-bg.mjs` and `pdf-bg.mjs` currently live in a
-session scratchpad, which is ephemeral — so today only the **source template** is durable. They belong in
-`tools/buyers-guide/` alongside the image manifest. Until that move happens, treat the commands below as
-the specification rather than a path you can run.
-</Warning>
+Two commands, both in the repo:
+
+```bash
+node tools/buyers-guide/build.mjs   # template + images -> publishable HTML
+node tools/buyers-guide/pdf.mjs     # HTML -> letter-size PDF, both copies
+```
 
 ## The pieces
 
 | Piece | Where | What it is |
 |---|---|---|
 | Source template | `.claude/artifacts/buyers-guide-SOURCE-template.html` | The whole guide as one HTML file. Images are `__placeholder__` tokens, not data. **This is the file you edit.** |
-| Photos and logos | `.claude/reports/listing-presentation-work/` | Shared with the listing presentation — same brand toolkit, same photography. |
-| Build step | `build-bg.mjs` | Substitutes each `__token__` with a base64 data URI, writes the published HTML, and fails loudly if a token has no image. |
-| Print step | `pdf-bg.mjs` | Serves the file and drives Chrome to a letter-size PDF. |
+| Build step | `tools/buyers-guide/build.mjs` | Substitutes each `__token__` with a base64 data URI, writes the publishable HTML, and **exits non-zero** if a token has no image. |
+| Image manifest | `tools/buyers-guide/images.json` | The seven photos, pre-encoded. |
+| The Google mark | `tools/buyers-guide/google-color.svg` | The real four-colour Google G used on every review. |
+| Print step | `tools/buyers-guide/pdf.mjs` | Serves the HTML and drives Chrome to a letter-size PDF. |
 | Published HTML | `.claude/artifacts/buyers-guide.html` | The build output. Republished to the same path so the artifact URL never changes. |
+
+<Note>
+**Why the photos ship pre-encoded instead of being read from the brand toolkit.** The images in the guide
+are *processed derivatives* — resized and re-encoded from
+`.claude/reports/listing-presentation-work/` (the same toolkit the listing presentation uses). Verified
+2026-08-02: not one of them is byte-identical to a source file, so the build cannot simply re-read the
+originals without also reproducing a resize step that was never recorded. Shipping the manifest keeps the
+build exactly reproducible.
+
+The one exception is the Google mark. The toolkit's `logos/google.svg` is a **monochrome one-path glyph**
+that renders as a flat black "G" — wrong on a five-star review badge — so the four-colour mark is kept
+beside the script and overrides the manifest.
+</Note>
 
 ## The build
 
@@ -38,7 +52,9 @@ the specification rather than a path you can run.
   </Step>
   <Step title="Print to PDF">
     Chrome renders it at exactly 8.5 x 11 in with `printBackground` on and zero margins, so the navy bands
-    and full-bleed photos survive.
+    and full-bleed photos survive. **Both copies are written** — the git-tracked one in
+    `.claude/artifacts/` and Zach's on the Desktop — so they can never drift apart.
+    Confirm with `pdfinfo`: 11 pages, 612 x 792 pts.
   </Step>
 </Steps>
 
