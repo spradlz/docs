@@ -1,9 +1,9 @@
 ---
 title: "Dotloop (Reverse Engineering)"
-description: "UPDATED 8/3/2026 · 3:10 PM CDT — everything we have measured about dotloop's loop UI: the loop-detail layout, the document line, per-document sharing, and the design tokens. This is the reference the TC Loop is built against."
+description: "UPDATED 8/3/2026 · 4:10 PM CDT — everything we have measured about dotloop's loop UI: the loop-detail layout, the document line, per-document sharing, and the design tokens. This is the reference the TC Loop is built against."
 ---
 
-# UPDATED 8/3/2026 · 3:10 PM CDT
+# UPDATED 8/3/2026 · 4:10 PM CDT
 
 Dotloop is the product the TC Loop is modelled on. This page is the **single reference** for everything we
 have measured about how it actually behaves — captured live, logged in as Spradling Realty Group, not
@@ -333,3 +333,105 @@ Back = per-person checkbox (email on this send) + permission dropdown (View only
 - [TC Forms + the signing layer](/tc/forms) — G0–G4 dotloop signature parity
 - [Dotloop API integration](/guides/dotloop-integration) — their REST API (data, not UI)
 - [Transaction Coordination](/guides/transaction-coordination) — the TC system overview
+
+---
+
+## 10 · Edit, reshare, and the MVP scope — measured 8/3/2026 · 4:05 PM
+
+Walked live in dotloop (loop 306998806, a real executed listing loop) after Zach asked how dotloop handles
+editing a document that has already gone out. This section is what was **observed**, then what we build.
+
+### 10a · dotloop has NO void / resend — the model is "edit in private, then reshare"
+
+Opening a **SIGNED** document shows **`EDIT IN PRIVATE`** under the title, and **the fields are still
+editable**. Changes go nowhere until you press **SHARE** again. That is what *"Anything you add is private
+until shared"* has meant the whole time.
+
+So the loop is: **edit privately → save → share again.** There is no envelope to void, no "resend", no
+cancel. The button says **RESHARE** because the document is a living, versioned thing with a share state —
+not an envelope that gets sealed and mailed.
+
+**The document toolbar, measured:**
+
+| Menu | Items |
+|---|---|
+| **FILE** | Save · Print · Download · Split document · Rotate · Apply template · Save as template |
+| **ADD** | Add signature · Add initials · Add strikethrough |
+| **MORE** | Review notes · Show tasks · **Document history** · Host in person signing |
+| | **AUTOFILL** · **SAVE** · **SHARE** |
+
+`Document history` is the version trail that makes editing-after-signing survivable.
+
+### 10b · The stamp — the parity target, on a real executed document
+
+On the signature line itself, in green, sitting **in the DATE column**:
+
+```
+Chris Cribb          ┌ dotloop verified          ┐
+                     │ 12/17/25 1:02 PM CST      │
+BROKER SIGNATURE     └ QYP5-5XQB-EMTI-UVWZ  DATE ┘
+```
+
+Name in cursive · a verified label · timestamp **with timezone** · a 4×4 verification code. Three signers,
+three distinct codes. Page top carries `dotloop signature verification: https://dtlp.us/1pBL-oHDs-IzTC`.
+An unsigned slot still reads **`SELLER SIGN HERE`** — the same placeholder idea as our G0 tags.
+
+<Note>
+**We already match this.** `lib/esign/stamp-verification.ts` renders `HouseLoop verified` + the same
+timestamp format + a 4×4 grouped code derived from Documenso's `field.secondaryId` — the same value printed
+on the signing certificate, so the code genuinely cross-references. Shipped as G1. It says *HouseLoop
+verified*, never a false "dotloop verified" claim.
+</Note>
+
+### 10c · Where our architecture genuinely differs — and why we do NOT copy them
+
+| | dotloop | HouseLoop (Documenso) |
+|---|---|---|
+| A document is | living, versioned, edit-in-private | an **envelope**, sealed on send |
+| Edit after send | just edit, then reshare | **impossible** — `throw 'already sent'` |
+| A signature is | a stamp applied in place | a cryptographic seal |
+
+Copying dotloop wholesale would mean giving up envelope sealing, which is the stronger legal position. We
+keep the envelope and close the hole a different way (10d).
+
+### 10d · THE MVP — Zach 2026-08-03: *"make this an mvp for what we need dont boil the ocean"*
+
+His list, verbatim: *"the ability to add a person, does that person sign or not, reshare the doc, just send
+the pdf, or whatever … i still need that dotloop parity with the code and the date and time stamp on the
+date field."*
+
+| # | MVP capability | State |
+|---|---|---|
+| 1 | **Add a person to a document** — name · email · role | ✅ built (`hl_tc_loop_document_share`, mig 0581) |
+| 2 | **Do they sign?** — `view_only` \| `can_sign`, per document | ✅ built |
+| 3 | **Reshare** — re-notify chosen people, document unchanged | ⬜ modal built; needs wiring to the send engine |
+| 4 | **Just send the PDF** — a copy, no signature request | ⬜ to build |
+| 5 | **The stamp** — code + timestamp in the DATE column | ✅ built (G1) |
+| 6 | **Deliver the STAMPED copy** | ⬜ **G2 — the real gap** |
+
+<Warning>
+**#6 is why Zach thinks the stamping does not work.** The stamp has been correct since G1 — but Documenso
+emails the **unstamped** copy, and our stamped one sits in the loop where nobody looks. He opened the wrong
+copy and drew the obvious conclusion. Fixing the DELIVERY is worth more than any further stamp work.
+</Warning>
+
+**Explicitly OUT of the MVP** — named so nobody quietly builds them:
+
+- Edit-after-send / envelope voiding / document versioning
+- `Document history`
+- `Can fill & sign` and `Can edit in private` permissions (they change who may ALTER a legal document)
+- Split · Rotate · Apply template · Save as template · Host in person signing · Review notes · Fax
+
+### 10e · The one hole the MVP still leaves open
+
+`lib/esign/send-loop-document.ts:73` — `if (doc.status === 'sent') throw new Error('already sent')`, and
+there is **no void, no resend, no new-version path anywhere in the codebase**. Send a document with a typo
+today and you are stuck.
+
+That is deliberately NOT in the MVP, but it must not be forgotten. When it is built, the rule is the line
+dotloop's own model implies:
+
+- **Nobody has signed** → void the envelope, unlock the fill, send fresh links. The old links must die, or
+  a signer signs a stale version.
+- **Someone has signed** → editing produces a **new version** with its own envelope; the signed one stays
+  sealed in history. A signed document is immutable — that is what makes the signature mean anything.
