@@ -82,14 +82,47 @@ left-nav — the only route in is one button on the dashboard.
 
 ### Two tables are badly named
 
-- **`vendors`** is the **service-provider directory** — title company, lender, inspector, home warranty,
-  insurance. SISU held these as five loose text columns per deal (`title_company`, `mortgage_company`,
-  `home_inspection`, `home_warranty`, `insurance_company`). Zach 8/3: *"we call it our preferred vendors or
-  transaction partners — transaction partners might make more sense."* → **`transaction_partners`**.
-- **`brokerages`** is not a list of brokerages. It holds **the payout rulebook** — the tier ladder, each
-  tier's percentages, flat fees, thresholds, eXp constants, and referral sources. It is **team + comp
-  plan**. → **`teams`**, with the plan carrying an **effective date** so a 2023 deal computes on the 2023
-  plan.
+#### `vendors` → **`transaction_partners`** (Zach, 8/3)
+
+> *"Transaction partners would include every loan officer, every home warranty company, every moving
+> company, every title company — even if they were a referral, a preferred vendor, or not a preferred
+> partner."*
+
+**It is everyone who touches a transaction, not just the preferred list.** SISU held these as five loose
+text columns per deal (`title_company`, `mortgage_company`, `home_inspection`, `home_warranty`,
+`insurance_company`); this makes them real records you pick from instead of retyping.
+
+**Preferred is a FLAG on the row, not the definition of the table** — a referral partner you used once
+still belongs in there.
+
+<Warning>
+**`type` cannot carry "preferred" — that column already means the CATEGORY.** Overloading it is the
+two-facts-in-one-column disease (the same bug that put do-not-contact into an agent-history bucket, §5.6).
+Two columns:
+
+| Column | Values |
+|---|---|
+| `partner_type` | `lender` · `title` · `home_warranty` · `inspection` · `insurance` · `moving` · `other` |
+| `is_preferred` | true, or null/false — **this is the preferred-partner list** |
+
+"Show me my preferred lenders" is then one filter, and a one-off moving company still has a home.
+</Warning>
+
+#### `brokerages` → **`comp_plans`** (Zach, 8/3)
+
+It is not a list of brokerages. It holds **the payout rulebook** — the tier ladder, each tier's
+percentages, flat fees, thresholds, eXp constants, and referral sources.
+
+> *"Isn't it really just a comp plan? We don't need to say team plus comp plan, right? It's just comp plan
+> with team as a column, correct?"* — **Correct. There is NO teams table.**
+
+`team` only ever holds the two values Zach named — `spradling_realty_group_legacy` and `houseloop` — so it
+is a **value carried on the row**, not an entity needing its own table. A teams table would exist purely
+to hold two names.
+
+**GRAIN: one row per team, per effective period.** The plan carries an **effective date** so a 2023 deal
+computes on the 2023 rules; changing the plan adds a row rather than editing history. SRG's row has 5
+tiers and its own eXp constants; HouseLoop's has one tier today.
 
 ## What the dashboard actually does today
 
