@@ -315,6 +315,121 @@ nothing is.
 
 ---
 
+## 🧾 THE AUDIT RECEIPT — an item is not checked until it has one
+
+<Warning>
+**Locked by Zach 2026-08-03.** *"For every single thing you fix you have to audit and walk it like a user."*
+A checkbox means **one** thing: the agent opened the product, used the feature as a human through Playwright,
+and wrote down what the machine actually did. **Compiling is not evidence. Typechecking is not evidence. A
+passing gate is not evidence.** The receipt is the evidence.
+</Warning>
+
+### Why this is not optional
+
+On 2026-08-03 an agent reported the per-document Share modal as built, typechecked, committed and pushed.
+It was all of those things. It was also **unreachable** — the modal had state, it was mounted in the tree,
+and nothing anywhere called `setShareDoc`. Opening the page for the first time surfaced **three** defects
+inside a minute:
+
+| Defect | Caught by |
+|---|---|
+| The modal had no button — dead code | opening the page |
+| The **Done** button was missing (a custom `footer` prop had replaced the submit) | trying to save |
+| "Attach PDF to email" promised something the transport cannot do | reading it as a user |
+
+**`tsc` was clean for all three.** That is the whole argument. The typechecker verifies the code you wrote;
+only the screen verifies the product you shipped.
+
+### The anatomy, revised
+
+The artifact grows a third region. Same file, same URL, three bands top to bottom:
+
+| Region | What it is |
+|---|---|
+| **① THE PRD** | The plan, the law, the corrections, the "done means" — everything already specified on this page |
+| **② THE CHECKLIST** | One canonical numbered list, 1 → N. There is no cap; a real PRD runs to hundreds |
+| **③ THE AUDIT RECEIPTS** | **At the bottom.** One receipt per checklist item, in item order, each carrying its screenshot and its machine evidence |
+
+Item **17** in region ② links to receipt **17** in region ③. If a receipt has no item, it is orphaned; if a
+ticked item has no receipt, **it is not ticked** — untick it.
+
+### The seven fields — every receipt, no exceptions
+
+Zach's list, verbatim, in the order you collect them:
+
+| # | Field | What it must contain |
+|---|---|---|
+| 1 | **What I did** | The literal click path: *"Opened the loop → clicked People on document 2 → typed Dana Reed → chose Lender · Can sign → Done."* Not "tested sharing" |
+| 2 | **What happened on the page** | The Playwright screenshot, embedded, plus the sentence a human would say about it |
+| 3 | **The activity log row** | The `hl_lead_activity` row it created — `kind`, `title`, `actor_role`. **No row is a finding**, not an omission |
+| 4 | **The table(s) used** | Every table written or read — `hl_tc_loop_document_share`, `hl_lead_activity`. Name them |
+| 5 | **The variables** | The real values that moved: `permission='can_sign'`, `loop_status_key='lost'`, `meta.toLabel='Lost'` |
+| 6 | **Schema-lock check** | The tables you touched, checked against `tools/schema/schema.lock.json`. New table → is it in the lock, the census AND `target-verdicts.json`? New kind → is it in the catalog **and** writable? |
+| 7 | **Which item this proves** | The checklist number. A receipt that names no item is decoration |
+
+<Note>
+**Field 6 is the one people skip, and it is the one that bites.** Twice in one night a change was "done" while
+a companion artifact was not: a catalog kind existed but had no `hl_trigger_events` row, so **every write was
+rejected silently**; and migrations were applied while `schema.lock.json` lagged, blocking the whole branch.
+Neither was visible in the UI. Field 6 is how you catch the half that the screen cannot show you.
+</Note>
+
+### Playwright, and only Playwright
+
+**Use the MCP browser tools against real Chrome** (`mcp__playwright-*`). Never headless — headless is detected
+and blocked on any human-facing site (`.claude/lessons/no-headless-browsers.md`).
+
+**Drive it the way a person does.** Real clicks and real typing, because:
+
+- **Scripted value-setting does not register in React.** Setting `input.value` from `browser_evaluate` updates
+  the DOM and leaves component state empty — the form then submits **nothing** and looks like it worked. This
+  cost a full false pass on 2026-08-03.
+- **Navigating straight to a query URL trips bot detection.** Typing into the search box does not. The same
+  session got a `403` for URL-hopping and recovered when driven like a human.
+- If a control cannot be reached by clicking, **that is the finding** — write it down instead of routing around
+  it with a direct API call.
+
+**Verify with your eyes, then with the database.** A screenshot proves the render; a query proves the write.
+A receipt needs both, because a UI can lie in either direction — it can show success on a failed write, or
+hide a write that happened.
+
+### Running the checklist — the `/loop` protocol
+
+When Zach says **run in a loop**, the agent works the checklist top to bottom, and **one item is one full
+cycle**:
+
+<Steps>
+<Step title="Build item N">Write the code. Typecheck the WHOLE app, never filtered to your own filenames — filtering hides the files your change broke.</Step>
+<Step title="Walk it in Playwright">Open the page. Use the feature as a human. Click the real controls.</Step>
+<Step title="Screenshot it">Capture what a user would see, including the failure if it failed.</Step>
+<Step title="Collect the seven fields">Activity row · tables · variables · schema-lock check.</Step>
+<Step title="Write receipt N at the bottom">Then, and only then, tick item N.</Step>
+<Step title="Move to N+1">Never tick ahead. Never batch the walking to the end — that is how three defects hid behind a green typecheck.</Step>
+</Steps>
+
+**If the walk fails, the item does not advance.** Fix it, re-walk it, re-screenshot it. **Keep the failing
+screenshot in the receipt** — a receipt showing "broken → fixed → proven" is worth more than one that only
+shows the happy ending, and it is what makes the audit trustworthy.
+
+### Publishing as you go
+
+Re-publish the artifact after every few receipts — same file path keeps the same URL, so the tab on Zach's
+second screen updates in place. He should be able to watch the receipts appear without asking.
+
+Screenshots are inlined as data URIs (the artifact CSP blocks external hosts, so a linked image renders as
+nothing). Compress before embedding — raw PNGs make the page unusable on a phone. Generate the receipts region
+with a script that reads a manifest and inlines the images, so the payload never has to pass through the
+agent's own context.
+
+### The final gate — the screen-walk
+
+The agent's receipts are **the agent's own testimony**. The [Screen-Walk](/how-to/screen-walk) is where Zach
+walks the same screens after sign-off and forms his own verdict. It is the last step, it is his, and **it is
+not a formality** — every defect in the 7/28 outage was found by Zach looking at a screen while every audit
+was green.
+
+Sequence: **agent builds → agent walks + receipts → agent signs off → Zach screen-walks → gate closes.**
+
 ## The rules that keep it honest
 
 1. **One artifact per agent.** Not per feature. The agent's whole lane lives on one page.
