@@ -698,6 +698,48 @@ API-first Configure builders.
 | **G5** | SkySlope / eXp — push signed docs for brokerage compliance | ⬜ |
 | **G6** | Myli-TC — autonomous fill → sign → file via the same endpoints | ⬜ |
 
+### ⬜ PLANNED — the TEAMS table + admin UI (the last thing in this build)
+
+**Zach 2026-08-03: _"we need a team table dude, that is how we build this correctly otherwise it's hidden in
+typescript somewhere."_ He is right, and this is the deliberate debt we took to keep moving.**
+
+**What shipped instead (2026-08-03):** `hl_role_team` (mig 0582/0583) — a role belongs to MANY teams, which
+is the part the loop actually needed. `team_key` is a **hard-coded TEXT value**, not a foreign key: today the
+legal values `sales` and `transaction` live in code, and adding `marketing` means a one-line migration.
+
+| Role | Teams |
+|---|---|
+| Real Estate Agent | `sales` + `transaction` — the row a single-value column could never hold |
+| Showing Partner · Lender | `sales` |
+| Broker · Transaction Coordinator | `transaction` |
+| AI ISA · AI Receptionist | `sales` — **AI is a TYPE, not a team** |
+| AI Clone | *(none — a clone follows the person it clones, so its team is a property of the member)* |
+
+**What still has to be built, and why it is not optional forever:**
+
+1. **`hl_team`** — a real table: `key · label · description · sort · is_active`. Today the vocabulary is
+   hard-coded, which means the list of teams is invisible to the database and un-editable by a human. That is
+   exactly the "hidden in TypeScript" failure mode our own catalog laws exist to prevent.
+2. **`hl_role_team.team_key` → FK** to that table, once it exists.
+3. **A teams admin UI** — Zach's spec, modelled on the SureSend My-Teams cards: *create a team → name,
+   description, members*. Lives under My Team.
+4. **The department axis** — the list is department-shaped and will grow:
+   `sales · transaction · marketing · recruiting · content` (+ `past_client` when the referral dashboard
+   lands). Naming the first key `sales` rather than `lead` was chosen so it still reads correctly when
+   marketing arrives.
+5. **Per-team permissions** — Zach: *"need separate permissions for your teams."* Permission columns land on
+   `hl_role_team` (Lee's ruling: that is why it is a join table and not a `text[]`). `hl_role.grants_tc`
+   stays the permission bit until then, and folds in here.
+6. **Retire `hl_role.team_group`** — the single-value column `hl_role_team` supersedes. `rename-readiness.mjs`
+   measured **16 live reader/writer sites**; per `ONE_COMMIT_RENAME` all 16 move in the SAME commit as the
+   data. Shipping half a rename is what caused the 7/28 outage, which is why this was NOT bundled into 0582.
+
+**The rule that makes AI scale here** (Zach's open question, answered): filter on what a role can *do*, never
+on `kind='ai'`. **A team says where you appear; `kind` says whether you can sign.** So a future AI Transaction
+Coordinator joins the `transaction` team, appears on the loop, and holds `view_only` — while `can_sign` is
+never offered to it, because a signature on a legal document must be a person. Blocking AI from loops outright
+would have made that role impossible.
+
 ## Data model — migrations 0253–0263
 
 `apps/houseloop-crm/db/migrations/` (additive + reversible; `node db/migrate.mjs` against
