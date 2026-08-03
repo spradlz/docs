@@ -261,7 +261,22 @@ companies have seen on every Spradling contract to date), not something to guess
 ## PRD — DOTLOOP PARITY: make every executed document look like ours
 
 <Note>
-**Status: SPEC, not built.** Written 2026-08-02 after an end-to-end test on the Zach Test lead
+**Status 8/3/2026 9:15 AM CDT — 3 of 6 gates SHIPPED and verified in production.**
+
+| Gate | State | Evidence |
+|---|---|---|
+| **G0** pre-send sign-here tags | ✅ shipped `69437245d7` | tags render on a real filled agreement; only assigned parties tagged |
+| **G1** stamp into the DATE column | ✅ shipped `331505fe5e` | envelope 29, archived by the live webhook — both blocks in the date column |
+| **G3a** Documenso team branding | ✅ live | signing page reads "The Spradling Group", was "Personal Team" |
+| **G2** client emailed the unstamped copy | ⬜ next | — |
+| **G3b** branded HouseLoop email | ⬜ queued | — |
+| **G4** per-page banner + `/v/<code>` page | ⬜ queued | — |
+
+Live build receipt with screenshots: **artifact `a9cecf18-8569-4604-b955-4b571f082015`**.
+
+---
+
+**Originally written as SPEC, 2026-08-02**, after an end-to-end test on the Zach Test lead
 (envelope 25, Single Property Buyer-Broker Rep, Ana as designated agent, broker excluded). Everything in
 "What a signed document is SUPPOSED to look like" above is the target; this section is the gap between
 that and what actually ships today, with the cause of each gap measured rather than guessed.
@@ -281,7 +296,26 @@ a full signing certificate, Central-time dates. Every item below is about it *lo
 | Annotation layer stripped | Every visible mark is page content, so it renders the same in every viewer |
 | Central time | `BUSINESS_TZ` — an 11pm signature cannot print tomorrow's date |
 
-### G0 — You cannot SEE where the signatures will go before sending (do this first)
+### G0 ✅ SHIPPED — You cannot SEE where the signatures will go before sending
+
+<Note>
+**Shipped `69437245d7`.** `drawSignerTags()` draws an empty outlined box + label ("Buyer 1 — sign here")
+at each field that will really be created, served by `GET …/documents/:docId/preview`.
+
+Three things that make it correct rather than a repeat of the pre-print that was killed:
+**(1)** it is an outline and a label — no name, no cursive, nothing mistakable for a mark;
+**(2)** it is **never baked into the signable PDF** — tags drawn into the filled document would become
+permanent page content on the *executed* contract, since dotloop's tags are viewer overlays. `file_url`
+stays the clean document Documenso seals, and the route generates tags on demand, only for `draft`/`filled`;
+**(3)** it draws **only what will really be placed** — the signer roster always contains the broker but the
+send defaults to excluding them, so the route filters to match. A tag that never becomes a field is a lie
+in the other direction.
+
+The plumbing already existed: `fillLoopDocument` resolved the signers and passed them to `fillContract`
+with the comment *"draw each assigned party's sign/initials tags… so the filled doc SHOWS who signs where."*
+That parameter was received and never used, because the drawing had been deleted along with the pre-print.
+</Note>
+
 
 **The symptom, in Zach's words (2026-08-02):** *"when I click view PDF after I fill it out before sending
 it doesn't have any signature fields… this doesn't give me a very positive feeling."*
@@ -317,7 +351,33 @@ every other item verifiable by eye instead of by script. Verifying placement cur
 the field map through an overlay by hand — that is a tool for engineers, not a workflow for an agent about
 to send a contract.
 
-### G1 — The stamp sits ON the signature instead of in the DATE column
+### G1 ✅ SHIPPED — The stamp sits ON the signature instead of in the DATE column
+
+<Note>
+**Shipped `331505fe5e`, verified in production on envelope 29.** `stampVerification()` now takes
+`dateAnchors` — the printed (Date) column read from the form's own field map — and draws the block there.
+The party join is **by email**, resolved in the webhook, because Documenso knows nothing about our parties.
+
+**No silent fallback:** a signature with no matching anchor keeps the old placement *and* is reported in
+`skipped[]`. A silently unstamped date column is the exact class of failure this module already has scar
+tissue for.
+
+**Also fixed — a duplicate nobody had noticed.** `single_property_buyer_rep` carried **eight** DATE entries
+for four printed lines: four extractor-generated plus four hand-authored about 1pt apart. The generated map
+wins (read the box, don't guess it). Only the typed-NAME lines stay inline — they are printed labels, not
+e-sign boxes, so the extractor cannot see them.
+
+Production result, envelope 29: buyer `HouseLoop verified / 08/02/26 3:48 PM CDT / CMSC-9UDP-N01O-9QH2`,
+agent the same at 3:49 PM with her own code — each signer carrying their own moment, exactly like dotloop.
+
+<Warning>
+**A deploy's `createdAt` is when the build STARTS, not when it serves.** Envelope 28 was signed ~3 minutes
+after the G1 deploy appeared as SUCCESS and still came back with the OLD placement, which looked exactly
+like "the deploy never happened." It had; the old container was still serving. Verify a deploy by the
+**commit hash on the deployment** and then by re-running the flow — never by the timestamp alone.
+</Warning>
+</Note>
+
 
 **Measured on envelope 25:** the buyer's block overlaps the signature box; Ana's block collides with both
 her signature and the printed `(Agent's Signature)` label. All four `(Date)` lines are **blank**.
