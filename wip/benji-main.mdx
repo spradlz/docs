@@ -5,8 +5,6 @@ description: "Work-in-progress dossier — Benji · HouseLoop Website. BENJI —
 
 <Info>Live dossier — auto-generated from `.claude/state/wip/benji.md` on every push. **Progress: checklist pending.**</Info>
 
-<Warning>⚠ **Possibly stale:** this work-stream file was last written 101h ago. If Benji has shipped since, this dossier under-reports — refresh `.claude/state/wip/benji.md`.</Warning>
-
 **Owner:** Benji — HouseLoop Website
 
 ## Checklist
@@ -81,3 +79,65 @@ brain is:
 ### Coordinate
 - **Adam** owns `ai_responder`/resolver + the inbox model; ping before P3's resolver touch + inbound routing.
 - Caleb's rooftop-guard push is unblocked (my WIP committed).
+
+---
+
+# TC LOOP — CONTRACT ENGINE (2026-08-03, benji)
+
+**Board artifact:** https://claude.ai/code/artifact/cd761514-1600-4e12-aaf1-2af99c1ae98f
+Source: `.claude/artifacts/tc-loop-board.html` (edit + republish with the Artifact tool, same URL).
+
+### SHIPPED THIS SESSION
+
+### Arc 2 — the section builder (CLOSED)
+- `c8b2198e9e` — section DELETE offers **move-then-delete** (`reassign_to`) instead of refusing.
+  Zach: *"otherwise its basically a UI that is 1 and done."* TC check runs BEFORE the stage-count
+  check on purpose (a TC section also has stages, so counting first gives a misleading reason).
+- `88c70f643e` — the **builder UI**: `SectionsTable` (add/rename/recolour/drag-reorder), `SectionModal`,
+  and `ReassignDeleteModal` **extracted** from `StageDeleteModal` (which now delegates) — not copied.
+  ⚠ `SectionModal` uses `StageColorSwatches`, NOT `ColorPicker`: the API validates against
+  `STAGE_COLOR_HEXES` and 5 of ColorPicker's 10 swatches are NOT in it (would 400).
+- `e7dc503083` — **add a stage inside a section** + move one between sections.
+  ONE shared validator `lib/stages/section-assignment.ts` used by POST and PATCH (this is exactly the
+  check that drifts: inline in one, forgotten in the other). Same pipeline + never `tc_milestones`,
+  enforced in the API because a dropdown is not a security boundary.
+- **Board was WRONG on `advances_to_stage_id`**: it said 0/30. Truth = 23/30, all resolving to real
+  stages, and **the other 7 SHOULD be NULL** (funded/possession are post-close, inspection_resolution
+  is a sub-step, buyer_agency_prepped is a pre-step — no stage exists for any). Chasing "30/30" would
+  have wired 7 milestones to wrong stages.
+
+### Arc 4 — the date engine (CLOSED)
+- `6ee24ca689` — **`computeLoopSchedule` did not exist.** It was a named ghost in 4 comments, each
+  deferring to the others. `computeDue` (13 passing tests) was fully built and its ONLY caller was its
+  own test file. Wrote `lib/tc/loop-schedule.ts` + wired it into `PATCH /dates`.
+  Invariants: never invents a date (no anchor → NULL, counted in `skipped`); never touches
+  `is_overridden`; clearing an anchor clears the dates it fed.
+- `5f38f345e9` — **`TcTasksPanel`** — the Tasks dock tab was a stub, so 51 computed dates were invisible.
+  ⚠ `fmtDueDate` splits the string: `new Date('2026-09-08')` is UTC midnight and renders as **Sep 7**
+  in Central. Every task would have read one day early.
+- `ca8e136cbd` — **key dates are enterable**: generalised `PATCH /dates` to any `is_key_date`
+  milestone_key (validated against the loop's side; unknown keys REPORTED not ignored) + `TcKeyDatesPanel`
+  on the Dates dock tab. `listMilestones` now returns `is_key_date`; `TcLoopBundle` finally declares
+  `milestones` (the API always returned them — the type never said so, which is why they were unreachable).
+  Proven: typed Inspection Period Ends → **"Saved — 7 task dates recalculated"** → loop 58/58 scheduled.
+
+### ⚠ NOTE ON HISTORY
+The auto-save hook swept some of this in as `[lee] route.ts…` commits (author is still benji; the
+MESSAGE prefix is wrong, and `apps/houseloop-crm/app/api/calls/log/route.ts` — Lee's file — landed in
+`f3a1c28c6a`). Did NOT rewrite: that range contains other agents' commits. Real messages are in this file.
+
+### NEXT (in board order)
+- **Arc 3** — per-page coordinate conversion (two page sizes 978×1266 / 978×1511) · Inngest importer ·
+  overlay-verify every field map · **bucket 58 forms with Ana** (needs Ana).
+- **Arc 5** — needs **Lee** (5 renames) + **Zach's typed Rule-0 approval** to drop `hl_tc_phase`.
+- **Arc 6** — Documenso `distributionMethod: NONE` · HouseLoop shell invite · deliver the STAMPED copy ·
+  `/v/<code>` verification page.
+- Arc 1's last item is Zach's own acceptance test (disposition Lawrence Guenther).
+
+### STILL OPEN / HONEST GAPS
+- `on_market` (sale side) now HAS a writer via the Key Dates panel, but no loop has used it yet.
+- Existing client loops keep NULL task dates until someone enters a key date on them (or a backfill is
+  approved). I did NOT bulk-run the cascade on real client loops — that's a real-data write for Zach to OK.
+- Pre-existing bug, NOT mine: `app/(crm)/leads/[id]/page.tsx:267` reads `lead.id` two lines BEFORE its own
+  `if (!lead) notFound()` guard, so a deleted lead 500s instead of 404ing. Hit it on the soft-deleted
+  "Zach Test" lead.
