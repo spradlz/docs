@@ -1,0 +1,371 @@
+---
+title: "Commission & Transactions Model"
+description: "The money half of the transaction model: the six-table commission estate, the third Railway database that runs the dashboard today, SISU as frozen evidence, the full payout waterfall (referral off the top, tier ladder with its annual floor, eXp caps, stock), the four live constants that are currently wrong, and the plan to fold it all into the CRM."
+---
+
+> 📐 **POLICY DICTATED BY ZACH 8/3/2026** and cross-checked line by line against the stored comp plan and
+> all 11,639 live transaction rows. Source spec: `.claude/reports/commission-policy-spec-2026-08-03.md`.
+> **The fold itself is NOT yet scheduled** — it waits on Lee's Phase-3 sequencing.
+
+<Info>
+**Companion page:** [Transaction & Loop Model](/schema-lock/transaction-model) covers the **lifecycle** of a
+deal — loop stage, loop status, milestones, tasks, document categories. **This page covers the MONEY** —
+what a closing earns, who gets paid, and where those tables live. Two halves of one model; neither
+repeats the other.
+</Info>
+
+## ⚖️ THE PRECISION BAR — READ THIS BEFORE YOU BUILD ANYTHING
+
+> *"this is not rocket science and i'm not using this for irs purposes i just need a general idea"*
+> — Zach, 8/3/2026
+
+**This is management reporting, not accounting.** Legacy numbers exist so Zach can see the shape of the
+business — who produced, what the team netted, where the money went. They are **not** tax filings, **not**
+agent payout statements, and **not** reconciled to the penny against a closing disclosure.
+
+- Use **today's rules for all legacy deals**, except where the deal itself names its rate era (§4).
+- **Do not** build rate-history versioning for legacy.
+- **Round numbers are fine.** No reconciliation passes, no tolerance checks, no per-deal audits against
+  SISU's recorded figures. They **will** differ. That is expected and accepted.
+- When a legacy input is missing, approximate it and mark it `derived`. Do not stall a deal over it.
+
+Everything flagged "verify before real payouts" is **forward-looking precision** — it matters when
+HouseLoop disburses actual money, not when the dashboard renders history.
+
+---
+
+# PART 1 — WHERE THE DATA LIVES TODAY
+
+## The third database nobody signed off on
+
+HouseLoop is constitutionally **exactly two databases** — WEB (`Listing`, homes) and CRM (people, deals).
+There is a **third**, and it is where every closing actually lives:
+
+| | |
+|---|---|
+| **Connection** | `HL_TXN_DATABASE_URL` (`apps/houseloop-crm/lib/db-txn.ts`) |
+| **Host** | its own Railway project — `houseloop-transactions` |
+| **Schema** | `hl_txn` |
+| **Rows** | **11,639 transactions**, 1,947 of them `status = 'Closed'` |
+| **Provisioned by** | `tools/houseloop-transactions-db/` (`provision.mjs`, `migrate-srg-from-sisu.mjs`) |
+
+It is the **SISU replacement**. Every row carries `legacy_sisu_id`, so nothing lost its lineage when SISU
+shut down in June 2026.
+
+<Warning>
+**This database is a standing exception to the two-database law that the record never acknowledged.** It
+also means the schema lock does **not** cover it — which is exactly how a twin-hunt missed `brokerage_id`
+on 8/3 and nearly minted a duplicate `team` column in the CRM. Lee's fix: `model.lock.json` grows an
+`hl_txn` estate inventory so no future hunt can miss it.
+</Warning>
+
+## The six tables — the estate
+
+They only work together. Move `transactions` alone and you get history with no engine.
+
+| Table | Rows | What it is | Renamed to |
+|---|---|---|---|
+| `hl_txn.transactions` | 11,639 | every closing — 64 columns | *(stays)* |
+| `hl_txn.commission_adjustments` | **0** | referral · pre-split · post-split · final · not-on-DA | *(stays)* |
+| `hl_txn.commission_splits` | **3** | per-agent split, with eXp cap fields | *(stays)* |
+| `hl_txn.commission_forms` | **3** | the CDA (Commission Disbursement Authorization) | *(stays)* |
+| `hl_txn.vendors` | **0** | title · lender · inspection · warranty · insurance | **`transaction_partners`** |
+| `hl_txn.brokerages` | 2 | **the comp plan** — tiers, eXp fees, referral sources | **`teams`** + comp plan |
+
+<Warning>
+**The engine is real and it is EMPTY.** `commission-math.ts` is a complete, tested implementation —
+verified against 1007 Skyline Drive (Donna Mason: team net \$2,084.02 / agent net \$2,094.04). But
+adjustments hold **zero rows**, vendors **zero**, splits **three**, and `commission_pct` is **NULL on all
+1,947 closed deals**. It was built in May 2026 and never turned on. `/transactions` is not even in the CRM
+left-nav — the only route in is one button on the dashboard.
+</Warning>
+
+### Two tables are badly named
+
+- **`vendors`** is the **service-provider directory** — title company, lender, inspector, home warranty,
+  insurance. SISU held these as five loose text columns per deal (`title_company`, `mortgage_company`,
+  `home_inspection`, `home_warranty`, `insurance_company`). Zach 8/3: *"we call it our preferred vendors or
+  transaction partners — transaction partners might make more sense."* → **`transaction_partners`**.
+- **`brokerages`** is not a list of brokerages. It holds **the payout rulebook** — the tier ladder, each
+  tier's percentages, flat fees, thresholds, eXp constants, and referral sources. It is **team + comp
+  plan**. → **`teams`**, with the plan carrying an **effective date** so a 2023 deal computes on the 2023
+  plan.
+
+## What the dashboard actually does today
+
+`app/(crm)/dashboard/SisuDashboard.tsx` + `app/api/sisu-transactions/summary/route.ts`.
+
+**Only ONE money number is stored: `gci`.** Every other figure on that screen is computed **in the browser,
+on every page load, and discarded**:
+
+| KPI | How it is produced today |
+|---|---|
+| Zillow Paid | `gci × ` a **hardcoded price ladder**, only when `lead_source`/`lead_type` text-matches "zillow flex" / "zillow preferred" / "zillow sellers" |
+| Ana Income | `SUM(gci) WHERE agent = 'Ana Spradling'` — **a literal string match** |
+| Agent Net | Ana → full GCI; everyone else → `gross_paid_income × (1 − ladder%)` |
+| SRG Net | `gci − ana − zillow`, floored at zero |
+
+<Warning>
+**This is why the Ana Income card reads "—" with 0 deals for 2026:** not one 2026 closed row spells the
+agent exactly `Ana Spradling`. One spelling drift and an entire KPI silently goes blank. There are **83
+distinct agent name strings** across the closings. The fix is an agent **ID**, resolved once at pour.
+</Warning>
+
+---
+
+# PART 2 — THE PAYOUT POLICY (Zach, 8/3/2026)
+
+## 2.1 — The waterfall. The order IS the policy.
+
+| # | Step | Detail |
+|---|---|---|
+| 1 | **GCI** | `(sale price − price deduction) × commission rate`. The **actual** rate — 2.5%, 2.8%, 3%. **Never assume 3%.** |
+| 2 | **Referral off the top** | team-provided leads only, computed on GCI → **adjusted GCI** |
+| 3 | **Tier split** | `adjusted GCI × the agent's tier %` — which table depends on lead status |
+| 4 | **Add** | flat fee + ISA bonus |
+| 5 | **eXp fees** | the cap logic (§2.4) |
+| 6 | **Stock** | 5% withheld |
+| 7 | **Net to agent** | what lands |
+
+## 2.2 — Lead status is the first fork
+
+- **Team-provided** — the team supplied it. Zillow, Google PPC, and going forward **HouseLoop**. A referral
+  fee comes off the top.
+- **Agent-provided** — the agent brought it. **No referral fee, ever.**
+
+## 2.3 — The tier ladder, measured in CLOSED VOLUME
+
+| Tier | Closed volume | Agent keeps — **team lead** | Agent keeps — **own lead** |
+|---|---|---|---|
+| 1 | \$0 – \$2.5M | 50% | 75% |
+| 2 | \$2.5M – \$5M | 55% | 80% |
+| 3 | \$5M – \$7.5M | 60% | 85% |
+| 4 | \$7.5M – \$10M | 65% | 90% |
+| 5 | \$10M+ | 70% | 95% |
+
+The stored plan's `agent_pct` (0.75 → 0.95) and `group_pct` (0.50 → 0.70) match these two columns exactly.
+**`group_pct` is misleadingly named** — it is the *agent's* share on group-provided leads, not the group's.
+
+### ⭐ THE TIER FLOOR — the rule that will bite any implementer
+
+> *"closed volume resets every january 1 for the tier structure, but they keep the previous deals
+> percentage they gained for the entire year but they have to earn it again."* ·
+> *"floor is always set by the previous year."* — Zach
+
+Two things happen on January 1: **the volume counter resets to zero, and the payout tier does not.**
+
+```
+tier(deal) = MAX(
+    floor    = tier EARNED by volume in the previous calendar year,
+    current  = tier reached by volume so far in THIS calendar year
+)
+```
+
+**Worked example (Zach's own).** An agent closes \$6M in 2026 → Tier 3. On Jan 1 2027 volume resets to
+zero, but their **first closing of 2027 still pays Tier 3**. To reach Tier 4 they must close **\$7.5M of
+new volume** in 2027 — no credit carries.
+
+**The floor RATCHETS DOWN.** It is set by volume *earned*, never by what they were *paid at*. If that agent
+then closes only \$2M in 2027 — paid at the Tier 3 floor all year but earning Tier 1 by volume — their
+**2028 floor is Tier 1**. Status is kept for a year, not forever.
+
+**Without the floor, every agent's January and February deals compute at Tier 1**, understating a strong
+producer at the start of *every single year*.
+
+## 2.4 — eXp fees: the cap flips which fees apply
+
+| Fee | **Before cap** | **After cap** |
+|---|---|---|
+| eXp company split | **20% of gross** | **\$0** |
+| Capped transaction fee | \$0 | **\$75** |
+| Risk management | \$60/deal | \$0 |
+| Broker review | \$25 | \$25 |
+| Stock | 5% | 5% |
+
+**The cap is per-person, by role — not one number:**
+
+| Who | eXp cap |
+|---|---|
+| **Team agent** | **\$4,000** |
+| **Team / team leader** | **\$16,000** |
+
+**Risk management has its own annual ceiling: \$750.** \$60 per deal until the agent has paid \$750 that
+year, then it stops.
+
+## 2.5 — Three running totals force the order of calculation
+
+| Running total | Threshold | Controls | Resets |
+|---|---|---|---|
+| Closed volume | \$2.5M steps | which tier | Jan 1 — **carries the floor (§2.3)** |
+| eXp paid | \$4,000 / \$16,000 | when 20% becomes flat \$75 | Jan 1 |
+| Risk management paid | \$750 | when the \$60 stops | Jan 1 |
+
+**Therefore every deal must be computed in close-date order, per agent, per year.** A deal cannot be
+calculated in isolation — its numbers depend on everything that agent closed before it. An agent who closed
+in November was on a different tier than the same agent in February. **Compute in any other order and every
+number is wrong.**
+
+---
+
+# PART 3 — THE REFERRAL (Zillow today, HouseLoop tomorrow)
+
+## 3.1 — The current success-fee ladder
+
+Taken **off the top of GCI**, on transaction price:
+
+| Transaction price | Success fee |
+|---|---|
+| \$0 – \$74,999.99 | **15%** |
+| \$75,000 – \$149,999.99 | **25%** |
+| \$150,000 – \$224,999.99 | **30%** |
+| \$225,000 – \$299,999.99 | **35%** |
+| \$300,000+ | **40%** |
+
+## 3.2 — The rate era: read it off the deal, never chase the date
+
+Zillow changed rates at the **Flex → Preferred** switch — old Flex ran roughly **20–35%**, current runs
+**15–40%** (more at the high end, less at the low end). **We do not need to know when.** SRG already tagged
+the era on the deals:
+
+| `lead_type` | Closed deals | Ladder |
+|---|---|---|
+| `Zillow Flex Originated 2024 and Later` | 385 | current (15–40) |
+| `Zillow Flex Originated 2023 and Earlier` | 30 | old Flex (20–35) |
+| `Zillow Sellers Originated Lead` | 68 | current |
+| `Team Provided Lead` | 356 | current |
+| **`Agent Provided Lead`** | **16** | **NONE — no referral, even under a Zillow source** |
+| unlabeled | 305 | fall back to close date: before 2024 → old, else current |
+
+**One rule: use the label; if absent, use the close date.**
+
+## 3.3 — HouseLoop occupies the same slot Zillow does
+
+Going forward, **HouseLoop is a referral source** taking its cut off the top exactly where Zillow does —
+at a **flat 30%** rather than a ladder (Zach's design, being finalized). Same mechanism, different party
+and rate. The comp plan's referral model must therefore support **both a flat rate and a price ladder**
+per source.
+
+---
+
+# PART 4 — THE FOUR DEFECTS IN LIVE CONSTANTS
+
+Each one moves real money. All four are why the dashboard disagrees with the actual comp plan.
+
+| # | Defect | Impact |
+|---|---|---|
+| 1 | **Tiers stored as GCI, not volume** — `min_gci_ytd` = 0 / 40k / 80k / 120k / 160k | At 3% commission, \$2.5M of volume is ~\$75k GCI vs the stored \$40k threshold. **Every agent past \$2.5M sits on the wrong tier**, so every split of theirs is wrong. → rename `min_volume`, reset the values |
+| 2 | **eXp cap applied as \$16,000 to everyone** | **Every team agent's cap is overstated by \$12,000** — they keep paying the 20% four times longer than they did. `commission_splits.exp_cap_amount` already supports per-person; it was just filled with 16000 for all |
+| 3 | **The \$750 risk-management annual cap is never applied** | `commission-math.ts` charges \$60 every deal with no ceiling — overcharges anyone past ~12 deals in a year |
+| 4 | **Dashboard's Zillow ladder starts at 20%** | The real success fee starts at **15%**. Affects 16 sub-\$75k deals |
+
+---
+
+# PART 5 — THE FOLD (the pour)
+
+## 5.1 — The shape, in Zach's words
+
+> *"This needs to be in the CRM, not as a separate Railway database… all the closings would get one home."*
+> *"everything else should be full on real, like the real railway table that has all the exp commissions,
+> the formulas, the real referral payouts and all of that stuff, we are going to need that for good."*
+
+**Same pattern as FUB, twice.** FUB's 49,000 leads sit in a mirror; ~1,700 become real HouseLoop leads.
+Railway's 11,639 transactions sit in what is effectively a mirror; the good ones become real CRM
+transactions. **A mirror is where data waits until it is clean enough to be real — never a second home for
+the truth.**
+
+**Why consolidation is structural, not cosmetic:** the links only work inside one database. A lead → a
+transaction → an agent → a commission split cannot hold together across separate Railway projects. That is
+exactly why `houseloop_lead_id` exists on `hl_txn.transactions` and is populated on **zero of 11,639 rows**.
+
+## 5.2 — What makes it "real" instead of a copy
+
+1. **Agent becomes an ID, not typed text** (83 spellings today → real people).
+2. **`team`** — `spradling_realty_group_legacy` | `houseloop`. **Not `brokerage_id`** (Zach, 8/3).
+   `brokerage_id` (1 = SRG · 11,636 rows, 2 = HouseLoop · 3 rows) folds into it.
+3. **The lead link gets filled** — every past client becomes a real HouseLoop lead with a real lead ID.
+4. **Commission is entered, not computed in a browser.**
+
+## 5.3 — Legacy agents are records, never users
+
+> *"I don't want to make Alisha Hanks a user in HouseLoop… kinda like the FUB mirror, the past agent is
+> just a record… the agent does need to be an ID because I need to sort by agent in the dashboard, I just
+> don't want them to be active users."*
+
+**A separate legacy agent roster**, not `hl_users` rows. **Measured 8/3: 92 files read `hl_users`, and 31
+of them never filter `is_active`** — so an inactive legacy agent would still surface in roughly a third of
+the app's pickers, assignment dropdowns and notification lists. A separate roster is *structurally*
+incapable of leaking into a user picker. When a legacy agent later joins for real, they get a normal user
+account that points back at their legacy record.
+
+## 5.4 — Order is forced
+
+**Leads first, transactions second.** A transaction cannot point at a lead that does not exist yet.
+
+## 5.5 — What gets written per transaction
+
+Computed **once, at pour, in one place** — never in a component.
+
+| Column | Meaning |
+|---|---|
+| `gci` · `gross_paid_income` | recorded (legacy SISU) |
+| `commission_rate` | the actual rate — never a 3% default |
+| `lead_status` | `team_provided` \| `agent_provided` |
+| `referral_payee` · `referral_pct` · `referral_amount` | Zillow / HouseLoop / none |
+| `agent_tier` · `agent_split_pct` | resolved from volume **at that close date** |
+| `agent_net` · `team_net` | the split |
+| `exp_company_fee` · `exp_transaction_fee` · `risk_mgmt_fee` · `broker_review_fee` · `stock_payout` | the fee stack |
+| `was_capped` | had this agent capped at close time |
+| **`commission_source`** | **`recorded` \| `derived` \| `not_captured`** |
+| `comp_plan_version` | which rules produced it |
+
+**`commission_source` is the honesty column.** `recorded` = a real CDA exists (a receipt). `derived` = we
+computed it from this policy (a real number, honestly labeled). `not_captured` = no GCI exists. Going
+forward a real CDA **overwrites** the derived values and flips the flag to `recorded` — same columns,
+better source, no schema change.
+
+## 5.6 — Excluded from the pour: a team agent's own transaction
+
+**14 people / 17 deals.** A past-client book is a list of **people we can market to**; an agent's own
+closing is not a client relationship.
+
+- the client **is** the agent — April Atkinson · Savannah Gilbert
+- the client is the agent's **family** — Robert David/Jeremy David · Kaixi Shen/Kathy Shen ·
+  James Duston/Stephanie Duston
+- the client is a **past team agent** — Mark Tallent · Zak Zimmerman · Julie Lazzo · Tyler Harris
+- genuine **do-not-contact** — Will Arnett · Katie & Trent Harrison · Megan Young · Yvonne Burdette
+- **family, no transaction access** — Lilian Radke
+
+Written to `hl_srg_deal_overrides` with `decided_by = 'zach'` (the only rebuild-proof surface — the
+"509 deletions" law), reversal file committed. **Nothing was deleted.** Every transaction stays in
+`sisu_transactions` and on the dashboard as history — it simply does not make the trip into the clean
+table. *Excluded from the pour ≠ deleted from history.*
+
+## 5.7 — The dashboard cutover is the acceptance test
+
+When the dashboard reads the CRM table and the numbers still tie out, the fold is done.
+
+### Expected differences on cutover — corrections, not regressions
+
+1. The bottom Zillow band moves **20% → 15%** (16 deals).
+2. Tiers switch from **GCI thresholds to volume thresholds** — moves many agents up a tier.
+3. Team agents' eXp cap drops **\$16,000 → \$4,000** — they cap far earlier, keeping more.
+4. The **\$750 risk-management ceiling** starts applying.
+
+**Measured for context:** legacy Zillow deals recorded a flat **~50% withheld in every price band** (45%
+over \$300k) across 1,155 closings, with **no laddering at all** — because a flat rule was typed at entry
+rather than the real policy computed. Non-Zillow deals sat at 15–30%. The true per-deal breakdown was never
+recorded, which is precisely why it must be computed from this policy and stamped `derived`.
+
+---
+
+## Still open
+
+| # | Question | Status |
+|---|---|---|
+| 1 | Volume reset + tier floor | ✅ **CLOSED 8/3** — annual reset, floor = last year's EARNED tier, ratchets down |
+| 2 | Zillow ladder + rate era | ✅ **CLOSED 8/3** — ladder in §3.1, era from `lead_type`, close-date fallback |
+| 3 | Does a cap-crossing deal charge exactly to the cap? | assume **yes, exact** — pennies at this precision bar, not a blocker |
+| 4 | eXp caps \$4,000 / \$16,000 vs the actual eXp ICA | as stated for legacy · **verify before HouseLoop cuts a real payout** |
+| 5 | Where the noun **closing** finally lives | Zach ruled **the CRM** 8/3; Lee schedules the fold as Phase 3 |
+
+Items 3 and 4 are forward-looking. Neither holds up the pour.
