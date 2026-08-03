@@ -1950,8 +1950,86 @@ no-estimate homes. A full re-scrape with the fixed extractor is running on Camp 
 
 ---
 
+## 11c · THE POUR — where the resolved book actually lands (2026-08-03)
+
+Everything above resolves the book. **The pour is what turns it into real CRM data.** The money model,
+the transaction estate, and the fold plan are documented in full at
+**[Commission & Transactions Model](/schema-lock/commission-model)** — this section is the seller-engine
+half only.
+
+### The shape (Zach, 8/3)
+
+> *"This needs to be in the CRM, not as a separate Railway database… all the closings would get one home."*
+
+**Same pattern as FUB, twice.** FUB's 49,000 leads sit in a mirror; ~1,700 become real HouseLoop leads.
+The 11,639 transactions on the third Railway database sit in what is effectively a mirror; the good ones
+become real CRM transactions. **A mirror is where data waits until it is clean enough to be real — never a
+second home for the truth.**
+
+**Order is forced: people first, transactions second.** A transaction cannot point at a lead that does not
+exist yet — which is why the past-client people-side pour is step one of the whole migration, not a side
+quest.
+
+### The two halves, and their current state
+
+| Half | What it does | State |
+|---|---|---|
+| **People** | 1,721 resolved past clients → real `hl_leads` rows with `relationship_status = past_client`, `team = spradling_realty_group_legacy`, real HouseLoop lead IDs | **cleared to proceed** — waits behind the `relationship_status` rename |
+| **Closings** | the transaction estate folds into the CRM | **FROZEN** by Lee 8/3 pending the Phase-3 fold — see the model page |
+
+### `relationship_status` — the leads-table filter
+
+`lead` · `sphere_of_influence` · `past_client`, on `hl_leads`. The working leads table default-hides
+`past_client` and `sphere_of_influence`, so a resolved book never pollutes the live pipeline.
+
+<Warning>
+**The vocabulary is NOT a fixed enum.** These are keys in `hl_relationships` — the user-extensible
+Relationships builder (Settings → Pipeline & Workflow → Relationships, mig 0363). An admin can add more.
+**Never put a CHECK constraint on this column**: mig 0576 did exactly that on 8/3 and rejected four of the
+six live dropdown options — including the system-level *Sphere of Influence* every agent sees — until it
+was dropped in mig 0579. A hand-authored allowlist is a hand-kept copy of a database table and is
+structurally unable to stay correct.
+</Warning>
+
+### Closed agent history — a LEGACY column, and it cannot be derived
+
+The ana-only / ana-handoff / SRG-team-only distinction moves **off** relationships and onto its own
+column, `closed_agent_history` (`ana_only` · `ana_srg_agent_handoff` · `srg_agent_only`), with a
+computed-at stamp. Zach 8/3: *"the relationship thing is real and we need a separate thing to call ana
+handoff, that is not a relationship anymore."*
+
+**Measured 8/3 — it must be pre-recorded, and that is not laziness:** deriving the buckets purely from
+which agents closed a client's deals agrees with the stored answer on **1,631 of 1,721 clients (94.8%)** —
+but **72 of the 83 ana-handoff clients have Ana on ZERO of their closings** (average 1.07 deals each).
+The handoff happened on the **lead**, before the deal closed, and SISU only ever recorded the **closing**
+agent. The fact was never written down, so no modelling recovers it.
+
+Going forward it derives free from assignment history — an agent leaves, a new agent is inserted, Myli
+stays assigned the whole time, and the chain is recorded as it happens. **The column sits NULL on
+HouseLoop-native leads.**
+
+### Excluded from the pour — a team agent's own transaction
+
+**14 people / 17 deals**, written to `hl_srg_deal_overrides` with `decided_by = 'zach'` (the only
+rebuild-proof surface — the "509 deletions" law), reversal file committed. Agents buying their own homes,
+their families, past team agents, and four typed do-not-contacts. A past-client book is a list of **people
+we can market to**.
+
+**Nothing was deleted.** Every transaction stays in `sisu_transactions` and on the dashboard as history.
+*Excluded from the pour ≠ deleted from history.* Full roster on the
+[model page](/schema-lock/commission-model#5-6-excluded-from-the-pour-a-team-agents-own-transaction).
+
+### The verification gate
+
+The pour is not done until the rebuilt Book **diffs identical** against today's render. A green run is not
+the proof; the diff is.
+
+---
+
 ## 12 · Related
 
+- [Commission & Transactions Model](/schema-lock/commission-model) — **the money + the fold**: the six-table estate, the payout waterfall, eXp caps, the Zillow ladder eras
+- [Transaction & Loop Model](/schema-lock/transaction-model) — the deal *lifecycle*: loop stage, status, milestones, tasks
 - [Property Data & Address Identity](/guides/property-data-and-address-identity) — HLID, `identityKey`, the resolver
 - [HouseLoop Home Value](/guides/houseloop-home-value) — the value fork + monthly refresh chain
 - [Sold Data & Price History](/guides/sold-data-and-price-history) — sold detection, priceHistory mechanics
