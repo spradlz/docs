@@ -1,0 +1,178 @@
+---
+title: "📗 How We Work — Developer Doc Discipline"
+description: "The /dev-doc skill: every developer doc is the filing cabinet for exactly ONE board — stamp, summary, board link, an append-only run log that is never collapsed, and references. Includes how to create a doc, how to work in one, the publish protocol that catches the render-crashers a green build misses, and how to migrate an existing doc."
+---
+
+<Info>
+**FOR ZACH — read this bit, skip the rest.** Everything below is executable as the **`/dev-doc`**
+skill. You do not have to remember any of it. You say the sentence; the agent runs the protocol.
+</Info>
+
+## What to say to an agent
+
+| What you want | What you say |
+|---|---|
+| **Log today's work to a doc** | `/dev-doc log` — or just *"log today's work to the docs"* |
+| **Create a new doc** | `/dev-doc new <section>` — or *"create a dev doc for the seller engine"* |
+| **Publish it** | `/dev-doc publish` — or *"publish the docs"* |
+| **The live site looks stale** | `/dev-doc check` — or *"the docs are stale, check them"* |
+| **Migrate an old doc to this format** | `/dev-doc migrate <path>` — or *"migrate this doc to the run-log format"* |
+
+<Warning>
+**Typing `/dev-doc` is the reliable way.** Plain English usually works — the skill matches on phrases
+like *"update the docs"* or *"publish the docs"* — but that is pattern matching, so it is likely, not
+guaranteed. **Saying "go read the developer doc and do it" is the weakest option of all**: it depends
+on an agent choosing to go read prose and then interpreting it, which is the exact failure this whole
+system replaced.
+</Warning>
+
+## The one sentence
+
+**The board is the present tense. The doc is the past tense.** The board answers *"what are we doing
+right now?"* The doc answers *"how did we get here, and what is true?"* Our docs went stale because
+they tried to be both.
+
+---
+
+# The shape of every doc
+
+```
+Title + frontmatter
+├─ 🕐 Stamp        ← FIRST THING ON THE PAGE. Auto-generated: date · time · agent.
+├─ 📌 Summary      ← what is TRUE today. The ONLY band that gets rewritten.
+├─ 🔗 The board    ← the ONE board for this section: hyperlink + live counts
+├─ 📋 Run log      ← newest first. Append-only. NOTHING is ever collapsed.
+└─ 📎 Reference    ← sub-artifacts, wireframes, related docs — never a second board
+```
+
+**The stamp goes first** because the first question anyone asks a doc is *"is this current?"* —
+answering it at the top means nobody reads three paragraphs of a stale page before finding out.
+
+## ⭐ ONE DOC ↔ ONE BOARD
+
+Every doc links to **exactly one** board, and every board belongs to **exactly one** doc. Anything
+else the doc points at is a **reference**. The moment a doc has two boards you have two sources of
+truth for one subject.
+
+## ⭐ NOTHING IN THE RUN LOG IS EVER COLLAPSED
+
+> Zach, 2026-08-04: *"I may have a great idea 2 months ago and never get around to building it until 3
+> months later — it has to stay in the run log."*
+
+**The run log is an IDEA ARCHIVE, not an activity log.** The entry most worth finding is usually an
+old one — a fresh idea is still in your head, but a three-month-old idea only exists here. Collapsing
+by age buries exactly what people come looking for. **If the page gets long, that is the correct
+outcome. Length is not the enemy; losing an idea is.**
+
+### What a run-log entry looks like
+
+```markdown
+### 2026-08-04 · caleb
+**Closed items [209–213](<board-url>#i209).** Built the client dashboard as a full-screen portal —
+one component set serving both an active buyer and a past client.
+**Found:** it told a lead he OWNED a house he is still trying to buy. Only a closed deal counts as a
+home now. **Receipts:** #209–#213. **Verdict:** pass.
+```
+
+Four things, every time: **what closed** (item numbers, hyperlinked) · **what was built** · **what was
+FOUND** — the defect or discovery, and the most valuable part · **the verdict**.
+
+**Append-only. Never edit a past entry.** If an old entry turns out to be wrong, the correction is a
+NEW entry saying so. A record you can quietly rewrite is not a record.
+
+---
+
+# Creating a doc
+
+1. **Name the section FIRST** — a real CRM left-nav item, a HouseLoop System, or a Website section
+   (`DOCS_SECTION_DISCIPLINE`). **If none fits, STOP and ask Zach.** Never invent a top-level group.
+2. **Does a doc already exist for it?** `grep` `docs.json` and the tree. If yes, **EDIT that doc** —
+   do not create a sibling. Three docs on one topic is a bug we have already spent a day undoing.
+3. Create it with the five bands, its board link, and the stamp.
+4. **Add it to `docs.json` in the same pass** — a file not in the nav is an orphan, and one orphan
+   aborts the publish for *everyone*.
+5. Preflight → publish → hard-refresh.
+
+---
+
+# ⭐ Publishing — the trap that costs weeks
+
+```bash
+node .claude/skills/dev-doc/doc-preflight.mjs        # FIRST — catches what the build does not
+node tools/docs/mirror-docs.mjs --dry                # orphans + MDX syntax (authoritative)
+DEPLOY_AGENT=<you> node tools/docs/mirror-docs.mjs   # the real publish
+# confirm "published": true, then HARD-REFRESH (Cmd+Shift+R)
+```
+
+<Warning>
+**A GREEN PUBLISH IS NOT PROOF THE PAGE RENDERS.** A **percent sign in a heading** becomes part of the
+anchor slug; Mintlify's server render calls `decodeURIComponent` on it and throws `URIError: URI
+malformed`. **Every visit 500s while the BUILD STAYS GREEN** and the mirror reports `published: true`.
+
+Discovered 2026-07-18 after `guides/srg-reconciliation-engine` had been dead for **fifteen days** —
+along with `fub/master-scraper-ssot` and `wip/adam-pastclient-address-resolver`, three of our
+most-read pages. A bare `{{token}}` in a heading is the same class.
+
+**Never put `%` or `{{` in a heading — write "percent".** `doc-preflight.mjs` exists solely to catch
+this, and the first time it was pointed at the live docs it found one in `guides/seller-engine`.
+</Warning>
+
+| Symptom | Real cause | Fix |
+|---|---|---|
+| Edited a doc, live site unchanged | the mirror never ran (the auto-hook is unreliable) | run it manually |
+| `RECONCILE FAILED` | **one broken file blocks the WHOLE publish** — including everyone else's | `--dry` names it |
+| Published, still looks old | browser cache | `Cmd+Shift+R` |
+
+**Retire = delete + redirect.** Never remove a page from the nav and leave the file on disk — that is
+an orphan. `git rm` it **and** add a redirect in `docs.json`.
+
+<Info>
+**The preflight owns ONLY the render-crash class**; orphans and MDX syntax belong to `mirror --dry`,
+which is authoritative. Building it, the first version reimplemented the orphan check and flagged 14
+pages the mirror was perfectly happy with, then flagged `style={{…}}` (valid JSX), then flagged
+`` `{{token}}` `` in backticks — which is the documented *fix*, so it was punishing correct behaviour.
+**A gate that over-reports is as useless as one that under-reports**: it trains people to ignore it.
+Do not duplicate a gate that exists; complement it.
+</Info>
+
+---
+
+# ⭐ Migrating an existing doc
+
+**Every legacy doc migrates with the script, never by hand.**
+
+```bash
+# see what would happen across every doc — writes nothing
+node .claude/skills/dev-doc/migrate-doc.mjs --all --agent <you>
+
+# migrate one, for real
+node .claude/skills/dev-doc/migrate-doc.mjs docs-site/<path>.mdx --agent <you> --board <url> --write
+```
+
+**It never rewrites your prose — it WRAPS it.** The entire existing document is filed into the run log
+as a single dated "pre-migration" entry, verbatim, and the stamp / summary / board bands are added
+above it. Then it **diffs and refuses below 100%**.
+
+<Info>
+**Why the old body becomes a run-log entry instead of being reshaped:** everything already written is,
+by definition, a record of what was true when someone wrote it — which is exactly what the run log is
+for. Reshaping would mean deciding what to keep, and *that decision is how content dies*. Promote
+whatever is still current up into the Summary afterwards; nothing is lost while you do.
+</Info>
+
+**Current state:** `--all` reports **203 docs ready, 100% preserved on every one, 0 blocked.**
+
+### After migrating, three things are not optional
+
+1. **Write the Summary** — it is the only band that gets rewritten, and it is what makes the page useful.
+2. **Link the doc to its ONE board** (`/project-board new` if it does not have one).
+3. **Preflight, publish, hard-refresh** — and confirm `"published": true`.
+
+---
+
+# Reference
+
+- **The skill:** `.claude/skills/dev-doc/` — `SKILL.md`, `doc-preflight.mjs`, `migrate-doc.mjs`
+- **The board skill:** [How We Work — the project board](/how-to/artifact-checklist)
+- **The publish mechanics:** [Publishing the docs](/mintlify-how-to-guide)
+- **Section law:** `.claude/rules/DOCS_SECTION_DISCIPLINE.md`
