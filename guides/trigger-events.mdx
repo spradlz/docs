@@ -1,498 +1,80 @@
 ---
 title: "Trigger Events"
-description: "THE trigger events page — trigger events are CONFIGURED not created (⋮ → Configure), each with a two-arm New Lead / Existing Lead workflow+notification, grouped by integration section with Activity·Communication·Insights bands, plus drag-reorder and the hl_trigger_fire ledger."
+description: "The Trigger Events page IS the Activity Catalog wearing its automation filter — one page, one table, a Trigger toggle. The locked model (7/27), the two-natures law (8/4), the registered_* door family, and the requires_registration scale switch."
 ---
 
 **In the app:** Settings → **Trigger Events** — [`/settings/trigger-events`](https://crm.houseloop.ai/settings/trigger-events)
 
 <Info>
-**THE CANONICAL TRIGGER-EVENT CATALOG (Zach's law, 2026-07-17): every trigger event, every family, lives on
-THIS page** — HouseLoop.ai website · the inbox lane · Follow Up Boss · Transaction Coordination · AI Tools ·
-insights. **Running-document law:** the update log below is newest-first; every change stamps an entry AND
-re-edits the body to current truth. The matrix below is a CODE AUDIT (2026-07-17, three agents, every claim
-traced to file:line) — 🟢 WIRED = a real emitter fires it · 🟡 PARTIAL = fires but incompletely ·
-🔴 VIBE = the row exists, NO code fires it · ⏳ PENDING = wired, waiting on external (a number port).
+**Rewritten to the locked model 2026-08-04** (the previous version of this page described the pre-lock layout
+and had gone stale — Zach flagged it). The deeper catalog reference lives in
+[Activity Catalog](/guides/activity-catalog); this page covers what makes an activity a TRIGGER and how the
+page is organized.
 </Info>
 
-## Update log
+## The locked model (Zach, 2026-07-27)
 
-- **2026-07-20 (night)** — THE INBOX IDENTITY PASS (Zach live spec). (1) **Section order locked**:
-  HouseLoop.ai - Follow Up Boss - Transaction Coordination - the INBOXES (Company - Spradling Realty
-  Group - Past Agents - Myli - Zach - Ana) - AI Tools BELOW the inboxes - custom sections last.
-  (2) **The naming convention: the identity IS the name** - every line reads
-  `<Name>'s <Platform> Twilio Line (XXX-XXX-XXXX)`, every email source carries its address; baked into
-  hl_lead_sources.name so every surface shows it. (3) **Per-ADDRESS email trigger events are LIVE rows** - all 8 mailboxes render as
-  their own doors, grouped by hl_lead_sources.inbox_id (Ana's/Zach's/Myli's emails under their PERSONAL
-  inboxes; info@ + support@ SRG under the new shared "Spradling Realty Group" inbox; Company email =
-  info@houseloop.ai ONLY). Runtime email routing seeded to agree (mig 0433 - hl_inbox_email_doors).
-  (4) A FUB-carried door wears the "FUB:" platform prefix on the event ("FUB: Phone Call Received -
-  Zach's FUB Twilio Line (913-490-2988)"). (5) New seats: Myli's iMessage Line (913-208-1633, text door)
-  and Ana's FUB Twilio Line (913-453-5505 - the FUB line fronting her old KC mobile). (6) Board bugfix:
-  duplicate React row keys made sections silently DROP rows (call/text doors share event keys across
-  lines) - seat now rides in the key. The Workflows page mirrors all of it 1:1 (see guides/workflows).
-- **2026-07-17 (PM)** — Documented [the FUB pull-in](#the-fub-pull-in--what-creates_lead-imports): what
-  `creates_lead` imports (Context + browsing/Website History) vs what it does NOT (comms stay in FUB context;
-  comms native going forward), the caller-identity precedence (existing HL lead wins; FUB mirror only for
-  unknowns — the "Zach Test" fix), and one-phone-one-lead + household linking (mig 0424).
-- **2026-07-17 (v2)** — Matrix rewritten to mirror THE LIVE BOARD 1:1 (Zach: "it doesn't match my
-  screen") — same sections, same rows, same order, one color per row.
-- **2026-07-17** — THE FULL WIRING AUDIT (3 code agents), every event wired-vs-vibe with receipts.
-  Fixed live: Zach's FUB seat text door (mig 0418 seat + router text-parity wire). Flagged: the tc_*
-  workflow arms are notification-only (🔴) · 8 hidden catalog keys with no emitters (not on the board —
-  deletion queued) · a dead pixel-side insight emitter. FUB event family moved here from the retired
-  fub/trigger-events (canonical-catalog law).
-- **2026-07-16** — THE INBOX LANE shipped: per-inbox board sections, per-line fires (lead-less included),
-  creates-lead mints at ring — live-proven on an organic Zillow caller.
-- **2026-07-13** — The Configure model (events configured, never created) + the fire ledger.
+**A trigger event was never a separate object — it is an activity with automation switched on.**
+The Trigger Events page and the Activity Catalog are ONE page over ONE table (`hl_activity_catalog`);
+Trigger Events is that table filtered to the rows whose automation toggle is on. An automation can run a
+workflow, a playbook, or a notification.
 
-## ⭐ THE CANONICAL MATRIX — the board, row by row, wired vs vibe (code audit 2026-07-17)
+**The four nouns:** Integration = the pipe a lead arrives through · Source = the brand that produced them ·
+Activity = a fact that happened · Tool = a capability the AI can use. The loop: the Toolbox performs →
+an Activity records it → some activities are Triggers → Triggers run Playbooks → Playbooks use the Toolbox.
 
-**This table mirrors the live board 1:1** (same sections, same rows, same order as
-`/settings/trigger-events`). 🟢 = the row genuinely fires (emitter verified at file:line) · 🟡 = fires
-partially / with a caveat · 🔴 = looks functional but is not · ⏳ = wired, waiting on an external event.
+**Sections never collapse across pipes.** "Registered on HouseLoop" and "Registered via Zillow" are two
+rows, even when they run the same playbook — *"the lead source says who introduced them, the activity says
+where they are now."* Collapsing them destroys the number that proves HouseLoop is earning its keep.
 
-### 🌐 HouseLoop.ai Website (16)
+**Follow Up Boss is the Zillow connector, not an integration in its own right.** Zillow owns FUB; nothing
+else flows through it. Its section is Zillow — swap the connector later and the section keeps working.
 
-| Row | Fires from | Status |
+## The two-natures law (Zach, 2026-08-04)
+
+Every catalog row now carries an `origin` marker, because the rows come in two natures:
+
+| Nature | `origin` | What it means |
 |---|---|---|
-| Tour Request | site showing-request → `process-intake.ts:187` | 🟢 |
-| Contact Request | contact-agent form → `process-intake.ts:188` | 🟢 |
-| Direct Registration | sign-up / Google sign-in / manual Add Lead → `process-intake.ts:199` · `api/leads/route.ts:365` | 🟢 |
-| Seller Get Report | seller inquiry/claim + seller-demand pixel → `process-intake.ts:192-194` · `pixel/track:248` | 🟢 |
-| Saved Search | lead saves a search → `process-intake.ts:196` (system-seeded starters deliberately don't fire) | 🟢 |
-| Seller Get Started | the seller flow → intake base key | 🟢 |
-| Saved Home / Liked Home / Shared Home | pixel save/like/share + intake → `pixel/track:250-252` | 🟢 |
-| Text Received | inbound SMS/iMessage → `log-message.ts:281` (one choke point) | 🟢 |
-| Phone Call Received | inbound call → voice webhook (`fireInboxDoor`, lead-less incl.) | 🟢 |
-| Email Received | inbound email → `gmail-realtime.ts:222` + `inbound-sync:105` | 🟢 |
-| Re-Engaged / Viewed 10x in 7 Days / Looking in a New Area | the hourly `insight-engine` cron over OUR pixel data | 🟢 (⚠ a pixel-side repeat-views detector emits a dead event name — the cron is the real emitter; cleanup queued) |
-| Property Viewed (Insights band) | pixel view, identified leads → `pixel/track:249` | 🟢 |
+| **Facts Zillow defines** | `zillow_mapped` | Tour request, in-app message, the Zillow insights (high-intent buyer, new area, viewed 10x…). Zillow invents these; we painstakingly *mapped* them. Their names are **read-only** — only what they trigger is ours to configure. |
+| **Doors we built** | `ours` | Everything HouseLoop emits — website activity, comms, our native insights, and the registration doors. Fully ours to name, toggle, and extend. |
 
-**All 16 rows on your board are REAL.** (The audit also found 8 hidden catalog keys with no emitters —
-`general_registration`, `manual_enrollment`, `saved_search_agent/system`, etc. — they do NOT render on
-the board; they're catalog debris queued for deletion, not lies you can see.)
+## The registered_* family — first-class registration doors
 
-### 🔗 Follow Up Boss (19)
+Registration events are **first-class catalog rows, one row per door** — never collapsed into a generic
+"registered" (the per-door counts are the whole point). Born 2026-08-04 (migration 0612, phase 1):
 
-| Row | Fires from | Status |
-|---|---|---|
-| Property / Tour / Contact / Rental / Seller Inquiry | FUB `eventsCreated` → router classifier | 🟢 (Tour count 7 = real fires) |
-| Virtually Toured | `eventsCreated` (wired 2026-07-16 — was silently dropped) | 🟢 |
-| Property Viewed / Property Saved | FUB `notesCreated` ("Property Viewed/Saved" notes) | 🟢 (175 / 25 — the firehose is live) |
-| Property Shared | listener wired — but FUB has NEVER emitted a share (zero in the 400k-person mirror; extinct upstream) | 🟡 wired-but-extinct |
-| Text Messages | `textMessagesCreated` (masked bodies → Lane-2 recovery) | 🟢 |
-| In-App Messages (Zillow) | Lane-2 recovered body → `fub-body-recovered.ts:100` | 🟢 (count 1) — depends on the scraper's body recovery |
-| Notifications (generic notes) | `notesCreated` unclassified | 🟡 notify-only BY DESIGN (comms policy: a human FUB note is not website activity — no feed card) |
-| Email Received (reply) | `emailsCreated` | 🟢 |
-| The 5 Insights (High-Intent Buyer/Seller · 10x/7d · New Area · Re-Engaged) | `notesCreated` Zillow-wording regexes | 🟢 (HI-Seller 1 · New Area 3 = real fires) |
+`registered_like_home` · `registered_saved_home` · `registered_shared_home` · `registered_saved_search` ·
+`registered_tour_request` · `registered_contact_request` · `registered_get_seller_report` ·
+`registered_seller_get_started` · `registered_manual_entry`
 
-### 🤝 Transaction Coordination (11)
+Each carries its own Trigger / Creates-Lead / Notify toggles and its own fire counts. The old
+`*_registration` spellings still route during the transition and retire in phase 2 once rename-readiness
+reads zero.
 
-| Row | Fires from | Status |
-|---|---|---|
-| Document Sent / Opened / Signed | e-sign send + Documenso webhooks → the full door path (ledger + canvas) | 🟢 |
-| The 8 loop events (Loop Created · Under Contract · Milestone · Closed · Lost · Status Changed · TC Assigned · Key Date) | `fireLoopNotification` in the loop engine | 🔴 **the workflow arm is fake** — these fire NOTIFICATIONS only; no door, no ledger row, a bound workflow will never run, the count stays 0 forever. Needs real doors wired (decision pending). |
+## The scale switch — `requires_registration`
 
-### 🧰 AI Tools (20)
+A registration door used to be **hardcoded twice**: the website carried a hardcoded list of "actions that
+pop register-first," and each action fired a hardcoded token. That does not scale — a new door meant a
+deploy.
 
-| Row | Fires from | Status |
-|---|---|---|
-| Create a Saved Search → **Saved Search Setup** · Schedule an Appointment → **Appointment Set** | `execTool` → tool-fire ledger + `aiDoorIfBound` → the bound canvas runs | 🟢 |
-| The other 18 tools | the same choke point writes the tool-fire ledger on every use; the DOOR fires only when an active workflow is bound (none yet — "None — set via ⋮" is honest) | 🟡 ledger-real, workflow-unbound (bind a canvas → it goes green) |
+Now: **a registration door = a catalog row with `requires_registration` switched ON.** Eight rows carry it
+today (like, save, share, saved search, seller report, seller inquiry, tour, contact). The website will
+read the door list *from the catalog* (arc item 504) — after that, a new registration door is a row,
+never a deploy. Same config-table-and-UI law as colors.
 
-### 📞 The Inbox sections (2026-07-20 inventory: Company 7 · Spradling Realty Group 2 · Past Agents 2 · Myli 4 · Zach 6 · Ana 6)
+## The FUB inbound-text toggle
 
-**The naming convention (Zach LOCKED 2026-07-20): the identity IS the name.** Every row reads
-`<Event> - <Line> (number)` or `Email Received - <address>`; a FUB-carried door adds the "FUB:" prefix.
+An inbound text from an unknown number on the FUB side can mint a lead — governed by the
+`text_message` row in `hl_fub_webhook_settings` (Settings → Integrations → Follow Up Boss). The
+creates-a-lead toggle is currently **off by choice**: an existing lead's inbound text logs as plain comms
+activity; flip the toggle and an unknown sender mints. The in-app (Zillow) message row has the same switch,
+currently on.
 
-| Row | Fires from | Status |
-|---|---|---|
-| Company - call + text: Company Line (913-320-0906) · Sign Call Line (913-354-8600) · Ana's Old KC Mobile (913-954-7123) | voice/sms webhooks: fire on EVERY inbound (lead-less incl.), mint-at-ring on Creates-Lead | 🟢 (KC Mobile ⏳ GV number ports ~2026-07-21) |
-| Company - Email Received - info@houseloop.ai | matched leads (realtime + poller); the door row is live, per-address routing seeded (mig 0433) | 🟢 route + notify · 🟡 creates-lead mint from a mailbox = next build (toggle exists, wiring doesn't - do NOT flip it on) |
-| Spradling Realty Group - Email Received - info@ + support@spradlingrealtygroup.com | same email path; NEW shared inbox (2026-07-20) | 🟢 route + notify · 🟡 same mint caveat |
-| Past Agents - call + text: Past Agents Line (913-675-9877) | same webhooks; `ForwardedFrom` = whose old line | 🟢 (live-proven on an organic Zillow caller) |
-| Myli - Myli's HL Twilio Line (913-355-6809) call + text · Myli's iMessage Line (913-208-1633) text · myli@houseloop.ai | Twilio webhooks · BlueBubbles inbound · email path | 🟢 (iMessage door seated 2026-07-20) |
-| Zach - Zach's HL Twilio Line (913-286-1761) call + text · FUB: Zach's FUB Twilio Line (913-490-2988) call + text · zach@houseloop.ai + zach@spradlingrealtygroup.com | Twilio webhooks · FUB callsCreated/textMessagesCreated seat resolve · email path | 🟢 |
-| Ana - Ana's HL Twilio Line (913-648-9363) call + text · FUB: Ana's FUB Twilio Line (913-453-5505) call + text · ana@houseloop.ai + ana@spradlingrealtygroup.com | Twilio webhooks · FUB seat resolve · email path | 🟢 HL line + emails · 🟡 FUB line seated 2026-07-20 (913-453-5505 = the FUB line fronting her old KC mobile - first fire pending) |
+## What's next
 
-## 2026-07-13 — SHIPPED: trigger events are CONFIGURED, not created
-
-**The model, in one breath (Zach locked it live):** a trigger event is **ONE row per human action**, named exactly
-what it is — Contact Request, Saved Home, Property Viewed. **You never hand-create a trigger event.** Every event
-either comes from a **lead integration** (HouseLoop.ai, Follow Up Boss, Company Inbox, Transaction Coordination
-auto-populate their events) or is **Manual**. What you do to a row is **Configure** it — the ⋮ (kebab) menu on each
-row is **Configure** + **Pause**. There is no "Create Trigger Event" modal anymore.
-
-### The Configure modal — two arms
-
-**Configure** opens a modal with up to **two arms**, and each arm is exactly **one workflow + one notification + an
-on/off**:
-
-- **New Lead arm** — shows **only when the event can mint a lead** (the identity gate, `target.canMint`). It carries
-  a workflow dropdown (+ *create* jumps to the builder), the automatic **"New Lead" notification class** (fixed),
-  and its on/off. When the event can't mint, this arm is hidden.
-- **Existing Lead arm** — always shows. Workflow dropdown (+ *create* → builder), a **notification dropdown** (the
-  full catalog, see below), and its on/off.
-
-**Single-arm events.** When an event can't mint (`canMint=false`), only ONE arm renders and the modal reads
-**"Existing Leads Only"**:
-
-- **HouseLoop Insights** (the computed-pattern band) is **single-arm "Existing Leads Only"** — an insight is always
-  about a lead we already know (hard-locked existing).
-- **Transaction Coordination** is **single-arm "Existing Leads Only"** — a loop always hangs on an existing lead.
-
-The arm's three flags (`creates_lead` / `workflow_active` / the workflow id, and the existing-arm's
-`existing_workflow_*`) are written as a unit through `PATCH /api/trigger-events`. Config lives in
-`components/settings/trigger-events/ConfigureTriggerEventModal.tsx`.
-
-### The notification dropdown is sectioned
-
-The Existing-Lead arm's notification picker is the **full notification catalog**, grouped into the **same gray band
-headers the Notifications settings page shows, 1:1** (New Lead Activity · Existing Lead Activity · Communications · …)
-— driven by `lib/notifications/notification-sections.ts` and rendered with the sanctioned `HlDropdown` (a bare
-`<select>` can't draw gray dividers). The New-Lead arm's notification is the fixed "New Lead" class.
-
-### Sections = integrations · in-table bands = Activity / Communication / Insights
-
-The board groups every trigger event under its **integration section** (a blue section header), and inside a
-section, Excel-style band rows split the events by TYPE:
-
-**The section ORDER (Zach LOCKED 2026-07-20, both pages):** HouseLoop.ai Website - Follow Up Boss -
-Transaction Coordination - the inbox sections - AI Tools - custom sections last.
-
-| Section (integration) | What it holds |
-|---|---|
-| **HouseLoop.ai Website** | the native website events — browsing, inquiries, registration, and the computed insights |
-| **Follow Up Boss** | FUB webhook signals — the full FUB event family is cataloged [below](#the-fub-family--every-fub-trigger-event-moved-here-from-fubtrigger-events-2026-07-17); the pipeline lives on the [⭐ FUB SSOT](/fub/master-scraper-ssot). **Zero phone rows**: phone triggers live in the inbox sections (2026-07-16) |
-| **Transaction Coordination** | e-sign documents + loop milestones (existing-lead only) |
-| **The 6 inbox sections** (in the locked order Company - Spradling Realty Group - Past Agents - Myli - Zach Spradling - Ana Spradling) | one section per hl_inboxes row; rows chaptered 📞/💬/📧. Phone doors resolve inbox via hl_phone_numbers.inbox_id; EMAIL doors via hl_lead_sources.inbox_id + mailbox (per-address rows, 2026-07-20). Line names bake their identity ("Zach's HL Twilio Line (913-286-1761)"); a FUB-carried door's event reads "FUB: …" |
-| **AI Tools** | the 20 tool doors - BELOW the inboxes (2026-07-20) |
-| **Manual** | hand-run events with no integration (the catch-all — "Other/Custom" was retired; Workflows page only) |
-
-The in-table **bands** come from the `band` column on `hl_trigger_events`:
-
-- **ACTIVITY** — everything the person DOES (browsing + inquiries + registration).
-- **COMMUNICATION** — an actual communication received (Text / Call / Email Received — LIVE wires fired by the
-  inbound writers, minting through Company Inbox).
-- **INSIGHTS** — computed patterns. **Property Viewed now lives in the Insights band** (moved there in **mig 0395**).
-
-### Drag-reorder persists (sections AND events)
-
-Both the **integration sections** and the **individual trigger events within them** can be **drag-reordered**, and the
-order **persists to `hl_lead_flow_section_order` (mig 0396)** via **`/api/lead-flow/order`**. The Trigger Events board
-and the Workflows page share ONE order — reorder on either, it holds on both.
-
-### Native insights (Zillow-parity rules)
-
-The computed insights — **Viewed Home 10x in 7 Days** (the same home) · **Looking in a New Area** (2+ views in a ZIP
-never browsed in the prior 60 days) · **Re-Engaged** (active after 14+ days of silence) — are computed hourly by the
-registered Inngest fn `insight-engine` over our own pixel data (deterministic SQL, receipts in every fire, a hard
-14-day per-lead-per-insight gate checked against `hl_trigger_fire`, no tags). Thresholds live in `hl_settings` key
-`insight_engine`. An insight only ever aggregates patterns — it never re-fires a single event that has its own trigger.
-
-## What a trigger event is
-
-A thing that happened (someone did something) that can **create a lead** and/or **fire a workflow**. Every trigger
-event is a row on the board with its own arms. It is **auto-populated by its integration or Manual** — you Configure
-it, you don't create it.
-
-## The FUB pull-in — what `creates_lead` imports
-
-<Warning>
-**⚠️ THIS SECTION DESCRIBES TODAY, NOT THE TARGET — and the difference has already caused wrong work.**
-
-Zach 2026-07-31: *"I want ALL activity pulled in."* The **Lead Engine** artifact supersedes the pull-in table
-below, and an agent who reads this page as current law will build the **old** behaviour and believe they are
-correct. That happened on 2026-07-31: this page's "Communications — NOT imported" line was quoted back to
-Zach as intended behaviour while he was actively trying to replace it.
-
-**WHERE IT IS GOING (the FUB-completeness arc — Lee owns it):**
-- **The allowlist moves from INGESTION to PROCESSING.** Store *every* webhook — storage costs cents; the
-  $418/month was 183k *runs*. Spawn a run only for what we act on. Anything stored-but-unprocessed is
-  **replayable forever**, so the history is already there when a card ships later.
-- **The FUB archive renders teal and collapsed** — history imports, stamped, *never announced*. Re-imports
-  route to the archive path, not the notify path.
-- **The acceptance test:** *any lead's All tab contains every row from every other tab — the count equals
-  the union.*
-- Four dropped-signal recoveries get an explicit ruling: Viewed Property 115,892 · Saved Property 3,270 ·
-  Viewed Page 5,780 · group texts 148,627.
-
-**LIVE RECEIPTS (2026-07-31)** — a caller was minted correctly and then stranded, because the parts below
-are not yet true:
-1. **The FUB id was fetched and discarded.** `callerContext()` resolves an inbound number against the FUB
-   mirror (that is why the caller's name is on the ring) and `mintPhoneLead` took only the name. A lead born
-   with a NULL `fub_person_id` is **invisible to the activity sweep**, which selects on that column — so it
-   can never self-heal. *Fixed + gated (`scripts/fub-link-invariant.ts`); 3 live leads repaired.*
-2. **The fire log hides 70% of fires.** The list INNER JOINs `hl_leads`, so lead-less fires are dropped while
-   still being counted: **5,783 total · 1,724 shown · 4,059 hidden.** This contradicts the FIRE LEDGER
-   section below, which states the count and the drill-down *"agree by construction."*
-3. **`created` is never persisted.** The routing doctrine says *minted → `created:true`, matched →
-   `created:false`* — but `hl_trigger_fire` has no such column, and `matched` means *matched a workflow*, not
-   *matched a person*. The log therefore cannot say whether a lead was created.
-4. **The importer links but does not enrich.** `import-fub-lead.ts`'s existing-lead branch updates only
-   `fub_person_id`, `source_id`, `source`, `platform`, `channel` — not email, stage or name, though the
-   pull-in is documented as applying *owner · stage · AI*.
-</Warning>
-
-
-When a trigger event has **Creates-Lead ON** and the person is known to Follow Up Boss (a FUB webhook signal, or an
-inbound call/text whose number the FUB mirror recognises), the person is **pulled into HouseLoop per the routing
-rules** (owner · stage · AI). What crosses over is deliberate:
-
-| From Follow Up Boss | Where it lands in HouseLoop |
-|---|---|
-| **Context / dossier** (who they are, their FUB summary) | the lead's **Context** panel |
-| **Browsing** — property views, saved searches, home activity | **Website History** |
-| **Communications** — past texts, calls, emails | ⚠️ **BEING CHANGED — see the banner above.** Today: not imported (they stay as FUB history in the Context panel). Target: **imported and archived**, rendered teal + collapsed, never re-announced. |
-| **Everything from now on** | **native HouseLoop** (a fresh, clean conversation; nothing double-counts) |
-
-**Caller-identity precedence.** An existing HouseLoop lead ALWAYS wins — a call/text that matches one attaches to it
-and uses its name. The FUB people mirror is consulted **only** to name/pull a caller we don't have as a lead yet (the
-"Zach Test" fix — a stale FUB contact must never override a real lead). A **truly-unknown** caller (not in FUB either)
-mints a bare "Unknown Caller" lead; voicemail triage later updates the name/callback or deletes it if it's spam.
-Call-side detail: [Calls](/comms/calls). FUB pipeline: [FUB SSOT](/fub/master-scraper-ssot).
-
-**One phone → one lead (soft key, 2026-07-17).** Every create path routes a phone through `findOrAttachLeadByPhone()`
-(normalised last-10) so a callback lands on the SAME lead — no split identity. Phone is a **soft** key (no hard unique
-index): genuine shared-number people (spouses) are linked via `hl_lead_relationships` (mig 0424) and shown in the
-lead's **Household** section, and the manual Add-Lead flow warns "already exists → Open · Add household member · Add
-duplicate anyway".
-
-## THE ONE-SWITCH LAW (workflow on/off lives HERE)
-
-**A workflow is turned on or off in exactly one place: its arm's on/off inside the trigger event's Configure modal on
-this board.** Flipping an arm drives that workflow's real status (`hl_workflows.status`) — the Workflows page shows a
-**read-only** status badge that mirrors this toggle, never an independent switch. Locked infrastructure workflows
-(e.g. saved-search alert delivery) are always-on and exempt.
-
-The event itself always fires once it exists — the arm toggles gate the lead and the workflow, never the firing.
-
-## THE FIRE LEDGER — `hl_trigger_fire` (why the count never lies)
-
-Every genuine door dispatch writes **exactly one row** to `hl_trigger_fire` (`lead_id` · `event_key` · `platform` ·
-`matched` · `routed_by`), written by `dispatchDoor` in `lib/workflows/runtime.ts` — the one place every
-`houseloop/door.<key>` flows through.
-
-- The board's **TRIGGERED count** and its **click-through drill-down** ("which leads fired this") read this SAME table
-  — they agree by construction.
-- The native board is scoped `platform <> 'follow_up_boss'` — a FUB-origin fire can never appear on a HouseLoop.ai row
-  (and vice versa).
-- **Only a dispatch is a fire.** The lead activity feed is history, not a fire source — imported FUB history,
-  system-seeded searches, and replayed pre-registration browsing can never masquerade as trigger fires.
-- `lead_id` is `ON DELETE CASCADE` — deleting a lead removes its fires.
-
-## THE INBOX LANE — every call/text to an owned line FIRES, and creates-lead MINTS AT RING (2026-07-16)
-
-Live-proven the day it shipped on an organic Zillow caller (Sachind Jamesh → Alisha Hanks' old number).
-
-- **Every inbound call/text to an owned line writes a trigger event — lead-less included** (50 calls = 50
-  fires; a spam-gated call still fires with `routed_by='spam-gate'`; our own pool/dialer numbers are plumbing
-  and never fire). Fired by the voice/sms webhooks via `fireInboxDoor` (`lib/workflows/fire-door.ts`):
-  lead-bearing fires ride the door → `dispatchDoor`; lead-less fires write `hl_trigger_fire` directly
-  (lead_id NULL), stamped `source = the line's lead-source key` — which is exactly what each per-line board
-  count keys on (`event_key × source`).
-- **Creates-Lead is real**: unknown caller + the line's toggle ON → the lead is minted DURING the ring
-  (`lib/leads/mint-phone-lead.ts` — one writer, shared with Myli's wrapup; the caller's NAME resolves from
-  the FUB people mirror at ring time via `lib/phone/caller-context.ts`). Minted → the door fires
-  `created:true` (New-Lead arm); matched → `created:false`. Phone sources carry owner + stage defaults
-  (mig 0416) — a phone-minted lead is never ownerless.
-- **`seatSource` tier-0**: the door dispatch resolves the LINE's seat (`hl_lead_source_events` by source
-  key), so a website-born lead calling the company line routes the company line's workflow arm — not its
-  birth source's. Fail-closed like every other tier.
-- **ONE call = ONE trigger event — the lane that ANSWERS the number fires it.** Calls landing on our Twilio
-  (company / sign / past-agent pool / Ana) fire from OUR voice webhook; FUB's `callsCreated` echo of those
-  calls is skipped entirely. FUB-native lines (Zach's seat 913-490-2988, never porting) fire from the FUB
-  router into the inbox lane (`suppressLedger` keeps the import from writing a second row).
-- **Which past agent's line**: Twilio `ForwardedFrom` rides the FUB forward hop — the fire payload, the
-  call row, and the notification all know "past client calling Alisha Hanks' old number."
-- **Email**: `email_received` fires for matched leads from BOTH the Gmail realtime path and the inbound-sync
-  poller. Per-address lead-less email seats are the documented next build (the board says so honestly).
-
-## Routing (what happens when a door fires)
-
-`dispatchDoor` resolves the workflow through strict tiers and **picks the arm from the dispatch's created-flag**:
-`created=true` reads the New-Lead columns, `created=false` the Existing-Lead columns — fail-closed, so an unbound or
-toggled-off arm is a logged skip, never a fallback guess. **Registration doors route ONLY via their per-source
-assignment** — the fallback tiers carry a `*_registration` guard so a first-touch outreach workflow can never fire
-from a fallback match (the guard that closed the 1,421-import near-miss, 2026-07-09).
-
-## Where the messaging lives
-
-What each door actually SENDS (the two-beat: brand ack + Myli at 2 minutes) is documented on the
-[HouseLoop.ai Lead Integration](/integrations/houseloop-ai) page, message by message.
-
-
-## THE FUB FAMILY — every FUB trigger event (moved here from fub/trigger-events, 2026-07-17)
-
-The FUB *pipeline* (capture → import → sync → scraper) lives on the ONE
-[FUB SSOT](/fub/master-scraper-ssot); the events themselves live HERE, canonical.
-
-
-
-> Count, honestly (2026-07-16): **19 FUB rows live** — the original 23 minus the 4 phone subtypes deleted by
-> mig 0415 (phone triggers moved to the board's inbox lane; the generic `phone_call` row survives as hidden
-> notify plumbing and renders nowhere). Earlier copies of this doc said "22" and "23" in the same breath —
-> that drift dies here: the table below is one row per live `hl_fub_webhook_settings` row.
-
-**This is the master map.** One row per live `hl_fub_webhook_settings` row. Read a row left→right and you
-have the whole story: *the door → the FUB signal that creates it → the notification class it rolls up to →
-the card the agent sees.* Every event carries the **four toggles** (Sync · Creates Lead · Workflow · Notify)
-— ✅ **LIVE since 2026-07-09 night**: `_global` master ON; `property_viewed` notify muted by Zach (the
-firehose). **Creates Lead governs PER EVENT (Zach 2026-07-11 — no hardcoded never-mint list):** a behavioral
-signal (save/view/in-app) MINTS a new HouseLoop lead when its own `creates_lead` is ON, exactly like the
-inquiry rows — see [Behavioral signals can mint](#behavioral-signals-mint-when-creates-lead-is-on) below.
-
-#### How a row becomes a card (the chain every event follows)
-
-```
-FUB fires a webhook → POST crm.houseloop.ai/api/fub/webhook → fubWebhookRouter classifies it
-  → the hl_fub_webhook_settings ROW gates it (Sync? Creates Lead? Workflow? Notify?)
-  → notify ON → its notify_class row in hl_notify_classes renders the One-Card
-  → the lead OWNER's bell + SMS + email (per their /settings/notifications prefs)
-```
-
-<Note>
-**ONE SWITCH — the WORKFLOW ACTIVE toggle drives the workflow's real status (FUB parity, 2026-07-22).** Each FUB
-row has TWO workflow arms (New Lead / Existing Lead), each with its own **Workflow Active** toggle
-(`workflow_active` / `existing_workflow_active`) and its own bound workflow. Flipping an arm's toggle now also
-sets that workflow's `hl_workflows.status` (`active`/`paused`) — the FUB parity of the native "one switch" law
-(2026-07-08). Before this, `PUT /api/fub/webhook-settings` wrote the arm flag but never the workflow status, so a
-workflow could sit `status='active'` while its toggle read off — "FUB: Existing Lead - Tour Request" looked
-**stuck ON**. Now the Trigger Events board, the [Workflows](/guides/workflows) page, and the dispatch gate
-(`w.status='active' AND …_workflow_active`) can never disagree. (Also fixed: the existing-arm toggle wasn't
-updating its own on-screen state on click. Mig 0446 reconciled the pre-existing drift — paused stale-active FUB
-workflows whose arm flag was off.) **Board order + LOCKSTEP guarantee:** the Activity band is Property Inquiry · Tour · Contact · Seller ·
-Registration · Pre-Approval · Rental · Virtually Toured (`sort_order`, migs 0445/0447/0448). The
-[Workflows](/guides/workflows) table is kept **structurally** lockstep: it orders **purely by `trigger_sort`**
-(the same `hl_fub_webhook_settings.sort_order`), not by a separate hardcoded band rank. Because `sort_order`
-already runs Activity → Communication → Insights in order, one number reproduces the board top-to-bottom — so a
-band-map entry can never reorder a row, and reordering an event in the DB moves both tables together (Zach
-2026-07-22). ONE sort key, ONE source of truth.
-</Note>
-
-#### Registration-family (a first touch — can mint a new lead)
-
-FUB lumps all lead-initiated property contact under ONE event type (**Property Inquiry**); the real intent lives
-in the message text + source, and `classifyFubEvent` (`lib/fub/classify-fub-event.ts`) splits it into the atomic
-doors below (mig `0285`). Any doc/code still treating "Property Inquiry" as one door is stale.
-
-| # | Trigger event | Created from (the FUB signal) | Notification class | The card |
-|---|---|---|---|---|
-| 1 | `tour_request` | `eventsCreated` · Property Inquiry with tour language ("interested in touring/seeing X") | `lead_created` | 🏠 *registered* (`{{contact.full_name}}`) |
-| 2 | `contact_request` | `eventsCreated` · Property Inquiry with reach-out language ("have an agent call me") | `lead_created` | 🏠 *registered* |
-| 2b | `general_inquiry` | `eventsCreated` · **General Inquiry** carrying a real written message — no specific property (an investor introducing themselves, a question). **Its own door since 2026-07-30** (mig 0496); was silently folded into `contact_request` before that. Kind `general_inquired`. | `contact_request` (reused) | 📨 *asked an agent to reach out* |
-| 3 | `rental_inquiry` | `eventsCreated` · Property Inquiry, source **Zillow Rentals** | `lead_created` | 🏠 *registered* |
-| 4 | `property_inquiry` | `eventsCreated` · Property Inquiry (the default — "I am interested in `<addr>`") | `lead_created` | 🏠 *registered* |
-| 5 | `seller_inquiry` | `eventsCreated` · **Seller Inquiry** ("I want to sell my home") | `lead_created` | 🏠 *registered* |
-| 24 | `registration` | `eventsCreated` · **Registration** (portal sign-up). Boarded 2026-07-22 (mig 0442), seeded Sync-ON / **Creates-Lead OFF** — flip it on to mint from a registration | `lead_created` | 🏠 *registered* |
-| 25 | `pre_approval` | `eventsCreated` · **Pre-Approval** (mortgage readiness). Boarded 2026-07-22 (mig 0442), seeded Sync-ON / **Creates-Lead OFF** | `lead_activity_insight` | 🎯 *readiness signal* |
-
-<Note>
-**General Inquiry / Registration / Pre-Approval — the "never drop a lead" completion (2026-07-22).** These three
-FUB event types were dropped at the HouseLoop boundary (they weren't in `SERVICED_FUB_EVENT_TYPES`), so a
-Zillow **General Inquiry** like Kenneth Hunt (FUB 50544) — which FUB created and even emailed us — never became
-a CRM lead. All three are now serviced. **Update 2026-07-30: General Inquiry no longer folds into Contact Request — it
-has its OWN board row** (see 2b above); the junk filter is unchanged and still drops blank / phone-notice /
-Zillow-system messages → `null`. Registration and Pre-Approval got their own rows. Mint safety: the "latest intent" re-derive ranks the four strong property intents
-(`STRONG_FUB_EVENT_TYPES`) **above** these three, so adding them can never shadow a mintable Property Inquiry.
-Backstop: see the **Email Lead Safety-Net** below.
-</Note>
-
-#### System-family (activity on an existing lead)
-
-| # | Trigger event | Created from (the FUB signal) | Notification class | The card |
-|---|---|---|---|---|
-| 6 | `property_saved` | **`notesCreated`** — FUB logs each save as a note with the address ⚠️ | `home_saved` | 🔖 *saved a home* |
-| 7 | `property_viewed` | **`notesCreated`** — same note mechanism ⚠️ | `property_viewed` | 👀 *viewed a home* |
-| 8 | `property_shared` | ⚠️ signal essentially extinct — 4 share notes EVER in the mirror, last Jan 2025 (no share events exist). Row stays for the board; expect ~never | `home_shared` | 📤 *shared a home* |
-| 9 | `virtually_toured` | `eventsCreated` · Virtually Toured Property (passive 3D tour) | `property_viewed` | 👀 *viewed a home* |
-| 10 | `text_message` | `textMessagesCreated` (real SMS; ~7% of bodies masked → Lane 2) | `new_message` | 💬 *sent a message* |
-| 11 | `in_app_message` | ⚠️ **NOT exposed by the FUB API** (falsified 2026-07-09: all 10,588 `zillow_inapp` mirror rows are scraper-minted ids; zero ever arrived via `textMessagesCreated`, and only 33 relay emails ever). Native capture needs its own build — currently the FUB-UI scraper was the only source | `new_message` | 💬 *sent a message* |
-| 12 | `email_received` | `emailsCreated` (body mostly masked → Lane 2 recovery, then notify WITH body) | `email_received` | 📧 *replied by email* |
-| 13-17 | ~~phone rows~~ **MOVED TO THE INBOX LANE (Zach 2026-07-16)** | Phone triggers live on the [Trigger Events board's per-inbox sections](/guides/trigger-events), never on the FUB board. Rows 14/15/17 (company · sign · Ana) were DELETED (mig 0415 — those numbers ported out of FUB). The past-agent pool fires from OUR Twilio front door (913-675-9877, `ForwardedFrom` says whose old line); Zach's FUB seat (913-490-2988, never porting) fires from the FUB router INTO the inbox lane (`suppressLedger` = one call, one ledger row). The generic `phone_call` settings row survives ONLY as hidden notify plumbing for other FUB seats' call cards — it renders nowhere and its `callsCreated` echo of Twilio-landed calls is skipped entirely (one call = one trigger, the lane that answers it fires it). The call card prints FUB-style facts (`signalCall`; the Donna Lemmons Lewis stale-classification fix, 2026-07-16). | — |
-| 18 | `notification` | `notesCreated` — every generic note (agent notes, FUB nudges, pre-approval interest) EXCEPT machine junk (LinkPreview blobs, Sisu sync notes, RealScout stamps, bare-URL notes). Wired 2026-07-09 | `fub_note` | 📝 *Note on the lead* (`{{contact.full_name}}`) |
-| 19 | `insight_high_intent_buyer` | **`notesCreated`** — Zillow insights arrive as NOTES, never events (mirror ground truth 2026-07-09: 1,429 high-intent notes, zero insight event types). Classified by Zillow's own wording "high intent buyer" | `lead_intent_insight` | 🎯 *high-intent signal* |
-| 20 | `insight_high_intent_seller` | **`notesCreated`** — same note mechanism, wording "high intent Sellers" | `lead_intent_insight` | 🎯 *high-intent signal* |
-| 21 | `insight_new_area` | **`notesCreated`** — wording "is now looking in KS 66046" (AREA_RE in convert-fub-signal.ts; 41 live rows, current 2026-07-06) | `lead_activity_insight` | 🔁 *activity insight* |
-| 22 | `insight_viewed_10x_7d` | **`notesCreated`** — wording "They have viewed the property 10 times in 7 days" (INTENT_RE; 30 live rows, current 2026-07-02) | `lead_activity_insight` | 🔁 *activity insight* |
-| 23 | `insight_re_engaged` | **`notesCreated`** — "Buyer has started searching again … after being inactive for at least 14 days". **Zillow's #1 live insight by volume** (269 since May 2026). Boarded 2026-07-09 (mig 0361, Zach: "that is a big one") | `lead_activity_insight` | 🔁 *activity insight* |
-
-<Warning>
-**⚠️ Two known catalog quirks (documented, not bugs to "fix" silently):**
-1. **Saves/views arrive as `notesCreated`, not `eventsCreated`.** The standalone view/save webhooks died
-   2026-05-21 and FUB now logs each as a **note** — the live per-event source is `notesCreated`. The
-   `hl_fub_webhook_settings.fub_event` column (display-only) was corrected to `notesCreated` for
-   `property_saved`/`property_viewed` on 2026-07-11.
-2. **Phone triggers left the FUB board entirely (SHIPPED 2026-07-16).** The Twilio build landed: calls to
-   our owned lines fire per-line inbox trigger events (lead-less included, mint-at-ring via creates_lead),
-   and the FUB router resolves the CALLED number — Twilio-landed calls are skipped (our webhook owns them),
-   Zach's FUB-native seat fires into the inbox lane. See [the board SSOT](/guides/trigger-events) §THE INBOX
-   LANE for the full pipeline. The 3 dead subtype rows were deleted (mig 0415).
-</Warning>
-
-#### Email Lead Safety-Net — DELETED 2026-07-31
-
-<Warning>
-**⛔ REMOVED. There is no email intake path. Every lead arrives through Follow Up Boss.**
-
-Zach, verbatim: *"get rid of this email parser, everything comes through fub right now, this email parser does
-not work just get rid of it."* `lib/inngest/functions/email-lead-ingest.ts` (cron `*/5 * * * *`) and its parser
-`lib/email/parse-lead-email.ts` are **deleted**, along with the Inngest registration and the Run Log entry. The
-FUB webhook + `importFubLead` is now the **only** way a lead is minted from a vendor.
-
-**Why — its own ledger, over its entire 9-day life:** 26 `matched_existing` (FUB already had them), 16
-`skipped_noise`, 9 `skipped_toggle_off`, and **4 `minted`** — of which **one** was a real lead, two were
-internal test leads, and one was junk. One real lead in nine days, duplicating a path FUB already covers.
-
-**The junk row names the defect worth remembering.** A Zillow *"Your MyAgent connection requested a tour"* email
-contains **no buyer** — only the house, the tour time, and the **listing agent**. The parser took
-`firstPhone(bodyText)` (the first phone anywhere in the document) and trusted `Reply-To` blindly, minting a
-nameless lead that carried the **listing agent's** phone and Zillow's `no-reply` address. Its guard was
-`if (!email && !phone) return null` — **presence, not ownership**. Both were present; neither was the lead's.
-
-**The rule that outlives it:** a vendor notification always contains the vendor's and the agent's contact info.
-*"There is a phone in here"* is never *"this is the lead's phone."* Do not rebuild an email-scraping lead path.
-
-The Gmail forwarding into `info@houseloop.ai` still runs and is still useful as an **archive** — nothing parses
-it. Plumbing: [Vendor Lead Email Capture](/guides/vendor-lead-email-capture). The ledger table
-`hl_email_lead_ingest` is retained but frozen (mig 0562).
-</Warning>
-
-## Behavioral signals MINT when Creates Lead is ON
-
-**The `Creates Lead` toggle means the same thing on every row — behavioral events included (Zach 2026-07-11).**
-A `property_saved` / `property_viewed` / `in_app_message` from a person who is **not yet** a HouseLoop lead now
-**mints a new lead when that event's `creates_lead` is ON** (and `_global` on), instead of the old notify-only
-short-circuit. Turned OFF, it stays a lead-less "heads-up" notify. Each behavioral event is independent — Zach
-turns Create-Lead on only for the ones he wants to become leads.
-
-- **What fires on a mint:** a SAVE fires the real **`saved_home_registration`** door (its seat row already lives
-  in `hl_lead_source_events`); a view/in-app has no registration door of its own so it mints via the generic
-  first-touch **`direct_registration`**. Either way `importFubLead` mints/links the `hl_leads` row (source folded
-  to its six-bucket canonical), `backfillFubBehavior` logs the save as a `save_home` feed card, `dispatchDoor`
-  writes the `hl_trigger_fire` ledger row + runs any assigned workflow, and the owner gets a **New-lead** card
-  carrying the saved home.
-- **An EXISTING lead's behavioral signal is unchanged** — activity card + the `FUB_NOTIFY[webhookType]` ping, no
-  registration door (the `NON_DOOR_WEBHOOKS` gate still holds for `created = false`).
-- **Fail-closed preserved:** minting is still gated on `_global` + the row's `creates_lead`; nothing mints
-  without an explicit toggle. Code: `lib/inngest/functions/fub-lead-import.ts` (behavioral fast-path →
-  fall-through to the mint path; `saved_home` trigger/door; `doorEligible` opens only when `created`).
-
-## THE TRANSACTION / TC-LOOP FAMILY
-
-The Transaction Coordination section on the board — events fire on the TRANSACTION (a loop always hangs on
-an EXISTING lead; no Creates-Lead): e-sign document events (sent · viewed · signed · completed via
-Documenso) and loop milestone events (the TC loop stage moves). Deep law: the TC Loop guides.
-
-## THE AI-TOOLS FAMILY
-
-Every AI Toolbox capability is a trigger (migs 0407-0408): when the AI clone picks up a tool
-(`ai_schedule_appointment`, `ai_create_saved_search`, `ai_send_document`, …) the tool call IS the trigger
-event and the workflow bound to it runs — fires ledger to `hl_tool_fire` + the board's AI Tools section.
-Catalog: `lib/agent-runtime/capabilities.ts`.
-
-## Related
-
-- [HouseLoop.ai integration](/integrations/houseloop-ai) · [Follow Up Boss integration](/integrations/follow-up-boss)
-- [⭐ FUB SSOT](/fub/master-scraper-ssot) — the FUB pipeline
-- [Workflows](/guides/workflows) — the engine · [Lead Sources](/guides/lead-sources) — view + route
+The **cutover swap** (Lead Engine board items 363/364) makes this page permanently render *from* the
+catalog — `hl_trigger_events` stops being the vocabulary, keeps only user config (folders, bindings,
+toggles), and the final table drop is a typed Rule-0 event at the very end. Until then the page renders
+the transitional layout corrected on 2026-08-04 (the insight families on their correct sides, requests
+out of the Insights band, the registered_* doors visible).
