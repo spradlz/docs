@@ -15,13 +15,15 @@ happen; if work is not on the board it is not being done.
 **One agent, one board, ONE permanent numbered list — and exactly one green Active Working Section that items are
 pulled up into and dropped back down from.** An item is not ticked until it has an **audit receipt**.
 
-## The three sections, and only three
+## The five bands, in this order, always
 
-| Section | What is in it | Nav |
-|---|---|---|
-| 🟢 **Active working section** | The items being worked *right now*, pulled up out of the list, with the PRD that covers them | jump link |
-| **The list** | Everything, 1 → ∞, in permanent order. Ticked items stay exactly where they are. | jump link |
-| **Audit results** | The receipts. One per ticked item. | jump link |
+| Band | What is in it |
+|---|---|
+| 🟢 **Active working section** | The items being worked *right now*, pulled up out of the list, with the PRD covering every one of them |
+| **The list** | Everything, 1 → ∞, in permanent order. Ticked items stay exactly where they are. |
+| **The record** | The law, the corrections, the findings. Everything that is reasoning rather than a task — and the half that gets silently dropped when a board is rebuilt from memory. |
+| **Reference** | Every sub-artifact this board points at: locked wireframes, competitor references, linked artifacts. |
+| **Audit results** | The receipts. **Last**, because it is the longest band and nothing should sit under it. |
 
 <Warning>
 **There is deliberately no "Completed" section.** A finished item does not move to a pile — it stays in its own
@@ -29,8 +31,13 @@ position in the list and goes green. A separate completed section immediately cr
 orderings is how the last board reached 3.7MB with two competing "today's work" blocks.
 </Warning>
 
-Because these boards get long, **the jump nav is not optional** — a sticky bar at the top with `Active work · The
-list · Audit results` plus live counts (`29 done · 5 active · 11 to do`).
+Because these boards get long, **the sticky nav is not optional** — and it **scrolls, it does not hide**. One page,
+end to end, with a scrollspy so the lit button always names the band you are looking at. Beside it: a **progress bar
+of three real slices of one total** (done / active now / still to do) so the remainder is legible at a glance.
+
+**When you restructure a board: MIGRATE it, never retype it.** Parse the old document, diff the result, and report
+the percentage of fragments carried across. Rebuilding from memory silently drops the reasoning — which is the half
+nobody notices is gone until they need it.
 
 ---
 
@@ -110,7 +117,7 @@ and can say where. Most duplicate components in this codebase exist because nobo
 
 ```
 .claude/reports/board.json                 ← the state: items, status, dates, the PRD
-tools/houseloop-cards/build-board.mjs      ← the generator
+.claude/skills/project-board/build-board.mjs ← the generator (shipped IN the skill)
 .claude/reports/<name>-board.html          ← the output, published as the artifact
 ```
 
@@ -138,6 +145,42 @@ pulling item 56 into the active section is a one-line edit.
 `status` is `done | active | future`. Nothing else.
 
 ---
+
+## ⭐ The board is tied to the task list — STRUCTURALLY
+
+> Zach 2026-08-04: *"make it structural and not you need to think to update the board — the board has to be
+> tied to the task list."*
+
+**The task list is a RENDERING of the active section, not a second system reconciled by hand.** They cannot
+drift, because one derives from the other.
+
+| | |
+|---|---|
+| `/board active 56,72` | writes `board.json` **and** creates the tasks, in one action |
+| a task marked `completed` | a `PostToolUse` hook regenerates the board — no agent judgement involved |
+| task title | always carries the item number: `#56 Retire platform='inbox'` — the join key |
+
+<Warning>
+**What is automatic and what is not, stated honestly.** ✅ Marking a task complete rebuilds `board.json` and
+the HTML via `tools/hooks/board-sync.sh`. ⚠️ **Publishing is not automatic** — a shell hook cannot call the
+Artifact tool. The hook writes a dirty marker and the `UserPromptSubmit` hook surfaces it every turn until
+the agent republishes. **Never claim live bidirectional sync** — it is a derivation plus a nag, and claiming
+more is the class of overstatement this protocol exists to stop.
+</Warning>
+
+<Info>
+**This supersedes the older "sync at arc boundaries" protocol**, which was honest that it depended on an
+agent remembering at the right moment. It worked exactly as often as someone remembered. The hook removes
+the remembering.
+</Info>
+
+## The skill
+
+Everything on this page is executable as **`/project-board`** (`.claude/skills/project-board/`). The skill
+ships the SKILL.md law, `build-board.mjs`, and the hook. **The layout is not described to an agent — it is
+generated**, so no agent can render the bands wrong, invent a sixth section, or renumber items. This page
+stays as the human-readable explanation; the skill is what agents execute.
+
 
 ## Running it — the `/loop` protocol
 
