@@ -65,6 +65,46 @@ not a sender**.
 > **AI off → the alert still goes, without the paragraph.**
 > An AI **component** fails soft. An AI-**initiated** message fails closed.
 
+**Verified fleet-wide 2026-08-04** (the era-3 #89 census): every AI-initiator error path terminates without a
+provider call, and every AI ingredient inside a deterministic send degrades instead of dying — the voicemail
+triage is the exemplar (transcribe/classify failures still alert the team with *"Couldn't auto-read it —
+worth a listen"*). The scheduled lane's choke gate is keyed on the actor's **nature**, fail-closed: a future
+AI actor type is gated by default, not by someone remembering to widen a literal.
+
+---
+
+## WHAT IS REAL IN CODE — the era-3 build (2026-08-04)
+
+| Law | Where it lives |
+|---|---|
+| **Altitude 0 — audience first.** `CommRequest.audience` is REQUIRED (`nobody · team · person · public`) and the evaluator asks it before everything, including the master. Undeclared → `AUDIENCE_UNDECLARED`. nobody/team/public → `WRONG_LANE`. The evaluator serves ONLY the person lane. | `lib/ai/comms-security.ts` |
+| **The team lane is declared, not accidental.** All 58 notification classes carry `audience='team'`; the registry audit (axis 5, in the push cage) fails if any class misdeclares. No AI switch is consulted anywhere in the notification router. | mig `0618_notify_classes_audience.sql` · `scripts/notification-registry-audit.ts` |
+| **An event fires ONCE, ever.** The fire ledger carries the REAL event's identity (`hl_trigger_fire.real_event_id`, partial unique on `(event_key, real_event_id)`). The FUB router stamps `fub:<family>:<record id>` on live dispatches; the import's classify path derives `fub.events:<row id>`; the import **CLAIMS the row atomically before any effect** — a duplicate loses the INSERT race and stops. The 12-day stale-inquiry replay (Monica's class of bug) is structurally dead. | mig `0619_trigger_fire_real_event_id.sql` · `lib/inngest/functions/fub-lead-import.ts` |
+| **Voice honors the per-lead mic.** The inbound webhook gates the AI answer four ways: the org voice toggle · the ALL-AI master · the answering agent's capability · **the caller's own mic** (`ai_responder='none'` → the human chain takes the call; a lookup error fails closed). | `app/api/phone/webhooks/voice/route.ts` |
+| **The absorption is complete.** Every AI compose→send road proposes a WRITTEN intent and dispatches only through the gateway's commit-time re-auth: the workflow `ai_message`/`first_touch` step (the Faduma path) · the e-sign nudge · the clone email · myli-followup · daily-home. `sendTextAs` is reachable from exactly two places: the human template step and the gateway itself. A denial is an intent row with its reason — the shadow, visible. | `lib/workflows/execute-step.ts` · `lib/scheduledActions/*` · `lib/ai/comms-gateway.ts` |
+
+---
+
+## 🔒 CURRENT STATE — the pause holds until Zach walks it
+
+**The machinery above is BUILT and every lane is governed — and AI outbound-to-lead is still PAUSED.**
+That is not a contradiction; it is the order Zach set: *"I don't want AI to be able to send to anybody yet
+until this thing is completely fixed."* The un-pause (Lead Engine item #91) is a **Zach-only act**, taken
+per-lane after his own walk — never as one big switch-flip. The pause is reversible in one step
+(`hl_settings` key `ai_mode_snapshot_0487` preserves the exact prior state).
+
+---
+
+## THE HISTORY — the incidents this model answers
+
+**Monica Zinn** inquired about selling on Jul 15 at 02:16. Twelve days later a re-run importer re-fired her
+stale inquiry, the agnostic routing tier matched a workflow no page listed, and she received *"We got your
+request to list this home"* — **present tense** — though Zach had turned off all 38 bindings he could see.
+Five gates each let it through, and the root cause was one line: **the gate asked "who is sending?", and that
+is a label the sender picks.** Call yourself a workflow, you are not AI. Call it a notification, you are
+exempt. The audience model exists because the sender's self-description was the loophole — so the question
+changed to the one thing the sender cannot lie about.
+
 ---
 
 ## Currently PAUSED (mig 0487) — reversible
@@ -76,10 +116,12 @@ not a sender**.
 | `hl_leads.ai_mode_enabled` | **off on 17 leads**, ids snapshotted in `hl_settings` → `ai_mode_snapshot_0487` |
 | **Still running on purpose** | ✅ fact capture · ✅ AI summaries · ✅ team notifications — verified node-by-node before pausing |
 
-**Do not un-pause without Zach.** Gates 1, 2, 3 and 5 above are still open.
+**Do not un-pause without Zach.** The five gates that let Monica's email through are closed (the audience
+key, the surfaced-and-probed agnostic tier, the class registry, the fail-closed master, the sever + the
+absorption) — and the pause STILL holds until his walk. Built ≠ enabled.
 
-**Build plan:** the 🕳 *last rabbit hole* in the
-[Lead Engine](https://claude.ai/code/artifact/209ff52e-468f-46e1-a9da-8d763217c547).
+**Build record:** era-3 receipts #64–#69 on the
+[Lead Engine board](https://claude.ai/code/artifact/209ff52e-468f-46e1-a9da-8d763217c547).
 
 ---
 
@@ -143,7 +185,8 @@ SYSTEM notify   ▶ allowed
 
 **Essentially nothing the AI does can send today.** That is intended. None of it should have been
 sending. Each path earns its voice back when it is rebuilt behind a playbook — and not one moment
-sooner.
+sooner. **The rebuild landed 2026-08-04:** all five AI compose→send roads now propose through the
+evaluator and dispatch only through the gateway (see WHAT IS REAL above).
 
 **Unaffected, deliberately:** humans clicking send, and system notifications to our own team
 (`kind: 'notification'`). An alert to an agent is not an AI talking to a customer.
@@ -238,17 +281,18 @@ Every audit line reads: *actual actor* Myli · *under playbook* Tour Request · 
 
 ---
 
-## The five altitudes
+## The six altitudes
 
-One question — *is this AI allowed to act?* — asked at five scopes. **Deny overrides: a child can only ever be
-more restrictive than its parent, never less.**
+Two questions, in order: *who receives this?* — then *is this AI allowed to act?* — asked at six scopes.
+**Deny overrides: a child can only ever be more restrictive than its parent, never less.**
 
 | # | Scope | Where it lives |
 |---|---|---|
+| **0** | **The audience — who receives** | `CommRequest.audience`, required; asked before the master. Only 'person' proceeds — everything else is `WRONG_LANE` |
 | 1 | The whole roster | `hl_settings.ai_master` |
 | 2 | A lane | `hl_settings.ai_clones` · `ai_conversations` |
 | 3 | One employee | `hl_users.is_active` · `hl_agent_clone_config.enabled` |
-| 4 | One lead — **the mic** | `hl_leads.ai_responder = 'none'` |
+| 4 | One lead — **the mic** | `hl_leads.ai_responder = 'none'` — honored by text, email **and the phone lane** |
 | 5 | One playbook | `hl_playbooks.enabled` + an **open run** |
 
 Plus the delegation check: **may this actor present as this identity, on this channel?**
@@ -392,9 +436,10 @@ does. A voice conversation that left no record did not happen as far as the audi
 any actor. Nobody wrote one. **The absence of the row is the denial**, which is what fail-closed-by-design
 looks like: a new channel is off until someone turns it on deliberately.
 
-**Known gap, stated plainly:** the phone webhook checks only the voice toggle and the AI master — **not the
-per-lead mic.** A muted lead who calls in still gets answered. The lane is unfinished; the rule is written
-here first so it cannot be built wrong.
+**And the per-lead mic reaches the phone lane** (era-3 #87, 2026-08-04): before dialing the bot, the inbound
+webhook resolves the caller by phone and reads their mic — `ai_responder='none'` means the AI does not
+answer and the human forward chain / voicemail takes the call. An unknown caller has no lead and no mute.
+A lookup error fails closed.
 </Info>
 
 ---
@@ -421,10 +466,10 @@ There is exactly one request shape and one decision shape. There is deliberately
 `canSendNewLeadText()` / `canSendFollowUpEmail()` / `canCallAfterShowing()`. That abstraction guarantees
 whack-a-mole: a new event means a new function and a new place to forget a rule.
 
-Reason codes: `ALLOWED` · `MASTER_AI_DISABLED` · `CLONE_LANE_DISABLED` · `EMPLOYEE_DISABLED` ·
-`NO_ACTIVE_PLAYBOOK` · `PLAYBOOK_NOT_RUNNING` · `PLAYBOOK_WRONG_LEAD` · `PLAYBOOK_DISABLED` ·
-`IDENTITY_NOT_DELEGATED` · `LEAD_MUTED` · `LEAD_MISSING` · `QUIET_HOURS` · `DUPLICATE_ACTION` ·
-`POLICY_CONTEXT_MISSING`.
+Reason codes: `ALLOWED` · `AUDIENCE_UNDECLARED` · `WRONG_LANE` · `MASTER_AI_DISABLED` ·
+`CLONE_LANE_DISABLED` · `EMPLOYEE_DISABLED` · `NO_ACTIVE_PLAYBOOK` · `PLAYBOOK_NOT_RUNNING` ·
+`PLAYBOOK_WRONG_LEAD` · `PLAYBOOK_DISABLED` · `IDENTITY_NOT_DELEGATED` · `LEAD_MUTED` · `LEAD_MISSING` ·
+`QUIET_HOURS` · `DUPLICATE_ACTION` · `POLICY_CONTEXT_MISSING`.
 
 ---
 
@@ -436,8 +481,11 @@ Reason codes: `ALLOWED` · `MASTER_AI_DISABLED` · `CLONE_LANE_DISABLED` · `EMP
 | `hl_communication_intent` | Every proposed message, its decision, its reason, and its outcome. Idempotency key prevents double-sends. |
 | `hl_playbook_runs` | The authorization scope. A unique partial index enforces **one open run per lead** — in Postgres, not by convention. |
 | `hl_playbook_turn_trace` | Every decision, spoken or blocked, with its reason. |
+| `hl_notify_classes.audience` | The team lane, declared — 58/58 `'team'`; the registry audit keeps it so. |
+| `hl_trigger_fire.real_event_id` | The real event's identity; the partial unique index makes the fire ledger the idempotency authority. |
 
-Migrations: `0461_playbook_runs_and_turn_trace.sql` · `0465_ai_communication_security.sql`.
+Migrations: `0461_playbook_runs_and_turn_trace.sql` · `0465_ai_communication_security.sql` ·
+`0618_notify_classes_audience.sql` · `0619_trigger_fire_real_event_id.sql`.
 
 ---
 
@@ -484,14 +532,12 @@ TypeScript because SQL is just a string. "Be more careful" is not a fix; a faili
 
 ## Known-open, stated plainly
 
-- **Voice is not gated.** The phone lane checks the voice toggle and the master — **not the per-lead mic**. A
-  muted lead who calls in still gets answered. The lane is unfinished; the rule is written down so it cannot
-  be built wrong. **The call will be the playbook run** — permission asked once at answer-time.
+- **The un-pause is Zach's alone** (Lead Engine #91): the audience machinery is built and every lane is
+  governed, and nothing sends until his walk and his word — per-lane, never one big flip.
 - **Per-step capabilities** ("one SMS, this step, expires in 15 minutes") are not built. The evaluator checks
   the run and the playbook, not a per-step grant.
-- **Shadow / convert / enforce** are not done. The machinery is live and proven, but **most AI call sites have
-  not been migrated to propose an intent yet** — that happens as each vibe-coded mouth is absorbed into its
-  playbook.
+- **No playbooks run yet**, so every absorbed road currently denies `NO_ACTIVE_PLAYBOOK`. Intended: each lane
+  earns its voice back when its playbook ships — and there is no second road left to take instead.
 
 **Build plan:** the AI Programming master blueprint —
 [artifact 5b202c8e](https://claude.ai/code/artifact/5b202c8e-ea8a-4655-ae41-f5fb37b98f49), the
