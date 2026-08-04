@@ -35,6 +35,7 @@ vertical screen all day — the board *is* the session.
 /project-board done 56              move back down, green, date — REFUSES without an audit
 /project-board audit 56             write the ten-field receipt
 /project-board loop                 work the whole active section end to end
+/project-board migrate <old.html>   convert an existing hand-built board (parses + diffs)
 ```
 
 **The one you will use most is `/project-board loop`.** Name the items you want worked, then say loop,
@@ -181,11 +182,57 @@ markup and moving an item meant surgery. With the state in JSON it is a one-line
 result — measure the percentage of fragments carried across and report the number. Rebuilding from memory
 silently drops the reasoning, which is the half nobody notices is gone until they need it.
 
+## ⭐ MIGRATING AN EXISTING BOARD — the protocol
+
+**Every agent with a hand-built board migrates it with the script, never by hand.**
+
+```
+node .claude/skills/project-board/migrate-board.mjs <old-board.html> <out-board.json> \
+     --owner &lt;agent&gt; --title "&lt;name&gt;"
+```
+
+It parses the old document, writes `board.json`, extracts embedded screenshots back into real files,
+**diffs the result, and REFUSES to pass below 99%** — printing exactly which fragments did not make it.
+
+### The five rules, each one earned
+
+1. **PARSE, NEVER RETYPE.** Rebuilding a board from memory is how ~130 items, 16 screenshots and every
+   law/correction/finding section went missing on 2026-08-04. The file was never deleted — but the
+   published artifact lost them, and from Zach's side that is identical to deleting them.
+2. **NO CAPS ANYWHERE.** Three of mine ate content, each hiding the next: `paras[:6]` cut the fourteen
+   locked build decisions (they are paragraphs 5–14); a 2000-char truncation cut the **tails**, which
+   is exactly where the laws live; and a head-match `continue` skipped whole list bodies. The script
+   has none.
+3. **MEASURE, DO NOT CLAIM.** The gate is a number. If it says 96%, you are not done — read
+   `<board>.missing.txt` and fold it in. *A verification gate that under-reports is worse than none*,
+   which is why the comparison strips tags and normalises entities before comparing (`<code>hl_leads</code>`
+   must match plain `hl_leads`, `2&ndash;9` must match `2–9`).
+4. **OPEN EVERY RECOVERED IMAGE.** Each lands with `review: "OPEN THIS AND WRITE ITS CAPTION"`. I binned
+   a competitor's MOBILE reference shot **twice** by pattern-matching its caption instead of looking at
+   it. An image with no caption is not a duplicate — it is an image with no caption.
+5. **KEEP THE ORIGINAL FILE FOREVER.** It is the only thing that makes the diff possible, and the only
+   way to recover if the migration is wrong.
+
+### What the numbers become
+
+Migration is the **one moment** numbers are assigned. Old inline prefixes (`12 · Do the thing`) are
+stripped — they came from a scheme that no longer exists and would collide. From that moment the
+number is permanent.
+
+### After it passes
+
+1. Caption every recovered image, then sort them into `reference.shots` or delete the receipt duplicates.
+2. Move the genuinely-still-open items to `status: future`; everything shipped stays `done`.
+3. Set `active` to the batch you are working now, with a PRD line per item.
+4. Run the generator, publish, and **say the completeness number out loud** in the handoff.
+
+
 ## The verbs
 
 | Command | What it does |
 |---|---|
 | `/board new <name>` | scaffold `board.json` + first render |
+| `/board migrate <old.html>` | convert an existing hand-built board — parses, diffs, **refuses below 99%** |
 | `/board active 56,72,94-101` | pull those up, leave placeholders, create the matching tasks |
 | `/board done 56` | move back down, green, date — **refuses without an audit receipt** |
 | `/board audit 56` | write the ten-field receipt |
@@ -612,7 +659,191 @@ echo "board rebuilt $(date '+%H:%M') — items $NUMS closed. REPUBLISH the artif
 echo "  ⚑ board regenerated — republish the artifact to make it visible to Zach."
 ```
 
-## 4 · `board.json` — the data contract
+## 4 · `.claude/skills/project-board/migrate-board.mjs` — the migration protocol
+
+**Every agent with a hand-built board migrates it with this, never by hand.** It parses the old
+document, extracts embedded screenshots back into real files, **diffs the result, and refuses to pass
+below 99%** — printing exactly which fragments did not make it.
+
+```
+node .claude/skills/project-board/migrate-board.mjs <old-board.html> <out-board.json> --owner <agent>
+```
+
+<Warning>
+**This script exists because I got it wrong first.** Rebuilding this board from memory dropped ~130
+items, 16 screenshots and every law/correction/finding section, and recovering it took ten separate
+commands. Three of my own caps were eating content, each hiding the next: `paras[:6]` cut the fourteen
+locked build decisions (they are paragraphs 5–14), a 2000-char truncation cut the **tails** where the
+laws live, and a head-match `continue` skipped whole list bodies. **The script has no caps and it
+measures the result** — one command, 99.8%.
+</Warning>
+
+```js
+#!/usr/bin/env node
+/**
+ * migrate-board.mjs — convert an EXISTING hand-built board (HTML) into board.json, losing nothing.
+ *
+ * ⚑ THIS EXISTS BECAUSE I GOT IT WRONG FIRST. Migrating the Seller Engine board on 2026-08-04 I
+ *   rebuilt the list FROM MEMORY instead of parsing the old document. The file was never deleted —
+ *   but the published artifact lost ~130 items, 16 screenshots, and every law / correction / finding
+ *   section. From Zach's side that is identical to deleting them. Recovering it took ten separate
+ *   commands, and THREE OF MY OWN CAPS were eating content, each one hiding the next:
+ *     · `paras[:6]`         — cut the fourteen locked build decisions, which are paragraphs 5–14
+ *     · `note[:400]`/[:2000] — cut the TAILS, which is exactly where the laws live
+ *     · a head-match `continue` — skipped entire list bodies whose title matched an item
+ *   Every one of those is now impossible here: THIS SCRIPT HAS NO CAPS, and it MEASURES the result.
+ *
+ * THE PROTOCOL, in one line: PARSE, NEVER RETYPE — then DIFF and report the percentage.
+ *
+ * Usage:
+ *   node migrate-board.mjs <old-board.html> <out-board.json> [--owner caleb] [--title "…"]
+ *   node migrate-board.mjs <old-board.html> <out-board.json> --verify     (re-check completeness only)
+ */
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { dirname, join } from 'path';
+
+const [, , SRC, OUT, ...rest] = process.argv;
+if (!SRC || !OUT) {
+  console.error('usage: migrate-board.mjs <old-board.html> <out-board.json> [--owner x] [--title "…"]');
+  process.exit(1);
+}
+const arg = (k, d) => { const i = rest.indexOf(k); return i >= 0 ? rest[i + 1] : d; };
+const VERIFY_ONLY = rest.includes('--verify');
+
+const raw = readFileSync(SRC, 'utf8');
+const ent = (s) => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+  .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ')
+  .replace(/&mdash;/g, '—').replace(/&middot;/g, '·').replace(/&rarr;/g, '→').replace(/&rsquo;/g, '’');
+// Tags become a SPACE, not nothing — otherwise `<b>foo</b><code>bar</code>` becomes "foobar".
+const txt = (t) => ent(String(t).replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
+
+// ── 1 · ITEMS ────────────────────────────────────────────────────────────────────────────────────
+// Both shapes: live checkboxes AND the "already shipped" marks older boards used.
+const items = [];
+const seen = new Set();
+function pushItem(title, note, done, owner) {
+  const t = title.replace(/^\d+\s*[·.)]\s*/, '').trim();   // old inline numbers die here — see below
+  if (!t || t.length < 4) return;
+  const k = t.toLowerCase().slice(0, 80);
+  if (seen.has(k)) return;
+  seen.add(k);
+  items.push({ n: items.length + 1, status: done ? 'done' : 'future', title: t, ...(note ? { note } : {}), ...(owner ? { owner } : {}) });
+}
+for (const m of raw.matchAll(/<li[^>]*>([\s\S]*?)<\/li>/g)) {
+  const body = m[1];
+  const done = /<input[^>]*checked/.test(body) || /class="was"/.test(body);
+  const head = txt(body.split(/<small/)[0]);
+  const full = txt(body);
+  // NO TRUNCATION. The laws live in the tail.
+  const note = full.slice(head.length).replace(/^[\s·—-]+/, '') || null;
+  const own = /class="own own-(\w+)"/.exec(body)?.[1] ?? null;
+  pushItem(head, note, done, own);
+}
+
+// ── 2 · THE RECORD — every heading and EVERYTHING under it. No caps. ─────────────────────────────
+const heads = [...raw.matchAll(/<h([234])[^>]*>([\s\S]*?)<\/h\1>/g)]
+  .map((m) => ({ at: m.index, end: m.index + m[0].length, level: +m[1], title: txt(m[2]) }));
+const itemTitles = new Set(items.map((i) => i.title.toLowerCase().slice(0, 60)));
+const sections = [];
+heads.forEach((h, i) => {
+  const body = raw.slice(h.end, heads[i + 1]?.at ?? raw.length);
+  const paras = [...body.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)].map((m) => txt(m[1])).filter((p) => p.length > 40);
+  const lis = [...body.matchAll(/<li[^>]*>([\s\S]*?)<\/li>/g)].map((m) => txt(m[1]))
+    .filter((l) => l.length > 40 && !itemTitles.has(l.toLowerCase().slice(0, 60)));
+  const rows = [...body.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)]
+    .map((m) => [...m[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/g)].map((c) => txt(c[1])))
+    .filter((r) => r.some((c) => c.length > 1));
+  if (!paras.length && !lis.length && !rows.length) return;
+  sections.push({ level: h.level, title: h.title, paras: [...paras, ...lis], rows });
+});
+// keep the richest copy of any repeated heading
+const best = new Map();
+for (const s of sections) {
+  const k = s.title.slice(0, 80);
+  if (!best.has(k) || JSON.stringify(s).length > JSON.stringify(best.get(k)).length) best.set(k, s);
+}
+
+// ── 3 · IMAGES — data URIs back out to real files. ⚑ AND YOU MUST LOOK AT THEM. ─────────────────
+// I binned a competitor's MOBILE reference shot TWICE by pattern-matching its caption instead of
+// opening it. An image with no caption is not a duplicate; it is an image with no caption.
+const imgDir = join(dirname(OUT), 'recovered');
+const shots = [];
+[...raw.matchAll(/<img src="data:image\/(\w+);base64,([^"]{500,})"/g)].forEach((m, i) => {
+  if (VERIFY_ONLY) return;
+  mkdirSync(imgDir, { recursive: true });
+  const file = `recovered/legacy-${i + 1}.${m[1] === 'jpeg' ? 'jpg' : m[1]}`;
+  writeFileSync(join(dirname(OUT), file), Buffer.from(m[2], 'base64'));
+  const pre = raw.slice(Math.max(0, m.index - 1400), m.index);
+  const h4 = [...pre.matchAll(/<h4[^>]*>([\s\S]*?)<\/h4>/g)].pop();
+  shots.push({ file, title: h4 ? txt(h4[1]) : `Recovered image ${i + 1}`, caption: '', review: 'OPEN THIS AND WRITE ITS CAPTION — do not guess from surrounding text' });
+});
+
+// ── 4 · THE COMPLETENESS DIFF — the whole point. Claiming is not measuring. ──────────────────────
+function completeness(boardJson) {
+  // ⚑ THE HAYSTACK IS THE TEXT, NEVER JSON.stringify. Escaped quotes (\") mean any fragment
+  //   containing a " can never match, which reported a false 69.6% on a migration that was actually
+  //   fine. A verification gate that under-reports is worse than none — it sends you hunting for
+  //   content that is already there.
+  const walk = (v) => typeof v === 'string' ? v : Array.isArray(v) ? v.map(walk).join(' ')
+    : v && typeof v === 'object' ? Object.values(v).map(walk).join(' ') : '';
+  // ⚑ RECEIPTS COUNT AS CARRIED. They live in receipts/manifest.json, NOT in board.json, so a check
+  //   that only looks at the board reports a receipt's own prose as "lost" when it is sitting right
+  //   there in the audit band. Same class of error as the JSON.stringify haystack: the content was
+  //   never missing, the measurement was.
+  const rman = join(dirname(OUT), 'receipts', 'manifest.json');
+  // ⚑ COMPARE NORMALISED, NOT EXACT. Inline tags and entities make the same sentence differ by
+  //   whitespace between two documents ("2&ndash;9" vs "2–9", "source='PCSOI'" vs "source= 'PCSOI'").
+  //   Exact substring matching reported ~100 false losses. Strip to letters and digits and the
+  //   comparison measures CONTENT rather than markup.
+  //   ⚑ AND STRIP TAGS FROM THE HAYSTACK TOO — receipts store HTML, so <code>hl_leads</code>
+  //     normalises to "codehlleadscode" and never matches the plain "hlleads" from the old board.
+  const norm = (x) => txt(x).toLowerCase().replace(/[^a-z0-9]+/g, '');
+  const hay = norm(walk(boardJson) + (existsSync(rman) ? ' ' + walk(JSON.parse(readFileSync(rman, 'utf8'))) : ''));
+  let total = 0, missing = [];
+  for (const re of [/<p[^>]*>([\s\S]*?)<\/p>/g, /<li[^>]*>([\s\S]*?)<\/li>/g, /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/g]) {
+    for (const m of raw.matchAll(re)) {
+      const t = txt(m[1]);
+      if (t.length < 45) continue;
+      total++;
+      const sig = norm(t).slice(0, 70);
+      if (sig.length > 20 && !hay.includes(sig)) missing.push(t);
+    }
+  }
+  return { total, missing };
+}
+
+const board = existsSync(OUT) && VERIFY_ONLY ? JSON.parse(readFileSync(OUT, 'utf8')) : {
+  title: arg('--title', 'Migrated board'),
+  owner: arg('--owner', 'caleb'),
+  updated: new Date().toISOString().slice(0, 10),
+  _law: 'THE NUMBER IS PERMANENT FROM THIS MIGRATION FORWARD. Numbers were assigned ONCE here and never change again; items MOVE into the active section and back, they are never renumbered.',
+  active: { title: 'Nothing active yet', prd: ['Name the items to work and pull them up.'], items: [] },
+  items,
+  record: { title: 'The record — the law, the corrections, and the findings', lede: 'Recovered from the pre-migration board: everything that was NOT a checklist item and NOT a receipt. None of it is a task; all of it is the reasoning behind the tasks, which is the part that gets rebuilt wrong when it goes missing.', sections: [...best.values()] },
+  reference: { title: 'Reference & wireframes', lede: 'Sub-artifacts this board points at.', wireframes: [], shots },
+};
+
+const { total, missing } = completeness(board);
+const pct = total ? ((total - missing.length) / total * 100).toFixed(1) : '100.0';
+
+if (!VERIFY_ONLY) writeFileSync(OUT, JSON.stringify(board, null, 2));
+console.log(`\n${VERIFY_ONLY ? 'VERIFY' : 'MIGRATED'} ${SRC}`);
+console.log(`  items ${board.items.length} · record sections ${board.record.sections.length} · images ${board.reference.shots.length}`);
+console.log(`  COMPLETENESS: ${total} fragments · ${total - missing.length} carried · ${missing.length} missing → ${pct}%`);
+if (missing.length) {
+  console.log(`\n  ⚠ STILL MISSING — read these and decide, do NOT assume they are noise:`);
+  missing.slice(0, 12).forEach((m) => console.log(`    ✗ ${m.slice(0, 108)}`));
+  writeFileSync(OUT.replace(/\.json$/, '.missing.txt'), missing.join('\n'));
+  console.log(`  → all ${missing.length} written to ${OUT.replace(/\.json$/, '.missing.txt')}`);
+}
+if (+pct < 99) {
+  console.log(`\n  ⛔ BELOW 99% — DO NOT PUBLISH YET. Read the missing list and fold it in.`);
+  process.exit(2);
+}
+console.log(`\n  ✅ ${pct}% — keep the ORIGINAL file, never delete it. Then: open every recovered image and caption it.`);
+```
+
+## 5 · `board.json` — the data contract
 
 `status` is `done | active | future`. Nothing else.
 
