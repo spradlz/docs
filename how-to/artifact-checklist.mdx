@@ -24,6 +24,17 @@ interpretation surface for it to drift through.
 | **Where are we?** | `/project-board` — or *"rebuild the board"* |
 | **This one is done** | `/project-board done 56` — refuses without an audit receipt |
 | **Migrate my old board** | `/project-board migrate <old.html>` — parses + diffs, refuses below 99% |
+| **Put the wireframe ON the board** | `/project-board shoot <wireframe.html>` — or *"show me the wireframe in the board"* |
+
+<Warning>
+**A board that says "wireframe locked" and does not SHOW you the wireframe is a bug — report it.**
+Zach, 2026-08-04: *"There's no reference — the reference just says 'reference and wireframes', but it
+doesn't actually give me the wireframe. That artifact IS the wireframe for that section, dude."* The
+Reference band now renders the design as a full-width picture, desktop and mobile, and **the build
+fails** if a wireframe is named without one. If a design was signed off but never saved into the repo,
+the band says so in amber and names the item that will fix it — it never leaves a heading standing
+over nothing.
+</Warning>
 
 <Warning>
 **Typing `/project-board` is the reliable way.** Plain English usually works — the skill matches on
@@ -124,6 +135,55 @@ green. A second pile is a second ordering, and two orderings is how a board spli
 
 The nav **scrolls**, it does not hide: one page, end to end, with a scrollspy.
 
+## ⭐ A BOARD THAT NAMES A WIREFRAME MUST **SHOW** IT
+
+> Zach, 2026-08-04, reading the saved-search board: *"It says 'wireframe locked'… I need to actually
+> see that visually with screenshots. There's no reference — the reference just says 'reference and
+> wireframes', but it doesn't actually give me the wireframe. **That artifact IS the wireframe for
+> that section, dude.**"*
+
+**The Reference band is where a design LIVES, not where it is described.** A name, a file path and a
+link are text *about* a picture. An artifact cannot read the filesystem, so `docs/wireframes/x.html`
+renders as literally nothing a human can look at, and a link costs a second click and the right login.
+
+**The rule:** every entry in `reference.wireframes` carries a **`shot`** (and a `shotMobile` when the
+design has a phone view). It is inlined as an image, full width, exactly like a receipt screenshot.
+
+```bash
+node .claude/skills/project-board/shoot-wireframe.mjs docs/wireframes/<file>.html \
+     --out .claude/reports/<board>/wireframes --name "The thing — LOCKED <date>"
+# prints a paste-ready JSON block carrying "shot" + "shotMobile"
+```
+
+**The build FAILS (exit 1) on a named wireframe with no picture** — same treatment as a missing
+receipt screenshot, and for the same reason: *a board whose evidence is invisible is a claim with the
+evidence torn out.*
+
+### Declaring a gap is allowed. Faking one is not.
+
+Some designs were signed off and never saved into the repo, so there is no file to render. Say so:
+
+```json
+{ "name": "…", "what": "…", "status": "SIGNED OFF · not in the repo",
+  "gap": "The HTML was never committed — that is open item 23. Until it closes this board can only
+          describe the wireframe." }
+```
+
+That renders an **amber MISSING card** and passes the gate. The gate catches *silence*, not honesty —
+without this escape the only way to get a green build would be to fake a picture, which is the exact
+thing it exists to stop. An empty band is fine. **A false promise is not.**
+
+### Two defects underneath this, both worth remembering
+
+1. **Nothing in the shared generator may be one board's specifics.** The two Reference sub-headings
+   were hardcoded — `"a competitor's portal, desktop and mobile"` is true of the Seller Engine board,
+   which is what the generator was written against. Every *other* board inherited that sentence and
+   promised Zach things it did not have. (The output filename had the same bug ten lines away: any
+   `board.json` built itself into `seller-engine-board.html`.) **A heading is content; content lives
+   in the board's own JSON.** Same class as a hardcoded allowlist.
+2. **An empty sub-band must render NOTHING.** A heading over emptiness reads as *"the thing is here"* —
+   worse than a blank page, because a blank page sends you looking and a false heading makes you stop.
+
 ## ⭐ THE NUMBER IS PERMANENT
 
 Assigned once, never changed. "Item 34" means the same thing tomorrow and in a message to another agent.
@@ -194,9 +254,9 @@ Field 10 is the anti-drift field: most duplicate components exist because nobody
 ## The state lives in DATA
 
 ```
-&lt;board&gt;.json                                ← the state: items, status, dates, PRD, record, reference
+<board>.json                                ← the state: items, status, dates, PRD, record, reference
 .claude/skills/project-board/build-board.mjs ← the generator
-&lt;board&gt;.html                                ← the output, published as the artifact
+<board>.html                                ← the output, published as the artifact
 ```
 
 **Never hand-edit the HTML.** The previous board reached 3.7MB and 203 items by accretion — two competing
@@ -213,7 +273,7 @@ silently drops the reasoning, which is the half nobody notices is gone until the
 
 ```
 node .claude/skills/project-board/migrate-board.mjs <old-board.html> <out-board.json> \
-     --owner &lt;agent&gt; --title "&lt;name&gt;"
+     --owner <agent> --title "<name>"
 ```
 
 It parses the old document, writes `board.json`, extracts embedded screenshots back into real files,
@@ -237,6 +297,23 @@ It parses the old document, writes `board.json`, extracts embedded screenshots b
    it. An image with no caption is not a duplicate — it is an image with no caption.
 5. **KEEP THE ORIGINAL FILE FOREVER.** It is the only thing that makes the diff possible, and the only
    way to recover if the migration is wrong.
+6. **⭐ THE COMPLETENESS SCORE IS TWO NUMBERS, NEVER ONE — TEXT AND IMAGES.** The gate used to count
+   text fragments only, and I reported its **100.0%** as *"nothing was lost."* Images are not text
+   fragments, so that score was perfectly compatible with losing **every picture on the page** — which
+   is what Zach found. The check answered *"did the prose survive?"* while I reported it as *"did the
+   artifact survive?"* — the green-signal failure
+   (`.claude/lessons/every-tool-answers-a-narrower-question.md`) **inside the verification tool
+   itself**, written the same afternoon we documented it. The migrator now always prints both:
+
+   ```
+   COMPLETENESS (text):   765 fragments · 639 carried · 126 missing → 83.5%
+   COMPLETENESS (images): 11 in source · 11 carried
+   ```
+
+   A single blended percentage is precisely how a lost picture hides behind carried prose. **Two
+   questions, two numbers.** It also names any `<img src="https://…">` it cannot recover (it can only
+   extract *embedded* data-URI images) instead of skipping them silently, and it warns when the source
+   **talks about** a wireframe while `reference.wireframes` is empty — the exact shape of this bug.
 
 ### What the numbers become
 
@@ -247,9 +324,15 @@ number is permanent.
 ### After it passes
 
 1. Caption every recovered image, then sort them into `reference.shots` or delete the receipt duplicates.
-2. Move the genuinely-still-open items to `status: future`; everything shipped stays `done`.
-3. Set `active` to the batch you are working now, with a PRD line per item.
-4. Run the generator, publish, and **say the completeness number out loud** in the handoff.
+2. **Fill in the Reference band before you publish** — it is the band a migration leaves empty, and an
+   empty Reference band is the one people notice. Every wireframe gets a **`shot`** (or a declared
+   `gap`); every competitor/reference capture gets a real caption written **after opening the image**.
+   Set `wireframesLede` / `shotsLede` to what *this* board actually holds — never leave another
+   board's sentence describing yours.
+3. Move the genuinely-still-open items to `status: future`; everything shipped stays `done`.
+4. Set `active` to the batch you are working now, with a PRD line per item.
+5. Run the generator, publish, and **say BOTH completeness numbers out loud** in the handoff — text
+   and images. Reporting one number when the tool measured two is how this bug shipped.
 
 
 ## The verbs
@@ -328,16 +411,29 @@ is a contract about what got done.
  */
 import { readFileSync, writeFileSync, existsSync, statSync } from 'fs';
 import { execFileSync } from 'child_process';
-import { join } from 'path';
+import { join, basename, dirname } from 'path';
 
 const ROOT = '/Users/zachspradling/Code/BossLoop-Gold';
 // ⚑ ANY BOARD, NOT JUST THIS ONE. The skill ships one generator for every agent's board; pass the
 //   json path as argv[2] (and the html out as argv[3]) or fall back to the Seller Engine default.
 const BOARD = process.argv[2] || `${ROOT}/.claude/reports/board.json`;
-const RDIR = `${ROOT}/.claude/reports/receipts`;
-const OUT = process.argv[3] || BOARD.replace(/\.json$/, '.html').replace('board.html', 'seller-engine-board.html');
+// Per-board receipts dir (board.json `receiptsDir`, repo-relative) — boards must not share one
+// manifest or board A's receipts render in board B's audit band. Falls back to the original default.
+const RDIR_DEFAULT = `${ROOT}/.claude/reports/receipts`;
 
 const board = JSON.parse(readFileSync(BOARD, 'utf8'));
+// ⚑ THE OUTPUT NAME COMES FROM THE BOARD, NOT FROM THE BOARD I HAPPENED TO WRITE THIS FOR.
+//   This used to rewrite any "board.html" to "seller-engine-board.html" — so the saved-search board
+//   built itself into a file called seller-engine-board.html sitting in the saved-search folder.
+//   Same defect as the hardcoded reference headings below, ten lines apart: one board's specifics
+//   baked into the shared generator. `slug` in the board JSON wins; otherwise the folder names it.
+const OUT = process.argv[3] || (() => {
+  const html = BOARD.replace(/\.json$/, '.html');
+  if (!html.endsWith('board.html')) return html;
+  const slug = board.slug || basename(dirname(BOARD));
+  return join(dirname(BOARD), `${slug === 'reports' ? 'seller-engine' : slug}-board.html`);
+})();
+const RDIR = (() => { const b = JSON.parse(readFileSync(BOARD, 'utf8')); return b.receiptsDir ? `${ROOT}/${b.receiptsDir}` : RDIR_DEFAULT; })();
 const receipts = existsSync(`${RDIR}/manifest.json`)
   ? JSON.parse(readFileSync(`${RDIR}/manifest.json`, 'utf8')).receipts ?? [] : [];
 const receiptFor = (id) => receipts.find((r) => String(r.item) === String(id));
@@ -347,10 +443,12 @@ const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').
 // Inline a screenshot as a data URI. An artifact cannot reach the filesystem, so a linked image
 // renders as nothing at all — a receipt with an invisible screenshot is not a receipt.
 function hash(s) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) | 0; return h; }
+// ⚑ A MISSING SHOT IS A BUILD FAILURE, NOT A WARNING. Counted here, enforced at the exit below.
+const missingShots = [];
 function inlineShot(rel) {
   if (!rel) return null;
   const abs = rel.startsWith('/') ? rel : join(RDIR, rel);
-  if (!existsSync(abs)) { console.warn(`  ⚠ missing screenshot: ${abs}`); return null; }
+  if (!existsSync(abs)) { missingShots.push(abs); console.warn(`  ⚠ missing screenshot: ${abs}`); return null; }
   const out = join('/tmp', `board-${Math.abs(hash(abs))}.jpg`);
   try {
     execFileSync('sips', ['-s', 'format', 'jpeg', '-s', 'formatOptions', '72',
@@ -361,6 +459,67 @@ function inlineShot(rel) {
   console.log(`  · ${rel} → ${Math.round(statSync(out).size / 1024)}KB`);
   return `data:image/jpeg;base64,${readFileSync(out).toString('base64')}`;
 }
+
+// ── THE REFERENCE BAND ────────────────────────────────────────────────────────────────────────────
+// ⚑ TWO DEFECTS ZACH FOUND HERE ON 2026-08-04, both structural, both mine (Caleb):
+//
+//   ① THE HEADINGS WERE HARDCODED. "The reference — a competitor's portal, desktop and mobile" is
+//      true of the SELLER ENGINE board, which is the board I wrote this generator against. Every
+//      OTHER board inherited that sentence verbatim, so the saved-search board promised Zach a
+//      competitor's portal, a desktop view, a modal and a mobile view — and had none of them. A
+//      heading is CONTENT; content belongs in the board's own JSON, never baked into the renderer.
+//      Same class as a hardcoded allowlist: one place to edit, N places that silently drift.
+//
+//   ② AN EMPTY SUB-BAND STILL RENDERED ITS HEADING. Zero wireframes printed the heading and then
+//      nothing under it, which reads as "the wireframe is here" — worse than an empty page, because
+//      an empty page makes you go look for the thing and a false heading makes you stop looking.
+//      A band with nothing in it now renders NOTHING, and a board that has no wireframe at all says
+//      so out loud, pointed at the item that would fix it.
+//
+//   ③ AND THE ONE UNDER BOTH: a wireframe rendered as its NAME + FILE PATH + LINK. Text about a
+//      picture. An artifact cannot read the filesystem, so `docs/wireframes/x.html` shows a human
+//      absolutely nothing. A NAMED WIREFRAME MUST SHOW ITS PICTURE — `shot` (and optionally
+//      `shotMobile`) are inlined the same way receipts are, and a wireframe without one is a BUILD
+//      FAILURE, not a text-only fallback. Render it with: shoot-wireframe.mjs <file.html> --out …
+const missingWireframes = [];
+const wfs = board.reference?.wireframes ?? [];
+const wireframesHtml = wfs.length ? `
+  <h3 class="sect">${esc(board.reference?.wireframesLede ?? 'The wireframes — LOCKED, and they are the build spec')}</h3>
+  ${wfs.map((w) => {
+    const uri = w.shot ? inlineShot(w.shot) : null;
+    const uriM = w.shotMobile ? inlineShot(w.shotMobile) : null;
+    // ⚑ THE GATE CATCHES SILENCE, NOT HONESTY. A wireframe with no picture and no explanation is a
+    //   build failure. A wireframe that DECLARES its gap ("signed off, but it only ever existed as a
+    //   published artifact — item N puts it in the repo") renders as an amber MISSING card and passes.
+    //   Without this the only way to get a green build is to fake a picture, which is the opposite of
+    //   what this whole change is for.
+    if (!w.shot && !w.gap) missingWireframes.push(`${w.name} — no "shot" field (run shoot-wireframe.mjs, or set "gap")`);
+    if (!w.shot && w.gap) return `<article class="wf wf-gap">
+    <header><h3>${esc(w.name)}</h3><span class="wfs">NO PICTURE IN THE REPO</span></header>
+    <p>${esc(w.what)}</p><p><b>${esc(w.gap)}</b></p>
+    <p class="paths"><code>${esc(w.path)}</code>${w.url ? ` &middot; <a href="${w.url}" target="_blank" rel="noopener">open the wireframe &rarr;</a>` : ''}</p>
+  </article>`;
+    return `<article class="wf">
+    <header><h3>${esc(w.name)}</h3><span class="wfs">${esc(w.status)}</span></header>
+    <p>${esc(w.what)}</p>
+    ${uri ? `<figure><img src="${uri}" alt=""><figcaption>${esc(w.name)} — desktop</figcaption></figure>` : ''}
+    ${uriM ? `<figure><img src="${uriM}" alt=""><figcaption>${esc(w.name)} — mobile</figcaption></figure>` : ''}
+    <p class="paths"><code>${esc(w.path)}</code>${w.url ? ` &middot; <a href="${w.url}" target="_blank" rel="noopener">open the wireframe &rarr;</a>` : ''}</p>
+  </article>`;
+  }).join('\n')}` : (board.reference?.wireframeGap ? `
+  <h3 class="sect">The wireframes</h3>
+  <article class="wf wf-gap"><header><h3>Not in the repo yet</h3><span class="wfs">MISSING</span></header>
+    <p>${esc(board.reference.wireframeGap)}</p></article>` : '');
+
+const shs = board.reference?.shots ?? [];
+const shotsHtml = shs.length ? `
+  <h3 class="sect">${esc(board.reference?.shotsLede ?? 'The reference — what we are designing against')}</h3>
+  ${shs.map((sh) => {
+    const uri = inlineShot(sh.file);
+    return uri ? `<article class="rc"><header><h3>${esc(sh.title)}</h3></header>
+      ${sh.caption ? `<p class="lede">${esc(sh.caption)}</p>` : ''}
+      <figure><img src="${uri}" alt=""></figure></article>` : '';
+  }).join('\n')}` : '';
 
 const activeSet = new Set(board.active?.items ?? []);
 const items = [...board.items].sort((a, b) => a.n - b.n);
@@ -485,6 +644,11 @@ const html = `<title>${esc(board.title)}</title>
        background:#ECFDF5;color:var(--green);border-radius:999px;padding:4px 11px}
   .wf p{margin:0 0 8px;font-size:15px;color:var(--ink2)}
   .wf .paths{font-size:13px;color:var(--ink3)}.wf .paths a{color:var(--blue);font-weight:700;text-decoration:none}
+  /* The wireframe IS the picture — it gets the same treatment as a receipt screenshot, full width. */
+  .wf figure{margin:12px 0}.wf img{width:100%;border:1px solid var(--line);border-radius:8px;display:block}
+  .wf figcaption{font-size:13px;color:var(--ink3);margin-top:6px}
+  /* An honest gap reads as a gap: amber rail, never the blue "we have this" rail. */
+  .wf-gap{border-left-color:#B45309}.wf-gap .wfs{background:#B45309}
   code{background:#F3F4F6;border-radius:4px;padding:1px 5px;font-size:.92em}
   .pane{display:block}   /* one continuous page — the tabs SCROLL, they do not hide */
   .nav a{cursor:pointer}
@@ -556,20 +720,8 @@ ${items.map((it) => (activeSet.has(it.n) ? placeholder(it) : row(it))).join('\n'
   <h2 id="reference">${esc(board.reference?.title ?? 'Reference')}</h2>
   <p class="lede">${esc(board.reference?.lede ?? '')}</p>
 
-  <h3 class="sect">The wireframes &mdash; LOCKED, and they are the build spec</h3>
-  ${(board.reference?.wireframes ?? []).map((w) => `<article class="wf">
-    <header><h3>${esc(w.name)}</h3><span class="wfs">${esc(w.status)}</span></header>
-    <p>${esc(w.what)}</p>
-    <p class="paths"><code>${esc(w.path)}</code>${w.url ? ` &middot; <a href="${w.url}" target="_blank" rel="noopener">open the wireframe &rarr;</a>` : ''}</p>
-  </article>`).join('\n')}
-
-  <h3 class="sect">The reference &mdash; a competitor&rsquo;s portal, desktop and mobile</h3>
-  ${(board.reference?.shots ?? []).map((sh) => {
-    const uri = inlineShot(sh.file);
-    return uri ? `<article class="rc"><header><h3>${esc(sh.title)}</h3></header>
-      ${sh.caption ? `<p class="lede">${esc(sh.caption)}</p>` : ''}
-      <figure><img src="${uri}" alt=""></figure></article>` : '';
-  }).join('\n')}
+  ${wireframesHtml}
+  ${shotsHtml}
   </section>
 
   <section class="pane" data-pane="audits">
@@ -611,6 +763,36 @@ ${items.map((it) => (activeSet.has(it.n) ? placeholder(it) : row(it))).join('\n'
 </script>`;
 
 writeFileSync(OUT, html);
+
+// ⚑ THE BOARD IS STILL WRITTEN ABOVE — ON PURPOSE. You need the artifact on disk to inspect what broke.
+//   But the EXIT CODE tells the truth, because this script used to print one warning per missing image
+//   and then exit 0 with a green success line. Two agents lost their entire evidence band to that in a
+//   single hour on 2026-08-04 (Adam 45 images, Benji 26) — both read the success line, which is the
+//   rational thing to do. Benji's words: "the script reports a broken board as a good one. Two of us in
+//   one hour is a script bug, not a discipline bug." A board whose receipts are invisible is not a board;
+//   it is a claim with the evidence torn out, and it must not exit 0.
+// ⚑ A NAMED WIREFRAME WITH NO PICTURE IS THE SAME FAILURE AS A MISSING RECEIPT SHOT, so it gets the
+//   same treatment: a non-zero exit, not a warning. Zach 2026-08-04: "it says 'wireframe locked' …
+//   I need to actually SEE that visually with screenshots." A board that says LOCKED and shows a file
+//   path is a claim with the picture torn out.
+if (missingWireframes.length) {
+  console.error(`\n🔴 ${missingWireframes.length} WIREFRAME(S) NAMED WITH NO PICTURE — the board promises a locked design and shows a filename.`);
+  missingWireframes.forEach((m) => console.error(`     ✗ ${m}`));
+  console.error(`   FIX: node .claude/skills/project-board/shoot-wireframe.mjs <wireframe.html> --out ${RDIR}/wireframes`);
+  console.error(`        then paste the printed block (it carries "shot") into reference.wireframes.`);
+  console.error(`   NO WIREFRAME EXISTS YET? Say so honestly instead: set reference.wireframeGap to one`);
+  console.error(`        sentence naming the item that will fix it. An empty band is fine; a false promise is not.\n`);
+  process.exit(1);
+}
+if (missingShots.length) {
+  console.error(`\n🔴 BOARD BUILT BUT ${missingShots.length} SCREENSHOT(S) DID NOT RESOLVE — the evidence band will publish BLANK.`);
+  console.error(`   Looking under receiptsDir: ${RDIR}`);
+  missingShots.slice(0, 5).forEach((m) => console.error(`     ✗ ${m}`));
+  if (missingShots.length > 5) console.error(`     … and ${missingShots.length - 5} more`);
+  console.error(`   FIX: put the images under that directory, or set "receiptsDir" in the board JSON to where they are.`);
+  console.error(`   DO NOT PUBLISH until this reads 0.\n`);
+  process.exit(1);
+}
 console.log(`✅ board → ${OUT}`);
 console.log(`   ${items.length} items · ${done} done · ${active} active · ${future} to do · ${receipts.length} receipts`);
 ```
@@ -725,7 +907,11 @@ measures the result** — one command, 99.8%.
  *   node migrate-board.mjs <old-board.html> <out-board.json> --verify     (re-check completeness only)
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { dirname, join } from 'path';
+import { dirname, join, relative } from 'path';
+
+// Same constant the generator uses (build-board.mjs). Declared here because receiptsDir must be written
+// RELATIVE to the repo root — that is how build-board resolves it back.
+const ROOT = '/Users/zachspradling/Code/BossLoop-Gold';
 
 const [, , SRC, OUT, ...rest] = process.argv;
 if (!SRC || !OUT) {
@@ -791,8 +977,19 @@ for (const s of sections) {
 // ── 3 · IMAGES — data URIs back out to real files. ⚑ AND YOU MUST LOOK AT THEM. ─────────────────
 // I binned a competitor's MOBILE reference shot TWICE by pattern-matching its caption instead of
 // opening it. An image with no caption is not a duplicate; it is an image with no caption.
+// ⚑ AND THE COMPLETENESS GATE MUST COUNT THEM. Zach, 2026-08-04, reading a board this script had
+//   just reported at 100.0%: "there's no reference — it doesn't actually give me the wireframe."
+//   The gate was measuring TEXT FRAGMENTS. Images are not text fragments, so "100% preserved" was
+//   perfectly compatible with losing every picture on the page — the check answered "did the prose
+//   survive?" while I reported it as "did the artifact survive?" That is the green-signal failure
+//   (.claude/lessons/every-tool-answers-a-narrower-question.md) inside my own verification tool,
+//   written the same afternoon I helped document it. Images are now counted and reported separately,
+//   and an unresolvable one is named rather than silently skipped.
 const imgDir = join(dirname(OUT), 'recovered');
 const shots = [];
+// Every <img> in the source, by kind — so the report can say "12 images, 12 carried" and mean it.
+const allImgs = [...raw.matchAll(/<img\b[^>]*\bsrc="([^"]+)"/g)].map((m) => m[1]);
+const externalImgs = allImgs.filter((s) => !s.startsWith('data:'));
 [...raw.matchAll(/<img src="data:image\/(\w+);base64,([^"]{500,})"/g)].forEach((m, i) => {
   if (VERIFY_ONLY) return;
   mkdirSync(imgDir, { recursive: true });
@@ -815,7 +1012,12 @@ function completeness(boardJson) {
   //   that only looks at the board reports a receipt's own prose as "lost" when it is sitting right
   //   there in the audit band. Same class of error as the JSON.stringify haystack: the content was
   //   never missing, the measurement was.
-  const rman = join(dirname(OUT), 'receipts', 'manifest.json');
+  // ⚑ CHECK BOTH MANIFEST LOCATIONS. The generator reads <receiptsDir>/manifest.json; this script used
+  //   to look ONLY in <board-dir>/receipts/manifest.json. When those disagree the diff counts a
+  //   receipt's own prose as LOST and the gate under-reports — the exact "measurement was wrong, not
+  //   the content" failure this file warns about two lines down. Union of both, never one guess.
+  const rmanCandidates = [join(dirname(OUT), 'manifest.json'), join(dirname(OUT), 'receipts', 'manifest.json')];
+  const rman = rmanCandidates.find((c) => existsSync(c)) ?? rmanCandidates[1];
   // ⚑ COMPARE NORMALISED, NOT EXACT. Inline tags and entities make the same sentence differ by
   //   whitespace between two documents ("2&ndash;9" vs "2–9", "source='PCSOI'" vs "source= 'PCSOI'").
   //   Exact substring matching reported ~100 false losses. Strip to letters and digits and the
@@ -842,6 +1044,14 @@ const board = existsSync(OUT) && VERIFY_ONLY ? JSON.parse(readFileSync(OUT, 'utf
   owner: arg('--owner', 'caleb'),
   updated: new Date().toISOString().slice(0, 10),
   _law: 'THE NUMBER IS PERMANENT FROM THIS MIGRATION FORWARD. Numbers were assigned ONCE here and never change again; items MOVE into the active section and back, they are never renumbered.',
+  // ⚑ POINT THE GENERATOR AT THE IMAGES WE JUST EXTRACTED, OR EVERY ONE OF THEM PUBLISHES BLANK.
+  //   This script writes recovered images to <board-dir>/recovered/, but build-board.mjs resolves a
+  //   shot path against RDIR, which DEFAULTS to .claude/reports/receipts. Two paths for one concept,
+  //   and they never met — so a migrated board rendered every screenshot as nothing while the build
+  //   printed a warning per image and still EXITED 0. Adam hit exactly this on 2026-08-04: 45 real
+  //   receipts, all invisible, and the only signal was a warning line above a green success message.
+  //   Setting it here means the board that comes out of a migration renders its own evidence.
+  receiptsDir: relative(ROOT, dirname(OUT)),
   active: { title: 'Nothing active yet', prd: ['Name the items to work and pull them up.'], items: [] },
   items,
   record: { title: 'The record — the law, the corrections, and the findings', lede: 'Recovered from the pre-migration board: everything that was NOT a checklist item and NOT a receipt. None of it is a task; all of it is the reasoning behind the tasks, which is the part that gets rebuilt wrong when it goes missing.', sections: [...best.values()] },
@@ -854,7 +1064,30 @@ const pct = total ? ((total - missing.length) / total * 100).toFixed(1) : '100.0
 if (!VERIFY_ONLY) writeFileSync(OUT, JSON.stringify(board, null, 2));
 console.log(`\n${VERIFY_ONLY ? 'VERIFY' : 'MIGRATED'} ${SRC}`);
 console.log(`  items ${board.items.length} · record sections ${board.record.sections.length} · images ${board.reference.shots.length}`);
-console.log(`  COMPLETENESS: ${total} fragments · ${total - missing.length} carried · ${missing.length} missing → ${pct}%`);
+console.log(`  COMPLETENESS (text): ${total} fragments · ${total - missing.length} carried · ${missing.length} missing → ${pct}%`);
+// ⚑ REPORTED SEPARATELY AND ALWAYS, because a single blended percentage is how a lost picture hides
+//   behind carried prose. Two questions, two numbers — never one number answering the narrower one.
+const imgCarried = board.reference.shots.length;
+console.log(`  COMPLETENESS (images): ${allImgs.length} in source · ${imgCarried} carried` +
+            (externalImgs.length ? ` · ${externalImgs.length} EXTERNAL (not embedded — see below)` : ''));
+if (externalImgs.length) {
+  console.log(`\n  ⚠ ${externalImgs.length} IMAGE(S) ARE LINKS, NOT DATA — this script can only recover embedded ones.`);
+  externalImgs.slice(0, 8).forEach((s) => console.log(`    ↗ ${s.slice(0, 110)}`));
+  console.log(`    → save each one into ${relative(ROOT, imgDir)} yourself and add it to reference.shots,`);
+  console.log(`      or the migrated board will be missing pictures the old one showed.`);
+}
+if (allImgs.length && !imgCarried) {
+  console.log(`\n  🔴 THE SOURCE HAD ${allImgs.length} IMAGE(S) AND THE MIGRATED BOARD HAS NONE.`);
+  console.log(`     A text score of ${pct}% says nothing about this — do not read it as "nothing was lost."`);
+}
+// A board that NAMES a wireframe in its prose but carries no wireframe entry is the exact thing Zach
+// hit: the band promises a picture and delivers a heading. Say it here, at migration time.
+if (/wireframe/i.test(raw) && !(board.reference.wireframes ?? []).length) {
+  console.log(`\n  ⚠ THE SOURCE TALKS ABOUT A WIREFRAME AND reference.wireframes IS EMPTY.`);
+  console.log(`     Either shoot it   → .claude/skills/project-board/shoot-wireframe.mjs <file.html> --out <dir>`);
+  console.log(`     or declare the gap → set "gap" on the entry naming the item that will fix it.`);
+  console.log(`     What you must NOT do is leave the band promising a wireframe it cannot show.`);
+}
 if (missing.length) {
   console.log(`\n  ⚠ STILL MISSING — read these and decide, do NOT assume they are noise:`);
   missing.slice(0, 12).forEach((m) => console.log(`    ✗ ${m.slice(0, 108)}`));
