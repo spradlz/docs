@@ -150,8 +150,8 @@ renders as literally nothing a human can look at, and a link costs a second clic
 design has a phone view). It is inlined as an image, full width, exactly like a receipt screenshot.
 
 ```bash
-node .claude/skills/project-board/shoot-wireframe.mjs docs/wireframes/<file>.html \
-     --out .claude/reports/<board>/wireframes --name "The thing — LOCKED <date>"
+node .claude/skills/project-board/shoot-wireframe.mjs docs/wireframes/&lt;file&gt;.html \
+     --out .claude/reports/&lt;board&gt;/wireframes --name "The thing — LOCKED &lt;date&gt;"
 # prints a paste-ready JSON block carrying "shot" + "shotMobile"
 ```
 
@@ -254,9 +254,9 @@ Field 10 is the anti-drift field: most duplicate components exist because nobody
 ## The state lives in DATA
 
 ```
-<board>.json                                ← the state: items, status, dates, PRD, record, reference
+&lt;board&gt;.json                                ← the state: items, status, dates, PRD, record, reference
 .claude/skills/project-board/build-board.mjs ← the generator
-<board>.html                                ← the output, published as the artifact
+&lt;board&gt;.html                                ← the output, published as the artifact
 ```
 
 **Never hand-edit the HTML.** The previous board reached 3.7MB and 203 items by accretion — two competing
@@ -273,7 +273,7 @@ silently drops the reasoning, which is the half nobody notices is gone until the
 
 ```
 node .claude/skills/project-board/migrate-board.mjs <old-board.html> <out-board.json> \
-     --owner <agent> --title "<name>"
+     --owner &lt;agent&gt; --title "&lt;name&gt;"
 ```
 
 It parses the old document, writes `board.json`, extracts embedded screenshots back into real files,
@@ -1176,6 +1176,110 @@ A button that writes nothing must say so on its face. A wireframe that hides wha
 how we ship a button that goes nowhere.
 
 ---
+
+## 5 · `.claude/skills/project-board/shoot-wireframe.mjs` — the wireframe camera
+
+**The board must SHOW the design, not describe it.** This renders a wireframe in real Chrome at a
+desktop and a phone width and writes both PNGs next to the board, then prints the paste-ready JSON.
+It exists because a rule nobody can execute in one command is a rule nobody executes.
+
+```bash
+node .claude/skills/project-board/shoot-wireframe.mjs docs/wireframes/<file>.html \
+     --out .claude/reports/<board>/wireframes --name "The thing — LOCKED <date>"
+```
+
+```js
+#!/usr/bin/env node
+/**
+ * shoot-wireframe.mjs — turn a wireframe into a PICTURE the board can actually show.
+ *
+ * ⚑ WHY THIS EXISTS (Zach, 2026-08-04, reading the saved-search board):
+ *     "it says 'wireframe locked' … I need to actually see that visually with screenshots.
+ *      There's no reference — the reference just says 'reference and wireframes', but it doesn't
+ *      actually give me the wireframe. That artifact IS the wireframe for that section, dude."
+ *
+ *   He was right and the defect was structural, not a one-off. The board generator rendered a
+ *   wireframe as its NAME, its FILE PATH and a LINK — text about a picture. A path is not a picture.
+ *   An artifact cannot reach the filesystem, so `docs/wireframes/x.html` renders as literally nothing
+ *   a human can look at, and the link needs a second click and the right login. The board promised a
+ *   locked design and delivered a sentence describing one.
+ *
+ *   THE RULE THIS ENFORCES: a board that NAMES a wireframe must SHOW it. Not link it. Show it.
+ *   That means an image, inlined, on the page — which means somebody has to render the HTML to a
+ *   PNG, and if that is a manual chore it will not happen. So it is one command.
+ *
+ * WHAT IT DOES: opens the wireframe in real Chrome, screenshots it full-page at a desktop width and
+ * again at a phone width, and writes both next to the board's receipts. Then it prints the exact
+ * JSON block to paste into the board's `reference.wireframes` entry.
+ *
+ *   node shoot-wireframe.mjs docs/wireframes/foo-LOCKED.html --out .claude/reports/<board>/wireframes
+ *
+ * Options:  --desktop 1440   --mobile 390   --no-mobile   --name "The client dashboard"
+ *
+ * ⚑ ON THE HEADLESS LAW: `.claude/rules` bans headless browsers for HUMAN-LIKE SITES, because
+ *   headless gets detected and blocked. This renders a local file:// wireframe we wrote ourselves —
+ *   there is nobody to detect us. The ban does not apply, and using the real Chrome channel keeps
+ *   the render identical to what Zach sees when he opens the file.
+ */
+import { chromium } from 'playwright';
+import { existsSync, mkdirSync, statSync } from 'fs';
+import { basename, join, resolve, relative } from 'path';
+
+const ROOT = '/Users/zachspradling/Code/BossLoop-Gold';
+const args = process.argv.slice(2);
+const arg = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
+const src = args.find((a) => a.endsWith('.html'));
+
+if (!src) {
+  console.error('usage: shoot-wireframe.mjs <wireframe.html> --out <dir> [--desktop 1440] [--mobile 390] [--no-mobile]');
+  process.exit(1);
+}
+
+const abs = src.startsWith('/') ? src : join(ROOT, src);
+if (!existsSync(abs)) { console.error(`⛔ no such wireframe: ${abs}`); process.exit(1); }
+
+const outDir = resolve(arg('--out', join(ROOT, '.claude/reports/wireframes')));
+mkdirSync(outDir, { recursive: true });
+
+const stem = basename(abs).replace(/\.html$/, '');
+const DESK = Number(arg('--desktop', 1440));
+const MOB = Number(arg('--mobile', 390));
+const doMobile = !args.includes('--no-mobile');
+
+const shots = [];
+
+const browser = await chromium.launch({ channel: 'chrome' });
+try {
+  for (const [label, width] of [['desktop', DESK], ...(doMobile ? [['mobile', MOB]] : [])]) {
+    const page = await browser.newPage({ viewport: { width, height: 900 }, deviceScaleFactor: 2 });
+    await page.goto(`file://${abs}`, { waitUntil: 'networkidle' });
+    // Wireframes animate in on load; a screenshot fired too early catches a half-faded page.
+    await page.waitForTimeout(900);
+    const file = join(outDir, `${stem}--${label}.png`);
+    await page.screenshot({ path: file, fullPage: true });
+    await page.close();
+    shots.push({ label, width, file });
+    console.log(`  · ${label} ${width}px → ${relative(ROOT, file)} (${Math.round(statSync(file).size / 1024)}KB)`);
+  }
+} finally {
+  await browser.close();
+}
+
+// ── The paste-ready block. The board's `shot` field is what makes the picture render; without it the
+//    build now FAILS rather than quietly printing a filename (see build-board.mjs). ──
+const rel = (f) => relative(outDir.includes('/reports/') ? join(outDir, '..') : ROOT, f);
+const name = arg('--name', stem.replace(/[-_]/g, ' '));
+console.log(`\n📋 paste into the board JSON under reference.wireframes:\n`);
+console.log(JSON.stringify({
+  name,
+  what: 'TODO — what this surface is, and what Zach signed off on.',
+  path: relative(ROOT, abs),
+  status: 'LOCKED',
+  shot: rel(shots[0].file),
+  ...(shots[1] ? { shotMobile: rel(shots[1].file) } : {}),
+}, null, 2));
+console.log(`\n   then: node .claude/skills/project-board/build-board.mjs <board.json>`);
+```
 
 # Reference
 
