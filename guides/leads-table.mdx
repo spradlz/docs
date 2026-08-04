@@ -3,11 +3,32 @@ title: "Leads Table"
 description: "The all-leads table — Sierra-style structured system columns that all read from one aggregation, one SQL filter engine behind smart filters + Advanced Search, and per-user unread alerts."
 ---
 
-## 🚧 IN PROGRESS — the FUB-parity rebuild (2026-07-30 → 07-31, Adam)
+<Info>
+**Build artifact — [Adam · The Leads Table](https://claude.ai/code/artifact/f9a8e99d-ba1b-4e32-b1da-3ef6b2034731)** · last updated **2026-08-04**
+
+The artifact is the build record: the PRD, one continuously-numbered checklist, and **45 audit receipts** —
+every column driven in real headed Chrome with a screenshot, the row ORDER asserted for sorts and the row
+COUNT asserted for filters. **170 checks proven, 0 failed.** Read it there before changing this table; it
+carries the corrections and the reasoning, not just the outcome.
+</Info>
+
+## ✅ SHIPPED — the FUB-parity rebuild (2026-07-30 → 08-04, Adam)
 
 Zach: *"we are pivoting toward some work on the lead table."* Ported from the Follow Up Boss table he works in
 all day — wireframes pinned at `docs/wireframes/fub-leads-table-locked-2026-07-30.png` (+ the header-menu
-shot). **The wireframe is the truth**; this section records what shipped and what is still open.
+shot). **The wireframe is the truth.**
+
+**Where it landed:** the table went from **16 working columns to 45**, every one with a working sort and a
+working filter, all proven on screen rather than asserted. The 46th (`Created At`) was deliberately **not
+built** — see the collapse note below.
+
+<Note>
+**Every column is verified the same way, and "verified" has a specific meaning here.** A sort is proven only
+when the rendered ROW ORDER changes between its two directions. A filter is proven only when the ROW COUNT
+changes — because *a filter matching every lead is visually identical to a filter wired to nothing*, and only
+the count separates them. Anything that could not be proven that way carries a written verdict backed by its
+complementary operator, never a shrug. Harness: `apps/houseloop-crm/scripts/column-walk.ts`.
+</Note>
 
 ### Shipped
 
@@ -22,7 +43,8 @@ shot). **The wireframe is the truth**; this section records what shipped and wha
 | **One definition per column** *(07-31)* | `alert_count` had **three** definitions — the SQL one, plus two post-processing overrides that disagreed with each other (one summed client+agent+system, the other client+agent) and both silently beat the SQL. Both overrides deleted; the run-log expression is the single definition, and the parts now add up to the whole. |
 | **The vocabulary the table reads is signed** *(07-31)* | Every kind the table counts is now a signed catalog key — `property_viewed`, `property_saved`, `saved_search_created` and the rest. The `alert_count` literal moved with its fold in the same commit, which is what kept the Saved Searches column from silently zeroing. |
 | **Real-time reorder** | Subscribes to the notification stream **and** the run-log activity stream, debounced into one authoritative `router.refresh()`. |
-| **Per-column header menu — Hide + partial Sort** *(08-03)* | `ColumnHeaderMenu` on the shared `DataTable` behind an **opt-in `headerMenu` prop** (no other table changed). Hide Column is complete; sort is wired to 2 of ~16 columns. Full state in the section below. |
+| **Per-column header menu — Hide + Sort + Filter** *(08-04)* | `ColumnHeaderMenu` on the shared `DataTable` behind an **opt-in `headerMenu` prop** (no other table changed). All three halves complete on all 45 columns. Full state in the section below. |
+| **30 new columns** *(08-04)* | Built in eras, each unlocking the next: plain `hl_leads` fields + the primary address · one-join (`source`, `tags`) · nine `hl_messages` aggregates off ONE subquery shape · five `hl_calls` aggregates · existence flags · derived ages. Every count/flag filter is a **self-contained subquery** — `condToSql` output also runs inside `buildLeadsCountQuery` against a bare `FROM hl_leads l` where no `baseSelect` alias is in scope, and `filter-parity.test.ts` §7 enforces it. |
 | **Short public IDs** | `/lead/1041` instead of a UUID. Sequential (+1, FUB ordering — lower means older), backfilled in signup order, minted once, never reused. ⚠ **"UUID stays the PK" is SUPERSEDED** — Zach's ONE-ID LAW (7/31 PM) makes the sequential number the primary key and retires the UUID entirely at cutover. The column was also renamed to `houseloop_lead_id` (mig 0553, branded-id ruling: *every system's id wears its system's name*, beside `fub_person_id`). Effective now: **no new code may expose the UUID in any URL, display or export.** |
 
 ### The sort key — inbound or website, never our own outbound
@@ -51,46 +73,77 @@ special-case fighting the sort forever.
 | **8** | **The repeat-view insight had never fired.** `repeat-views.ts` counted `hl_pixel_event WHERE event_type = 'home_viewed'` — a value that table has **never had** (its vocabulary is `page_view` / `property_view` / `search`). Zero rows matched, ever. | Third instance of one disease this week — counting a word nobody writes. Repointed to that table's real token; the deeper attribution gap is tracked separately. |
 | **6** | **A `NOT NULL` I added silently destroyed activity rows for ~7 hours.** | Full write-up on [Lead Detail](/guides/lead-detail#in-progress-cutover-the-messages-tab-and-how-a-message-goes-missing). One message lost, recovered. |
 
-### The per-column header menu — HALF SHIPPED (state verified 2026-08-03)
+### The per-column header menu — COMPLETE (2026-08-04)
 
-The menu itself is **live on `/leads`**. It renders from the locked wireframe via `ColumnHeaderMenu`
-(`components/table/ColumnHeaderMenu.tsx`), passed into the shared `DataTable` through an **opt-in `headerMenu`
-prop** — no other table in the app changed, and a column that opts out falls through to exactly the header it
-had before.
+Live on `/leads` via `ColumnHeaderMenu` (`components/table/ColumnHeaderMenu.tsx`), passed into the shared
+`DataTable` through an **opt-in `headerMenu` prop** — no other table in the app changed.
 
 | Half | State |
 |---|---|
-| **Hide Column** | ✅ **Done.** Works on every column except `name` (force-visible — the item renders disabled rather than silently doing nothing). Persists per-user through the existing `toggleColumn` → `hl_users.data->'leads_table_layout'`. |
-| **Sort (`Old → New` / `New → Old`)** | ⚠️ **Built, but wired to only 2 of ~16 columns.** The menu renders everywhere; the sort *section* only appears where the column declares a `sortKey`. Today that is **`last_web` and `last_comm` only** (`LeadsTable.tsx:695,711`). Every other column opens a menu containing Hide and nothing else. |
-| **Filter** | ❌ **Not built.** Deliberately deferred — the section is documented in `ColumnHeaderMenu.tsx` and intentionally absent from the component. |
+| **Hide Column** | ✅ Every column except the anchor (see the law below), persisted per-user. |
+| **Sort** | ✅ **All 45 columns.** `LEAD_SORTS` went from 5 entries to **26**; `sort.test.ts` runs every one against the live DB — **104 checks green**. |
+| **Filter** | ✅ **Built**, including multiselect. `filter-parity.test.ts` — **303 checks green**. |
 
-**`LEAD_SORTS` currently holds five sorts:** `activity` · `newest` · `last_comm` · `last_web` · `name_az`.
-So even wiring every existing sort key reaches roughly a third of the columns — **the rest need new SQL sort
-expressions**, which is the actual remaining work, not UI.
+**Sort labels derive from the column's TYPE, never hand-typed per column** — one type, one label pair, in one
+function. FUB's entire field vocabulary is four types (`GET /v1/customFields`), and we mirror it:
 
-**The old "three live sort bugs" list is fully resolved:**
+| Type | Sort labels | Filter operators |
+|---|---|---|
+| `number` | `0 → 9` / `9 → 0` | is greater than · is less than · is empty · is not empty |
+| `date` | `Old → New` / `New → Old` | was less than · was more than · is empty · is not empty |
+| `text` | `A → Z` / `Z → A` | contains · does not contain · is empty · is not empty |
+| `dropdown` | `A → Z` / `Z → A` | include · exclude |
 
-| Prerequisite | State |
-|---|---|
-| `SORT_OPTIONS` desynced from `LEAD_SORTS` | **Fixed** — keyed `{id,label,sort,dir}`, resolved by sort+dir together |
-| Toolbar never wrote `?dir=` | **Fixed** — the URL carries direction |
-| `sortable: true` was dead code | **Neutralised** — `DataTable` now reads `headerMenu?.(col) ?? (col.sortable && onSort ? …)`, so the menu wins and the dead branch is never reached on this table. The stray `sortable: true` flags remain on two columns as no-ops and should be deleted with the sort build. |
+**The value editor was EXTRACTED, not re-implemented.** `FilterValueEditor` is one component shared by
+Advanced Search and the header menu — the header filter writes into the same `criteria` array, so there is
+still exactly one filter engine and it is SQL.
 
-⚠ **Do not build a second filter engine.** The four operators are character-identical to the existing date
-operators in `lib/leads/filter-fields.ts`, so the header filter is a **new surface onto the engine that
-already exists** — it writes into the same `criteria` array Advanced Search uses.
+<Warning>
+**Multiselect was the bug that hid in "deliberately deferred."** `include`/`exclude` were originally skipped
+with the argument that the columns needing them "already have first-class toolbar dropdowns." True for Stage
+and Relationship, **false for Source, Assignments and Tags** — so those columns offered you `include`, then
+rendered a value editor with **nothing in it**. Five columns' filters were unreachable from their own header.
+*An operator you can select but cannot fill reads as a broken feature, not an absent one.* Options are now
+passed in from the same lists Advanced Search uses, so the two surfaces can never offer different values for
+one field, and **Apply stays disabled until something is ticked** — an empty `include` would match every lead,
+which is precisely the silent no-op this whole audit exists to catch.
+</Warning>
 
-⚠ **Do not build a second value editor.** `OperatorPicker` + `ValueEditor` live inside the private monolith
-`ActiveFilterRow` (`AdvancedSearchBuilder.tsx:155-577`). They must be **extracted and shared**, not
-re-implemented — re-implementing them is how this table got a JS filter engine and a client-side sort that both
-had to be deleted.
+### 🔒 THE ANCHOR LAW — Lead Information is always far-left, never hidden
 
-**On the old "filter is blocked until the column model locks":** re-measured 2026-08-03 and the blocker is
-**materially smaller than stated**. The only rename that actually landed was `lead_number → houseloop_lead_id`
-(mig 0553, already done). Everything since is **additive** (`team` 0575, relationship-bucket vocabulary
-0576/0579) — additions do not break filter bindings. Crucially, **all 16 columns bind to computed expressions
-in `BASE_SELECT`, not to raw `hl_leads` columns**, so the filter fields are insulated from the column diet by
-construction. The remaining coordination is confirming the expression map with Lee, not waiting for a freeze.
+Zach 2026-08-04: *"that column does not drag, its not supposed to drag and should always be stored at the far
+left and can never go away."*
+
+Enforced in `normalizeLayout` (`lib/leads/table-layout.ts`) — the **read** path — plus `reorder()`, which
+refuses to move the anchor or drop anything in front of it.
+
+<Warning>
+**Why the read path and not the writer.** Two guards already existed and both were CORRECT and both were TRUE
+while the column was missing from Zach's screen: the drag handler refuses to move a sticky column, and the save
+path never writes `name` into `hidden`. Neither helped, because a bad `order` array written by **any other
+path** sails straight past them — in the real incident, a hand-run layout reset used the *settings panel's*
+grouping order instead of the *table's* column order, which put `name` at index 10. The anchor rendered
+eleventh: still pinned, but pinned in the middle of a 45-column horizontal scroll, which to a human reads as
+**gone**. **Protection that lives in the writer is not protection.** The reader is the last gate before render,
+so the invariant lives on the value every render actually consumes.
+</Warning>
+
+### `Created At` — deliberately NOT built
+
+The shipped **Registered** column already sorts on `newest → l.created_at` and filters on
+`filterKey: 'created_at'`. Same source, same meaning. Building a second column that renders the same timestamp
+under a different name is how a table grows to 46 columns that mean 40 things. **Collapsed onto Registered.**
+
+### Known limits, stated rather than hidden
+
+- **The dev fixture is too thin to exercise some columns on screen.** 39 leads, one with a visit, one with an
+  open task, and `hl_lead_addresses` has **zero rows** — so City / State / Zip render empty for every lead.
+  Those columns are built and their SQL is proven by complementary arithmetic (`is empty` → 39 **and**
+  `is not empty` → 0), but they cannot be *shown* working until the fixture has data.
+- **A single non-NULL value under `NULLS LAST` sorts first in BOTH directions.** On a column where one lead has
+  a value and 38 are NULL, asc and desc are mathematically the same list. That is correct behaviour, not a
+  broken sort — check the count row on the same column, which does reorder.
+
 - **3,275 FUB-pipe activity rows carry no source.** Probably `zillow` (the only site behind that pipe), but
   "probably" is not good enough to write 3,275 rows — awaiting Zach.
 - `WEB_KINDS_SQL` derives from `activity-badges.ts`, which **stops existing** when the catalog gains `lens`/
@@ -107,8 +160,21 @@ All per-lead metrics are computed in one `SELECT` (`BASE_SELECT` in
 `lib/leads-query.ts`) over the CRM tables plus the first-party
 [pixel](/guides/pixel-tracking) events:
 
-Column order (left → right): **Phone Status · Email Status · Registered ·
-Requests · Visits · Listings · Alerts · Agent Action · Tasks**.
+**Default visible columns (13 + the anchor):** Lead Information (always first) · Stage · Assignments ·
+Last Web Activity · Last Communication · Phone Status · Email Status · Registered · Requests · Visits ·
+Listings · Saved Searches · Recent Actions · Tasks.
+
+**The other 31 ship OFF by default and are opt-in from the Columns panel** — Address · City · State · Zip ·
+Source · Tags · Updated At · the nine message columns · the five call columns · the four flags · the four
+derived ages. Shipping 45 columns *visible* would be unusable; shipping them *available* is the point.
+
+<Warning>
+**A newly shipped column currently defaults to VISIBLE for existing users.** `normalizeLayout` treats "not in
+your saved order" as NEW rather than OFF — which is right (an absence is not a decision, and the alternative
+hides every future column from everyone forever). But it means shipping 30 columns at once pushed all 30 into
+the table of anyone with a saved layout. Worth a ruling on whether a new column should instead inherit
+`DEFAULT_VISIBLE`; until then, expect to tidy the Columns panel after a column drop.
+</Warning>
 
 | Column | Source |
 |---|---|

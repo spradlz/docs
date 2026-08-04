@@ -1,89 +1,30 @@
 ---
 title: "AI Authentication"
-description: "How anything is allowed to reach a person at HouseLoop — the AUDIENCE model, the four classes, asked-for vs chosen, the freshness clock. Updated 2026-07-28 after a workflow emailed a lead twelve days late. Originally: how an AI is allowed to communicate — the actor model, the five altitudes, the one evaluator, the gateway, commit-time re-authorization, and the tests that keep it honest. THE LAW: no playbook, no voice. Supersedes and absorbs the old AI Safety Toggles page."
+description: "How anything is allowed to reach a person at HouseLoop — the AUDIENCE model (built 2026-08-04): who receives is the first question, asked before the master. The four classes, asked-for vs chosen, the freshness clock, real-event idempotency, fail-soft components / fail-closed initiators, the six altitudes, the one evaluator, the gateway, commit-time re-authorization. THE LAW: no playbook, no voice. Supersedes and absorbs the old AI Safety Toggles page."
 ---
 
 <Info>
-📌 **Last updated: July 27, 2026.** This page **supersedes `guides/ai-safety-toggles`**, which described a
-wall that had four holes in it and claimed "ungated is impossible." One subject, one page — two documents on
-one subject is how this got re-solved three times.
+📌 **Last updated: August 4, 2026 — the audience model is BUILT** (era-3 of the Lead Engine: items 81–90).
+This page **supersedes `guides/ai-safety-toggles`**. One subject, one page — two documents on one subject is
+how this got re-solved three times.
 </Info>
 
 
 ---
 
-## ⛔ 2026-07-28 — THE LAW MOVED UP A LEVEL. Read this before the rest of the page.
-
-<Warning>
-**Everything below this section is still true about the AI. It was never true about automation.**
-This page said "ungated is impossible." That is now accurate for AI sends. **A workflow was never gated at
-all**, and on 2026-07-27 one emailed a real person.
-</Warning>
-
-## 🔒 CURRENT STATE — the pause (Zach's standing order, re-affirmed 7/29/2026)
-
-**AI outbound-to-lead is PAUSED and stays paused until the audience gate ships (Gate 5 of the Lead
-Engine plan).** What that means precisely, as of 7/29:
-
-| Paused (off until Zach's go) | Running on purpose |
-|---|---|
-| The 23 outbound-to-lead workflows (`hl_workflows.status = 'paused'`, mig 0487) | Team notifications (the delivery layer was repaired 7/29 — class-keyed resolution, receipts on file) |
-| AI email + voice conversations (`ai_conversations` off) | Lead minting from FUB (repaired 7/29 — alias-closure + API-seed) |
-| 17 leads' clones (`ai_mode` off — exact restore snapshot in `hl_settings` key `ai_mode_snapshot_0487`) | Fact capture, AI summaries, dossiers (audience: nobody — never belonged near the send switch) |
-
-**Why it stays paused:** the gates that allowed the Monica Zinn email (a workflow send is not an AI send,
-the agnostic routing tier, two status columns, no freshness clock) are designed but not yet rebuilt.
-The un-pause is item-gated in the Lead Engine artifact: it happens when the audience gate lands and each
-restored piece is verified individually — never as one big switch-flip.
-
-**The pause is reversible in one step** — the snapshot preserves the exact prior state. Nobody un-pauses
-without Zach's explicit word.
-
-### The incident
-
-**Monica Zinn inquired about selling on Jul 15 at 02:16.** On **Jul 27 at 17:16 — twelve days later —** she
-received *"We got your request to list this home. A HouseLoop agent will reach out shortly."* **Present tense.**
-
-```
-17:16:56  seller_inquired      RE-FIRED by fub-lead-import (Lee re-ran the importer)
-17:16:57  seller_get_started   matched · routed_by: agnostic-trigger:follow_up_boss
-17:16:58  workflow "HL: Existing Lead - Seller Get Started" ran
-17:16:59  email sent to a real person
-```
-
-**Zach had turned OFF 38 workflow bindings on the Trigger Events page. He did not miss one.**
-
-### Five gates, and every one let it through
-
-| # | Gate | Why it failed |
-|---|---|---|
-| 1 | The binding he could toggle | Bound to `seller_get_started` under the **WEBSITE** source. Monica came via **Follow Up Boss**. |
-| 2 | **The agnostic fallback** (`runtime.ts:330`) | Fires **any** workflow matching `trigger_type` and **never reads `workflow_active`**. A workflow with **no binding at all** still fires — and no row on the Trigger Events page represents it. **The page is not a complete list of what can run.** |
-| 3 | Two status columns | `hl_lead_source_events.workflow_active` (what the page writes) vs `hl_workflows.status` (what dispatch obeys). 38 off on one; 17 still `active` on the other. |
-| 4 | **The master failsafe** | `aiMasterEnabled()` **failed OPEN by design** — the comment said *"fail-open so a settings hiccup can never silence production."* A query error **turned the AI on** moments after a human turned it off. **Fixed 2026-07-28: fails closed, and no row is not permission.** |
-| 5 | **The sever itself** | `authorized-send.ts:77` — `if (!looksAi) return ALLOW`. A workflow is not AI, so it is treated as a human, **and humans are ungated.** Line 63: anything that **calls itself** a notification is exempt. |
-
-### The root cause, in one line
-
-> **The gate asks "WHO IS SENDING?" — and that is a label the sender picks.**
-
-Call yourself a workflow, you are not AI. Call it a notification, you are exempt. **The sender's
-self-description is the loophole.**
-
----
-
-## THE NEW LAW — gate on AUDIENCE, not on actor
+## THE MODEL — gate on AUDIENCE, not on actor (BUILT 2026-08-04)
 
 > **You can lie about what you are. You cannot lie about who receives it.**
 
 The recipient is in the payload. Keying the gate on **audience** is what makes it un-dodgeable: a workflow
-cannot escape by not being an AI, because **it is not being asked what it is.**
+cannot escape by not being an AI, because **it is not being asked what it is.** As of 2026-08-04 this is not
+a design — it is **Altitude 0 of the one evaluator**, asked before even the master switch.
 
-| Class | Reaches | Gate |
+| Class | Reaches | Gate — and where it is enforced |
 |---|---|---|
-| **① COMPUTATION** | **nobody** — facts, summaries, lead context, scoring, vision tags, SEO drafting | **NONE.** Nothing leaves the building. **68,915 vision tags and 5,999 articles are real AI work with zero communication — they should never have been near the AI switch.** |
-| **② INTERNAL** | **our team** — notifications, alerts, run log | **ALWAYS ON.** *A pause that silences your own alerts hides what it stopped.* |
-| **③ A PERSON** | lead · past client · lender · partner | **THE GATE.** The only class that splits. |
+| **① COMPUTATION** | **nobody** — facts, summaries, lead context, scoring, vision tags, SEO drafting | **NONE.** Nothing leaves the building. A computation that asks the send gate is denied `WRONG_LANE` — it has no business there. |
+| **② INTERNAL** | **our team** — notifications, alerts, run log | **ALWAYS ON.** *A pause that silences your own alerts hides what it stopped.* Declared in data: `hl_notify_classes.audience = 'team'` on all 58 classes (mig 0618), and the registry audit's axis 5 fails the push if any class misdeclares. The notification router never consults an AI switch — structurally, not accidentally. |
+| **③ A PERSON** | lead · past client · lender · partner | **THE GATE.** The only class that splits. The only audience the evaluator serves — everything else bounces to its own lane. |
 | **④ PUBLIC** | SEO articles published · social posts · listings | **Its own switch.** Real risk (brand, a wrong price on a public page) but **nobody's phone buzzes.** Pausing lead outreach must not stop an article. |
 
 ### ③ splits on one question — and that is the whole model
