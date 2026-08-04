@@ -1,233 +1,697 @@
 ---
-title: "📋 The Artifact Checklist"
-description: "How Zach and an agent actually work: one board per agent, ONE permanent numbered list, ONE green active working section, and an audit receipt on every item before it can be ticked. This is the operating protocol, not a template."
+title: "📋 How We Work — the /project-board skill"
+description: "The operating protocol for every agent, shipped as an executable skill: ONE permanent numbered board (Active · The list · The record · Reference · Audit results), a single green active working section you can loop, a ten-field audit before anything is ticked, and a hook that ties the board to the task list. This page is the instructions AND the source."
 ---
 
 <Info>
-**This is infrastructure, not decoration.** Zach runs four boards on two vertical screens — one per agent
-(**Lee**, **Benji**, **Adam**, **Caleb**). Each is that agent's entire working surface: the plan, the law, the
-corrections, and the next thing to do. **The board is the session.** If a decision is not on the board it did not
-happen; if work is not on the board it is not being done.
+**This is how we work — and it is executable, not advisory.** Everything on this page ships as the
+**`/project-board`** skill at `.claude/skills/project-board/`. The skill contains the law, the
+**generator**, and the **hook**. An agent never writes board HTML by hand; it edits `board.json` and
+runs the tool. That is deliberate: **the layout is not described, it is generated**, so there is no
+interpretation surface for it to drift through.
 </Info>
 
-## The one sentence
+# What the skill does
 
-**One agent, one board, ONE permanent numbered list — and exactly one green Active Working Section that items are
-pulled up into and dropped back down from.** An item is not ticked until it has an **audit receipt**.
+Every agent runs their project as **ONE board**: a permanent numbered list with a single green
+**Active Working Section** that items are pulled into and dropped back out of. Zach reads these on a
+vertical screen all day — the board *is* the session.
+
+| It gives you | Which fixes |
+|---|---|
+| **One permanent list, 1 → ∞** | "item 34" meaning something different tomorrow |
+| **One green active section** | not knowing what is being worked *right now* |
+| **A ten-field audit before anything ticks** | "done" meaning "it compiled" |
+| **The record band** | the law and the findings getting lost between checkboxes |
+| **The reference band** | sub-artifacts and locked wireframes floating unattached |
+| **A hook onto the task list** | the board going stale because someone forgot to update it |
+
+# How to invoke it
+
+```
+/project-board                      rebuild + republish, report the counts
+/project-board new <name>           scaffold a new board for a project
+/project-board active 56,72,94-101  pull those items up + create the matching tasks
+/project-board done 56              move back down, green, date — REFUSES without an audit
+/project-board audit 56             write the ten-field receipt
+/project-board loop                 work the whole active section end to end
+```
+
+**The one you will use most is `/project-board loop`.** Name the items you want worked, then say loop,
+and the agent works every one of them — build, walk it in Playwright, write the audit, tick it,
+republish — without checking in between items.
+
+<Warning>
+**What is automatic, stated honestly.** ✅ Marking a task complete rebuilds the board — a `PostToolUse`
+hook does it, with no agent judgement involved. ⚠️ **Publishing is not automatic**: a shell hook cannot
+call the Artifact tool, so the hook writes a dirty marker and the `UserPromptSubmit` hook surfaces it
+every turn until the agent republishes. **Never call this live bidirectional sync** — it is a
+derivation plus a nag, and claiming more is the class of overstatement this protocol exists to stop.
+</Warning>
+
+---
+
+# The skill source
+
+Everything below is the actual shipped code. It lives in three files.
+
+## 1 · `.claude/skills/project-board/SKILL.md` — the law
+
+The instructions loaded into the agent's context when the skill fires.
+
+````markdown
+---
+name: project-board
+description: >
+  How EVERY agent runs a project: ONE permanent numbered board (Active working section · The list ·
+  The record · Reference · Audit results), items that MOVE into a single green active section and back,
+  a ten-field audit receipt before anything is ticked, and a /loop that works the active section end to
+  end. Use when asked to "start a board", "make a checklist for this project", "make items 56 and
+  94-101 active", "loop the active section", "mark item 56 done", or "what's the state of the board".
+  Reproducible because it is a GENERATOR plus a HOOK, not prose an agent re-interprets.
+---
+
+# The project board
+
+**One agent, one board, ONE permanent numbered list, ONE green active section.** Zach reads these on a
+vertical screen all day — the board IS the session. If a decision is not on it, it did not happen.
+
+## Why this is a skill and not a doc
+
+A doc is read *if the agent thinks to read it*, so every agent re-interprets the layout and you get four
+different boards. **This skill ships the generator**, so the layout is not described — it is executed.
+An agent never writes the HTML. It edits `board.json` and runs the tool. That is the whole point:
+**zero interpretation surface.**
 
 ## The five bands, in this order, always
 
 | Band | What is in it |
 |---|---|
 | 🟢 **Active working section** | The items being worked *right now*, pulled up out of the list, with the PRD covering every one of them |
-| **The list** | Everything, 1 → ∞, in permanent order. Ticked items stay exactly where they are. |
-| **The record** | The law, the corrections, the findings. Everything that is reasoning rather than a task — and the half that gets silently dropped when a board is rebuilt from memory. |
-| **Reference** | Every sub-artifact this board points at: locked wireframes, competitor references, linked artifacts. |
-| **Audit results** | The receipts. **Last**, because it is the longest band and nothing should sit under it. |
+| **The list** | Everything, 1 → ∞, permanent order. Ticked items stay exactly where they are. |
+| **The record** | The law, the corrections, the findings. Everything that is reasoning rather than a task. |
+| **Reference** | Every sub-artifact this board points at: locked wireframes, competitor references, linked artifacts |
+| **Audit results** | The receipts. Last, because it is the longest band and nothing should sit under it. |
 
-<Warning>
-**There is deliberately no "Completed" section.** A finished item does not move to a pile — it stays in its own
-position in the list and goes green. A separate completed section immediately creates a second ordering, and two
-orderings is how the last board reached 3.7MB with two competing "today's work" blocks.
-</Warning>
+There is deliberately **no "Completed" section** — a finished item stays in its own position and goes
+green. A second pile is a second ordering, and two orderings is how a board splits in half.
 
-Because these boards get long, **the sticky nav is not optional** — and it **scrolls, it does not hide**. One page,
-end to end, with a scrollspy so the lit button always names the band you are looking at. Beside it: a **progress bar
-of three real slices of one total** (done / active now / still to do) so the remainder is legible at a glance.
+The nav **scrolls**, it does not hide: one page, end to end, with a scrollspy.
 
-**When you restructure a board: MIGRATE it, never retype it.** Parse the old document, diff the result, and report
-the percentage of fragments carried across. Rebuilding from memory silently drops the reasoning — which is the half
-nobody notices is gone until they need it.
+## ⭐ THE NUMBER IS PERMANENT
 
----
+Assigned once, never changed. "Item 34" means the same thing tomorrow and in a message to another agent.
+New work appends at the end. Re-prioritising does **not** renumber. Gaps are fine; renumbering is not.
 
-## ⭐ The numbering law — THE NUMBER IS PERMANENT
+> This REVERSES an older law that derived numbers from DOM position. That was wrong: a number whose
+> meaning silently drifts when something is inserted above it is not an identifier, it is a coincidence.
 
-**An item's number is assigned once and never changes.** Item 34 means the same thing tomorrow, next week, and in
-a message to another agent.
+## ⭐ The active working section
 
-<Warning>
-**This REVERSES the previous law on this page, which said numbers were derived from DOM position and re-stamped on
-every reorder.** That was wrong, and the reason is worth keeping: derived numbers mean *"I have not signed off
-item 12"* silently changes meaning the moment anything is inserted above it. A number whose meaning drifts is not
-an identifier — it is a coincidence. Numbers are now **authored once, in the data, and frozen**.
-</Warning>
-
-- New work appends at the end. It never inserts in the middle.
-- Re-prioritising does **not** renumber. You move an item into the active section; its number rides along.
-- Numbers may have gaps. Gaps are fine. Renumbering is not.
-
-## ⭐ The Active Working Section
-
-**Exactly one, wearing a big green band.** Never two — if a second green block appears, the board has two "now"s
-and neither is real.
-
-**How an item moves:**
+**Exactly one, green-banded.** Two green blocks means two "now"s and neither is real.
 
 1. Zach names items — one, or a range: *"make 56, 72, 89 and 94 through 101 active."*
-2. Each named item is **pulled up** into the active section.
-3. In its home position it leaves a **placeholder** — dashed, with an ↑ and a link to the active section — so the
-   list never develops holes and you can always see where an item went.
-4. When it is done it **moves back down** to its own position, goes **green**, gets its **checkbox ticked**, its
-   **completion date**, and a link to its **audit result**.
+2. Each is **pulled up** into the active section and leaves a dashed **placeholder** in its home position,
+   so the list never develops holes and you can always see where an item went.
+3. Done → it **moves back down**, goes green, gets its checkbox, its **completion date**, and a link to
+   its audit.
 
-**Active can be a single item or a hundred.** It is a batch on purpose: that is what makes `/loop the active
-section` a real instruction rather than a per-item conversation.
+Active can be one item or a hundred — it is a batch on purpose, because that is what makes `/board loop`
+a real instruction instead of a per-item conversation.
 
-**The PRD covers EVERY item in the active section.** Not a summary of the theme — the reasoning for each item in
-there, including what was rejected and why. An item in the active section without its reasoning is an item someone
-will rebuild wrong in three weeks.
+**The PRD covers EVERY item in the active section.** Not a summary of the theme — the reasoning for each,
+including what was rejected and why. An item without its reasoning is one someone rebuilds wrong later.
 
----
+## ⭐ THE BOARD IS TIED TO THE TASK LIST — STRUCTURALLY
 
-## ⭐ The audit — ten fields, and an item cannot be ticked without one
+> Zach 2026-08-04: *"make it structural and not you need to think to update the board — the board has to
+> be tied to the task list."*
 
-> **Compiling is not evidence. Typechecking is not evidence. A passing gate is not evidence. The receipt is the
-> evidence.**
-
-| # | Field | What it must contain |
-|---|---|---|
-| 1 | **Walked in Playwright** | The literal click path. Which URL, which buttons, in order. Real headed Chrome. |
-| 2 | **Buttons actually pushed** | Not "the button exists" — it was clicked and something happened. |
-| 3 | **What happened on the page** | The embedded screenshot + one human sentence. |
-| 4 | **The table it wrote to** | Named. Every table touched, not just the interesting one. |
-| 5 | **The event that was logged** | The activity kind. **"No row" is a FINDING, not a blank.** |
-| 6 | **The variables that moved** | Real values, before and after. Not "the count updated". |
-| 7 | **The code it wrote to** | The files. |
-| 8 | **Against the current schema lock?** | Tables vs `schema.lock.json`; kinds vs the catalog **and writability**. |
-| 9 | **Is it inventing something new?** | If yes, say so loudly. New table / new kind / new column gets signed before it ships. |
-| 10 | **Reuse check** | Did you look for something already built? Name what you found and why it did or did not fit. |
-
-<Warning>
-**Field 8 is the one people skip, and it is the one that bites.** A kind can exist in the catalog and still have
-its writes rejected silently because it was never seated. *Presence is not writability.* Probe it: insert, read it
-back, roll back.
-</Warning>
-
-<Warning>
-**Field 10 is the anti-drift field.** "I could not find one" is an acceptable answer only if you actually looked
-and can say where. Most duplicate components in this codebase exist because nobody wrote this line down.
-</Warning>
-
----
-
-## The state lives in DATA, not in the HTML
-
-**The board is GENERATED from a JSON file. It is never hand-edited as markup.**
-
-```
-.claude/reports/board.json                 ← the state: items, status, dates, the PRD
-.claude/skills/project-board/build-board.mjs ← the generator (shipped IN the skill)
-.claude/reports/<name>-board.html          ← the output, published as the artifact
-```
-
-<Warning>
-**Why this is a law and not a preference.** The previous board reached **3.7MB and 203 list items** by accretion:
-every session appended to the markup, nothing was reorganised, and it ended with two overlapping "today's work"
-sections, a stale date, and two numbering schemes that did not reconcile. The cause was structural — **the state
-lived in the HTML**, so moving an item meant surgery on markup and nobody ever did it. With the state in JSON,
-pulling item 56 into the active section is a one-line edit.
-</Warning>
-
-`board.json` shape:
-
-```json
-{
-  "title": "...", "owner": "caleb", "updated": "2026-08-04",
-  "active": { "title": "...", "prd": ["...", "..."], "items": [31, 32, 33] },
-  "items": [
-    { "n": 31, "status": "active", "title": "...", "note": "...", "prd": "how this one gets done" },
-    { "n": 30, "status": "done", "date": "2026-08-04", "title": "...", "receipt": "30" }
-  ]
-}
-```
-
-`status` is `done | active | future`. Nothing else.
-
----
-
-## ⭐ The board is tied to the task list — STRUCTURALLY
-
-> Zach 2026-08-04: *"make it structural and not you need to think to update the board — the board has to be
-> tied to the task list."*
-
-**The task list is a RENDERING of the active section, not a second system reconciled by hand.** They cannot
-drift, because one derives from the other.
+**The task list is a RENDERING of the active section, not a second system that gets reconciled.** They
+cannot drift because one derives from the other.
 
 | | |
 |---|---|
 | `/board active 56,72` | writes `board.json` **and** creates the tasks, in one action |
-| a task marked `completed` | a `PostToolUse` hook regenerates the board — no agent judgement involved |
-| task title | always carries the item number: `#56 Retire platform='inbox'` — the join key |
+| task marked `completed` | a `PostToolUse` hook regenerates the board — **no agent judgement involved** |
+| task title | always carries the item number: `#56 Retire platform='inbox'` — that number is the join key |
 
-<Warning>
-**What is automatic and what is not, stated honestly.** ✅ Marking a task complete rebuilds `board.json` and
-the HTML via `tools/hooks/board-sync.sh`. ⚠️ **Publishing is not automatic** — a shell hook cannot call the
-Artifact tool. The hook writes a dirty marker and the `UserPromptSubmit` hook surfaces it every turn until
-the agent republishes. **Never claim live bidirectional sync** — it is a derivation plus a nag, and claiming
-more is the class of overstatement this protocol exists to stop.
-</Warning>
+**What is genuinely automatic, and what is not — stated honestly:**
 
-<Info>
-**This supersedes the older "sync at arc boundaries" protocol**, which was honest that it depended on an
-agent remembering at the right moment. It worked exactly as often as someone remembered. The hook removes
-the remembering.
-</Info>
+- ✅ **Automatic:** marking a task complete rebuilds `board.json` + the HTML, via `tools/hooks/board-sync.sh`.
+- ⚠️ **Not automatic:** publishing to the artifact URL, because a shell hook cannot call the Artifact tool.
+  The hook writes a **dirty marker**; the `UserPromptSubmit` hook surfaces it every turn until the agent
+  republishes. Same anti-forget mechanism this repo already uses for progress and identity.
 
-## The skill
+**Never claim live bidirectional sync.** It is a derivation plus a hook, and saying otherwise is the kind
+of claim this whole protocol exists to stop.
 
-Everything on this page is executable as **`/project-board`** (`.claude/skills/project-board/`). The skill
-ships the SKILL.md law, `build-board.mjs`, and the hook. **The layout is not described to an agent — it is
-generated**, so no agent can render the bands wrong, invent a sixth section, or renumber items. This page
-stays as the human-readable explanation; the skill is what agents execute.
+## ⭐ The audit — ten fields, and nothing is ticked without one
 
+> Compiling is not evidence. Typechecking is not evidence. A passing gate is not evidence. The receipt is.
 
-## Running it — the `/loop` protocol
+1. **Walked in Playwright** — the literal click path, real headed Chrome
+2. **Buttons actually pushed** — not "the button exists"; it was clicked and something happened
+3. **What happened on the page** — embedded screenshot + one human sentence
+4. **The table it wrote to** — every table touched, named
+5. **The event logged** — the activity kind. **"No row" is a FINDING, not a blank.**
+6. **The variables that moved** — real values, before and after
+7. **The code it wrote to** — the files
+8. **Against the schema lock?** — tables vs `schema.lock.json`, kinds vs the catalog **and writability**
+9. **Is it inventing something new?** — a new table/kind/column gets signed before it ships
+10. **Reuse check** — did you look for something already built? Name what you found and why it did not fit
 
-Zach says **"loop the active section"** and the agent works every item in it without checking in between them.
+Field 8 is the one people skip: a kind can be in the catalog and still have its writes rejected silently
+because it was never seated. **Presence is not writability** — probe it, then roll back.
+Field 10 is the anti-drift field: most duplicate components exist because nobody wrote that line down.
 
-For each item, in order:
+## The state lives in DATA
 
-1. **Read the item's PRD line.** If it does not have one, that is a bug in the board — write it first.
+```
+&lt;board&gt;.json                                ← the state: items, status, dates, PRD, record, reference
+.claude/skills/project-board/build-board.mjs ← the generator
+&lt;board&gt;.html                                ← the output, published as the artifact
+```
+
+**Never hand-edit the HTML.** The previous board reached 3.7MB and 203 items by accretion — two competing
+"today's work" sections, a stale date, two numbering schemes — precisely because the state lived in the
+markup and moving an item meant surgery. With the state in JSON it is a one-line edit.
+
+**And when you restructure a board: MIGRATE it, never retype it.** Parse the old document and diff the
+result — measure the percentage of fragments carried across and report the number. Rebuilding from memory
+silently drops the reasoning, which is the half nobody notices is gone until they need it.
+
+## The verbs
+
+| Command | What it does |
+|---|---|
+| `/board new <name>` | scaffold `board.json` + first render |
+| `/board active 56,72,94-101` | pull those up, leave placeholders, create the matching tasks |
+| `/board done 56` | move back down, green, date — **refuses without an audit receipt** |
+| `/board audit 56` | write the ten-field receipt |
+| `/board loop` | work every item in the active section end to end, rebuilding + republishing after each |
+| `/board` | rebuild + republish, report the counts |
+
+## `/board loop` — the protocol
+
+For each item in the active section, in order:
+
+1. **Read its PRD line.** No PRD is a bug in the board — write it first.
 2. **Build it.**
-3. **Walk it in Playwright.** Headed Chrome, real clicks. Never `curl` as a substitute for a walk.
+3. **Walk it in Playwright.** Headed Chrome, real clicks. `curl` is never a substitute for a walk.
 4. **Write the ten-field audit.** If any field cannot be filled honestly, the item is not done.
-5. **Move it back down, green it, stamp the date, rebuild and republish the board.**
+5. **`/board done <n>`**, then **republish**. Zach is reading it while you work — a board that only
+   updates at the end is one he cannot use to interrupt you.
 
-**Republish as you go, not at the end.** Zach is reading the board while you work; a board that only updates at
-the end is a board he cannot use to interrupt you.
-
-**If a walk reveals the item was standing on something broken:** that is not a detour, it is a new item. Append it
-at the end with its own number, note why it exists, and say so in the next message. **Never silently widen an
-item's scope** — the number is a contract about what got done.
-
----
+**If a walk reveals the item was standing on something broken:** that is not a detour, it is a new item.
+Append it at the end with its own number and say so. **Never silently widen an item's scope** — the number
+is a contract about what got done.
 
 ## The rules that keep it honest
 
-- **Report what happened, not what you intended.** If a walk failed, the receipt says it failed.
-- **A "no row" is a finding.** If an action wrote no activity row, that is the most interesting line in the audit.
-- **Corrections stay on the record.** Every mistake stays visible in the item's note. A board with no corrections
-  is a board nobody audited.
-- **One owner per item.** If two agents are needed, it is two items. An item with two owners has no owner.
-- **Never fake a control.** A button that writes nothing must say so on its face — the tour-notes box on the
-  client dashboard reads *"Notes are coming"* rather than swallowing what someone types. Zach's rule: a wireframe
-  that hides what does not exist is how we ship a button that goes nowhere.
+- **Report what happened, not what you intended.** A failed walk gets a receipt saying it failed.
+- **Corrections stay on the record** — in the item's note and in The record band. A board with no
+  corrections is a board nobody audited.
+- **One owner per item.** Two agents needed means two items; an item with two owners has no owner.
+- **Never fake a control.** A button that writes nothing must say so on its face.
+````
 
-| Agent | Lane |
+## 2 · `.claude/skills/project-board/build-board.mjs` — the generator
+
+**This is the file that makes the standard un-driftable.** The agent never writes HTML; it writes
+`board.json` and runs this. Pass a board path as `argv[2]` to run it for any project.
+
+```js
+#!/usr/bin/env node
+/**
+ * build-board.mjs — render the master board from board.json. THE ONE generator for this page.
+ *
+ * ⚑ CATALOG / REUSE CHECK, answered rather than skipped. The pre-build gate offered four cataloged
+ * tools (footage-landmark-scan, ops-card-create, engagement-dashboard, railway-deploy-status) — none
+ * render a checklist. The real reuse question was `build-receipts.mjs`, which I own and which wrote
+ * into THIS SAME FILE. Two tools writing one page is precisely the drift we keep fighting, so this
+ * one ABSORBS its screenshot-inlining (the sips → JPEG data-URI routine below is lifted from it) and
+ * becomes the single writer. build-receipts still serves the older artifacts.
+ *
+ * ⚑ WHY A GENERATOR AND NOT A HAND-EDITED PAGE. The previous board reached 3.7MB and 203 list items
+ * by accretion: every session appended, nothing was reorganised, and it ended with TWO overlapping
+ * "today's work" sections, a stale date, and two numbering schemes that did not reconcile. Zach,
+ * 2026-08-04: "this thing is a shit show, dude." The cause was structural — the STATE lived in the
+ * HTML, so moving an item meant surgery on markup. Now the state is board.json and the page is a
+ * render of it: pulling item 56 into the active section is a one-line data edit.
+ *
+ * THE ARCHITECTURE (Zach's, dictated 2026-08-04):
+ *   · ONE list, 1 → ∞. THE NUMBER IS PERMANENT — items are never renumbered, so "item 34" means the
+ *     same thing tomorrow as it does today.
+ *   · Items MOVE. Pulling one into the active section leaves a PLACEHOLDER in its home position, so
+ *     the list never develops holes and you can always see where it went.
+ *   · ONE active section, wearing a big green band. It can hold a single item or a hundred — batch,
+ *     so it can be looped.
+ *   · The PRD covers EVERY item in the active section. No item in there without its reasoning.
+ *   · Finishing moves an item back DOWN to its own position, greens it, and stamps the date.
+ *   · Three sections + sticky jump nav: ACTIVE · THE LIST · AUDIT RESULTS. There is deliberately no
+ *     "completed" section — a finished item stays where it belongs and is simply ticked.
+ *
+ * Usage: node tools/houseloop-cards/build-board.mjs
+ */
+import { readFileSync, writeFileSync, existsSync, statSync } from 'fs';
+import { execFileSync } from 'child_process';
+import { join } from 'path';
+
+const ROOT = '/Users/zachspradling/Code/BossLoop-Gold';
+// ⚑ ANY BOARD, NOT JUST THIS ONE. The skill ships one generator for every agent's board; pass the
+//   json path as argv[2] (and the html out as argv[3]) or fall back to the Seller Engine default.
+const BOARD = process.argv[2] || `${ROOT}/.claude/reports/board.json`;
+const RDIR = `${ROOT}/.claude/reports/receipts`;
+const OUT = process.argv[3] || BOARD.replace(/\.json$/, '.html').replace('board.html', 'seller-engine-board.html');
+
+const board = JSON.parse(readFileSync(BOARD, 'utf8'));
+const receipts = existsSync(`${RDIR}/manifest.json`)
+  ? JSON.parse(readFileSync(`${RDIR}/manifest.json`, 'utf8')).receipts ?? [] : [];
+const receiptFor = (id) => receipts.find((r) => String(r.item) === String(id));
+
+const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// Inline a screenshot as a data URI. An artifact cannot reach the filesystem, so a linked image
+// renders as nothing at all — a receipt with an invisible screenshot is not a receipt.
+function hash(s) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) | 0; return h; }
+function inlineShot(rel) {
+  if (!rel) return null;
+  const abs = rel.startsWith('/') ? rel : join(RDIR, rel);
+  if (!existsSync(abs)) { console.warn(`  ⚠ missing screenshot: ${abs}`); return null; }
+  const out = join('/tmp', `board-${Math.abs(hash(abs))}.jpg`);
+  try {
+    execFileSync('sips', ['-s', 'format', 'jpeg', '-s', 'formatOptions', '72',
+                          '--resampleWidth', '1200', abs, '--out', out], { stdio: 'ignore' });
+  } catch {
+    return `data:image/png;base64,${readFileSync(abs).toString('base64')}`;
+  }
+  console.log(`  · ${rel} → ${Math.round(statSync(out).size / 1024)}KB`);
+  return `data:image/jpeg;base64,${readFileSync(out).toString('base64')}`;
+}
+
+const activeSet = new Set(board.active?.items ?? []);
+const items = [...board.items].sort((a, b) => a.n - b.n);
+const done = items.filter((i) => i.status === 'done').length;
+const active = items.filter((i) => i.status === 'active').length;
+const future = items.filter((i) => i.status === 'future').length;
+
+function row(it, { inActive } = {}) {
+  const isDone = it.status === 'done';
+  const r = it.receipt ? receiptFor(it.receipt) : null;
+  return `<li class="it ${isDone ? 'is-done' : ''}" id="i${it.n}">
+    <span class="num">${it.n}</span><span class="box">${isDone ? '&#10003;' : ''}</span>
+    <span class="txt"><b>${esc(it.title)}</b>
+      ${it.date ? `<span class="when">completed ${esc(it.date)}</span>` : ''}
+      ${it.note ? `<small>${esc(it.note)}</small>` : ''}
+      ${inActive && it.prd ? `<small class="prd"><b>How:</b> ${esc(it.prd)}</small>` : ''}
+      ${r ? `<a class="rlink" href="#r-${esc(String(it.receipt))}">audit &rarr;</a>` : ''}
+    </span></li>`;
+}
+// An item pulled UP leaves this behind, so the list never has a hole and you can see where it went.
+const placeholder = (it) => `<li class="it is-placeholder" id="i${it.n}">
+    <span class="num">${it.n}</span><span class="box">&#8593;</span>
+    <span class="txt"><b>${esc(it.title)}</b><small>Pulled up into the active working section &mdash; <a href="#active">go there</a></small></span></li>`;
+
+const receiptsHtml = receipts.map((r) => {
+  const shots = (r.screenshots ?? []).map((s) => {
+    const uri = inlineShot(s.src);
+    return uri ? `<figure><img src="${uri}" alt=""><figcaption>${esc(s.caption)}</figcaption></figure>` : '';
+  }).join('');
+  return `<article class="rc" id="r-${esc(String(r.item))}">
+    <header><span class="rn">Item ${esc(String(r.item))}</span><h3>${esc(r.title)}</h3>
+      <span class="verdict v-${esc(r.verdict || 'pass')}">${esc(r.verdict || 'pass')}</span></header>
+    <div class="rf"><h4>&#9312; What I did &mdash; the literal click path</h4><p>${r.what_i_did ?? ''}</p></div>
+    <div class="rf"><h4>&#9313; What happened on the page</h4><p>${r.what_happened ?? ''}</p></div>
+    <div class="rf"><h4>&#9314; The activity row it wrote</h4><p>${r.activity_row ?? ''}</p></div>
+    <div class="rf"><h4>&#9315; Every table touched</h4><p>${r.tables ?? ''}</p></div>
+    <div class="rf"><h4>&#9316; The real values that moved</h4><p>${r.variables ?? ''}</p></div>
+    <div class="rf"><h4>&#9317; Schema-lock check &mdash; new, or reused?</h4><p>${r.schema_lock ?? ''}</p></div>
+    <div class="rf"><h4>&#9318; Which item it proves</h4><p>${r.proves ?? ''}</p></div>
+    ${shots}</article>`;
+}).join('\n');
+
+const html = `<title>${esc(board.title)}</title>
+<style>
+  :root{--bg:#F5F7FA;--card:#fff;--ink:#111827;--ink2:#374151;--ink3:#6B7280;--line:#E5E7EB;
+    --blue:#2D6DFF;--navy:#1B3A8A;--green:#047857;--green-bg:#ECFDF5;--green-line:#6EE7B7;--amber:#B45309;
+    --f:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:var(--f);background:var(--bg);color:var(--ink);font-size:16px;line-height:1.55}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 20px 100px}
+  .nav{position:sticky;top:0;z-index:10;background:rgba(245,247,250,.94);backdrop-filter:blur(8px);
+       border-bottom:1px solid var(--line);padding:12px 0;margin-bottom:26px}
+  .nav .in{max-width:1080px;margin:0 auto;padding:0 20px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .nav a{font-size:14px;font-weight:600;color:var(--ink2);text-decoration:none;border:1px solid var(--line);
+         background:#fff;border-radius:999px;padding:7px 15px}
+  .nav a.go{background:var(--green);border-color:var(--green);color:#fff}
+  .nav .sp{margin-left:auto;display:flex;gap:8px}
+  .pill{font-size:13px;font-weight:700;border-radius:999px;padding:6px 13px}
+  .pct{font-size:14px;font-weight:800;color:var(--green);align-self:center}
+  .barwrap{padding-top:10px!important;padding-bottom:2px}
+  .bar{display:flex;width:100%;height:12px;border-radius:999px;overflow:hidden;background:#E5E7EB}
+  .seg{display:block;height:100%}
+  .s-done{background:var(--green)}
+  .s-act{background:var(--blue)}
+  .s-fut{background:#D1D5DB}
+  .barlab{font-size:12.5px;color:var(--ink3);margin-top:5px}
+  .barlab b{color:var(--ink2)}
+  .p-done{background:#ECFDF5;color:var(--green)}.p-act{background:#EFF6FF;color:var(--blue)}.p-fut{background:#F3F4F6;color:var(--ink3)}
+  h1{font-size:32px;font-weight:800;letter-spacing:-.02em;margin:28px 0 4px}
+  .sub{color:var(--ink3);margin:0 0 8px}
+  h2{font-size:22px;font-weight:800;margin:52px 0 6px;scroll-margin-top:104px}
+  .active,.rc,.it{scroll-margin-top:104px}
+  .lede{color:var(--ink2);margin:0 0 16px;max-width:86ch}
+  .active{border:3px solid var(--green-line);background:var(--green-bg);border-radius:16px;
+          padding:22px 24px;margin:0 0 12px;scroll-margin-top:74px}
+  .active .hd{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+  .active .tag{background:var(--green);color:#fff;font-size:12px;font-weight:800;letter-spacing:.08em;
+               text-transform:uppercase;border-radius:999px;padding:5px 13px}
+  .active h2{margin:0;font-size:22px}
+  .prdbox{background:#fff;border:1px solid var(--green-line);border-radius:10px;padding:16px 18px;margin:14px 0 18px}
+  .prdbox h4{margin:0 0 8px;font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--green)}
+  .prdbox p{margin:0 0 10px;font-size:15px;color:var(--ink2)}.prdbox p:last-child{margin-bottom:0}
+  ul.list{list-style:none;margin:0;padding:0}
+  .it{display:flex;gap:12px;align-items:flex-start;background:var(--card);border:1px solid var(--line);
+      border-radius:10px;padding:13px 15px;margin:0 0 8px;scroll-margin-top:74px}
+  .it .num{flex:0 0 34px;font-size:13px;font-weight:800;color:var(--ink3);font-variant-numeric:tabular-nums;padding-top:2px}
+  .it .box{flex:0 0 22px;height:22px;border:2px solid var(--line);border-radius:5px;display:grid;
+           place-items:center;font-size:13px;font-weight:800;color:#fff}
+  .it .txt{min-width:0}.it .txt b{display:block;font-size:16px;line-height:1.35}
+  .it .txt small{display:block;font-size:14px;color:var(--ink3);margin-top:4px}
+  .it .txt small.prd{color:var(--ink2);background:#F9FAFB;border-left:3px solid var(--green-line);
+                     padding:9px 12px;border-radius:0 6px 6px 0;margin-top:9px}
+  .when{display:inline-block;font-size:12px;font-weight:700;color:var(--green);background:#ECFDF5;
+        border-radius:999px;padding:2px 9px;margin-top:5px}
+  .rlink{display:inline-block;margin-top:6px;font-size:13px;font-weight:700;color:var(--blue);text-decoration:none}
+  .is-done{background:#F6FEFB;border-color:var(--green-line)}
+  .is-done .box{background:var(--green);border-color:var(--green)}
+  .is-placeholder{background:#FAFAFA;border-style:dashed;opacity:.75}
+  .is-placeholder .box{border-color:var(--green-line);color:var(--green);background:#fff}
+  .active .it{background:#fff;border-color:var(--green-line)}
+  .rc{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin:0 0 16px;scroll-margin-top:74px}
+  .rc header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+  .rc h3{margin:0;font-size:18px;flex:1}
+  .rn{background:var(--navy);color:#fff;font-size:12px;font-weight:800;border-radius:999px;padding:4px 11px}
+  .verdict{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;border-radius:999px;padding:4px 11px}
+  .v-pass{background:#ECFDF5;color:var(--green)}.v-partial{background:#FFFBEB;color:var(--amber)}
+  .rf{margin:0 0 12px}.rf h4{margin:0 0 4px;font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--blue)}
+  .rf p{margin:0;font-size:15px;color:var(--ink2)}
+  .rc figure{margin:14px 0 0}.rc img{width:100%;border:1px solid var(--line);border-radius:8px;display:block}
+  .rc figcaption{font-size:13px;color:var(--ink3);margin-top:6px}
+  h3.sect{font-size:17px;font-weight:800;margin:30px 0 12px}
+  .rec{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:0 0 10px}
+  .rec.l2{border-left:4px solid var(--navy)}.rec.l3{border-left:4px solid var(--line)}
+  .rec h3{margin:0 0 8px;font-size:16.5px}
+  .rec p{margin:0 0 8px;font-size:15px;color:var(--ink2)}.rec p:last-child{margin-bottom:0}
+  .rec table{font-size:14px;margin:10px 0 0}
+  .wf{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--blue);
+      border-radius:10px;padding:16px 18px;margin:0 0 12px}
+  .wf header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+  .wf h3{margin:0;font-size:17px;flex:1}
+  .wfs{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;
+       background:#ECFDF5;color:var(--green);border-radius:999px;padding:4px 11px}
+  .wf p{margin:0 0 8px;font-size:15px;color:var(--ink2)}
+  .wf .paths{font-size:13px;color:var(--ink3)}.wf .paths a{color:var(--blue);font-weight:700;text-decoration:none}
+  code{background:#F3F4F6;border-radius:4px;padding:1px 5px;font-size:.92em}
+  .pane{display:block}   /* one continuous page — the tabs SCROLL, they do not hide */
+  .nav a{cursor:pointer}
+  @media (max-width:700px){.nav .sp{width:100%;margin-left:0}}
+</style>
+
+<div class="nav"><div class="in">
+  <a class="go" href="#active" data-tab="active">&#9679; Active work</a>
+  <a href="#list" data-tab="list">The list</a>
+  <a href="#record" data-tab="record">The record</a>
+  <a href="#reference" data-tab="reference">Reference</a>
+  <a href="#audits" data-tab="audits">Audit results</a>
+  <span class="sp">
+    <span class="pill p-done">${done} done</span>
+    <span class="pill p-act">${active} active</span>
+    <span class="pill p-fut">${future} to do</span>
+    <span class="pct">${Math.round((done / items.length) * 100)}%</span>
+  </span>
+</div>
+<!-- ⚑ THE PROGRESS BAR IS THREE REAL SLICES OF ONE TOTAL, not a single fill. Zach: "that needs to
+     read as a progress bar at the top of the total, with the done, the active slice, and the to do."
+     Showing only "done %" hides the thing he actually wants to see at a glance — how much of the
+     remainder is being worked RIGHT NOW versus still queued. The widths are computed from the item
+     counts, so the bar cannot disagree with the pills beside it. -->
+<div class="in barwrap">
+  <div class="bar" role="img" aria-label="${done} of ${items.length} done, ${active} active, ${future} to do">
+    <span class="seg s-done" style="width:${(done / items.length) * 100}%"></span>
+    <span class="seg s-act"  style="width:${(active / items.length) * 100}%"></span>
+    <span class="seg s-fut"  style="width:${(future / items.length) * 100}%"></span>
+  </div>
+  <div class="barlab"><b>${done}</b> of <b>${items.length}</b> done &middot; <b>${active}</b> active now &middot; <b>${future}</b> still to do</div>
+</div></div>
+
+<div class="wrap">
+  <h1>${esc(board.title)}</h1>
+  <p class="sub">Owner: ${esc(board.owner)} &middot; updated ${esc(board.updated)} &middot; <b>${items.length}</b> items</p>
+  <p class="lede">One list, numbered 1&rarr;&infin;, and <b>a number never changes</b> &mdash; so &ldquo;item 34&rdquo; means the same thing tomorrow. Items <b>move</b> into the active section and leave a placeholder behind; finishing moves them back down, greens them, and stamps the date. <b>There is only ever one active section.</b></p>
+
+  <section class="pane on" data-pane="active"><section class="active" id="active">
+    <div class="hd"><span class="tag">&#9679; Active working section</span><h2>${esc(board.active.title)}</h2></div>
+    <div class="prdbox">
+      <h4>The PRD &mdash; covering every item in this section</h4>
+      ${board.active.prd.map((p) => `<p>${esc(p)}</p>`).join('\n      ')}
+    </div>
+    <ul class="list">
+      ${items.filter((i) => activeSet.has(i.n)).map((it) => row(it, { inActive: true })).join('\n      ')}
+    </ul>
+  </section></section>
+
+  <section class="pane" data-pane="list">
+  <h2 id="list">The list</h2>
+  <p class="lede">Everything, in permanent order. Ticked items stay exactly where they are &mdash; there is no &ldquo;completed&rdquo; pile.</p>
+  <ul class="list">
+${items.map((it) => (activeSet.has(it.n) ? placeholder(it) : row(it))).join('\n')}
+  </ul>
+  </section>
+
+  <section class="pane" data-pane="record">
+  <h2 id="record">${esc(board.record?.title ?? 'The record')}</h2>
+  <p class="lede">${esc(board.record?.lede ?? '')}</p>
+  ${(board.record?.sections ?? []).map((sec) => `<article class="rec l${sec.level}">
+    <h3>${esc(sec.title)}</h3>
+    ${sec.paras.map((p) => `<p>${esc(p)}</p>`).join('')}
+    ${sec.rows.length ? `<div class="scroll"><table>${sec.rows.map((r, i) => `<tr>${r.map((c) => `<${i === 0 ? 'th' : 'td'}>${esc(c)}</${i === 0 ? 'th' : 'td'}>`).join('')}</tr>`).join('')}</table></div>` : ''}
+  </article>`).join('\n')}
+  </section>
+
+  <section class="pane" data-pane="reference">
+  <h2 id="reference">${esc(board.reference?.title ?? 'Reference')}</h2>
+  <p class="lede">${esc(board.reference?.lede ?? '')}</p>
+
+  <h3 class="sect">The wireframes &mdash; LOCKED, and they are the build spec</h3>
+  ${(board.reference?.wireframes ?? []).map((w) => `<article class="wf">
+    <header><h3>${esc(w.name)}</h3><span class="wfs">${esc(w.status)}</span></header>
+    <p>${esc(w.what)}</p>
+    <p class="paths"><code>${esc(w.path)}</code>${w.url ? ` &middot; <a href="${w.url}" target="_blank" rel="noopener">open the wireframe &rarr;</a>` : ''}</p>
+  </article>`).join('\n')}
+
+  <h3 class="sect">The reference &mdash; a competitor&rsquo;s portal, desktop and mobile</h3>
+  ${(board.reference?.shots ?? []).map((sh) => {
+    const uri = inlineShot(sh.file);
+    return uri ? `<article class="rc"><header><h3>${esc(sh.title)}</h3></header>
+      ${sh.caption ? `<p class="lede">${esc(sh.caption)}</p>` : ''}
+      <figure><img src="${uri}" alt=""></figure></article>` : '';
+  }).join('\n')}
+  </section>
+
+  <section class="pane" data-pane="audits">
+  <h2 id="audits">Audit results</h2>
+  <p class="lede">An item is not ticked until it has one of these. <b>Compiling is not evidence. Typechecking is not evidence. A passing gate is not evidence.</b> The receipt is the evidence.</p>
+  ${receiptsHtml}
+  </section>
+
+  </section>
+</div>
+
+<script>
+  // ⚑ THE TABS SCROLL, THEY DO NOT HIDE. Zach: "I like these toggle buttons. They just need to go to
+  //   this section… it has to be one single thing that I can scroll end-to-end." An earlier pass made
+  //   them show/hide panes, which meant you could never see the list and the receipts in one motion.
+  //   Order is deliberate: Active (what we are doing) → The list → Reference → Audit results LAST,
+  //   because the receipts are the longest band and nothing should sit below them.
+  (function () {
+    var tabs = [].slice.call(document.querySelectorAll('.nav a[data-tab]'));
+    tabs.forEach(function (t) {
+      t.addEventListener('click', function (e) {
+        e.preventDefault();
+        var el = document.getElementById(t.dataset.tab);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        history.replaceState(null, '', '#' + t.dataset.tab);
+      });
+    });
+    // Scrollspy — the lit button always names the band you are actually looking at.
+    var marks = tabs.map(function (t) { return { tab: t, el: document.getElementById(t.dataset.tab) }; })
+                    .filter(function (m) { return m.el; });
+    function spy() {
+      var y = window.scrollY + 130, cur = marks[0];
+      marks.forEach(function (m) { if (m.el.offsetTop <= y) cur = m; });
+      tabs.forEach(function (t) { t.classList.toggle('go', t === cur.tab); });
+    }
+    window.addEventListener('scroll', spy, { passive: true });
+    spy();
+  })();
+</script>`;
+
+writeFileSync(OUT, html);
+console.log(`✅ board → ${OUT}`);
+console.log(`   ${items.length} items · ${done} done · ${active} active · ${future} to do · ${receipts.length} receipts`);
+```
+
+## 3 · `tools/hooks/board-sync.sh` — the structural tie to the task list
+
+Registered on `PostToolUse` matching `TaskUpdate|TaskCreate` in `.claude/settings.local.json`.
+A completed task whose title carries `#209` moves that item to done, dates it, pulls it out of the
+active section, and regenerates the board.
+
+```bash
+#!/usr/bin/env bash
+# board-sync.sh — TIE THE BOARD TO THE TASK LIST, STRUCTURALLY.
+#
+# ⚑ CATALOG CHECK, answered not skipped: the gate offered the Heartland sync jobs, the ops-card
+#   creator and the engagement dashboard. None of them touch a project board or the task list. New.
+#
+# ⚑ WHY THIS EXISTS. Zach 2026-08-04: "make it structural and not you need to think to update the
+#   board — the board has to be tied to the task list." The previous design (Lee's, and he was honest
+#   about it in the doc) reconciled the artifact and the task list BY PROTOCOL at arc boundaries —
+#   which means it worked exactly as often as an agent remembered to do it. This removes the
+#   remembering, which is the whole ask.
+#
+# WHAT IT DOES: fires PostToolUse on TaskUpdate/TaskCreate. If a completed task's title carries an
+# item number (`#209 …`), the matching item in board.json is moved to `done` with today's date, pulled
+# out of the active section, and the board is regenerated.
+#
+# ⚑ WHAT IT HONESTLY CANNOT DO: publish. A shell hook cannot call the Artifact tool, so it writes a
+#   DIRTY MARKER at .claude/state/board-dirty and the UserPromptSubmit hook surfaces that back to the
+#   agent every turn until it republishes. Same anti-forget mechanism this repo already uses for
+#   progress and identity. NEVER describe this as live bidirectional sync — it is a derivation plus a
+#   nag, and claiming more than that is exactly the class of overstatement this protocol exists to stop.
+
+set -euo pipefail
+ROOT="/Users/zachspradling/Code/BossLoop-Gold"
+BOARD="$ROOT/.claude/reports/board.json"
+GEN="$ROOT/.claude/skills/project-board/build-board.mjs"
+MARK="$ROOT/.claude/state/board-dirty"
+
+[ -f "$BOARD" ] || exit 0
+[ -f "$GEN" ]   || exit 0
+
+# The hook receives the tool payload on stdin. Only completed tasks whose title carries an item number
+# matter — that number is the join key, and it always re-derives from the board, so the board wins.
+PAYLOAD="$(cat 2>/dev/null || true)"
+echo "$PAYLOAD" | grep -q '"completed"' || exit 0
+
+NUMS="$(echo "$PAYLOAD" | grep -oE '#[0-9]+' | tr -d '#' | sort -un || true)"
+[ -n "$NUMS" ] || exit 0
+
+CHANGED=0
+for n in $NUMS; do
+  if node -e "
+    const fs=require('fs'); const p='$BOARD';
+    const b=JSON.parse(fs.readFileSync(p,'utf8'));
+    const it=b.items.find(x=>x.n===$n);
+    if(!it || it.status==='done') process.exit(1);
+    it.status='done'; it.date=new Date().toISOString().slice(0,10);
+    // Finishing an item also pulls it OUT of the active section — the 'move back down' half of the
+    // rule. Doing it here is what stops the green band drifting out of date behind the agent.
+    if(Array.isArray(b.active?.items)) b.active.items=b.active.items.filter(x=>x!==$n);
+    fs.writeFileSync(p, JSON.stringify(b,null,2));
+  " 2>/dev/null; then CHANGED=1; echo "  board: item $n → done"; fi
+done
+
+[ "$CHANGED" = "1" ] || exit 0
+
+node "$GEN" >/dev/null 2>&1 || true
+mkdir -p "$(dirname "$MARK")"
+echo "board rebuilt $(date '+%H:%M') — items $NUMS closed. REPUBLISH the artifact." > "$MARK"
+echo "  ⚑ board regenerated — republish the artifact to make it visible to Zach."
+```
+
+## 4 · `board.json` — the data contract
+
+`status` is `done | active | future`. Nothing else.
+
+```json
+{
+  "title": "The Seller Engine — Master Board",
+  "owner": "caleb",
+  "updated": "2026-08-04",
+  "active": {
+    "title": "what this batch is",
+    "prd": ["the reasoning, one paragraph per point — covering EVERY item below"],
+    "items": [209, 210, 211]
+  },
+  "items": [
+    { "n": 209, "status": "active", "title": "...", "note": "...", "prd": "how this one gets done" },
+    { "n": 208, "status": "done", "date": "2026-08-04", "title": "...", "receipt": "208" },
+    { "n": 214, "status": "future", "title": "...", "note": "why it is parked" }
+  ],
+  "record":    { "title": "...", "lede": "...", "sections": [{ "level": 2, "title": "...", "paras": [], "rows": [] }] },
+  "reference": { "title": "...", "lede": "...", "wireframes": [], "shots": [] }
+}
+```
+
+| Field | Meaning |
 |---|---|
-| **Lee** | infra · glue · deploy · cross-app · data model |
-| **Adam** | CRM (`apps/houseloop-crm/**`) |
-| **Benji** | Website (`apps/houseloop-web/**`) |
-| **Caleb** | data · intel · scrapers · reconciliation |
+| `n` | **permanent.** Assigned once, never changed, never renumbered. |
+| `status` | `done` · `active` · `future` |
+| `date` | stamped when it is completed |
+| `note` | the correction, the finding, the reason — kept visible on purpose |
+| `prd` | how THIS item gets done. Required while it is in the active section. |
+| `receipt` | the audit id in `receipts/manifest.json` |
 
 ---
 
-## Reference
+# The laws this encodes
 
-- **A live board built to this spec:** `.claude/reports/board.json` + `tools/houseloop-cards/build-board.mjs`
-  (Caleb, the Seller Engine).
-- **The wireframe law** — when a UI is designed as HTML, the signed HTML is the build spec and the React is a
-  verbatim port: `.claude/rules/UI_ITERATION_HTML_FIRST.md`.
-- **The Inngest law** — a recurring job that did not run through a registered Inngest function does not exist:
-  `.claude/rules/INNGEST_OR_IT_DOESNT_EXIST.md`.
+## THE NUMBER IS PERMANENT
+
+Assigned once, never changed. New work appends at the end. Re-prioritising does **not** renumber.
+Gaps are fine; renumbering is not.
+
+<Warning>
+**This REVERSES an older law on this page** that derived numbers from DOM position and re-stamped them
+on every reorder. A number whose meaning silently changes when something is inserted above it is not
+an identifier — it is a coincidence.
+</Warning>
+
+## MIGRATE, NEVER RETYPE
+
+When restructuring a board, **parse the old document and diff the result** — then report the percentage
+of fragments carried across. Rebuilding from memory silently drops the *reasoning*, which is the half
+nobody notices is gone until they need it.
+
+<Info>
+This law was earned: rebuilding this very board from memory dropped ~130 items, 16 screenshots, and
+every law/correction/finding section. The recovery ran at 99.4% only because it was done by parsing
+and diffing rather than retyping.
+</Info>
+
+## THE AUDIT IS THE EVIDENCE
+
+> Compiling is not evidence. Typechecking is not evidence. A passing gate is not evidence.
+
+Ten fields, every one filled honestly, or the item is not done. **Field 8** (schema-lock) is the one
+people skip — a kind can be in the catalog and still have its writes rejected silently because it was
+never seated; *presence is not writability*, so probe it and roll back. **Field 10** (reuse check) is
+the anti-drift field — most duplicate components exist because nobody wrote that line down.
+
+## NEVER FAKE A CONTROL
+
+A button that writes nothing must say so on its face. A wireframe that hides what does not exist is
+how we ship a button that goes nowhere.
+
+---
+
+# Reference
+
+- **Live board built to this spec:** `.claude/reports/board.json`
+- **The wireframe law** — a signed HTML wireframe IS the build spec, the React is a verbatim port:
+  `.claude/rules/UI_ITERATION_HTML_FIRST.md`
+- **The Inngest law** — a recurring job that did not run through a registered Inngest function does not
+  exist: `.claude/rules/INNGEST_OR_IT_DOESNT_EXIST.md`
