@@ -84,6 +84,14 @@ embedded in the modal** with a short link (`houseloop.ai/s/<code>`) and ONE save
 | **21-22** | Map the 176 Zillow criteria → pre-fill `+ Search` from them | 17 of 32 leads, 100% usable criteria |
 | **23** | Pin the signed-off wireframe into `docs/wireframes/` | — |
 
+### ✅ RESOLVED 2026-08-04 — the magic-link binding problem
+
+The permanent-token problem is **decided**: the link becomes a **one-time ticket**, the **session**
+becomes the credential (rolling 90 days), and the PWA replaces a native app for "stay logged in".
+Full architecture + the sequencing for the past-client book:
+[the link is a ticket, the session is the credential](#-2026-08-04--decided-the-link-is-a-ticket-the-session-is-the-credential).
+**Minting accounts is free and unblocked; SENDING is gated on one-time + expiry shipping first.**
+
 ### ⚠️ KNOWN GAP — 7 phone-only leads get a search that cannot send
 
 Item 11 unlocked creating saved searches for leads with a phone and **no email**. Those searches are
@@ -297,12 +305,62 @@ authenticated actor, and today the authenticated actor is wrong.
   </Step>
 </Steps>
 
-### ⚠️ Security finding — fix before we email magic links at scale
+### ✅ 2026-08-04 — DECIDED: the link is a TICKET, the session is the credential
 
-Magic tokens are `HMAC(email)` with **no expiry and unlimited reuse** (`apps/houseloop-web/lib/auth/magic-token.ts`).
-Anyone who ever obtains the URL is that person, permanently — forwarded emails, shared screens, browser history.
-This is acceptable-ish for internal use today and **not** acceptable for a link we send to every Zillow lead.
-Needs expiry plus single-use or rotation before step 5 above ships.
+<Warning>
+**THE BUG, NAMED PROPERLY: our token IS the credential.** Magic tokens are `HMAC(email)` with **no expiry
+and unlimited reuse** (`apps/houseloop-web/lib/auth/magic-token.ts`), so the URL itself is a permanent
+key — forwarded emails, shared screens, browser history. Anyone holding it *is* that person, forever.
+
+Zach, 2026-08-04, from having it happen to him: *"I had one attach to my browser and it was like a
+horsefly I couldn't get off me."* He was not carrying a session — he was carrying the password in his
+URL bar. Acceptable-ish internally; **not** acceptable mailed to 1,710 past clients.
+</Warning>
+
+**THE DECIDED ARCHITECTURE — separate the LINK from the SESSION.** This is what Substack, Notion and
+Slack do, and it kills the horsefly by construction:
+
+| | Today (broken) | Decided |
+|---|---|---|
+| **The link** | permanent credential, unlimited reuse | **one-time exchange ticket** — short-lived (24h by text, 7d by email) and **burned the instant it is used** |
+| **The session** | does not exist as a separate thing | **the credential.** A rolling 90-day cookie, refreshed on every visit |
+| **Forwarded link** | the recipient becomes that person, permanently | dead — *"this link has already been used"* |
+| **Getting unstuck** | impossible, the URL still works forever | log out. The session is per-device and revocable |
+
+**"Stay logged in" needs no native app.** A rolling 90-day session pushes its own expiry out on every
+visit, so a client who checks their home value monthly **never sees a login screen again** — the same
+reason nobody re-logs-in to Amazon.
+
+**And a PWA beats an app for this.** *Add to Home Screen* gives an icon, full-screen chrome and a
+persistent session: roughly 95 percent of the app benefit, no App Store, and nobody has to install
+anything. **A native app is worth building for exactly one thing — push notifications** (*"your home
+went up $4,000 this month"* on the lock screen). Ship the PWA first; let the engaged clients prove
+whether push earns the build.
+
+#### The sequence for the past-client book — minting is free, sending is gated
+
+1. **Mint the accounts now, silently.** No email, no link, nothing sent. It costs nothing and it
+   unblocks seeding their saved searches and their HouseLoop value so the portal has content in it.
+   (39 of 42 CRM leads have **no** web User at all — that existence gap is why the dashboard rails and
+   Timothy's saved searches render blank.)
+2. **⛔ Ship one-time + expiry BEFORE a single link goes out.** This gates every outbound send. We do
+   not mail 1,710 permanent bearer tokens.
+3. **Then send — text beats email.** They tap, they are in, no password.
+4. **On arrival:** *"Add HouseLoop to your home screen"* + the claim banner. Claiming matches on
+   **email**, so a later Google sign-in with the same address resolves to the same account and the same
+   searches — no duplicate identity.
+
+<Info>
+**One trap to test before any bulk send:** a link tapped from Messages opens in an **in-app browser**,
+and a session set there does not always follow the client into Safari. To them that reads as *"the link
+didn't work."* Test it on a real phone first — this is the kind of detail that burns a first impression
+with 1,710 people simultaneously.
+</Info>
+
+**Still open:** do we proactively email *"here is your account"*, or only surface the claim banner when
+they arrive? Zach's call.
+
+**Tracked as board items 224–229** on the [Seller Engine board](https://claude.ai/code/artifact/2c63e8e3-4768-434b-8bfd-f548ead15f27).
 
 ### 🧭 Tomorrow morning — the whiteboard list
 
