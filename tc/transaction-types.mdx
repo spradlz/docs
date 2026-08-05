@@ -1,0 +1,41 @@
+---
+title: "Transaction Types"
+description: "What kind of deal a loop is — Purchase or Sale. A config table + UI, so a new kind of deal is a row, not a deploy."
+---
+
+<Info>Mirrors the CRM's **TC Loop → Configure → Transaction Types** page 1:1. Shipped 2026-08-04 (Zach:
+"transaction type needs to be a ui page just like tasks, milestones, transaction status and loop
+status").</Info>
+
+## What it is
+
+The vocabulary for **what kind of deal a loop is**. Today it holds exactly two rows — **Purchase** and
+**Sale** — because that is all we do. The reason it is a table and a page anyway, in Zach's words:
+"those are the only two we have now but we might need to expand to have lease or commercial sale or
+something later on." A table makes that expansion a **row**, not a deploy.
+
+## Where the data lives
+
+| | |
+|---|---|
+| Table | `hl_tc_transaction_type` — `key` (the text token other tables FK to) · `label` · `color` · `icon` · `sort_order` · `is_active` |
+| Consumers | `hl_transactions.transaction_type` FKs to `key` (mig 0599 pulled this vocabulary out of a hardcoded TypeScript union) |
+| API | `/api/tc/transaction-types` |
+
+## What the page does
+
+- **Add, rename, recolour, reorder** types — the same builder every other TC config surface uses
+  (StagesPage + the shared modal), so all five config pages look and behave identically by
+  construction.
+- The **LOOPS column** counts live loops on each type, and the **delete guard is honest**: the API
+  refuses to remove a type while loops still point at it, and the page shows the count before you try.
+- The **loop status options a coordinator sees are scoped by type** — a Purchase loop offers purchase
+  statuses, a Sale loop offers sale statuses.
+
+## Why this vocabulary matters beyond TC
+
+`transaction_type` + `milestone` on `hl_transactions` is the **truth test the seller engine's
+transaction ledger reads** (Zach 8/4: the ledger pulls in "literally every transaction"). A row with a
+NULL type is invisible to that ledger, so the pour stamps a type on every row it writes — an untyped
+transaction is a writer bug, not missing data, and the ledger surfaces the untyped count loudly rather
+than silently filtering it away.
