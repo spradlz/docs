@@ -1,84 +1,3024 @@
 ---
 title: "🔒 Schema Lock"
-description: "THE locked data schema for the HouseLoop CRM + website — generated from the database itself, so it cannot lie. If anyone drifts, this is the document you bring them to."
+description: "THE one schema document: what is locked, what is being built, the laws, and the master board artifact that shows every table. Generated header + hand-maintained run log — everything else in this section folded here 8/5."
 ---
 
 <Info>
-**This page is GENERATED** (`tools/schema/schema-atlas.mjs`, from the committed `schema.lock.json` + the live activity catalog — last lock: **2026-08-05**). Hand-editing it is impossible-by-design: regenerate or it reverts. **The lock file is the truth; the cage enforces it; this document shows it.**
+🕐 **Generated header** (`tools/schema/schema-atlas.mjs`, from the committed `schema.lock.json` + the
+live activity catalog — last lock: **2026-08-05**). Regenerating overwrites everything above the run
+log; the run log + folded appendices below are hand-maintained and preserved. **The lock file is the
+truth; the cage enforces it; this page shows it.**
 </Info>
 
-## 🗺️ WHERE YOU SEE EVERYTHING — this page is the front door
+## 📌 Summary — what is true today
 
-**THE ONE LOCK** (`tools/schema/model.lock.json`, regenerated on every schema-lock run — Zach's 7/31
-directive: one place, auto-updating, caged) currently holds: **167 signed kinds ·
-180 tables · the alias fold-map · the payload contracts · the target verdicts.**
-The two open queues it makes visible (fail-visible, never hidden): **payload contracts** and
-**target verdicts** — each signing session shrinks them.
+HouseLoop's data lives in **two databases**: the **WEB** database (the website — `Listing` ~355K
+homes, users, visitors; Prisma, 39 models) and the **CRM** database (**180 tables ·
+222 FKs**, all on the board below). Everything that *happens* is one of **167
+signed activity kinds**; everything that *exists* is a row in a locked table. The **Spradling
+Refinery** (Caleb's `hl_srg_*`/`sisu_*` reconciliation estate + the third Railway DB, `hl_txn`
+schema) is a **separate section** on the board — it pours INTO the product tables and is never part
+of the product schema. Config surfaces for humans: **Settings → Trigger Events** (every event kind,
+trigger + notify toggles, both arms) and **Settings → Notifications** (who receives what, per
+channel).
 
-| Everything, one click each | |
-|---|---|
-| **All signed schema rulings** (identity, pipelines, three stamps, messages, short ids…) | [Target Model](/schema-lock/target-model) |
-| **Every signed activity kind** + section + sentence | [Activity Catalog](/schema-lock/activity-catalog) |
-| **Every table** in the locked CRM schema | [Tables](/schema-lock/tables) |
-| **The past-client estate law** (Seven Rules + Sitting Verdicts) | [Past Clients](/schema-lock/past-clients) |
-| **The transaction/loop model** (mapped 7/31, pending sign-off) | [Transaction Model](/schema-lock/transaction-model) |
-| **The build board** (gates · incidents · standing rules) | Lead Engine artifact `209ff52e` (claude.ai → artifacts) |
-| **The table-set board** (proposed model over current state) | Table Sitting artifact `bbfedbd9` (claude.ai → artifacts) |
+## 🔗 THE BOARD — the master schema artifact (the data twin of this page)
 
-**The process in one line:** you sign → Lee migrates → ONE command regenerates this whole section +
-the ONE LOCK + the gate dictionaries → the cages block anything that disagrees. A misfit found by any
-agent goes through Lee: alias-fold, or a new signing by Zach. No other path.
-
-## The one-paragraph version (for humans)
-
-HouseLoop's data lives in **two databases**: the **WEB** database (the website — homes, listings, visitors; Prisma schema, 39 models) and the **CRM** database (**180 tables**, every one listed in this section). Everything that *happens* is one of **167 signed activity kinds** (the Activity Catalog, signed by Zach 2026-07-29). Everything that *exists* is a row in a locked table. Nobody — human or AI — can add a table, column, or activity kind without the machines below letting them.
+**[THE SCHEMA LOCK — master board →](https://claude.ai/code/artifact/f7c5bb65-eb28-4e8b-b82e-3e4d2fab6c12)** — every CRM table as a permanent numbered item
+with its measured columns and row count, the in-build tables green in the active section, the
+retiring tables flagged, the Refinery as its own banner, and the laws in the record band. Generated
+by `tools/schema/build-schema-board.mjs` from the same lock as this page — regenerate both after
+every migration. **ONE DOC ↔ ONE BOARD:** this page is the only doc that references it, and it is
+this page's only board.
 
 ## THE CAGES — what physically stops drift
 
 | # | Cage | What it blocks | Where it runs |
 |---|------|----------------|---------------|
 | 1 | **Migration numbering** | duplicate migration numbers (boot-runner loops) | pre-push, blocking |
-| 1b | **Table laws** | non-`hl_` names · singular/plural twins (`hl_lead` vs `hl_leads`) · tables without a `-- GRAIN:` registration | pre-push, blocking |
+| 1b | **Table laws** | non-`hl_` names · singular/plural twins · tables without a `-- GRAIN:` registration | pre-push, blocking |
 | 2 | **Event-kind drift** | the generated TypeScript union disagreeing with the catalog — an invented kind **does not compile** | pre-push + compile time |
 | 3 | **Catalog parity** | a kind that can be written but cannot render | pre-push, blocking |
-| 4 | **SCHEMA DRIFT** | the live database differing from `schema.lock.json` in ANY way — new/changed/dropped column, index, constraint, trigger, function | pre-push, blocking |
-| 5 | **WRITE-PATH TEST** *(defined 2026-07-31 · probe = the next beam, not yet a machine)* | a schema change that breaks a REAL writer while the schema still matches the lock. The blind spot it closes: on 7/31, gate 4 verified the DB matched the lock PERFECTLY while `NOT NULL` was rejecting every `logActivity` insert (explicit NULL ≠ omitted column; `void` call sites swallow the rejection — silent data loss, found by Zach in the product). The machine: after any migration touching a written table, exercise the REAL writers (`logActivity`/`logMessage`/…) in a rolled-back transaction and fail loud. Until the probe ships, the matrix in `.claude/lessons/check-constraints-permit-null.md` is the manual gate: wrong value · NULL · omitted column · **the real caller's path** | post-migration, blocking (manual until the probe ships) |
-| — | **DDL attribution** | nothing — it *names* whoever touched the schema (`hl_schema_ddl_log`: who, what, when) | always-on DB event trigger |
-| — | **ESLint** `hl/no-hardcoded-event-kind` | kind string literals in comparisons (the 7/28 disease) | lint |
+| 4 | **SCHEMA DRIFT** | the live database differing from `schema.lock.json` in ANY way | pre-push, blocking |
+| — | **DDL attribution** | nothing — it *names* whoever touched the schema (`hl_schema_ddl_log`) | always-on DB event trigger |
 
-**The migration workflow** (the only legal way to change schema): write `05XX_*.sql` → apply locally with `db/migrate.mjs` → `node tools/schema/schema-lock.mjs` → commit the migration **and** the lock in ONE push. The cage rejects anything else.
+**The migration workflow** (the only legal way to change schema): write `06XX_*.sql` → apply with
+`db/migrate.mjs` (hand-applied = ledgered SAME session) → `node tools/schema/schema-lock.mjs` →
+regenerate this page + the board → commit migration **and** lock in ONE push. The cage rejects
+anything else. Destructive DDL = Rule-0: typed Zach approval, live session, tables named.
 
-## The two databases
+## The two databases (+ the Refinery source)
 
 | Database | Where | What it holds | Governance |
 |---|---|---|---|
-| **WEB** (`DATABASE_URL`) | centerbeam Railway | The website: `Listing` (~355K homes), users, visitors, saved searches, market data — 39 Prisma models | Prisma schema-as-code (migration history: being adopted) |
-| **CRM** (`HL_CRM_DATABASE_URL`) | autorack Railway | People + everything that happens: **180 tables · 222 foreign keys** | schema.lock.json + the 4-gate cage |
+| **WEB** (`DATABASE_URL`) | centerbeam Railway | The website: `Listing` (~355K homes), users, visitors, saved searches | Prisma schema-as-code |
+| **CRM** (`HL_CRM_DATABASE_URL`) | autorack Railway | People + everything that happens: **180 tables · 222 FKs** | schema.lock.json + the cage |
+| *(source)* **TXN** (`HL_TXN_DATABASE_URL`) | Railway, `hl_txn` schema | The Refinery source: 11,639 transactions / 1,947 closed — feeds the commission build, never a product store | read-only mining (Caleb) |
 
-The law that joins them: **the website is our Zillow, the CRM is our contact book** — home data lives on the web `Listing` (keyed by HLID), the CRM points at it by `website_hlid` and never copies values.
+The law that joins them: **the website is our Zillow, the CRM is our contact book** — home data lives
+on the web `Listing` (keyed by HLID), the CRM points at it by `website_hlid` and never copies values.
 
-## CRM tables by domain
+## Every CRM table, by domain
 
-| Domain | Tables | Page |
-|---|---|---|
-| uncategorized | 61 | [tables →](/schema-lock/tables#uncategorized) |
-| transactions-and-loops | 21 | [tables →](/schema-lock/tables#transactions-and-loops) |
-| past-clients | 20 | [tables →](/schema-lock/tables#past-clients) |
-| comms | 19 | [tables →](/schema-lock/tables#comms) |
-| leads | 17 | [tables →](/schema-lock/tables#leads) |
-| activity-and-catalog | 8 | [tables →](/schema-lock/tables#activity-and-catalog) |
-| appointments-and-tasks | 8 | [tables →](/schema-lock/tables#appointments-and-tasks) |
-| config | 8 | [tables →](/schema-lock/tables#config) |
-| workflows-and-ai | 7 | [tables →](/schema-lock/tables#workflows-and-ai) |
-| identity | 4 | [tables →](/schema-lock/tables#identity) |
-| system | 3 | [tables →](/schema-lock/tables#system) |
-| content-and-seo | 2 | [tables →](/schema-lock/tables#content-and-seo) |
-| financing | 2 | [tables →](/schema-lock/tables#financing) |
+*The full column-level detail lives on [the board](https://claude.ai/code/artifact/f7c5bb65-eb28-4e8b-b82e-3e4d2fab6c12) — this is the reading index.*
+
+### comms (30)
+
+**`hl_bb_events`** — *grain not yet registered* · 12 columns · links to `hl_leads`
+
+**`hl_bb_lines`** — *grain not yet registered* · 6 columns
+
+**`hl_blocked_numbers`** — *grain not yet registered* · 6 columns · links to `hl_users`
+
+**`hl_calls`** — *grain not yet registered* · 19 columns · links to `hl_leads`, `hl_users`, `hl_agents` · ⚡ 1 trigger(s)
+
+**`hl_channels`** — *grain not yet registered* · 8 columns
+
+**`hl_communication_intent`** — *grain not yet registered* · 21 columns · links to `hl_users`, `hl_leads`, `hl_playbook_runs`
+
+**`hl_conversations`** — *grain not yet registered* · 8 columns · links to `hl_leads`
+
+**`hl_dialer_assignments`** — *grain not yet registered* · 13 columns · links to `hl_users`
+
+**`hl_email_campaigns`** — *grain not yet registered* · 18 columns · links to `hl_email_lists`, `hl_users`, `hl_templates`
+
+**`hl_email_event`** — *grain not yet registered* · 11 columns · links to `hl_leads`
+
+**`hl_email_lead_ingest`** — *grain not yet registered* · 11 columns · links to `hl_leads`
+
+**`hl_email_list_members`** — *grain not yet registered* · 3 columns · links to `hl_email_lists`, `hl_leads`
+
+**`hl_email_lists`** — *grain not yet registered* · 10 columns · links to `hl_users`
+
+**`hl_email_send_log`** — *grain not yet registered* · 25 columns · links to `hl_email_campaigns`, `hl_leads`, `hl_users`, `hl_templates` · ⚡ 1 trigger(s)
+
+**`hl_email_unsubscribes`** — *grain not yet registered* · 3 columns
+
+**`hl_imessage_assignments`** — *grain not yet registered* · 7 columns · links to `hl_users`
+
+**`hl_inbound_emails`** — *grain not yet registered* · 20 columns · links to `hl_leads`, `hl_users` · ⚡ 1 trigger(s)
+
+**`hl_inbound_messages`** — *grain not yet registered* · 7 columns · ⚡ 1 trigger(s)
+
+**`hl_inbox_email_doors`** — *grain not yet registered* · 5 columns · links to `hl_inboxes`
+
+**`hl_inbox_send_log`** — *grain not yet registered* · 3 columns
+
+**`hl_inbox_subscribers`** — *grain not yet registered* · 7 columns · links to `hl_inboxes`, `hl_users`
+
+**`hl_inboxes`** — *grain not yet registered* · 13 columns · links to `hl_users`
+
+**`hl_messages`** — *grain not yet registered* · 30 columns · links to `hl_conversations`, `hl_leads`, `hl_users`
+
+**`hl_notification`** — *grain not yet registered* · 15 columns · links to `hl_notify_classes`, `hl_activity_catalog`, `hl_leads`, `hl_users` · ⚡ 1 trigger(s)
+
+**`hl_notify_classes`** — *grain not yet registered* · 8 columns
+
+**`hl_number_ports`** — *grain not yet registered* · 10 columns
+
+**`hl_phone_forward_rules`** — *grain not yet registered* · 9 columns
+
+**`hl_phone_numbers`** — *grain not yet registered* · 18 columns · links to `hl_users`, `hl_inboxes`, `hl_lead_sources`, `hl_routing_groups`, `hl_workflows`
+
+**`hl_routing_groups`** — *grain not yet registered* · 8 columns
+
+**`hl_sending_inboxes`** — *grain not yet registered* · 14 columns
+
+### past-clients (28)
+
+**`client_reconciliation_notes`** — *grain not yet registered* · 12 columns
+
+**`hl_county_findings`** — *grain not yet registered* · 10 columns
+
+**`hl_mls_property_history`** — *grain not yet registered* · 180 columns
+
+**`hl_mls_rooftop_status`** — *grain not yet registered* · 12 columns
+
+**`hl_pastclient_gold_snapshot`** — *grain not yet registered* · 3 columns
+
+**`hl_pastclient_resolve_quar_child`** — *grain not yet registered* · 15 columns
+
+**`hl_pastclient_resolve_quar_parent`** — *grain not yet registered* · 8 columns
+
+**`hl_pastclient_url_quar`** — *grain not yet registered* · 6 columns
+
+**`hl_srg_agent_roster`** — *grain not yet registered* · 10 columns
+
+**`hl_srg_canonical`** — *grain not yet registered* · 29 columns
+
+**`hl_srg_deal_ledger`** — *grain not yet registered* · 19 columns
+
+**`hl_srg_deal_overrides`** — *grain not yet registered* · 14 columns
+
+**`hl_srg_dedupe_log`** — *grain not yet registered* · 6 columns
+
+**`hl_srg_dotloop_contracts`** — *grain not yet registered* · 18 columns
+
+**`hl_srg_dotloop_loops`** — *grain not yet registered* · 10 columns
+
+**`hl_srg_fub_note_quarantine`** — *grain not yet registered* · 11 columns
+
+**`hl_srg_identity_verdict`** — one row per past client (pc_id). Not per deal — a person is identified once. · 8 columns
+
+**`hl_srg_mls_deals`** — *grain not yet registered* · 56 columns
+
+**`hl_srg_past_client_homes`** — *grain not yet registered* · 107 columns · links to `hl_srg_past_clients`
+
+**`hl_srg_past_clients`** — *grain not yet registered* · 120 columns
+
+**`hl_srg_pastclient_gt`** — *grain not yet registered* · 16 columns
+
+**`hl_srg_pch_quarantine`** — *grain not yet registered* · 107 columns
+
+**`hl_srg_pch_staging`** — *grain not yet registered* · 107 columns
+
+**`hl_srg_pour_matrix`** — one row per book lead (pc_id from hl_srg_book) · 18 columns
+
+**`hl_srg_resolver_quarantine`** — *grain not yet registered* · 5 columns
+
+**`hl_srg_resolver_quarantine_s2`** — *grain not yet registered* · 6 columns
+
+**`hl_srg_resolver_stage2`** — *grain not yet registered* · 10 columns
+
+**`sisu_transactions`** — *grain not yet registered* · 35 columns
+
+### transactions-and-loops (28)
+
+**`hl_agent_mls_transactions`** — *grain not yet registered* · 24 columns
+
+**`hl_contract_fill`** — *grain not yet registered* · 11 columns · links to `hl_transactions`, `hl_leads`, `hl_contract_template`
+
+**`hl_contract_template`** — *grain not yet registered* · 15 columns · links to `hl_tc_loop_document_category`
+
+**`hl_dotloop_connection`** — *grain not yet registered* · 12 columns
+
+**`hl_esign_sender`** — *grain not yet registered* · 8 columns · links to `hl_users`
+
+**`hl_fub_deals`** — *grain not yet registered* · 17 columns
+
+**`hl_fub_sisu_link`** — *grain not yet registered* · 14 columns
+
+**`hl_loop_role`** — one row per transaction-counterparty ROLE (the closed-but-admin-extensible vocabulary: buyer, co_buyer, seller, …) · 6 columns
+
+**`hl_showing_coordination`** — *grain not yet registered* · 18 columns · links to `hl_users`, `hl_leads`
+
+**`hl_srg_loop`** — *grain not yet registered* · 51 columns
+
+**`hl_tc_email`** — *grain not yet registered* · 11 columns · links to `hl_transactions`, `hl_leads`
+
+**`hl_tc_loop_document`** — *grain not yet registered* · 15 columns · links to `hl_contract_fill`, `hl_tc_loop_folder`, `hl_transactions`
+
+**`hl_tc_loop_document_category`** — one row per document category · 8 columns
+
+**`hl_tc_loop_document_share`** — one row per (document, person) — i.e. one person's access to ONE loop document. A person on four · 9 columns · links to `hl_tc_loop_document`, `hl_tc_loop_participant`
+
+**`hl_tc_loop_event`** — *grain not yet registered* · 13 columns · links to `hl_stages`, `hl_tc_milestone_template`, `hl_transactions`
+
+**`hl_tc_loop_folder`** — *grain not yet registered* · 5 columns · links to `hl_transactions`
+
+**`hl_tc_loop_participant`** — *grain not yet registered* · 7 columns · links to `hl_loop_role`, `hl_transactions` · ⚡ 1 trigger(s)
+
+**`hl_tc_loop_task`** — *grain not yet registered* · 27 columns · links to `hl_transactions`
+
+**`hl_tc_milestone_template`** — *grain not yet registered* · 14 columns · links to `hl_stages`
+
+**`hl_tc_stage_snapshot_20260804`** — one row per dropped hl_tc_stage row (the REVERSAL of this ceremony's table drop) · 15 columns
+
+**`hl_tc_status_group_snapshot_20260804`** — one row per hl_tc_loop_status key with its dropped status_group value (the REVERSAL of the column drop) · 2 columns
+
+**`hl_tc_task_category`** — *grain not yet registered* · 8 columns
+
+**`hl_tc_task_template`** — *grain not yet registered* · 23 columns · links to `hl_tc_task_template`, `hl_tc_milestone_template`
+
+**`hl_tc_transaction_status`** — *grain not yet registered* · 11 columns · links to `hl_tc_transaction_status_section`, `hl_tc_transaction_type`
+
+**`hl_tc_transaction_status_section`** — *grain not yet registered* · 7 columns · links to `hl_tc_transaction_type`
+
+**`hl_tc_transaction_type`** — one row per transaction type · one row per loop status. · 8 columns
+
+**`hl_tc_working_status`** — *grain not yet registered* · 9 columns · links to `hl_tc_transaction_status`
+
+**`hl_transactions`** — *grain not yet registered* · 48 columns · links to `hl_leads`, `hl_users`, `hl_stages`, `hl_tc_transaction_status`, `hl_tc_working_status`
+
+### leads (19)
+
+**`hl_home_claim`** — one row per lead × home × claim PERIOD (claimed_at/ended_at — succession IS transfer; signed Lee 8/4). · 18 columns · links to `hl_leads`
+
+**`hl_home_finance`** — one row per LEAD × HOME (lead_id + hlid). NOT per lead. · 9 columns · links to `hl_leads`
+
+**`hl_lead_activity_star`** — *grain not yet registered* · 4 columns · links to `hl_leads`
+
+**`hl_lead_addresses`** — *grain not yet registered* · 11 columns · links to `hl_leads`
+
+**`hl_lead_collaborators`** — *grain not yet registered* · 7 columns · links to `hl_users`, `hl_leads`, `hl_role`
+
+**`hl_lead_convo_state`** — *grain not yet registered* · 7 columns · links to `hl_leads`
+
+**`hl_lead_dossier`** — *grain not yet registered* · 9 columns · links to `hl_leads`
+
+**`hl_lead_emails`** — *grain not yet registered* · 8 columns · links to `hl_leads`
+
+**`hl_lead_facts`** — *grain not yet registered* · 10 columns · links to `hl_leads`
+
+**`hl_lead_flow_section_order`** — *grain not yet registered* · 3 columns
+
+**`hl_lead_phones`** — *grain not yet registered* · 8 columns · links to `hl_leads`
+
+**`hl_lead_pipeline_memberships`** — *grain not yet registered* · 8 columns · links to `hl_leads`, `hl_users`, `hl_pipelines`, `hl_stages`
+
+**`hl_lead_referrals`** — *grain not yet registered* · 14 columns · links to `hl_users`, `hl_leads`
+
+**`hl_lead_relationships`** — *grain not yet registered* · 6 columns · links to `hl_users`, `hl_leads`
+
+**`hl_lead_source_events`** — *grain not yet registered* · 21 columns · links to `hl_trigger_events`, `hl_users`, `hl_role`, `hl_stages`, `hl_workflows`, `hl_lead_sources`, `hl_tags`
+
+**`hl_lead_source_pages`** — *grain not yet registered* · 12 columns · links to `hl_stages`, `hl_lead_sources`, `hl_pipelines`
+
+**`hl_lead_sources`** — *grain not yet registered* · 37 columns · links to `hl_users`, `hl_role`, `hl_pipelines`, `hl_stages`, `hl_inboxes`, `hl_lead_sources`
+
+**`hl_lead_tags`** — *grain not yet registered* · 5 columns · links to `hl_leads`, `hl_tags`
+
+**`hl_leads`** — *grain not yet registered* · 55 columns · links to `hl_integrations`, `hl_workflows`, `hl_users`, `hl_role`, `hl_lender_company`, `hl_user`, `hl_loan_status`, `hl_myli_states`, `hl_pipelines`, `hl_agents`, `hl_lead_sources`, `hl_stages` · ⚡ 2 trigger(s)
+
+### workflows-and-ai (17)
+
+**`hl_agent_clone_config`** — *grain not yet registered* · 5 columns · links to `hl_users`
+
+**`hl_agent_nudge_rules`** — *grain not yet registered* · 7 columns
+
+**`hl_ai_actions_dropped_20260621`** — *grain not yet registered* · 12 columns · links to `hl_users`, `hl_leads`
+
+**`hl_ai_identity_delegation`** — *grain not yet registered* · 9 columns · links to `hl_users`
+
+**`hl_ai_prompt_history`** — *grain not yet registered* · 6 columns
+
+**`hl_ai_voice_test_run`** — *grain not yet registered* · 9 columns
+
+**`hl_fub_person_facts`** — *grain not yet registered* · 36 columns
+
+**`hl_memory_snapshots`** — *grain not yet registered* · 6 columns · links to `hl_leads`
+
+**`hl_myli_states`** — *grain not yet registered* · 15 columns
+
+**`hl_playbook_runs`** — *grain not yet registered* · 14 columns · links to `hl_users`, `hl_leads`
+
+**`hl_playbook_turn_trace`** — *grain not yet registered* · 7 columns · links to `hl_leads`, `hl_playbook_runs`
+
+**`hl_playbooks`** — *grain not yet registered* · 12 columns
+
+**`hl_scheduled_actions`** — *grain not yet registered* · 22 columns · links to `hl_users`, `hl_leads`
+
+**`hl_smart_filters`** — *grain not yet registered* · 11 columns · links to `hl_users`
+
+**`hl_tool_fire`** — *grain not yet registered* · 9 columns · links to `hl_leads`
+
+**`hl_workflow_runs`** — *grain not yet registered* · 21 columns · links to `hl_leads`, `hl_workflows`
+
+**`hl_workflows`** — *grain not yet registered* · 36 columns · links to `hl_trigger_events`, `hl_users`
+
+### system (13)
+
+**`hl_audit_log`** — *grain not yet registered* · 8 columns · links to `hl_users`
+
+**`hl_forensic_anomalies`** — *grain not yet registered* · 10 columns
+
+**`hl_fub_ingest_cursor`** — *grain not yet registered* · 3 columns
+
+**`hl_integrations`** — one row per INTEGRATION — the pipe a lead/event arrives through (houseloop \| follow_up_boss · 3 columns
+
+**`hl_lse_comms_snapshot_20260804`** — *grain not yet registered* · 4 columns
+
+**`hl_lse_insight_snapshot_20260804`** — *grain not yet registered* · 4 columns
+
+**`hl_lse_requests_snapshot_20260804`** — *grain not yet registered* · 4 columns
+
+**`hl_schema_ddl_log`** — one row per DDL statement executed against the database · 7 columns
+
+**`hl_schema_migrations`** — *grain not yet registered* · 4 columns
+
+**`hl_system_health`** — *grain not yet registered* · 8 columns
+
+**`hl_system_health_issue`** — *grain not yet registered* · 10 columns
+
+**`hl_tev_band_snapshot_20260804`** — *grain not yet registered* · 4 columns
+
+**`hl_tev_sections_snapshot_20260804b`** — *grain not yet registered* · 6 columns
+
+### config (13)
+
+**`hl_color_palette`** — one row per selectable colour. · 6 columns
+
+**`hl_custom_fields`** — *grain not yet registered* · 13 columns
+
+**`hl_fub_webhook_settings`** — *grain not yet registered* · 17 columns · links to `hl_workflows`
+
+**`hl_holiday_calendar`** — *grain not yet registered* · 3 columns
+
+**`hl_pipeline_section`** — one row per section within one pipeline · 12 columns · links to `hl_pipelines`
+
+**`hl_pipelines`** — *grain not yet registered* · 9 columns
+
+**`hl_registration_settings`** — *grain not yet registered* · 3 columns
+
+**`hl_relationships`** — *grain not yet registered* · 12 columns · links to `hl_users`
+
+**`hl_settings`** — *grain not yet registered* · 3 columns
+
+**`hl_stage_transitions`** — *grain not yet registered* · 10 columns · links to `hl_users`, `hl_leads`
+
+**`hl_stages`** — *grain not yet registered* · 14 columns · links to `hl_tc_transaction_status`, `hl_pipelines`, `hl_pipeline_section`
+
+**`hl_tags`** — *grain not yet registered* · 6 columns
+
+**`hl_templates`** — *grain not yet registered* · 21 columns · links to `hl_users`
+
+### identity (10)
+
+**`hl_agent_mls_ids`** — *grain not yet registered* · 10 columns
+
+**`hl_agents`** — *grain not yet registered* · 15 columns
+
+**`hl_member_role`** — *grain not yet registered* · 9 columns · links to `hl_role`, `hl_users`
+
+**`hl_oauth_connections`** — *grain not yet registered* · 20 columns · links to `hl_channels`, `hl_agents`, `hl_users`
+
+**`hl_pixel_visitor`** — *grain not yet registered* · 10 columns
+
+**`hl_role`** — *grain not yet registered* · 17 columns
+
+**`hl_role_team`** — one row per (role, team) — i.e. one role's membership of ONE team. A role on two teams has two · 3 columns · links to `hl_role`
+
+**`hl_user`** — *grain not yet registered* · 9 columns · links to `hl_leads`, `hl_lender_company`
+
+**`hl_user_license`** — one row per agent per state · 6 columns · links to `hl_users` · ⚡ 1 trigger(s)
+
+**`hl_users`** — *grain not yet registered* · 21 columns · links to `hl_users` · ⚡ 2 trigger(s)
+
+### activity-and-catalog (8)
+
+**`hl_activity_catalog`** — *grain not yet registered* · 34 columns · ⚡ 1 trigger(s)
+
+**`hl_activity_runlog`** — *grain not yet registered* · 23 columns · links to `hl_activity_catalog`, `hl_leads` · ⚡ 1 trigger(s)
+
+**`hl_pixel_event`** — *grain not yet registered* · 10 columns · ⚡ 1 trigger(s)
+
+**`hl_run_log`** — *grain not yet registered* · 12 columns
+
+**`hl_trigger_event_alias`** — *grain not yet registered* · 4 columns · links to `hl_activity_catalog`
+
+**`hl_trigger_event_sections`** — *grain not yet registered* · 3 columns
+
+**`hl_trigger_events`** — one row per trigger_type (the DEFINITION). The per-source WIRING (which workflow fires for a · 22 columns
+
+**`hl_trigger_fire`** — *grain not yet registered* · 11 columns · links to `hl_trigger_events`, `hl_leads`
+
+### appointments-and-tasks (8)
+
+**`hl_appointment_outcome_rules`** — *grain not yet registered* · 8 columns · links to `hl_stages`, `hl_appointment_outcomes`
+
+**`hl_appointment_outcomes`** — *grain not yet registered* · 12 columns · links to `hl_stages`
+
+**`hl_appointment_types`** — *grain not yet registered* · 12 columns · links to `hl_stages`
+
+**`hl_appointments`** — *grain not yet registered* · 27 columns · links to `hl_users`, `hl_leads`, `hl_agents`, `hl_appointments`
+
+**`hl_calendar_connections`** — *grain not yet registered* · 19 columns · links to `hl_users`
+
+**`hl_calendar_events`** — *grain not yet registered* · 20 columns · links to `hl_calendar_connections`, `hl_leads`, `hl_users`
+
+**`hl_notes`** — *grain not yet registered* · 15 columns · links to `hl_users`, `hl_leads`
+
+**`hl_tasks`** — *grain not yet registered* · 19 columns · links to `hl_users`, `hl_leads`
+
+### content-and-seo (4)
+
+**`hl_content_runs`** — *grain not yet registered* · 20 columns · links to `hl_content_templates`
+
+**`hl_content_templates`** — *grain not yet registered* · 21 columns
+
+**`hl_keyword_demand`** — *grain not yet registered* · 12 columns
+
+**`hl_media`** — *grain not yet registered* · 11 columns · links to `hl_users`
+
+### financing (2)
+
+**`hl_lender_company`** — *grain not yet registered* · 4 columns
+
+**`hl_loan_status`** — *grain not yet registered* · 6 columns
+
+## The activity catalog (all 167 kinds)
+
+*● = something writes this kind today. The CRM page at Settings → Trigger Events shows the same rows live.*
+
+### Comms (22)
+
+| Kind | Family | Layout | Payload | Live |
+|---|---|---|---|---|
+| `call_note_created` | calls | note | &#123;body, call_id&#125; | ● |
+| `call_note_deleted` | calls | note | &#123;call_id&#125; | ○ |
+| `call_note_edited` | calls | note | &#123;body, call_id&#125; | ○ |
+| `email_bounced` | — | — | — | ○ |
+| `email_clicked` | email | message | &#123;email_id, url&#125; | ● |
+| `email_deleted` | — | — | — | ○ |
+| `email_opened` | email | message | &#123;email_id&#125; | ● |
+| `email_received` | email | message | &#123;subject, from, thread&#125; | ● |
+| `email_sent` | email | message | &#123;subject, to, thread&#125; | ● |
+| `imessage_received` | messages | message | &#123;body, from, to&#125; | ○ |
+| `imessage_sent` | messages | message | &#123;body, from, to&#125; | ● |
+| `lead_unsubscribed` | — | — | — | ○ |
+| `phone_call_logged` | calls | call | &#123;direction, notes&#125; | ○ |
+| `phone_call_made` | calls | call | &#123;from, to, duration_s, line&#125; | ● |
+| `phone_call_missed` | calls | call | &#123;from, line&#125; | ○ |
+| `phone_call_received` | calls | call | &#123;from, to, duration_s, recording?, line&#125; | ● |
+| `sms_received` | messages | message | &#123;body, from_number, to_number, thread&#125; | ● |
+| `sms_sent` | messages | message | &#123;body, from_number, to_number, thread&#125; | ● |
+| `voicemail_left` | calls | call | &#123;to&#125; | ○ |
+| `voicemail_received` | calls | call | &#123;from, recording, transcript?&#125; | ○ |
+| `zillow_message_received` | messages | message | &#123;body, property?&#125; | ● |
+| `zillow_message_sent` | messages | message | &#123;body, property?&#125; | ● |
+
+### Content (2)
+
+| Kind | Family | Layout | Payload | Live |
+|---|---|---|---|---|
+| `seo_article_published` | seo | plain | &#123;slug, url&#125; | ○ |
+| `seo_article_written` | seo | plain | &#123;slug, topic&#125; | ○ |
+
+### Homes (3)
+
+| Kind | Family | Layout | Payload | Live |
+|---|---|---|---|---|
+| `home_added` | people | — | — | ● |
+| `loan_balance_updated` | people | — | — | ● |
+| `ownership_status_changed` | people | — | — | ● |
+
+### System (53)
+
+| Kind | Family | Layout | Payload | Live |
+|---|---|---|---|---|
+| `ai_context_built` | ai | plain | &#123;lead_id, token_count&#125; | ○ |
+| `ai_director_move_chosen` | ai | plain | &#123;lead_id, move, reasoning_ref&#125; | ○ |
+| `ai_fact_captured` | ai | plain | &#123;fact, lead_id&#125; | ○ |
+| `ai_memory_updated` | ai | plain | &#123;lead_id, section?&#125; | ○ |
+| `ai_send_blocked` | ai | plain | &#123;reason: master_off\|lead_muted\|banned_phrase\|no_persona\|leak_guard\|no_intent, draft_ref?&#125; | ○ |
+| `ai_summary_generated` | ai | plain | &#123;lead_id, trigger: initial\|refresh&#125; | ○ |
+| `ai_toggle_disabled` | ai | plain | &#123;toggle: master\|receptionist\|inside_sales\|clones\|nurture\|db_mgr\|tc\|content\|clone(lead_id), by, reason&#125; | ○ |
+| `ai_toggle_enabled` | ai | plain | &#123;toggle: master\|receptionist\|inside_sales\|clones\|nurture\|db_mgr\|tc\|content\|clone(lead_id), by, reason&#125; | ○ |
+| `appointment_outcome_created` | config | plain | &#123;name&#125; | ○ |
+| `appointment_outcome_deleted` | config | plain | &#123;id&#125; | ○ |
+| `appointment_outcome_edited` | config | plain | &#123;name&#125; | ○ |
+| `appointment_type_created` | config | plain | &#123;name&#125; | ○ |
+| `appointment_type_deleted` | config | plain | &#123;id&#125; | ○ |
+| `appointment_type_edited` | config | plain | &#123;name&#125; | ○ |
+| `custom_field_created` | config | plain | &#123;name, type&#125; | ○ |
+| `custom_field_deleted` | config | plain | &#123;id&#125; | ○ |
+| `custom_field_edited` | config | plain | &#123;name, type&#125; | ○ |
+| `email_campaign_created` | config | message | &#123;name&#125; | ○ |
+| `email_campaign_deleted` | config | message | &#123;id&#125; | ○ |
+| `email_campaign_edited` | config | message | &#123;name&#125; | ○ |
+| `email_campaign_sent` | config | message | &#123;campaign_id, recipient_count&#125; | ○ |
+| `email_list_created` | config | plain | &#123;name&#125; | ○ |
+| `email_list_deleted` | config | plain | &#123;id&#125; | ○ |
+| `email_list_edited` | config | plain | &#123;list_id, field: name\|members\|…, action?: added\|removed, lead_id?&#125; | ○ |
+| `email_template_created` | config | message | &#123;name&#125; | ○ |
+| `email_template_deleted` | config | message | &#123;id&#125; | ○ |
+| `email_template_edited` | config | message | &#123;name&#125; | ○ |
+| `idx_sync_completed` | jobs | plain | &#123;listings&#125; | ○ |
+| `integration_disconnected` | integrations | plain | &#123;name&#125; | ○ |
+| `job_failed` | jobs | plain | &#123;fn, error&#125; | ○ |
+| `lead_source_created` | config | plain | &#123;name, integration&#125; | ○ |
+| `lead_source_deleted` | config | plain | &#123;id&#125; | ○ |
+| `lead_source_edited` | config | plain | &#123;name, integration&#125; | ○ |
+| `lead_table_filter_created` | config | plain | &#123;name, criteria&#125; | ○ |
+| `lead_table_filter_deleted` | config | plain | &#123;id&#125; | ○ |
+| `lead_table_filter_edited` | config | plain | &#123;name, criteria&#125; | ○ |
+| `merge_field_created` | config | plain | &#123;token&#125; | ○ |
+| `merge_field_deleted` | config | plain | &#123;id&#125; | ○ |
+| `merge_field_edited` | config | plain | &#123;token&#125; | ○ |
+| `relationship_type_created` | config | plain | &#123;name&#125; | ○ |
+| `relationship_type_deleted` | config | plain | &#123;id&#125; | ○ |
+| `relationship_type_edited` | config | plain | &#123;name&#125; | ○ |
+| `saved_search_alert_sent` | notifications | plain | &#123;search_id, match_count&#125; | ○ |
+| `settings_updated` | config | plain | &#123;scope: business\|profile, field, from, to&#125; | ○ |
+| `stage_created` | config | plain | &#123;name, pipeline&#125; | ○ |
+| `stage_deleted` | config | plain | &#123;id&#125; | ○ |
+| `stage_edited` | config | plain | &#123;name, pipeline&#125; | ○ |
+| `tag_created` | config | plain | &#123;name&#125; | ○ |
+| `tag_deleted` | config | plain | &#123;id&#125; | ○ |
+| `tag_edited` | config | plain | &#123;name&#125; | ○ |
+| `text_template_created` | config | plain | &#123;name&#125; | ○ |
+| `text_template_deleted` | config | plain | &#123;id&#125; | ○ |
+| `text_template_edited` | config | plain | &#123;name&#125; | ○ |
+
+### Transactions (18)
+
+| Kind | Family | Layout | Payload | Live |
+|---|---|---|---|---|
+| `document_created` | documents | plain | &#123;doc_id, form, loop_id&#125; | ○ |
+| `document_deleted` | documents | plain | &#123;doc_id, loop_id&#125; | ○ |
+| `document_edited` | documents | plain | &#123;doc_id, field, loop_id&#125; | ○ |
+| `document_opened` | documents | plain | &#123;doc_id&#125; | ● |
+| `document_sent` | documents | plain | &#123;form: buyer_agency\|single_showing\|contract\|…, loop_id&#125; | ● |
+| `document_shared` | documents | plain | &#123;docId, docTitle, loopId, recipients:[&#123;name,email,permission&#125;], action: granted\|revoked&#125; | ● |
+| `document_signed` | documents | plain | &#123;doc_id, signer&#125; | ● |
+| `loan_status_changed` | financing | status_change | &#123;lender: &lt;slug&gt;, lender_company_id, loan_officer?, loan_officer_user_id?, to: &lt;hl_loan_status: contacting\|contact_made\|started_application\|submitted\|underwriting\|pre_approved\|fully_underwritten\|on_hold\|denied\|funded\|no_longer_active&gt;, amount?, tag?&#125; | ● |
+| `loop_created` | loops | plain | &#123;loop_id, name, transaction_id?&#125; | ○ |
+| `loop_deleted` | loops | plain | &#123;loop_id&#125; | ○ |
+| `loop_edited` | loops | plain | &#123;loop_id, field: name\|transaction_id\|…&#125; | ○ |
+| `loop_status_changed` | loops | status_change | &#123;loop_id, from, to: &lt;from loop statuses config&gt;&#125; | ○ |
+| `tc_status_changed` | — | status_change | &#123;to: &lt;hl_tc_loop_work_status: processing\|paused_blocked\|waiting_for_closing\|complete&gt;, from?, loop_id, note?&#125; | ● |
+| `transaction_created` | loops | plain | &#123;transaction_id, lead_id, address, price, type: buyer\|seller&#125; | ○ |
+| `transaction_deleted` | loops | plain | &#123;transaction_id&#125; | ○ |
+| `transaction_edited` | loops | plain | &#123;transaction_id, field: participants\|address\|coordinator\|commission\|listing_price\|contract_price\|closing_date\|under_contract_date\|…, action?, user?&#125; | ○ |
+| `transaction_milestone_reached` | loops | plain | &#123;transaction_id, milestone: &lt;from milestones config&gt;&#125; | ○ |
+| `transaction_status_changed` | loops | status_change | &#123;transaction_id, from, to: pending\|closed\|lost, close_price?, close_date?, reason?&#125; | ○ |
+
+### Website (40)
+
+| Kind | Family | Layout | Payload | Live |
+|---|---|---|---|---|
+| `contact_requested` | requests | request | &#123;message&#125; | ● |
+| `general_inquired` | requests | request | &#123;message&#125; | ● |
+| `houseloop_insight_buyer_reengaged` | houseloop | plain | &#123;insight: &#123;quietDays: &lt;15+ days of zero activity before returning&gt;, resumedAt, eventsSinceReturn&#125;, definition_ver&#125; | ● |
+| `houseloop_insight_high_intent_buyer` | houseloop | plain | &#123;insight: &#123;saves: &lt;3+ distinct homes saved in 7d — Zach locked 7/27&gt;, windowDays, alsoRepeatViewer&#125;, definition_ver&#125; | ● |
+| `houseloop_insight_new_area` | houseloop | plain | &#123;insight: &#123;zip, views, windowDays, lookbackDays&#125;, definition_ver&#125; | ● |
+| `houseloop_insight_viewed_10x_7d` | houseloop | plain | &#123;insight: &#123;home, views, windowDays, address, url&#125;, definition_ver&#125; | ● |
+| `property_hidden` | saves | home_card | &#123;hlid&#125; | ○ |
+| `property_inquired` | requests | request | &#123;hlid, propertyType: home\|duplex\|land\|condo\|…, message&#125; | ○ |
+| `property_liked` | saves | home_card | &#123;hlid&#125; | ○ |
+| `property_saved` | saves | home_card | &#123;hlid, propertyType&#125; | ○ |
+| `property_searched` | searches | home_card | &#123;searchType: address\|filters\|ai, query, resultCount&#125; | ○ |
+| `property_shared` | shares | home_card | &#123;hlid, channel?&#125; | ○ |
+| `property_unsaved` | saves | home_card | &#123;hlid&#125; | ○ |
+| `property_viewed` | views | home_card | &#123;hlid, propertyType, address&#125; | ○ |
+| `registered_contact_request` | — | — | — | ○ |
+| `registered_get_seller_report` | — | — | — | ○ |
+| `registered_like_home` | — | — | — | ○ |
+| `registered_manual_entry` | — | — | — | ○ |
+| `registered_saved_home` | — | — | — | ○ |
+| `registered_saved_search` | — | — | — | ○ |
+| `registered_seller_get_started` | — | — | — | ○ |
+| `registered_shared_home` | — | — | — | ○ |
+| `registered_tour_request` | — | — | — | ○ |
+| `registration_completed` | registrations | plain | &#123;type: buyer\|seller, entry: get_report\|seller_get_started\|direct\|…&#125; | ● |
+| `rental_inquired` | requests | request | &#123;hlid, message&#125; | ● |
+| `saved_search_created` | searches | plain | &#123;criteria, name, frequency&#125; | ○ |
+| `saved_search_deleted` | searches | plain | &#123;search_id&#125; | ○ |
+| `saved_search_edited` | searches | plain | &#123;criteria, name&#125; | ○ |
+| `saved_search_paused` | searches | plain | &#123;search_id&#125; | ○ |
+| `seller_inquired` | requests | request | &#123;message, integration: follow_up_boss, source: zillow&#125; | ● |
+| `seller_report_requested` | requests | request | &#123;address&#125; | ○ |
+| `tour_requested` | requests | request | &#123;hlid, requested_time, message&#125; | ● |
+| `virtually_toured` | requests | plain | &#123;hlid&#125; | ● |
+| `zillow_insight_actively_searching` | zillow | plain | &#123;integration: follow_up_boss, source: zillow, evidence: &lt;Zillow's stated evidence text&gt;&#125; | ○ |
+| `zillow_insight_buyer_reengaged` | zillow | plain | &#123;integration: follow_up_boss, source: zillow, quiet_days: &lt;days silent on Zillow before re-engaging&gt;&#125; | ○ |
+| `zillow_insight_high_intent_buyer` | zillow | plain | &#123;integration: follow_up_boss, source: zillow, evidence, definition_ver&#125; | ○ |
+| `zillow_insight_high_intent_seller` | zillow | plain | &#123;integration: follow_up_boss, source: zillow, evidence, definition_ver&#125; | ○ |
+| `zillow_insight_new_area` | zillow | plain | &#123;integration: follow_up_boss, source: zillow, zip, view_count, window&#125; | ○ |
+| `zillow_insight_specific_property_interest` | zillow | plain | &#123;integration: follow_up_boss, source: zillow, hlid, evidence&#125; | ○ |
+| `zillow_insight_viewed_10x_7d` | zillow | plain | &#123;integration: follow_up_boss, source: zillow, hlid, view_count, window&#125; | ○ |
+
+### Work (29)
+
+| Kind | Family | Layout | Payload | Live |
+|---|---|---|---|---|
+| `activity_starred` | crm | plain | &#123;activity_id&#125; | ○ |
+| `activity_unstarred` | crm | plain | &#123;activity_id&#125; | ○ |
+| `appointment_created` | appointments | plain | &#123;title, event_type: &lt;appt-type settings&gt;, date, time, duration, all_day, location, people, related_lead, assigned_to, invitees, invite_message, details&#125; | ● |
+| `appointment_deleted` | appointments | plain | &#123;appt_id&#125; | ○ |
+| `appointment_dispositioned` | appointments | status_change | &#123;outcome: &lt;appointment_outcomes config: showed_up\|no_show\|cancelled\|rescheduled\|...&gt;, from_time?, to_time?&#125; | ○ |
+| `appointment_edited` | appointments | plain | &#123;appt_id, field, from, to&#125; | ○ |
+| `calendar_invite_sent` | appointments | plain | &#123;appt_id, to&#125; | ○ |
+| `feedback_received` | appointments | plain | &#123;appt_id, body, from&#125; | ○ |
+| `lead_created` | people | plain | — | ○ |
+| `lead_deleted` | people | plain | &#123;lead_id&#125; | ○ |
+| `lead_edited` | people | plain | &#123;field, from, to&#125; | ○ |
+| `lead_restored` | people | plain | &#123;lead_id&#125; | ○ |
+| `lead_trashed` | people | plain | &#123;lead_id&#125; | ○ |
+| `note_added` | notes | note | &#123;body&#125; | ● |
+| `note_deleted` | notes | note | &#123;note_id&#125; | ○ |
+| `note_edited` | notes | note | &#123;body, note_id&#125; | ○ |
+| `stage_changed` | pipeline | status_change | &#123;from_stage, to_stage, pipeline&#125; | ● |
+| `tag_added` | pipeline | plain | &#123;name&#125; | ○ |
+| `tag_removed` | pipeline | plain | &#123;name&#125; | ○ |
+| `task_created` | tasks | plain | &#123;type: call\|text\|email\|follow_up\|send_listing\|other, name, due_date, due_time, assigned_to, priority: low\|med\|high\|urgent, description&#125; | ● |
+| `task_deleted` | tasks | plain | &#123;task_id&#125; | ○ |
+| `task_edited` | tasks | plain | &#123;task_id, field, from, to&#125; | ○ |
+| `task_status_changed` | tasks | status_change | &#123;from, to: pending\|in_progress\|completed\|cancelled&#125; | ○ |
+| `user_created` | people | plain | &#123;type: lead\|agent\|lender\|showing_partner\|…, source, integration&#125; | ○ |
+| `user_deleted` | people | plain | &#123;user_id&#125; | ○ |
+| `user_edited` | people | plain | &#123;field, from, to&#125; | ○ |
+| `user_reassigned` | people | plain | &#123;from_agent, to_agent&#125; | ○ |
+| `user_restored` | people | plain | &#123;user_id&#125; | ○ |
+| `user_trashed` | people | plain | &#123;user_id&#125; | ○ |
 
 ## The signed models (quick reference)
 
-- **Activity kinds**: [the full catalog →](/schema-lock/activity-catalog) — 167 kinds, 6 sections, payload shape per kind
 - **Loan ladder** (config, `hl_loan_status`): contacting → contact_made → started_application → submitted → underwriting → pre_approved → fully_underwritten → on_hold → denied† → funded† → no_longer_active†
 - **The three words**: *transaction* (canonical) · *deal* (agent-facing label) · *loop* (the document container, own lifecycle)
 - **The pair**: *integration* = which system carried it · *source* = the brand · transports (Twilio/Gmail) are carriers, never sources
 - **The user model**: every actor is an `hl_user` (type: lead · agent · lender · ai · bot · visitor …) — "lead is a type, not a who"
+
+{/* HAND-MAINTAINED BELOW — the generator preserves everything after this line */}
+
+## 📋 Run log
+
+*(newest first — append via /dev-doc log; never collapse, never edit past entries)*
+
+### 2026-08-05 · lee
+**THE CONSOLIDATION (Zach: "this whole page is a shit show … fold every one of the other docs into
+one master schema lock document").** Ten schema-lock pages became ONE: this page. The generated header
+(tables, catalog, cages) regenerates from the lock; the seven hand-written pages are folded below as
+appendices, verbatim (134KB carried of 136KB source — the delta is frontmatter only).
+**Built:** the [master schema board artifact](https://claude.ai/code/artifact/f7c5bb65-eb28-4e8b-b82e-3e4d2fab6c12)
+— 184 items (178 locked · 4 in build · 2 retiring), every table's measured columns inline, the
+Spradling Refinery as its own estate, generated by tools/schema/build-schema-board.mjs.
+**Found:** 61 of 180 tables were falling into the atlas "uncategorized" bucket — the domain rules were
+extended to zero. **Verdict:** pass.
+
+### 2026-08-05 · lee (earlier)
+**The Great Rename APPLIED (mig 0632, Benji).** hl_tc_transaction_status = where the DEAL stands
+(10 rows, sectioned active/closed/archived) · hl_tc_working_status = what the coordinator is doing ·
+hl_transactions gained transaction_status_key/at/by/reason + working_status_id. Lock regenerated after
+the caging incident. Board #544.
+
+### 2026-08-05 · lee (earlier)
+**The lead-child retirements (#550):** hl_lead_phones + hl_lead_emails at 0 rows / 0 readers /
+0 writers — secondary contacts live as labeled lists on hl_leads.data (alt_emails, alt_phones). DROP
+arms as mig 0633 on Zach's typed line. **The Six Facts (mig 0631)** + **notify rehome (mig 0630)**
+landed the day prior — see the freeze appendix for the full rulings.
+
+
+---
+
+# 📎 Transaction & Loop Model (folded 8/5 — includes THE FREEZE + THE FINAL TABLE SET)
+
+> 🔏 **SCHEMA LOCKED BY LEE 7/31/2026 PM under Zach's directive** ("you lock in the schema") ·
+> **LAST AMENDED: 8/5/2026 — THE TRANSACTION SCHEMA FREEZE (below)**
+
+## ❄️ THE FREEZE — 8/5/2026 (Zach: "we need that locked otherwise it is just trying to hit a moving target")
+
+<Warning>
+**From this date, the transaction estate changes THROUGH THIS SECTION or it does not change.** Every
+pending/proposed row below is the complete exception window; anything not listed lands only by amending
+this page first. Caleb's refinery mirror builds against THIS, never against live. Source of intent:
+Benji's measured package (`.claude/reports/freeze/benji-transaction-intent-2026-08-05.md`, 47 columns
+audited against the live DB) + every signed-unbuilt ruling.
+</Warning>
+
+**FROZEN NOW (readers exist — named before any touch):** `hl_transactions.transaction_type` (Caleb's
+ledger + the milestone/task estate join on it) · `hl_transactions.milestone` (the ledger tests
+`milestone='closed'`) · the four refinery-vocabulary columns `disposition` / `verified` / `our_side` /
+`team` (CHECKs identical to `hl_srg_canonical` — the mirror is a COPY because the destination already
+absorbed the vocabulary).
+
+**SIGNED AT THE FREEZE (Lee, 8/5):**
+- **The side fold** — `loop_kind` + `our_side` are twins of `transaction_type` (100% correlated wherever
+  populated; the `hl_tc_stage` disease one level up). `transaction_type` survives; the twins retire in
+  place and physically drop at a typed ceremony. The refinery's `our_side` maps at pour
+  (`buy→purchase`, `sell→sale`). **The 238 composite dedup key amends** to
+  `(lead_id, website_hlid, transaction_type)`.
+- **Commission folds out** — `commission_type/commission_value/agent_net/srg_net/zillow_paid` are
+  per-PARTICIPANT facts wearing per-transaction columns (two agents cannot express two splits). Intent:
+  a commission table keyed by **transaction + party** (rides `hl_transaction_party`, signed 8/4). The
+  money design itself lives on the [Commission model page](/schema-lock/commission-model).
+- **Dead vs future columns** (the 11 zero-filled columns get sentences so they are not re-invented):
+  FUTURE, keep as named — `dotloop_id` · `sisu_transaction_id` · `resale_mls_number` (external-id
+  convention) · `verified` (the pour writes it) · `list_price` · `lost_reason` + `lost_at_stage_id` ·
+  `void_reason` (the void feature's fields). DEAD, drop at the anchor-columns typed ceremony —
+  `tc_stage_id` (points at a dropped table) · `override_id` (no owner found).
+
+**✍️ RULED BY ZACH, 8/5 — THE SIX FACTS + THE GREAT RENAME (two rulings, same afternoon; the second
+sharpens the first).**
+
+**Ruling 1, THE SIX FACTS, verbatim:** *"i need one place on the houseloop transaction for its list
+price, its contract price, its sale price, its under contract date, its closing date, and its final
+status."* The transaction carries its closed-record facts as COLUMNS: `list_price` · `contract_price`
+· `sale_price` · `contract_date` (added, mig 0631) · `closing_date` · final status.
+
+**Ruling 2, THE GREAT RENAME — the status vocabularies were named wrong, not modeled wrong.** Zach:
+*"the loop status is really the transaction status, and transaction status is actually the TC working
+stage."* The map:
+| today's name | what it actually holds | Zach's name |
+|---|---|---|
+| `hl_tc_loop_status` (pre-listing → under contract → closed + the terminal exits) | where the DEAL stands | **TRANSACTION STATUS** |
+| `hl_tc_transaction_status` (processing/paused/blocked/waiting/complete) | what the COORDINATOR is doing | **TC WORKING STATUS** |
+| `hl_transactions.milestone` (4 coarse values) | a stunted duplicate of transaction status | **FOLDS INTO transaction status** (its 0631 CHECK is the transitional guard; the six-facts "final status" = the ONE renamed vocabulary) |
+| milestone/task config tables | the deal's date-bearing checkpoints + work | already correctly named |
+
+Execution = table/column renames + the milestone-column fold, ONE-COMMIT-RENAME class, added to the
+exception list (Benji's lane, sequenced with his three renames; frozen readers named per the standing
+commitment).
+
+**Ruling 3, THE STEPPER — the data lives in two homes, the stepper draws ONE line.** The lead's own
+stages live on the lead; the under-contract→close segment lives on the TRANSACTION as milestones; the
+lead-detail stepper STITCHES them into one unbroken reading order (the `hl_pipeline_section.managed_by
+= 'tc_milestones'` flag anticipated exactly this). The tail stages come off the lead PIPELINES as
+stored facts without leaving the stepper's picture — and after close, the lead's line continues to
+Past Client/Nurture instead of dying with the deal. This resolves the milestones-as-lead-stages
+conflation BEFORE the pour: closings map to transactions, never to lead stages.
+
+**THE DATED CHANGE LIST (the only exceptions in flight):** 0627 milestones ✅ · 0628 categories ✅ ·
+Add-Folder UI ✅ · the three table renames (`hl_tc_task_template→hl_tc_task`,
+`hl_tc_milestone_template→hl_tc_milestone`, `hl_tc_loop_event→hl_tc_loop_milestone`) — signed, Benji,
+not started · the anchor-columns typed drop — Lee's ceremony, on Zach's block · the two freeze
+signings above — built at their own boundaries.
+
+**OWED, honestly:** the ten signed transaction/loop activity kinds are cataloged but their **emit
+points are unverified** (presence ≠ firing — Benji's flag, correctly not claimed). One probe per kind:
+insert → read back → roll back.
+
+**✅ APPLIED 8/5 PM — THE GREAT RENAME LANDED (mig 0632, Benji, ledgered same session; schema lock
+regenerated by Lee in the caging incident that proved the lock ceremony).** The live estate now reads:
+- **`hl_tc_transaction_status`** = the DEAL vocabulary (Zach's "transaction status"), 10 rows scoped
+  per `transaction_type_key`: `pre_listing · pre_contract · under_contract · closed ·
+  contract_fell_through · listing_not_won · listing_expired · listing_cancelled · offer_not_accepted ·
+  buyer_cancelled`, each carrying `is_terminal`, `color`, `icon`, and a `section_key` into
+  **`hl_tc_transaction_status_section`** (`active / closed / archived` — the coarse rollup the UI
+  groups by).
+- **`hl_tc_working_status`** = the COORDINATOR lane (Zach's "TC working status"): `Processing ·
+  Paused/Blocked · Waiting for Closing · Complete`, with `transaction_status_advance_to_key` so a
+  working state can auto-advance the deal status when it completes.
+- **`hl_transactions`** carries the stamped fact: `transaction_status_key` + `transaction_status_at` +
+  `transaction_status_by_user_id` + `transaction_status_reason`, and `working_status_id`.
+
+## 📋 THE FINAL TABLE SET (Zach 8/5: "I need a finalized table set" — this list IS it)
+
+One row per table; state = live today, building this loop, or awaiting a typed ceremony.
+
+| Table | Holds | State |
+|---|---|---|
+| `hl_leads` | the PERSON — primary email/phone as columns; secondary contacts as labeled lists on `data` (`alt_emails`, `alt_phones`) | ✅ live (child tables retired 8/5) |
+| `hl_transactions` | the DEAL — the Six Facts (`list_price · contract_price · sale_price · contract_date · closing_date · transaction_status_key`) | ✅ live |
+| `hl_tc_transaction_type` | purchase / sale — the one family | ✅ live |
+| `hl_tc_transaction_status` (+ `_section`) | where the DEAL stands, sectioned active/closed/archived | ✅ live (0632) |
+| `hl_tc_working_status` | what the COORDINATOR is doing | ✅ live (0632) |
+| `hl_tc_milestone` / `hl_tc_task` (+ `hl_tc_task_category`) | the deal's date-bearing checkpoints + the work | 🔨 renames #548, Benji, this loop |
+| `hl_transaction_party` | every person/entity ON a deal, role-typed, one primary | 🔨 #545, Benji, this loop |
+| commission table (keyed transaction + party) | the money — built against the third-database findings | 🔨 #546, Benji, this loop |
+| `hl_connected_people` + `hl_connected_people_type` | person-to-person links (spouse/partner/family/referred_by) | 🔨 #549, Caleb, this loop |
+| `hl_relationships` | the LIFECYCLE vocabulary (Lead · Sphere of Influence · Past Client + Ana variants) | ✅ live, untouched — never duplicated |
+| `hl_activity_catalog` | every thing that CAN happen + `notify`/`notify_class` (the owner columns) | ✅ live |
+| `hl_lead_phones` / `hl_lead_emails` | — | ⚰️ retire: 0 rows, 0 readers as of 8/5; DROP arms as mig 0633 on Zach's typed line |
+
+**FREEZE AGENDA (questions parked here, each needs its own verdict — never decided in passing):**
+① the `activity` two-names question — tev.activity tells the registration story, catalog.activity names
+the action; TWO facts wanting two names (Adam's parity proof, 8/5). ② the five unruled notify_class
+re-routes (tc_closed/tc_lost coarsening to tc_status_changed · the two insight rows ·
+seller_get_started/home_value_report collapsing to seller classes). ③ `hl_fub_webhook_settings.notify_class`
+ownership (its OWN column today — flagged, untouched). ④ a dedicated column vs `data` jsonb for the
+secondary-contact lists if they outgrow labeled keys.
+
+## 🔗 HOW A LEAD CONNECTS TO A DEAL — the one map (Zach's 8/5 question, answered in one place)
+
+**`hl_transactions` IS the deals table** — one row per deal. The whole correlation, today:
+
+```
+hl_leads (the PERSON, 55 cols)
+   │  1 ────── many
+   ▼
+hl_transactions.lead_id  →  hl_leads.id     (real FK, ON DELETE CASCADE)
+   │                                          one lead owns many deals
+   ├── website_hlid      →  the HOUSE        (the website Listing — the house holds the value)
+   ├── transaction_type  →  hl_tc_transaction_type   (purchase | sale — ONE family since the 8/5
+   │                        fork collapse: 22/23 typed; the untyped 1 shows loudly, never filtered)
+   ├── transaction_status_key →  hl_tc_transaction_status  (where the deal stands — renamed 8/5, mig 0632)
+   └── transaction_id ←── the TC estate hangs OFF the deal:
+         hl_tc_loop_task (719) · milestones (via milestone_key) · documents · participants
+```
+
+**Today's limit, and the signed fix:** `lead_id` is SINGULAR — one person per deal. That is why
+splitting a glued couple ("Michael & Katherine") without more machinery makes the second person
+unservable. The signed fix is **`hl_transaction_party`** (8/4, unbuilt): each person on the deal gets a
+row with a role (co_buyer / co_seller / other), exactly ONE flagged primary, and a party can be a named
+entity (a trust holding title) instead of a person. `lead_id` then remains as the primary-party mirror.
+**The value queries repoint from "which deals does this person OWN" to "which transactions is this
+person a PARTY to"** — that repoint is atomic with the couple-split (board 239+241+247).
+
+**The refinery side** (the pour's source): `hl_srg_canonical` (1,964 deals, key `pc_id:hlid:side`) has
+NO FK to anything — the pour copies it into `hl_transactions` where the FK to the person is real.
+
+## 📌 THE STAMPING RULE (Zach's 8/5 instinct, signed into the freeze)
+
+Zach: *"when it closes out, that milestone needs to get stamped as a row on that transaction for the
+actual real things."* The rule: **milestones are the working checklist DURING a deal; when the deal
+closes, its FACTS become COLUMNS on the transaction** — nobody walks an event log to answer "what did
+it sell for and when did it go under contract."
+
+Measured hole (Caleb, 8/5): there is a `contract_price` but **NO `contract_date` — the under-contract
+date has no column** and the milestone table that could hold it is unbuilt. **SIGNED (freeze
+amendment, Lee 8/5): `hl_transactions.contract_date` DATE** — stamped when the deal goes under
+contract, next to `closing_date` which already follows this rule. Diet entry rides the migration.
+
+<Info>
+**This page is the deal's LIFECYCLE — loop stage, loop status, milestones, tasks, document categories.
+The MONEY is a separate page: [Commission & Transactions Model](/schema-lock/commission-model)** — the
+six-table commission estate, the third Railway database (`hl_txn`) that runs the dashboard today, SISU as
+frozen evidence, the payout waterfall, eXp caps, the Zillow rate eras, and the fold into the CRM.
+Two halves of one model; neither repeats the other.
+</Info>
+
+<Info>
+**Status: LOCKED (7/31 PM).** The model below is the governed schema, worked out Zach × Benji × Ana and
+locked by Lee under Zach's directive. **Signed + BUILT (mig 0531, additive):** `hl_pipeline_section`
+(the SECTION config table — replaces the hardcoded chapter labels; `managed_by` = pipeline \|
+tc_milestones decides who may edit) · `hl_tc_loop_document_category` (7 rows for the 58 dotloop forms) ·
+the `hl_contract_template` dotloop-import columns. **Locked, build sequenced (the ladder):** the TWO
+STATUS AXES (loop status DERIVED via `hl_stages.loop_status_key`, never stored · TC work status EXPLICIT,
+config in the TC loop lane) · tasks nest under MILESTONES (`hl_tc_phase` retires — drop waits for Zach's
+typed Rule-0) · flat archive exits with the GROUP column (active \| closed \| archived) · the
+`listing_not_won` exit (sequenced EARLY — Lawrence Guenther has nowhere to go today) · the five renames
+one-per-push · the work-status purge WITH the e-sign string-writer in the same commit.
+**`tc_status_changed`: SIGNED by Zach 7/31 PM and MINTED (mig 0534)** — 'updated the TC status', section
+Transactions, payload hints the work-status vocabulary. No open signatures remain on this model. Execution owner: Benji. Companion operating doc:
+[Transaction Coordination](/guides/transaction-coordination) (Benji updating per Zach's 7/31 order).
+Pairs with [Target Model](/schema-lock/target-model) and [Activity Catalog](/schema-lock/activity-catalog).
+</Info>
+
+## The one-sentence problem
+
+**We have three different concepts crammed into one status list, and no vocabulary at all for document
+categories or folders.** A-Frame — the system we reverse-engineered — keeps them deliberately separate and
+its own doc warns *"A-Frame has both; don't conflate."* We conflated them.
+
+---
+
+# PART 1 — WHAT EXISTS TODAY
+
+Queried live from the CRM database, 2026-07-31.
+
+## The tables
+
+| Table | Grain | Rows/notes |
+|---|---|---|
+| `hl_transactions` | one row per transaction **and** per TC workspace (both) | 34 columns; carries loop fields *and* financial fields |
+| `hl_tc_transaction_status` | config | **7 rows** — the dropdown |
+| `hl_tc_loop_folder` | one row per folder per loop | **free-text `name`**, no vocabulary |
+| `hl_tc_loop_document` | one row per document on a loop | has `status`, `esign_*`, `contract_key` |
+| `hl_tc_loop_participant` | one row per party per loop | `role` is free text |
+| `hl_tc_loop_task` · `hl_tc_loop_event` | tasks / events on a loop | |
+| `hl_tc_stage` · `hl_tc_phase` · `hl_tc_milestone_template` · `hl_tc_task_template` | config | |
+| `hl_contract_template` | one row per contract FORM | `key, name, form_kind, pdf_b64` only |
+| `hl_contract_fill` | one row per fill of a form | |
+| `hl_tc_email` | — | **0 rows, sentenced to fold into email** |
+
+## `hl_transactions` — the columns
+
+```
+id · lead_id · stage_id · milestone · property_address · property_price · closing_date
+commission_type · commission_value · zillow_paid · agent_net · srg_net
+notes · recorded_at · recorded_by_user_id · created_at · updated_at
+voided_at · voided_by_user_id · void_reason
+loop_name · loop_kind · transaction_type · tc_stage_id
+created_by_user_id · tc_assignee_user_id
+lost_reason · lost_at_stage_id · transaction_status_id
+list_price · cover_image_url · website_hlid
+```
+
+One row is doing two jobs: `loop_name`/`loop_kind`/`tc_stage_id`/`tc_assignee_user_id` are the **TC
+workspace**; `commission_*`/`agent_net`/`srg_net`/`zillow_paid` are the **financial record**.
+
+## The status dropdown today — three concepts in one list
+
+```
+0  Processing
+1  Paused
+2  Waiting for Closing
+3  Preparing Documents
+4  Document Sent
+5  Buyer Signed
+6  Showing Agreement Signed
+```
+
+Read it again and the seam is obvious:
+
+| Rows | What they actually are | Belongs |
+|---|---|---|
+| Processing · Paused · Waiting for Closing | **TC processing state** — is the coordinator working it? | a TC status field |
+| Preparing Documents · Document Sent · Buyer Signed · Showing Agreement Signed | **document lifecycle events** — things that HAPPEN | the activity log + document state |
+| *(missing entirely)* | **the loop's own stage** — active, under contract, sold, archived | the loop spine |
+
+The four document rows are not statuses at all. They are events, already written to
+`hl_lead_activity` (`document_sent`, `document_signed`), and the webhook *also* advances this dropdown —
+so the same fact is stored twice, in two shapes.
+
+**The loop stage Zach asked about does not exist yet.** Nothing in the system can answer "is this loop
+active, under contract, sold, or archived."
+
+## Everything else that has no vocabulary
+
+<AccordionGroup>
+  <Accordion title="Folders — free text, 9 distinct names already in use">
+```
+Showing / Touring Agreements          (7 loops)
+Compliance - Missing/Fix Docs         (1)
+Contract Docs                         (1)
+Potential form for Listing Agreement  (1)
+Offer Accepted for Sellers Signature  (1)
+Post-Contract/Inspection Docs         (1)
+MLS Supplements - Sellers to Fill Out (1)
+Listing Docs                          (1)
+Commission Docs                       (1)
+```
+Typed by hand, per loop. Two loops will never agree on a folder name, and nothing can query "show me
+every buyer agency across all loops."
+  </Accordion>
+  <Accordion title="loop_kind / transaction_type — 2 combinations, no catalog">
+```
+exclusive_buyer + purchase   (7 loops)
+seller          + sale       (1 loop)
+```
+Both are free text. `loop_kind` also encodes the FORM used, which is a different fact from the SIDE.
+  </Accordion>
+  <Accordion title="Participant roles — free text, 1 value in the wild">
+```
+designated_agent  (5)
+```
+The code also uses `buyer_2` and `buyers_broker`, but nothing constrains the column.
+  </Accordion>
+  <Accordion title="Contract forms — 3 hardcoded in TypeScript">
+`lib/tc/contract-forms.ts` holds 3 forms as TS literals with hand-measured coordinates. Meanwhile
+**58 current eXp/KCRAR forms** sit in the dotloop master folder with dotloop's own exact field maps.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+# PART 2 — WHAT IS PLANNED
+
+## The approved target model (Zach signed 2026-07-30)
+
+From [The Table Sitting](/schema-lock/target-model), the TRANSACTIONS family:
+
+| Table | What it is |
+|---|---|
+| `transactions` | **one SIDE of one deal** — the financial record. The catalog section is **Transactions** (Zach renamed it from "Deals", mig 0528 — sections speak the TABLE noun; "deal" survives only as prose). |
+| `loops` | **the TC workspace** — its own lifecycle, born at Appointment Set, **can exist before a transaction** |
+| `loop_milestones` | milestones inside a loop |
+| `loop_tasks` | tasks inside a loop |
+| `loop_participants` | every party on a loop — **becomes the signer registry** |
+| `documents` | ONE document table — loop docs, transaction docs and contract fills merge |
+| `document_signatures` 🆕 | per-recipient signing state — 3-party signing finally has a home |
+| `commission_forms` | the DA + splits + adjustments |
+
+**Phase C of the pour:** *"`hl_transactions` splits into `loops` + `transactions`."*
+
+That split already answers the structural half of Zach's question. What it does **not** yet specify is the
+vocabulary: the loop's stages and statuses, the folder structure, and the document categories.
+
+## A-Frame's model — the pattern worth copying
+
+A-Frame separates exactly what we merged:
+
+**Stages — a fixed system enum:**
+```
+PRE_ACTIVE · ACTIVE · UNDER_CONTRACT · SOLD · NOT_SOLD
+```
+
+**Statuses — user-built, each bound to a stage:**
+
+| Status | Stage | systemType |
+|---|---|---|
+| Coming Soon | PRE_ACTIVE | — |
+| Active | ACTIVE | `SYSTEM_ACTIVE` |
+| Under Contract | UNDER_CONTRACT | — |
+| Pending | UNDER_CONTRACT | — |
+| Closed | SOLD | `SYSTEM_CLOSED` |
+| Expired | NOT_SOLD | — |
+| Cancelled | NOT_SOLD | `SYSTEM_FELL_APART` |
+| Draft | PRE_ACTIVE | `SYSTEM_DRAFT` |
+
+<Note>
+**The `systemType` trick — copy it exactly.** Statuses are renamable and recolorable by the user, but a few
+are *bound* to system behavior. The user can rename "Closed" to anything; the engine still knows which one
+is closed via the bound type. Customizable words, stable logic.
+</Note>
+
+Also on their transaction: **`xactionSide` = `BUYER | SELLER`**, and attachments are grouped in folders
+seeded per transaction from a team-level `defaultXactionFolders` list.
+
+And critically, A-Frame keeps a **separate** team-defined field for processing state
+(Processing · Paused · Waiting for Closing · Closed · Cancelled) — the same words we put in our one list.
+Their own doc says: *"distinct from the structural Status→Stage spine above. A-Frame has both; don't
+conflate."*
+
+---
+
+# PART 3 — THE MODEL (Zach + Ana, 2026-07-31)
+
+Worked out in one sitting with Zach, with Ana ruling on how tasks hang off milestones. **Nothing is built
+yet** — this is the package that goes to Lee for the migration.
+
+## 3.1 — The naming law
+
+```
+hl_*            HouseLoop-wide — leads, pipelines, stages, everything PRE-contract
+hl_tc_loop_*    the TC Loop — from signing documents / under contract onward
+```
+
+Zach: *"anything past under contract or signing documents is a `hl_tc_loop` table naming convention."*
+
+Config and live rows share the prefix and are told apart by `_catalog` — the same word the system already
+uses for `hl_activity_catalog` (the dictionary) vs `hl_lead_activity` (the rows).
+
+| Table | rows | Was |
+|---|---|---|
+| `hl_tc_loop_status` | 13 | `hl_tc_stage` |
+| `hl_tc_loop_work_status` | 4 | `hl_tc_transaction_status` |
+| `hl_tc_loop_milestone_catalog` | 31 | `hl_tc_milestone_template` |
+| `hl_tc_loop_milestone` | ~16/loop | `hl_tc_loop_event` |
+| `hl_tc_loop_task_catalog` | 139 | `hl_tc_task_template` |
+| `hl_tc_loop_task` | ~81/loop | *already correct* |
+| `hl_tc_loop_document_category` | 🆕 | — |
+| `hl_tc_loop_document` · `_folder` · `_participant` | | *already correct* |
+| `hl_pipeline_section` | 🆕 | replaces `lib/stages/chapters.ts` |
+| ~~`hl_tc_phase`~~ | 21 | **RETIRED — Ana 2026-07-31** |
+
+`hl_pipeline_section` stays HouseLoop-wide on purpose: sections group *lead pipeline* stages
+(Working the Buyer, Win the Listing), which is pre-contract territory.
+
+## 3.2 — Two status axes, and why one field could never hold both
+
+| | **Loop status** — where the DEAL is | **TC work status** — what the FILE needs |
+|---|---|---|
+| how | **derived** from the stage's section while alive · **explicit** on a terminal exit | **explicit**, set by the coordinator |
+| values | `pre_contract` · `pre_listing` · `under_contract` · `closed` · `archived`(+reason) | `processing` · `paused_blocked` · `waiting_for_closing` · `complete` |
+| moved by | the agent, working the pipeline | the TC, working their board |
+| default | derived from birth | **NULL until a TC is assigned**, then `processing` |
+
+They are independent, and these four combinations prove it:
+
+- `under_contract` + `waiting_for_closing` — deal live, TC done, waiting on the date
+- `closed` + `processing` — house closed, TC still chasing commission docs
+- **`pre_contract` + `processing`** — buyer agreement out for signature, Ana chasing it. **This is the case
+  that broke the old single-field model** and produced a status that didn't match the stage.
+- `archived` + `processing` — contract terminated, TC still releasing earnest money and filing the cancellation
+
+<Note>
+**`cancelled` was cut from the TC axis** (Zach). If the loop is archived, the TC isn't "cancelled" — the loop
+is. Saying it twice is the double-write this whole exercise exists to kill.
+</Note>
+
+### Derived while alive, explicit when it dies — the correction
+
+<Warning>
+An earlier draft of this page said loop status is purely derived. **It is not, and it could not be** — if
+every value came from the stage there would be no way to archive a loop at all. Nothing can compute
+"we lost the listing" from a pipeline position.
+
+```
+loop_status_key IS NULL   → derive from the stage's section
+                            pre_contract · pre_listing · under_contract · closed
+loop_status_key IS SET    → a human ended this loop on purpose. The derivation stops.
+                            listing_not_won · offer_not_accepted · fell_through
+                            listing_expired · listing_cancelled · archived
+```
+
+The column lives on the LOOP (nullable). Only the terminal exits are ever written to it; the active path is
+never stored, so it cannot drift. Corrected 2026-07-31 after Zach caught it.
+
+**⚠ SUPERSEDED 2026-08-04/05 (the freeze, confirmed by Benji against the live DB):** loop status **IS
+a stored column now** — `hl_transactions.loop_status_key → hl_tc_loop_status`, with `loop_status_at` /
+`_by_user_id` / `_reason` attribution beside it. Zach's ruling ("i dont need those weird derived stuff,
+it should just be a simple drop down") and migs 0599 + 0620–0622 postdate this passage: the 45-line
+derivation ladder died, the vocabulary became config rows with a UI. The paragraph above stays as the
+dated record of the earlier model.
+</Warning>
+
+### The derivation is a FOREIGN KEY, not an if-statement
+
+`hl_stages` gains `loop_status_key → hl_tc_loop_status(key)`. Loop status is **never stored on the loop** —
+it is the stage's `loop_status_key`. It cannot drift, and a stage can be re-pointed in config without a
+deploy.
+
+```
+working_buyer stages     → pre_contract
+win_listing / list_prep  → pre_listing
+under_contract stages    → under_contract
+Closed (is_terminal)     → closed
+```
+
+### The archive exits — flat, one chip, `group` for rollup
+
+Zach rejected parent-child twice and was right: the reason IS the status, so storing both is storing one
+fact twice. `hl_tc_loop_status` carries a `group` column instead.
+
+| key | label | side | group |
+|---|---|---|---|
+| `pre_contract` | Pre-Contract | buyer | active |
+| `pre_listing` | Pre-Listing | seller | active |
+| `under_contract` | Under Contract | both | active |
+| `closed` | Closed | both | closed |
+| `offer_not_accepted` | Offer Not Accepted | buyer | archived |
+| `listing_not_won` | **Listing Not Won** | seller | archived |
+| `listing_expired` | Listing Expired | seller | archived |
+| `listing_cancelled` | Listing Cancelled | seller | archived |
+| `fell_through` | Fell Through | both | archived |
+| `archived` | Archived | both | archived |
+
+- **One dropdown, one chip.** `Listing Not Won` — status and reason are the same fact.
+- `WHERE group = 'archived'` gives the rollup without a second field.
+- `side` scopes the dropdown; a seller loop never offers "Offer Not Accepted".
+- **`archived` is the plain catch-all** — a buyer who changed their mind isn't ghosted, but the loop still ends.
+
+<Warning>
+**`listing_not_won` closes a hole that exists right now.** The seller pipeline runs
+Listing Appointment Met → Listing Agreement Sent → Listing Agreement Signed with **no exit**. Lose the
+listing and there is nowhere to put it — Lawrence Guenther's listing has no disposition today. Without it,
+listing-presentation win rate cannot be computed at all.
+</Warning>
+
+### Why "lost" is a loop status and never a stage
+
+A buyer is never lost — they are still a person, possibly buying next spring. A TC is never "in a lost
+stage." **The transaction is what's lost**, along with every document in that loop.
+
+**A loop is one attempt at one deal.** One buyer can carry four archived loops (offer rejected, offer
+rejected, fell through) and a fifth that closes, while their pipeline stage never moves backwards. A lead
+has one stage; a lead has many loops. That is the whole argument.
+
+## 3.3 — Milestones, tasks, and what a loop actually holds
+
+**Status is one value → a column. Milestones are a dated checklist → rows.** Measured on a live loop: 16
+milestones, 81 tasks.
+
+```
+☐ Listing Agreement Sent      ✓ Listing Agreement Signed (ERTS)
+☐ Photos / Media Complete     ☐ On-Market (Live)
+☐ Under Contract              ☐ Earnest Money (EMD) Received
+☐ Inspection Period Ends      ☐ Inspection Resolution (ROUC)
+☐ Title Commitment            ☐ Appraisal Received
+☐ Clear to Close              ☐ Final Walkthrough
+☐ Closing                     ☐ Funded                    ☐ Possession
+```
+
+Each needs its own date (the TC overrides them constantly — inspections extend, closings move), its own
+completion, its own completed-by. That cannot be a column.
+
+### Ana's ruling: tasks nest under MILESTONES. Phases are retired.
+
+Tasks already hang off milestones — just only 4 of the 30:
+
+```
+ 57  start           → (not a milestone)
+ 38  closing         → closed
+ 18  effective       → under_contract
+ 14  inspection_end  → inspection_period_ends
+ 12  on_market       → on_market
+```
+
+`phase` was a *second* grouping that said nothing the anchor didn't already say, and made 81 tasks look
+like they lived in two hierarchies. **Retired.**
+
+`start` — 57 of 139 tasks, the biggest bucket — becomes a real milestone, **`loop_started`**. Then every
+task nests under a milestone with zero special cases.
+
+```
+hl_tc_loop_milestone_catalog   31            hl_tc_loop_milestone    ~16 per loop
+  └── hl_tc_loop_task_catalog  139             └── hl_tc_loop_task   ~81 per loop
+      milestone_key + offset                       due = milestone date + offset
+```
+
+Migration is 1:1, no guessing: `closing→closed` · `effective→under_contract` ·
+`inspection_end→inspection_period_ends` · `on_market→on_market` · `start→loop_started`.
+
+### Two species of milestone — which is why Under Contract → Close is its own beast
+
+```
+CHECKPOINTS  (anchor=start, no offset)      COMPUTED DATES  (anchored + offset)
+buyer_agreement_sent                        under_contract          KEY DATE
+buyer_agreement_signed                      emd_due                 effective +3
+listing_agreement_signed                    inspection_period_ends  KEY DATE
+pre_listing_packet                          title_commitment        effective +10
+                                            clear_to_close          closing −3
+                                            final_walkthrough       closing −1
+```
+
+The top group answers *did it happen*. The bottom group are **dates with timing rules** — business-day
+math, holiday rolls, 139 tasks hanging off them. Only the second group has anything to configure, which is
+why it earns its own section.
+
+## 3.4 — Sections become data, with a `source` column that owns the redirect
+
+`lib/stages/chapters.ts` is a hardcoded TypeScript map of labels, colors and icons — you cannot rename a
+section without a deploy. It is promoted to `hl_pipeline_section`:
+
+```
+key · pipeline_id · label · sort · color_bar · color_tint · icon · source
+```
+
+`source` decides who edits the stages inside it:
+
+| Section | source | Edited where |
+|---|---|---|
+| Working the Buyer · Win the Listing · List Prep · Nurture | `manual` | inline on the stages page |
+| **Under Contract → Close** | **`tc_schedule`** | **read-only here → redirect to TC → Milestones** |
+
+Zach: *"the under contract to close section needs to be a redirect to the tc loop milestones table, and
+those stages auto update."* The TC owns it because the TC owns the dates.
+
+## 3.5 — The kinds
+
+```
+loop_status_changed          ✅ ALREADY SIGNED — payload literally says "to: <from loop statuses config>"
+tc_status_changed            🆕 NEW — needs Lee's signature + Zach's nod
+transaction_status_changed   ⚠️  DEPRECATE — redundant; pending|closed|lost is derivable from the stage
+```
+
+```jsonc
+loop_status_changed {
+  loop_id, from, to,                  // pre_contract → under_contract
+  side,                               // buyer | seller
+  stage_id, stage_name, section_key   // what caused the derivation to flip
+}
+
+tc_status_changed {
+  loop_id, from, to,                  // processing → waiting_for_closing
+  tc_user_id, note?
+}
+```
+
+## 3.6 — The two wires that were built and never connected
+
+<Warning>
+**`advances_to_stage_id`: 0 of 30 milestones wired.** The column exists on every milestone template and is
+NULL on all of them. That is why milestones and stages became two hand-typed lists of nearly the same
+words — the bridge was built and never plugged in.
+
+**`computeLoopSchedule`: 0 of 487 tasks have a due date.** 139 templates carry anchors, offsets,
+business-day rules and holiday rolls; not one live task has ever been given a date. **The machine is fully
+assembled and has never been switched on.**
+</Warning>
+
+Related finding, and the answer to "what is `is_active` wired into": it is a **seed filter, read once**
+(`lib/tc/loop-engine.ts:95`) when a loop is created. It fires no automation and notifies nobody. Turning one
+off is safe — future loops skip that milestone, existing loops keep theirs.
+
+## 3.7 — `hl_tc_loop_work_status`: keep the table, purge the rows
+
+The table name is right; the rows are rot.
+
+```
+KEEP    Processing
+RENAME  Paused → Paused / Blocked
+KEEP    Waiting for Closing
+ADD     Complete
+
+DELETE  Preparing Documents        → a document state, lives on the document
+DELETE  Document Sent              → already the activity kind document_sent
+DELETE  Buyer Signed               → already document_signed AND a pipeline stage
+DELETE  Showing Agreement Signed   → same
+```
+
+<Warning>
+**The e-sign webhook writes two of those names BY STRING** — `'Buyer Signed'` and
+`'Showing Agreement Signed'` (`app/api/esign/webhook/route.ts`). That writer moves in the **same commit** as
+the row purge, or we recreate the 0488 incident in the TC lane.
+</Warning>
+
+## 3.8 — `hl_tc_loop_document_category`
+
+What kind of document a blank form is, which decides the folder it lands in when filled.
+
+```
+Exclusive Buyer Agency Contract  →  buyer_agency       →  Showing & Touring Agreements
+Kansas Brokerage Relationships   →  buyer_disclosure   →  Showing & Touring Agreements
+Real Estate Sale Contract        →  offer              →  Contract Documents
+Exclusive Right to Sell          →  listing            →  Listing Documents
+```
+
+Today the folder is free text typed per loop — 9 distinct hand-typed names in the wild, and nothing can
+answer *"show me every buyer agency across all loops."*
+
+**Nothing to do with status.** Zach's test: *"it might not be a contract yet"* — a lost listing presentation
+has an attempt and no paper. **Categories describe paper; loop status describes the attempt.**
+
+<Note>
+**Companions are dead.** An earlier draft proposed `hl_contract_template_companion` for Ana's "rides with"
+rule (the KS + MO disclosures welded to the buyer agency). Zach killed it: they are just documents with a
+type, and **which documents go out together is a PLAYBOOK rule**, not a property of the form. Packet
+composition lives with the offer-writing rules.
+</Note>
+
+---
+
+# THE PACKAGE FOR LEE
+
+```
+NEW      hl_pipeline_section              replaces lib/stages/chapters.ts
+NEW      hl_tc_loop_document_category     gives the 58 dotloop forms a home
+
+RETIRE   hl_tc_phase                      21 rows — Ana killed it
+PURGE    hl_tc_loop_work_status rows      −4 document rows, +Complete, rename Paused
+
+RENAME   hl_tc_stage               → hl_tc_loop_status
+         hl_tc_transaction_status  → hl_tc_loop_work_status
+         hl_tc_milestone_template  → hl_tc_loop_milestone_catalog
+         hl_tc_task_template       → hl_tc_loop_task_catalog
+         hl_tc_loop_event          → hl_tc_loop_milestone
+
+COLUMNS  hl_stages.loop_status_key           FK → hl_tc_loop_status
+         hl_tc_loop_status.group, .side
+         hl_tc_loop_task_catalog.milestone_key   replaces `anchor`
+         DROP phase from both task tables
+
+ROWS     hl_tc_loop_status  + Offer Not Accepted · Listing Not Won · Listing Expired
+                            · Listing Cancelled · Fell Through · Archived
+         milestone catalog  + loop_started
+
+WIRE     advances_to_stage_id       0 of 30 today
+FIX      computeLoopSchedule        0 of 487 tasks have a due date
+FIX      e-sign webhook             stop writing status strings — SAME COMMIT as the purge
+DELETE   lib/stages/chapters.ts
+
+KINDS    tc_status_changed          🆕 needs signing
+         transaction_status_changed ⚠️ deprecate
+```
+
+**Net: +1 table** (two new, one retired), seven renames, zero new concepts.
+
+## Still open
+
+| # | Question | Who |
+|---|---|---|
+| 1 | Sign `tc_status_changed` | Lee signs · Zach approves |
+| 2 | Nod on `hl_tc_loop_document_category` | Zach |
+| 3 | Which of the 58 forms in which category | Zach + Ana |
+| 4 | Rename sequencing — 5 live tables with readers | Lee (cutover) |
+| 5 | `transaction_status_changed` deprecation path — alias-fold or let it die | Lee |
+
+
+---
+
+# 📎 The Target Model (folded 8/5)
+
+> 🔏 **APPROVED BY ZACH: 7/30/2026** · **LAST AMENDED: 7/31/2026 PM** (clone-identity + lead-category signings · hl_messages session · the Sitting
+> Verdicts · the short-id law · the property/type ruling). Every amendment carries its date inline.
+
+<Info>
+**Approved by Zach 2026-07-30.** Five scouts surveyed every lane of the codebase in parallel (leads/people ·
+comms · transactions · website/homes · AI/config); this is the synthesis. Full working plan with per-lane
+evidence: `~/.claude/plans/snug-booping-eagle.md` (session artifact) · execution board: the Table Sitting.
+**The rule: new work writes ONLY to canonical tables. Everything else is a repoint away from retirement.**
+</Info>
+
+## The set — what the CRM + website actually need
+
+**CRM — 44 canonical tables** (People 5→3 on 7/30 · memberships folds into stage columns, signed 7/31):
+
+| Family | Tables |
+|---|---|
+| People (3) — **revised 7/30 PM · identity vocabulary SIGNED 7/31 AM** | `hl_users` (the WORKERS: agent/TC/showing partner/lender/AI — the hl_user twin merges in at cutover; the word person is dead) · `hl_leads` (the SERVED — lifecycle on one row; **contact info lives ON the row** as labeled JSON lists with a normalized index + dupe WARNINGS not blocks; **fixed role slots are FK columns** — assigned agent/lender/showing partner/TC → hl_users; the contact child tables AND hl_lead_collaborators fold in and retire) · `hl_connected_people` (**RENAMED BY ZACH 8/5**, was hl_lead_relationships: "hl_lead_relationship is wrong, that should be HL_Connected_People — the HL_relationships table needs to be the relationship type which is either lead, sphere of influence, or past client" — so the machine token matches the Connected People surface, and `hl_relationships` keeps the LIFECYCLE-type vocabulary unchallenged; spouse/partner/family/**referred-by** links between real lead rows — the manual-add referral question is the spec). **SIGNED IDENTITY VOCABULARY (Zach 7/31)**: `hl_users.user_type` = `human` \| `ai` · `hl_users.user_role` = `agent` \| `broker` \| `admin` \| `lender` \| `showing_partner` \| `tc` \| `isa`. Users and leads are TWO SEPARATE TABLES forever (the only merge ever = the internal hl_user twin folding into hl_users). **The WHO payload** on any card/API: `user_id` OR `lead_id` + `name` + (for users) `user_type` + `user_role` |
+| Lead org (6) — **pipeline position SIGNED 7/31 AM** | `hl_pipelines` + `hl_stages` = **pure CONFIG** (definitions only — names, order, colors; the UI stepper reads config). **The lead's position = COLUMNS on hl_leads**: `buyer_stage_id` + `seller_stage_id` (nullable FKs into hl_stages — null = not in that pipeline; both filled = buyer AND seller at once). Fixed slots are columns — same rule as the role slots. `hl_lead_pipeline_memberships` + the old scattered stage columns FOLD IN and retire, which also kills the live dual-write disease (4 writers, 2 homes, silent drift). Buyer/seller-ness DERIVES from these columns — never a lead_type column. Transactions already follow this pattern (loop carries stage/status columns pointing at config). · `hl_tags` · `hl_lead_tags` · `hl_lead_segment` + `_member` (smart filters + email lists = ONE noun) |
+| Comms (9) | `hl_messages` — SMS/iMessage TODAY; **email folds in at Phase B** (send log + inbound; the thread route's UNION dies then — the doc previously read present-tense and nearly misled a build; tense law: docs describe TODAY, aspirations get phase labels). **SIGNED 7/31 (Zach × Lee, the hl_messages session)**: ① load-bearing metadata keys PROMOTE to columns — `recipient_role` (NOT NULL + default), `delivery_status` + `delivery_status_at`, `template_key`, `image_url`, and `transport` (`twilio` \| `gmail` \| `bluebubbles` — the pair law's carrier word); metadata keeps only carrier junk (sids, error codes). ② `channel` + `direction` = the message's physical facts; the activity KIND (`sms_sent`/`sms_received` — signed, untouched) is DERIVED from them in exactly ONE function in the one writer — never stored on the message, never hand-picked. ③ **SUPERSEDED 7/31 PM by THE ONE-ID LAW (Zach, verbatim: "you don't have another machine-readable
+id for a user — that IS the id... and hl_leads' table key = that table's FK, correct"): a lead has ONE
+identity — the sequential number. `lead_id` = 123445 IS the primary key, the FK value in every table,
+and the URL — FUB's own architecture. The UUID retires entirely at cutover** (the deepest surgery of
+all: PK swap + every FK, staged dual-key, its own Zach-in-the-room session — until then the number is
+the only id any human or URL ever sees, and the uuid is unreferenced plumbing awaiting deletion). Same
+law for users (`user_id` = the number). The morning's "UUID stays PK" clause is dead — this supersedes
+it. Original morning text follows for the record:  `/lead/123456` + `/user/123456` — `hl_leads.lead_number` + `hl_users.user_number`, own sequences, **STRICTLY SEQUENTIAL +1** (a lower number = an older record, FUB semantics); **BACKFILL every existing row in `created_at ASC` order** so nothing is numberless and the numbers reflect real signup sequence; minted once, frozen, never reused (a deleted lead's number never frees); UUID stays the PK — the number is the PUBLIC handle only, old UUID URLs redirect; NEVER `fub_person_id`. **Recorded as a DECISION, not an oversight**: sequential ids are enumerable and leak volume (anyone seeing /lead/41 can infer book size) — Zach chose FUB's ordering semantics knowingly. Shipped: mig 0521 (view) · 0522 (metadata→columns + one-writer kind derivation) · 0523 (the numbers). ④ PRODUCT DIRECTION (Zach): user PROFILES will render like lead detail — users, vendors, and leads all texting on ONE platform with everybody's comms recorded; the comms model must never assume 'lead' is the only conversation partner (recipient/user columns are first-class for this reason). **GRAIN RULING (Adam's find, 7/31): lead-facing conversations ONLY** — notification deliveries to staff are `hl_notification`'s noun; today's 1,274 receipt rows read through the `hl_lead_conversations` view until Phase B migrates them out. The test is WHO IT'S TO: lead = conversation, staff = receipt · `hl_calls` (voicemail = an outcome) · `hl_email_event` · `hl_notes` · `hl_notification` · `hl_phone_numbers` (dialer/imessage/bb assignments fold in) · `hl_inboxes` (+doors/subscribers) · `hl_templates` · `hl_suppressions` (unsubscribes + blocked numbers) |
+| Scheduling & work (4) | `hl_appointments` (+types/outcomes/rules config) · `hl_tasks` · `hl_scheduled_actions` · `hl_communication_intent` |
+| Transactions (8) — **the TC/loop deep model lives in [Transaction Model](/schema-lock/transaction-model) (Benji × Zach × Ana, 7/31): TWO STATUS AXES (loop status DERIVED from stage via `hl_stages.loop_status_key`, never stored · TC work status EXPLICIT, null till a TC owns the file) · naming law `hl_*` pre-contract / `hl_tc_loop_*` post-signing, config splits on `_catalog` · tasks nest under MILESTONES (phases retire) · flat archive exits (the exit reason IS the status)** | `transactions` (one SIDE of one deal — the correct axis is loop-vs-transaction, NOT live-vs-history) · `loops` (the TC workspace) · `loop_milestones` · `loop_tasks` · `loop_participants` · `documents` · `document_signatures` (**NEW** — 3-party signing finally has a home) · `commission_forms` (+splits/adjustments). **DERIVE-DON'T-STORE (SIGNED by Zach 7/31)**: agent attribution lives PER-TRANSACTION (every row carries its agent — that IS the relationship history Myli speaks); routing buckets (Ana-only / handoff / team-only) are a DERIVATION parameterized by agent — `originated(X)` / `handoff(X)` / `team_only(X)` over the lead's transaction rows — never a stored truth, never hardcoded to a person; a stored bucket column may exist only as a regenerable CACHE. **THE THREE STAMPS (SIGNED Zach × Lee 7/31 — 'srg_legacy' is DEAD, it smeared three questions into one token)**: `team` CHECK (`spradling_realty_group` \| `houseloop`) = whose ERA/BRAND the deal closed under (the dashboard toggle as a column) · `integration` = the carrier system (`follow_up_boss` legacy era \| `houseloop` forward) — the signed pair law · `source` = the REAL lead source (`zillow` \| `google_ppc` \| `referral` \| `sign_call` …) — a brand, never an era token |
+## 🧹 THE DATA HYGIENE LAW (Zach, 7/31 PM — constitutional, delegated to Lee end-to-end)
+
+**"There cannot be a way to get to the same answer through two separate columns. There should not be
+lazy columns — last_communication should be a QUERY from the run log, not a hardcoded stamp; that's how
+shit drifts. Minimum number of tables, minimum number of columns. If it's unused or empty now, delete
+it — we'll name it for when the piece gets built the right way. Every time I had an idea, you guys spun
+up a table or added columns without checking if we already had something. Zero data hygiene has taken
+place in this CRM — I own that — but we are enforcing it now."**
+
+The four rules, enforced:
+1. **ONE PATH PER ANSWER.** Two columns/routes to the same fact = one dies. No exceptions.
+2. **DERIVE, DON'T STAMP.** A fact computable from the run log / another table is a QUERY (or a
+   DECLARED regenerable cache) — never a hand-maintained stamp that can disagree with the source.
+3. **NO SPECULATIVE SCHEMA.** A column/table for an idea that isn't built yet does not exist — it gets
+   NAMED in the plan and BUILT when its feature is. Unused/empty now → dies now (with judgment: a live
+   engine's columns survive even if quiet).
+4. **THE CAGE:** every new column migration must name its READER in a `-- READER:` line, or the lint
+   rejects it. Ideas stop minting schema.
+5. **THE CACHED-POINTER RULE (Caleb's Redfin autopsy 7/31 PM, AMENDED by Zach's correction):** every
+   cached external pointer names its RE-VALIDATION check AND its DISCARD threshold — validate on use,
+   discard only on unambiguous contradiction. The guard is ASYMMETRIC because that's where the risk
+   lives: **SEARCH is strict** (bad pointers are born there — all 36 wrong-house urls came from
+   first-ever searches, the fast path never misfired once) · **LANDED pages are verified** (walk away
+   rather than write a neighbor town's value) · **SAVED pointers are PROTECTED** (Zach: Redfin/Zillow
+   never reindex a home url — "that's their SEO moat" — so a correct saved url is correct FOREVER, an
+   ASSET; discard only on wrong-STATE, because our own address row is the less reliable side of a
+   same-state disagreement).
+6. **THE EXTERNAL-ID LAW (Zach, 7/31 late — "it should have been just dotloop_id, not hardcoded
+   srg dotloop id"):** an external system's id column is **`<system>_id`** — `dotloop_id`, `fub_person_id`
+   stays only because *person* disambiguates FUB's several id spaces — THE TABLE SUPPLIES THE NOUN.
+   The four existing `dotloop_<thing>_id` columns are tagged **legacy spelling, do not cite as
+   precedent**; they ride a future rename batch (live data + estate ownership gate the timing).
+7. **THE AUTHORITY (Zach, 7/31 PM): LEE OWNS ALL DATA-SCHEMA HYGIENE.** Every new COLUMN, every new
+   TABLE, every new ACTIVITY KIND goes through Lee — one authority, no exceptions, agents included.
+   The kind gate already enforces this for kinds; the migration lint gains the same gate for columns
+   and tables (a schema-creating migration without Lee's approval line does not push).
+
+Execution: Lee runs the full column diet end-to-end from PRODUCT-CODE derivation (receipts per verdict),
+locks the catalog + schema + data model as read-only Mintlify pages, keeps the Lead Engine artifact open
+with the locked tables + payloads, and building resumes in the morning — fixed as we go, never revisited
+as a scanning exercise.
+
+## ⚖️ THE ACTOR-AGNOSTIC VOCABULARY LAW (Zach, 7/31 PM — constitutional)
+
+**"The whole CRM is designed so that if a human can do it, the AI can do it — so an ai_ prefix on an
+action is REDUNDANT."** One vocabulary of ACTIONS; the WHO (human · AI · clone, name, role) is carried
+ENTIRELY by the user on the row — never by the kind. There is no `lender_looked_up`, no
+`tc_looked_up_document`, no `ai_<anything a human could also do>` — a lookup is `property_searched`
+whether Ana did it or Myli did; a text is `sms_sent` whether Zach typed it or his clone did.
+**THE TWO-SIDED TEST (Zach's full statement, ratifying Adam's carve-out, 7/31 PM): "If anyone can do
+it, there's NO prefix. But if it's genuinely a thing only the AI can do, it NEEDS the ai_ prefix."**
+Both directions are requirements, not permissions: an action a human could take never forks by actor
+(no prefix, the user carries the WHO) — AND an AI-machinery event with no human equivalent (the memory
+engine's own operations: `ai_context_built`, `ai_fact_captured`, `ai_send_blocked`) MUST wear the
+prefix, because there the prefix names the ACTION's nature, not the actor. Receipts from today: `ai_search` deleted (was `property_searched` + an AI user) ·
+`ai_clone_stepped_in` deleted (was the real channel kind + an AI user) · `property_looked_up` folded
+(was `property_searched` + Myli's id). New kind proposals are tested against this law FIRST.
+
+| The verbs (5) | `hl_lead_activity` (+`website_hlid` column) — **THE ONLY readable source for lead behavior (SIGNED ruling 7/31): every display, column, and count reads the run-log; querying `hl_pixel_event` for lead behavior is a BUG** · `hl_activity_catalog` · `hl_trigger_fire` · `hl_pixel_event` (raw capture tier — write/debug/replay only) · `hl_pixel_visitor` |
+| AI (4) | `hl_myli_states` · `hl_workflows` (playbooks fold in) · `hl_workflow_runs` · `hl_lead_facts` · `hl_ai_identity_delegation` |
+| Config & system (8) | `hl_settings` (six table-costumed documents fold in) · `hl_custom_fields` (+**NEW** `hl_lead_custom_value` — fields finally get values) · `hl_lead_sources` (+events) · `hl_oauth_connections` (the ONE token vault — four fragments fold in) · `hl_run_log` (+cost columns) · `hl_schema_migrations` · `hl_audit_log` · `hl_system_health` |
+| Sacred until cutover (2) | `hl_trigger_events` (+sections/alias — folds into the catalog at cutover, #35/#42/#43 on Gate 8) |
+
+**WEB — 12 canonical:** `Listing` · `hl_property` (HouseloopProperty folds in) · `hl_hlid_alias` (slug_alias
+folds in) · `hl_value_history` · `hl_market_index` · `hl_home_claim` · `hl_dedup_quarantine` (the undo trail) ·
+NextAuth `User`/`Account`/`Session` · `SavedListing` · `SavedSearch` · view `hl_canonical_home`. SEO/geo tables
+remain as **labeled caches**. ~12 zero-reference WEB tables retire.
+
+## 🏷️ THE HOUSELOOP VALUE REPORT LEDGER — signed design (Zach 7/31 PM, his words)
+
+**THE BRAND IS "HouseLoop Value Report"** (Zach, typed 7/31 PM: "its houseloop value report") — the
+product name puts the BRAND on the report, and the home/property question dissolves: no property-type word
+in the name at all. Display strings currently reading "Home Value Report" REBRAND to "HouseLoop Value
+Report" (copy sweep); token keys carrying home_value_report rebrand on the LADDER (readiness-mapped, never
+casually). Everything else notifies as PROPERTY. And it gets its own table, per Zach: *"a massive table with every
+home value report for all of our clients and current clients... a column with the person in it,
+relationship past client, their home value report, a home value report sent key and the date it was sent."*
+
+**The shape (design signed, details to Caleb's build spec through Lee's schema review):**
+- **Grain: one row per REPORT SENT** — person × home × period. Grows forever; every client's report
+  history lives here.
+- Columns: `lead_id` (the person — relationship reads from the lead, never re-stored) · `website_hlid`
+  (the home) · `period` (the report month) · `sent_at` + the sent key (the delivery receipt, wired to the
+  send machinery) · the **as-sent snapshot** (the numbers the client actually saw, FROZEN — this is a
+  historical receipt like an email body, NOT a live value copy; live values stay on WEB `Listing` +
+  `hl_value_history` per the no-copy law, and the monthly send reads them fresh at render time).
+- Pairs with Caleb's `hl_home_value_month` (the WEB value side) — value truth there, send receipts here.
+
+**Estates:** Caleb's `hl_srg_*` universe = governed by the signed [Past-Client Schema Lock](/schema-lock/past-clients).
+The Dashboard = `hl_txn.transactions` (physical merge with CRM transactions adopted on paper, executed post-cutover).
+
+**Bottom line: ~160 live tables today → ~100 surviving → a noun core of ~30.**
+
+## The pour — how we get there without the software ever stopping
+
+1. **A · BEAMS (additive)** — WEB gets a migration ledger + DDL trigger (today ~18 WEB tables exist only as
+   `CREATE TABLE IF NOT EXISTS` in request code — unenumerable) · `document_signatures` + sealed/original PDF
+   columns + sha256 · `hl_lead_custom_value` · `hl_lead_activity.website_hlid` · message thread ids /
+   attachments / draft status · run-log cost columns · the loop↔transaction link.
+2. **B · REPOINTS (one fold per push, alias-closure pattern)** — email → `hl_messages` · phone assignments →
+   `hl_phone_numbers` · tokens → `hl_oauth_connections` · settings documents → `hl_settings` · segments merge ·
+   the stage_id dual-write dies with its four writers in one commit.
+3. **C · CUTOVER SURGERY (Zach in the room, ONE-COMMIT-RENAME)** — the person merge · trigger-events →
+   catalog succession + the kind FK move · the `hl_transactions` split into `loops` + `transactions` ·
+   FK-ghost drops (hl_agents, hl_channels, hl_conversations) · **the actor→user vocabulary rename**
+   (Zach 7/31: "we don't have actor anymore, it's user and user_type") — lands as `user_name` /
+   `user_type` / `user_id` (bare `user` is a Postgres reserved word), 58 files, ONE commit; until then
+   the `hl_lead_conversations` view is the adapter — its OUTPUT already speaks the new names, so readers
+   never migrate twice. **✅ THE CLONE IDENTITY RULING — SIGNED BY ZACH 7/31 PM**
+   (his words: "clone gets its own user row, zach_ai_clone, user type=ai, linked to the user, so EVERY
+   user can have an ai clone and it's distinguished if it does an activity"): **every clone is a REAL
+   `hl_users` row** — `user_type='ai'`, its own id + name (`<user>_ai_clone`), `clone_of_user_id` → its
+   human. Attribution becomes a plain FK; "everything the clone did" is one WHERE. Display may still
+   SPEAK as the owner (the product's replies-as intent) via the clone_of link. **The standing constraint
+   (guides/ai-agents, carried verbatim): a clone NEVER holds a service seat and NEVER owns a comms
+   identity — identity yes, capabilities no.** **BUILT 7/31 PM (Adam, migs 0548-0550): clone rows live,
+   the never-a-seat guard proven both directions, attribution stores the clone's own id. THE THREE-COLLAPSE
+   RULE from the build: ATTRIBUTION collapses (the row carries the clone's id) · ROUTING does not (a clone
+   sends on the human's channels — the law obeyed in code) · PERMISSION does not (a clone IS its human for
+   "may I"). And THE DISPLAY RULE: PRESENTATION SPEAKS AS THE OWNER (feeds, bubbles, chat resolve through
+   clone_of); OVERSIGHT AND AUDIT SHOW THE TRUTH (the audit log and AI-oversight surfaces render the clone
+   as itself — resolving those to the owner would FALSIFY the record). The actor→user cutover rename is now
+   UNBLOCKED: clone-ness derives from the user row, so the legacy columns delete with zero information loss.** This unblocks the rename: `actor_kind`'s distinction
+   survives as the clone's own row (14 legacy clone rows repoint; the COALESCE collapse in the writers
+   dies in the same pass). **ALSO SIGNED 7/31 PM — THE LEAD CATEGORY**: `lead_created` ("created a lead")
+   + `lead_edited` ("edited a lead") join the catalog beside the `user_*` family — the kind-level
+   completion of the two-category identity law; `contact_updated`/`name_changed` fold onto the edit kinds
+   with the changed column in the payload.
+4. **D · RETIREMENT BATCHES (Rule-0, ongoing)** — every fold frees tables; every batch snapshots first;
+   the schema lock ratchets at each new floor (233 → 167 → 160 → …).
+
+## The receipts that shaped it (found by the scouts, all code-cited in the plan)
+
+Custom fields could be defined but never hold a value · the lead's stage was dual-written by four mint paths
+and read by nobody · email paid rent daily in a hand-written UNION + a ±2-minute id triangulation · OAuth
+tokens lived in four tables · 3-party document signing had nowhere to record signers · the sealed PDF
+overwrote the unsigned original · `/dashboard` and `/tc` could disagree about the same closing with nothing
+to detect it · six config tables were jsonb documents wearing table costumes. **The foundation exists so none
+of these can happen again.**
+
+
+---
+
+# 📎 The Data Model (folded 8/5)
+
+> 🔏 **LOCKED BY LEE 2026-07-31 (overnight), under Zach's end-to-end delegation** ("you finish the column
+> diet end to end... it's going to be in locked tables on the Mintlify developer docs and I'm not going
+> to visit it again"). Every verdict DERIVED FROM PRODUCT CODE by parallel sweeps — what the product
+> reads/writes survives; what nothing reads dies; receipts live in `tools/schema/column-verdicts.json`
+> (carried inside THE ONE LOCK). Governed by [THE DATA HYGIENE LAW](/schema-lock/target-model).
+
+<Info>
+**How to read:** ✅ KEEP = the signed surviving set · ❌ DIES = sentenced (drops batch behind Zach's typed
+Rule-0, snapshots first) · 🔀 FOLDS = the fact moves to the named destination · ➕ COMING = approved,
+awaiting its build. Colors match the Table Sitting board.
+</Info>
+
+## `hl_activity_catalog`
+
+
+**THE NUMBER: ~782 live columns → 540 signed keepers across 47 tables.**
+
+*20 -&gt; 13. The catalog's own dead flags: creates_lead/notify/notify_class live elsewhere.*
+
+**✅ KEEP:** `key` · `label` · `section` · `source` · `lens` · `payload_schema` · `emitted` · `sentence` · `color` · `icon` · `request` · `hero` · `card_layout`
+
+**❌ DIES:**
+
+- `label_present` — 0/148
+- `creates_lead` — 0 true — the real gate is hl_lead_source_events.creates_lead
+- `notify` — 0 true
+- `notify_class` — 0 filled — the live one is on hl_trigger_events
+- `status` — 1 distinct
+- `signed_at` — zero readers
+- `created_at` — zero readers
+
+## `hl_ai_identity_delegation`
+
+*9 -&gt; 7. SECURITY FLAG: allowed_playbook_keys is the per-playbook scope the gate NEVER CHECKS — enforce it or remove the promise.*
+
+**✅ KEEP:** `id` · `ai_actor_user_id` · `presented_user_id` · `channel` · `enabled` · `valid_from` · `valid_until`
+
+**❌ DIES:**
+
+- `allowed_playbook_keys` — zero refs, absent from the schema test — a scope that doesn't scope
+- `created_at` — zero readers
+
+## `hl_appointments`
+
+*27 -&gt; 22.*
+
+**✅ KEEP:** `id` · `lead_id` · `title` · `description` · `location` · `type` · `starts_at` · `ends_at` · `status` · `is_all_day` · `created_by` · `created_at` · `updated_at` · `assigned_user_id` · `guest_emails` · `outcome` · `outcome_notes` · `outcome_at` · `outcome_by` · `calendar_event_id` · `calendar_provider` · `created_by_uuid`
+
+**❌ DIES:**
+
+- `recruiter_id` — PlacedAgent leftover, 0/12
+- `owner_user_id` — 0/12 zero refs
+- `updated_by` — 0/12
+- `rescheduled_to_id` — zero refs repo-wide
+- `data` — all rows '&#123;&#125;'
+
+## `hl_audit_log`
+
+*8 -&gt; 7.*
+
+**✅ KEEP:** `id` · `actor_id` · `action` · `target_t` · `target_id` · `diff` · `at`
+
+**❌ DIES:**
+
+- `request_id` — typed, never rendered, 0/204 populated
+
+## `hl_calls`
+
+*19 -&gt; 14.*
+
+**✅ KEEP:** `id` · `lead_id` · `user_id` · `phone` · `direction` · `outcome` · `duration_seconds` · `from_number` · `to_number` · `recording_url` · `transcript` · `summary` · `occurred_at` · `data`
+
+**❌ DIES:**
+
+- `recruiter_id` — 0/587 PlacedAgent legacy
+- `created_at` — occurred_at is the time axis
+- `our_identity_user_id` — byte-identical to user_id (same $2), zero reads
+- `conversation_key` — 508/508 equal 'call:'||lead_id — pure derivation; the thread ORDER repoints
+- `archived_from` — derived from data-&gt;&gt;'source'
+
+```json
+{
+ "note": "Email split: leads-table email_count reads hl_messages channel='email' which has ZERO rows while 124 send-log rows sit beside it \u2014 the Email count is structurally 0 (defect list; resolves at the Phase-B email fold)"
+}
+```
+
+## `hl_communication_intent`
+
+*21 -&gt; 21 — 0 rows but fully wired; the four write-only stamps are the audit trail BY DESIGN (a security gate must be reconstructable).*
+
+**✅ KEEP:** `id` · `lead_id` · `channel` · `body` · `proposed_by` · `status` · `created_at` · `authorized_at` · `blocked_at` · `playbook_key` · `playbook_step` · `intent_key` · `expires_at` · `authorized_by` · `wire_ref` · `sent_at` · `failed_at` · `error` · `target` · `updated_at` · `reason`
+
+## `hl_contract_template`
+
+*15 -&gt; 13. field_map DEAD (real maps are the JSON files per SIGNATURE_ANCHORING); the 5 dotloop columns are build-ahead, not dead.*
+
+**✅ KEEP:** `id` · `key` · `name` · `form_kind` · `active` · `pdf_b64` · `created_at` · `updated_at` · `dotloop_document_id` · `dotloop_folder_id` · `category_key` · `page_count` · `imported_at`
+
+**❌ DIES:**
+
+- `field_map` — zero references — contract-forms.ts loads the JSON files
+- `pdf_path` — zero references — pdf_b64 is the bytes source
+
+## `hl_custom_fields`
+
+*13 -&gt; 10.*
+
+**✅ KEEP:** `id` · `key` · `label` · `field_type` · `applies_to` · `is_required` · `choices` · `description` · `default_value` · `sort_order`
+
+**❌ DIES:**
+
+- `is_recurring` — in the SELECT + interface, NO WRITER EXISTS, no consumer
+- `created_at` — zero renderers
+- `updated_at` — zero renderers
+
+## `hl_email_campaigns`
+
+*18 -&gt; 13. open/click counts are rendered-but-never-written — the page repoints to a SUM over hl_email_send_log in the same commit or the Open Rate tile dies.*
+
+**✅ KEEP:** `id` · `name` · `type` · `status` · `list_id` · `template_id` · `subject` · `notes` · `from_email` · `scheduled_at` · `sent_at` · `send_count` · `created_at`
+
+**❌ DIES:**
+
+- `open_count` — no writer anywhere — permanently 0; derive from send_log
+- `click_count` — same
+- `list_rules` — written never consumed; audience comes from list_id
+- `created_by` — zero readers
+- `updated_at` — typed, never rendered
+
+## `hl_email_event`
+
+*11 -&gt; 7. THE BIG DEFECT: template_key is 2/2637 stamped, so Email Analytics reads '(unlabeled) 2635' and the lead-detail Website Activity Email tab is BLANK (its ILIKE filter matches 0 of 25 candidates). Fix = stamp at send time / join on the right id — a copy that is 99.9% null rescues nothing.*
+
+**✅ KEEP:** `id` · `resend_email_id` · `event_type` · `to_email` · `lead_id` · `link` · `occurred_at`
+
+**❌ DIES:**
+
+- `saved_search_id` — 0/2637 filled — the answering surface reads hl_email_send_log's copy
+- `template_key` — 2/2637 — see the defect; the fix is upstream, not this column
+- `raw` — no query selects it
+- `created_at` — occurred_at is the time axis everywhere
+
+## `hl_inboxes`
+
+*13 -&gt; 10.*
+
+**✅ KEEP:** `id` · `name` · `kind` · `owner_user_id` · `manager_kind` · `manager_user_id` · `ai_channels` · `spam_mode` · `prompt_layer` · `is_active`
+
+**❌ DIES:**
+
+- `ring_chain` — duplicate of hl_routing_groups.ring_targets — the voice webhook rings the group; two UIs edit who-rings, only one is wired; all 8 rows '[]' so the subtitle is permanently blank
+- `created_at` — write-only
+- `updated_at` — write-only
+
+```json
+{
+ "DEFECTS": "/inbox/company always redirects away (name lookup 'Company' vs actual 'HouseLoop Company') \u00b7 nav-by-editable-name pattern breaks on rename",
+ "DIET_WATCH": "spam_mode + prompt_layer are settings round-trips no engine reads (the spam gate reads hl_calls.outcome) \u2014 kept pending a product decision; manager_user_id identical to owner on all populated rows \u2014 becomes a duplicate if no AI manager ever differs"
+}
+```
+
+## `hl_lead_activity`
+
+*23 -&gt; 18. actor trio = the cutover rename set; 4 dead + source duplicate.*
+
+**✅ KEEP:** `id` · `lead_id` · `kind` · `occurred_at` · `direction` · `title` · `body` · `photo` · `meta` · `integration` · `source_name` · `source_table` · `source_id` · `created_at` · `input_tokens` · `output_tokens` · `actor` · `actor_role` · `actor_kind`
+
+**❌ DIES:**
+
+- `platform` — 1/17,891 rows, zero readers
+- `channel` — 32 rows, deliberately NULL per 0479, zero readers
+- `archived_from` — write-only (the archive chain never renders — DEFECT flagged: the teal-divider law was never wired)
+- `notified_at` — 17,552 rows all from one migration UPDATE, zero readers
+- `source` — LEGACY SENTENCED by its own writer doc — integration + source_name survive
+
+```json
+{
+ "rename": "actor/actor_role/actor_kind -> the user columns at cutover (KEEP till then \u2014 live readers)"
+}
+```
+
+## `hl_lead_activity_star`
+
+*4 -&gt; 2.*
+
+**✅ KEEP:** `user_id` · `activity_id`
+
+**❌ DIES:**
+
+- `lead_id` — stamp duplicating the JOIN sitting beside it
+- `created_at` — zero readers
+
+## `hl_lead_facts`
+
+*10 -&gt; 7.*
+
+**✅ KEEP:** `id` · `lead_id` · `domain` · `slot` · `value` · `confidence` · `updated_at`
+
+**❌ DIES:**
+
+- `evidence` — 292/293 written, zero readers
+- `source` — 1 distinct hardcoded literal
+- `created_at` — zero readers
+
+## `hl_lead_relationships`
+
+*6 -&gt; 4 (0 rows, fully wired — the spouse/referral build lands on this).*
+
+**✅ KEEP:** `lead_id` · `related_lead_id` · `relationship` · `created_at`
+
+**❌ DIES:**
+
+- `id` — surrogate; unique key is the pair
+- `created_by` — written, zero readers
+
+## `hl_lead_source_events`
+
+*21 -&gt; 17.*
+
+**✅ KEEP:** `id` · `lead_source_id` · `event_key` · `tag_id` · `is_active` · `workflow_id` · `creates_lead` · `workflow_active` · `existing_workflow_id` · `existing_workflow_active` · `notify` · `existing_notify` · `is_quarantined` · `default_stage_id` · `default_ai_agent_user_id` · `default_ai_role_id` · `default_assigned_user_id`
+
+**❌ DIES:**
+
+- `label` — derived+force-synced from hl_trigger_events.label (one bare reader joins the catalog in the drop commit)
+- `sort_order` — same derivation
+- `created_at` — zero readers
+- `updated_at` — zero readers
+
+## `hl_lead_sources`
+
+*38 -&gt; ~24. One name, one AI slot, external handoff becomes a user, dead word dies, token plumbing flagged to the vault pattern.*
+
+**✅ KEEP:** `id` · `key` · `name` · `color` · `is_active` · `sort_order` · `created_at` · `updated_at` · `source_type` · `is_selectable` · `integration_id` · `use_integration_defaults` · `default_stage_id` · `default_pipeline_id` · `default_tag_ids` · `default_assigned_user_id` · `handoff_user_id` · `auto_handoff_on_appointment` · `default_message_sender` · `clone_default_on` · `inbox_id` · `mailbox` · `is_quarantined`
+
+**❌ DIES:**
+
+- `platform` — the dead word — already sentenced, never backfill, drop at cutover
+- `brand_display_name` — second name for one thing — name wins
+- `default_ai_agent_user_id` — AI pile -&gt; ONE ai user FK (clones are users)
+- `default_ai_role_id` — role lives on the user row
+- `default_responder` — collapses into the one AI slot
+- `handoff_external_name` — an external partner is a PERSON -&gt; a user row (lender/showing_partner pattern), pointed at by handoff_user_id
+- `handoff_external_email` — same
+- `handoff_external_phone` — same
+
+## `hl_lead_tags`
+
+*5 -&gt; 3.*
+
+**✅ KEEP:** `lead_id` · `tag_id` · `applied_at`
+
+**❌ DIES:**
+
+- `id` — surrogate PK never joined — the natural key (lead_id,tag_id) is the unique index AND the run-log sourceId
+- `applied_by` — only the test harness reads it; all 430 live rows one value
+
+## `hl_leads`
+
+*FINAL — DERIVED FROM THE PRODUCT CODE (two-agent sweep 7/31 PM: list surface + detail + mobile + engines, every verdict carries a file receipt). 54 columns -&gt; 31 keepers. Zach's method: 'look at the actual code, the UI — what would you build?'*
+
+**✅ KEEP:** `houseloop_lead_id` · `first_name` · `last_name` · `email` · `phone` · `address` · `created_at` · `updated_at` · `deleted_at` · `created_by` · `updated_by` · `source_id` · `assigned_user_id` · `lead_score` · `import_batch_id` · `fub_person_id` · `ai_mode_enabled` · `assigned_ai_agent_id` · `escalation_stage` · `ack_due_at` · `clone_ack_due_at` · `last_human_ack_at` · `notify_anchor_at` · `active_workflow_id`
+
+**❌ DIES:**
+
+- `name` — duplicate of first+last — LeadLane renders repoint to the formatter, then dies
+- `source` — text fallback only (COALESCE in leads-query) — backfill source_id then die
+- `platform` — dead word — the Integration row repoints to the integration column, then dies
+- `channel` — allowlisted, ZERO readers anywhere — dead
+- `pipeline_id + stage_id` — ORPHANED both surfaces (all 5 stage-move paths write memberships) — die; replaced by signed buyer_stage_id + seller_stage_id
+- `myli_state_id` — dead prop (MyliLane never destructures it) — die
+- `owner_user_id` — one engine reader (notification fan-out create.ts:233) — repoint to assigned_user_id, die
+- `relationship_owner_user_id` — the Owner picker was dropped — dead, die
+- `recruiter_id` — ZERO references (every grep hit is another table) — die
+- `status` — written 'active' at creation, never read — die
+- `current_workflow_run_id` — ZERO references since mig 0003 — fully dead; Zach's playbook rename lands on active_workflow_id instead
+- `timezone` — dead since 7/24 BUSINESS_TZ hardcode (+ stale comment in CenterLane to clean)
+- `is_past_client` — unmounted toggle — dies into the ONE relationship column
+- `ai_responder` — the clone-vs-Myli picker — collapses into assigned_ai_agent_id pointing at the clone-user or Myli (UI rebuild in the same pass)
+- `ai_clone_id` — indirect gating only — same collapse
+- `ai_agent_user_id` — legacy backend fallback (runtime.ts) — repoint to assigned_ai_agent_id, die
+- `ai_role_id` — role lives on the user row (clone model) — fold at cutover with the dropdown rebuild
+- `data` — ZERO UI readers (proven) — dies after hl_lead_custom_value beam + the SISU export repoint
+- `id` — ONE-ID law — retires at cutover PK surgery; effective now: never exposed
+- `last_communication_at` — ZACH'S DERIVE-DON'T-STAMP LAW: 'that should be a filter from the run log — a query, not a hardcoded stamp; that's how shit drifts.' The list-sort derives from MAX(hl_lead_activity.occurred_at) comm kinds; if scale ever demands a cache it is a DECLARED regenerable one, never a hand-stamp.
+
+**🔀 FOLDS:**
+
+- `relationship_bucket` → LIVE UI (ReferralBand) -&gt; the ONE relationship column — Band rebuilds on it in the same fold
+- `referral_rank` → LIVE UI -&gt; derives from relationships edges; Band keeps the A/B/C/D control on the derived value
+- `relationship_dossier` → LIVE textarea -&gt; hl_lead_facts; Band repoints
+- `loan_status + loan_lender_company_id + loan_officer_user_id + loan_status_at` → backend-writer only -&gt; per-TRANSACTION loan state (signed)
+- `responder_mode` → escalation_stage — ONE failover-state column (it duplicates the ladder state; written by the same sla-sweep/handoff engine; the reasoning-copy reader repoints in the fold)
+- `imessage_enabled` → the PHONE ENTRY's imessage attribute in the contact list (signed contact-JSON model) — 'can this number receive blue-bubble texts' is a fact about the NUMBER, not the lead; a lead with two numbers can differ per number. The composer checkbox repoints to the phone attribute; the message itself records transport (the signed hl_messages column) per send.
+
+**➕ COMING:** `relationship` · `buyer_stage_id + seller_stage_id` · `integration` · `lender_user_id + showing_partner_user_id + tc_user_id`
+
+```json
+{
+ "keep_notes": {
+  "active_workflow_id": "the LIVE pointer (MyliWatchingBadge) \u2014 renames to active_playbook_id (playbook survives)",
+  "created_by": "write-only audit, Zach-approved for manual entry",
+  "notify_anchor_at": "notification-dedup engine (backend)",
+  "escalation_+_ack_family": "the SLA/failover engine + the MyliLane cockpit \u2014 load-bearing",
+  "houseloop_lead_id": "becomes THE lead_id per the ONE-ID law (today zero readers \u2014 the /lead/<n> display beam wires it) \u2014 RENAMED 0553: the brand wears the id (houseloop_lead_id beside fub_person_id, future chime_id)"
+ }
+}
+```
+
+## `hl_messages`
+
+*30 -&gt; 16 (code-derived). THE CRITICAL FIND: the 0522 split-brain — metadata keys promoted to columns, readers never moved: 1,275 agent receipts leak into lead Texts, Myli chat 33/1,308, template-sends 0/700, and the status webhook still writes the blob while the column froze. Reader fix = 4 call sites + 1 webhook, LEE EXECUTING TONIGHT.*
+
+**✅ KEEP:** `id` · `lead_id` · `direction` · `channel` · `source` · `body` · `metadata` · `created_at` · `external_id` · `recipient_role` · `template_key` · `image_url` · `actor` · `actor_role` · `status` · `delivery_status`
+
+**❌ DIES:**
+
+- `conversation_id` — 0/2576, dead since mig 0075
+- `conversation_mode` — same
+- `subject` — 0/2576 — email never lands here
+- `workflow_run_id` — 0/2576 zero refs
+- `llm_call_id` — same
+- `decision_audit_id` — same
+- `our_identity_user_id` — write-only; send identity re-resolved live
+- `conversation_key` — duplicate filter of recipient_role (the view's predicate is the survivor; leads-query repoints)
+- `delivery_status_at` — write-only, frozen at the 0522 backfill instant
+- `archived_from` — derived from source='fub' (1473/1478 agree)
+- `transport` — EXACT 1:1 derivation of channel (sms-&gt;twilio, imessage-&gt;bluebubbles), zero readers — the signed column turns out DERIVED; record the supersession honestly
+
+```json
+{
+ "keep_notes": {
+  "actor + actor_role": "RENAME set (user_name/user_type at cutover)",
+  "status/delivery_status": "ONE survives \u2014 identical on all overlapping rows; consolidation rides the reader fix",
+  "template_key + image_url": "zero readers TODAY because of the split-brain \u2014 readers repoint tonight"
+ }
+}
+```
+
+## `hl_myli_states`
+
+*15 -&gt; 5 — a 1-row lookup wearing a state machine's clothes. RENAMES hl_ai_states (signed).*
+
+**✅ KEEP:** `id` · `is_default` · `position` · `label` · `color`
+
+**❌ DIES:**
+
+- `key` — n=1, zero readers
+- `description` — same
+- `created_at` — same
+- `updated_at` — same
+- `priority` — 1 distinct
+- `is_interruptible` — never exercised
+- `is_waiting` — same
+- `is_terminal` — same
+- `allowed_tools` — 0 non-empty
+- `default_workflow_id` — 0 set
+
+## `hl_notes`
+
+*14 -&gt; 9 (code-derived, receipts in the sweep). THE JUDGMENT CALL: lead_id vs entity_type/entity_id — polymorphism is theoretical (1234/1234 rows = 'lead') and lead_id carries the ON DELETE CASCADE integrity, so LEAD_ID SURVIVES: the 6 entity_* readers repoint onto it, the 171 NULL lead_id rows backfill from entity_id first, then entity_type+entity_id die. One path, and it's the one with referential integrity.*
+
+**✅ KEEP:** `id` · `subject` · `body` · `author_user_id` · `source` · `created_at` · `lead_id` · `archived_from`
+
+**❌ DIES:**
+
+- `entity_type + entity_id` — theoretical polymorphism — readers repoint to lead_id (backfill 171 NULLs first)
+- `is_html` — zero readers
+- `updated_at` — stamped, never selected
+- `created_by` — 4/1234 filled, zero readers — mig-0060 boilerplate; author_user_id is the truth
+- `updated_by` — 0/1234 filled, zero readers
+
+```json
+{
+ "INVESTIGATE": {
+  "archived_from (chain)": "the whole FUB archive-flag chain (notes -> activity.archived_from) is WRITE-ONLY per the sweep \u2014 but the FUB law says archived rows render teal under a divider. Either the divider reads it somewhere the sweep missed or the archive rendering was never wired \u2014 that's a DEFECT to fix, not a column to kill. Verify before any verdict."
+ }
+}
+```
+
+## `hl_notification`
+
+*15 -&gt; 11 (code-derived). seen_at was one concept stamped twice with a never-usable index; trigger_event was a write-only taxonomy; channels_sent written never read. event_key + notification_class BOTH stay (the class is the pref-lookup key that survived the 7/29 rename incident).*
+
+**✅ KEEP:** `id` · `recipient_user_id` · `event_key` · `title` · `body` · `lead_id` · `entity_type` · `entity_id` · `payload` · `read_at` · `created_at` · `notification_class`
+
+**❌ DIES:**
+
+- `seen_at` — identical to read_at on all 1,753 rows, zero readers — plus DROP the dead index hl_notification_recipient_unseen_idx (predicates on seen_at, unusable by every unread query)
+- `trigger_event` — zero readers anywhere — write-only taxonomy, FK'd and indexed for nothing
+- `channels_sent` — written by dispatch, never selected
+
+```json
+{
+ "DEFECT_FLAGGED": "loop-engine's tc_date_approaching dedup reads payload->>'milestone_key' which appears in ZERO live rows \u2014 the 20h dedup has never once matched; when TC date notifications go live they will spam. Fix the writer to stamp milestone_key (goes on the morning defect list)."
+}
+```
+
+## `hl_notify_classes`
+
+*7 -&gt; 5.*
+
+**✅ KEEP:** `class_key` · `heading_tpl` · `subline_tpl` · `with_message` · `grp`
+
+**❌ DIES:**
+
+- `is_system` — all 55 rows true — discriminates nothing
+- `updated_at` — written never read
+
+## `hl_oauth_connections`
+
+*20 -&gt; 16. recruiter_id's drop REWRITES the partial unique index the Gmail OAuth upsert depends on — its own migration, sequenced.*
+
+**✅ KEEP:** `id` · `provider` · `account_email` · `access_token` · `refresh_token` · `expires_at` · `watch_history_id` · `watch_expiry` · `is_active` · `updated_at` · `user_id` · `sync_enabled` · `domain_filter_enabled` · `domain_filter_domains` · `is_default` · `signature`
+
+**❌ DIES:**
+
+- `channel_id` — zero refs, all NULL
+- `recruiter_id` — all NULL; only no-op predicates — BUT the partial unique index rewrite gates the drop
+- `scopes` — written+returned, zero UI consumers
+- `created_at` — returned as gmail_connected_at, rendered by nothing
+
+## `hl_phone_numbers`
+
+*18 -&gt; 14. PLUS the night's nastiest infra finds: the UNIQUE constraint sits on the FORMATTED display string (re-import with different formatting = duplicate row) while e164 — the column EVERY lookup matches — has NO INDEX (every inbound call/text seq-scans); and assigned_user_id at 0/54 means Myli's warm-hat greeting is unreachable on every line (latent defect).*
+
+**✅ KEEP:** `id` · `e164` · `label` · `category` · `platform` · `is_active` · `sort_order` · `created_at` · `routing_group_id` · `answer_mode` · `inbox_id` · `lead_source_id` · `assigned_user_id` · `forwards_to`
+
+**❌ DIES:**
+
+- `number` — duplicate of e164 (identical last-10 on all 54; display formats from e164)
+- `creates_event` — selected+typed, never consumed — superseded by the lead_source_id seat
+- `workflow_id` — joined for a name no UI renders — superseded by the seat's workflow
+- `updated_at` — write-only stamp
+
+```json
+{
+ "DEFECTS": "e164 misnamed+unnormalized (53/54 bare-10) \u00b7 unique on wrong column \u00b7 e164 unindexed \u00b7 warm-hat unreachable (assigned_user_id never set \u2014 column kept, the FEATURE needs wiring or a decision)"
+}
+```
+
+## `hl_pipeline_section`
+
+*VERDICT OVERRIDDEN BY LEE: the sweep read zero product readers and called the table dead — but it is SIGNED BUILD-AHEAD (Zach 7/31, mig 0531): the sections screen + Under-Contract redirect are on the morning ladder (Benji's own rabbit-hole entry). SEQUENCED, not speculative. If the screen is not built within the week, the hygiene law reclassifies it.*
+
+**✅ KEEP:** `id` · `key` · `label` · `color` · `icon` · `sort_order` · `managed_by` · `pipeline_id` · `created_at` · `updated_at` · `side` · `chapter_key`
+
+## `hl_pipelines`
+
+*7 -&gt; 6.*
+
+**✅ KEEP:** `id` · `name` · `is_default` · `sort_order` · `scope` · `created_at`
+
+**❌ DIES:**
+
+- `updated_at` — no reader
+
+## `hl_pixel_event`
+
+*9 -&gt; 8 + THREE BANNED DISPLAY READERS to repoint (pixel/events feed, requests status WRITE, saved-searches sub-tab).*
+
+**✅ KEEP:** `id` · `visitor_id` · `event_type` · `occurred_at` · `lead_id` · `mls_number` · `property_payload` · `event_payload`
+
+**❌ DIES:**
+
+- `created_at` — occurred_at is the ordering key; not even a proxy (390,499 rows differ)
+
+```json
+{
+ "VIOLATIONS": "3 display readers of the raw tier (target-model reader-ban) \u2014 morning repoint list; the Accept/Decline status WRITE into event_payload is product state in the raw tier"
+}
+```
+
+## `hl_pixel_visitor`
+
+*10 -&gt; 7.*
+
+**✅ KEEP:** `visitor_id` · `lead_id` · `email` · `is_bot` · `bot_name` · `identified_at` · `created_at`
+
+**❌ DIES:**
+
+- `first_seen` — identical to created_at on 100% of rows
+- `updated_at` — zero readers
+- `user_agent` — 215,963 rows write-only — is_bot/bot_name are its derived outputs; the raw string stores an answered question
+
+## `hl_run_log`
+
+*12 -&gt; 11. The by-bytes king: created_at identical to started_at on 0-of-1,173,572 rows — indexed + huge, so a real migration not a casual ALTER.*
+
+**✅ KEEP:** `id` · `app` · `source` · `fn` · `status` · `trigger` · `run_id` · `error` · `payload` · `started_at` · `finished_at`
+
+**❌ DIES:**
+
+- `created_at` — exact duplicate of started_at (measured: 0 rows differ), zero readers
+
+## `hl_scheduled_actions`
+
+*22 -&gt; 19.*
+
+**✅ KEEP:** `id` · `lead_id` · `action_type` · `channel` · `payload` · `scheduled_for` · `actor_type` · `actor_user_id` · `status` · `created_at` · `updated_at` · `sent_at` · `cancelled_at` · `scheduled_by_name` · `attempts` · `last_error` · `requires_review` · `inngest_event_id`
+
+**❌ DIES:**
+
+- `inngest_run_id` — written never read — inngest_event_id is the linked one
+- `workflow_run_id` — no SELECT or WHERE anywhere
+- `result` — written never read
+
+## `hl_settings`
+
+*3 -&gt; 2.*
+
+**✅ KEEP:** `key` · `value`
+
+**❌ DIES:**
+
+- `updated_at` — ~15 upserts write it, zero reads
+
+## `hl_stages`
+
+*14 -&gt; 10 + section_id sequenced (see hl_pipeline_section).*
+
+**✅ KEEP:** `id` · `pipeline_id` · `name` · `position` · `color` · `icon` · `is_terminal` · `is_active` · `chapter_key` · `loop_status_key`
+
+**❌ DIES:**
+
+- `chapter_sort` — zero refs outside migrations
+- `created_at` — no reader
+- `updated_at` — no reader
+
+```json
+{
+ "sequenced": {
+  "section_id": "BUILD-AHEAD (0531, signed) \u2014 reader ships with the sections screen on the morning ladder"
+ }
+}
+```
+
+## `hl_tags`
+
+*6 -&gt; 5. label is NOT a duplicate (name=slug, label=display, 150/172 differ, COALESCE reads).*
+
+**✅ KEEP:** `id` · `name` · `label` · `color` · `is_locked`
+
+**❌ DIES:**
+
+- `created_at` — no SELECT reads it
+
+## `hl_tasks`
+
+*19 -&gt; 15.*
+
+**✅ KEEP:** `id` · `lead_id` · `name` · `description` · `type` · `priority` · `assigned_user_id` · `created_by` · `created_at` · `updated_at` · `status` · `due_at` · `completed_at` · `calendar_event_id` · `calendar_provider`
+
+**❌ DIES:**
+
+- `owner_user_id` — 0/12 zero refs (all 5 INSERT sites use the same 9-col list)
+- `created_by_uuid` — same
+- `updated_by` — same
+- `source_workflow_run_id` — same
+
+## `hl_tc_loop_document`
+
+*15 -&gt; 15 — the healthiest table in the family; every column live.*
+
+**✅ KEEP:** `id` · `transaction_id` · `contract_fill_id` · `esign_provider` · `esign_doc_id` · `signed_at` · `file_url` · `contract_key` · `reminders_enabled` · `last_reminder_at` · `status` · `folder_id` · `name` · `created_at` · `updated_at`
+
+## `hl_tc_loop_document_category`
+
+*SAME OVERRIDE: signed build-ahead (0531) for the 58-form dotloop import + folders — the importer is Benji's next build. Sequenced; week deadline per the hygiene law.*
+
+**✅ KEEP:** `id` · `key` · `label` · `folder_label` · `sort_order` · `side` · `created_at` · `updated_at`
+
+## `hl_tc_loop_event`
+
+*13 -&gt; 11 (renames hl_tc_loop_milestone). completed_by write-only — nothing can show WHO completed a milestone.*
+
+**✅ KEEP:** `id` · `title` · `event_date` · `completed` · `sort` · `milestone_key` · `transaction_id` · `advances_to_stage_id` · `template_id` · `completed_at` · `created_at`
+
+**❌ DIES:**
+
+- `omitted` — seeded false, no component reads it
+- `completed_by` — write-only — not in the SELECT
+
+## `hl_tc_loop_participant`
+
+*7 -&gt; 7 — all live.*
+
+**✅ KEEP:** `id` · `transaction_id` · `full_name` · `email` · `phone` · `role` · `created_at`
+
+## `hl_tc_loop_task`
+
+*26 -&gt; 9 — THE HEAVIEST DIET. Write-once display-only table; no task endpoint exists; computeDue has zero callers so the 10 snapshot rule-columns have never executed. Don't polish until a writer exists.*
+
+**✅ KEEP:** `id` · `transaction_id` · `label` · `assignee_role` · `sort` · `due_date` · `completed` · `template_id` · `created_at`
+
+**❌ DIES:**
+
+- `day_unit + business_day_def + weekend_roll + holiday_roll + skip_holidays + anchor_type + anchor_on + is_conditional + task_type + default_offset_days` — template snapshots, single-valued across all 487 rows, duplicate hl_tc_task_template via template_id — and the only consumer has zero callers
+- `anchor_task_id` — 0/487 no reader
+- `completed_at` — never written or read
+- `completed_by` — same
+- `is_overridden` — 0/487 no consumer
+- `is_active` — the seed filter reads the TEMPLATE's flag, not this
+- `phase` — DROP per the lock
+
+**🔀 FOLDS:**
+
+- `anchor` → milestone_key (sequenced rename)
+
+## `hl_templates`
+
+*21 -&gt; 14 (code-derived). PLUS three live bugs for the morning list: three *_text_hook blocks unpickable on text nodes (NULL channel defaults to email) · /api/email/send-template 422s for ~200 of 216 templates (only 1 of 40 category values mapped) · opening a system template in the editor silently rewrites visibility to team.*
+
+**✅ KEEP:** `id` · `kind` · `name` · `subject` · `body` · `llm_compose_prompt` · `is_active` · `created_at` · `key` · `category` · `visibility` · `folder` · `channel` · `image_url`
+
+**❌ DIES:**
+
+- `body_source` — every hit is an INSERT — zero readers
+- `tokens` — nothing parses it; self-inconsistent array/object
+- `created_by` — joined for a name ZERO components render; 0/216 filled by the one live writer path
+- `updated_at` — selected into the DTO, rendered nowhere
+- `lifecycle` — editor echo written straight back; lifecycleMeta has zero call sites
+- `scope` — constant 'crm' on all 216 rows
+- `template_group` — 0/216 — groupForTemplate derives the same 4-value answer from folder+category; the derivation branch is the only one that has ever run
+
+## `hl_transactions`
+
+*35 -&gt; 29. loop_kind dead (confirmed vs the model's does-not-survive ruling); status quintet = the sequenced two-axes set.*
+
+**✅ KEEP:** `id` · `lead_id` · `property_address` · `property_price` · `closing_date` · `notes` · `created_at` · `updated_at` · `list_price` · `cover_image_url` · `commission_type` · `commission_value` · `zillow_paid` · `agent_net` · `srg_net` · `transaction_type` · `website_hlid` · `stage_id` · `recorded_at` · `voided_at` · `void_reason` · `tc_assignee_user_id` · `created_by_user_id` · `milestone` · `tc_stage_id` · `transaction_status_id` · `loop_status_key` · `loop_status_at` · `loop_status_by_user_id`
+
+**❌ DIES:**
+
+- `loop_kind` — 8/8 populated, ZERO selects — write-only (matches the signed does-not-survive ruling)
+- `lost_reason` — superseded by loop_status_key archive exits
+- `lost_at_stage_id` — same
+- `recorded_by_user_id` — dropped at the UI boundary — hl_audit writeAudit is the actor record
+- `voided_by_user_id` — same
+
+**➕ COMING:** `loop_status_reason`
+
+## `hl_trigger_fire`
+
+*9 -&gt; 8.*
+
+**✅ KEEP:** `event_key` · `platform` · `fired_at` · `lead_id` · `source` · `matched` · `routed_by` · `id`
+
+**❌ DIES:**
+
+- `fub_person_id` — 4,700 written, zero readers — survivor hl_leads.fub_person_id
+
+## `hl_users`
+
+*Zach 7/31 PM: full_name splits into first_name + last_name (matching hl_leads — one name model everywhere); full_name becomes DERIVED for display, never stored as a second truth. Plus the data-key registry: 13 keys measured, 1 declared; the profile trio (title/card_phone/card_email) promotes to real columns with the user-profiles build; notification_prefs vs notification_channels = two keys one concept (collapse); license_state key vs hl_user_license table = two homes one fact (collapse).*
+
+**❌ DIES:**
+
+- `full_name` — becomes derived (first || ' ' || last) — display only, never stored
+
+**➕ COMING:** `first_name + last_name`
+
+## `hl_workflow_runs`
+
+*21 -&gt; 14 (playbook runs). actor stamps write-only; state-machine leftovers 0/8.*
+
+**✅ KEEP:** `id` · `workflow_id` · `lead_id` · `status` · `triggered_by` · `current_node_id` · `outcome` · `error` · `is_dry_run` · `started_at` · `ended_at` · `trigger_payload` · `updated_at`
+
+**❌ DIES:**
+
+- `actor_type` — write-only
+- `actor_user_id` — write-only
+- `state_id` — 0/8 zero refs
+- `resolution_signal_id` — same
+- `resolution_signal_key` — same
+- `paused_at` — same
+- `resumed_at` — same
+
+## `hl_workflows`
+
+*39 -&gt; 24 (playbook vocabulary at cutover). 15 dead incl. 7 copy-only carriers the duplicate faithfully copies and nothing reads.*
+
+**✅ KEEP:** `id` · `key` · `name` · `description` · `status` · `trigger_type` · `folder` · `is_system` · `is_locked` · `lead_stage` · `created_by` · `created_at` · `updated_at` · `workflow_config` · `platform` · `trigger_config` · `sender_default` · `reenrollment_policy` · `cooldown_days` · `bh_override`
+
+**❌ DIES:**
+
+- `associated_state_id` — zero refs
+- `is_default_for_state` — zero refs
+- `variant_label` — zero refs
+- `version` — zero refs
+- `started_by` — zero refs
+- `signal_id` — zero refs
+- `myli_prompt_title + myli_prompt + schedule_config + preconditions + tool_access + quiet_hours + completion + target_type + kind` — copy-only carriers — cloned row to row, never read
+
+
+---
+
+# 📎 Commission & Transactions Model (folded 8/5)
+
+> 📐 **POLICY DICTATED BY ZACH 8/3/2026** and cross-checked line by line against the stored comp plan and
+> all 11,639 live transaction rows. Source spec: `.claude/reports/commission-policy-spec-2026-08-03.md`.
+> **The fold itself is NOT yet scheduled** — it waits on Lee's Phase-3 sequencing.
+
+<Info>
+**Companion page:** [Transaction & Loop Model](/schema-lock/transaction-model) covers the **lifecycle** of a
+deal — loop stage, loop status, milestones, tasks, document categories. **This page covers the MONEY** —
+what a closing earns, who gets paid, and where those tables live. Two halves of one model; neither
+repeats the other.
+</Info>
+
+## ⚖️ THE PRECISION BAR — READ THIS BEFORE YOU BUILD ANYTHING
+
+> *"this is not rocket science and i'm not using this for irs purposes i just need a general idea"*
+> — Zach, 8/3/2026
+
+**This is management reporting, not accounting.** Legacy numbers exist so Zach can see the shape of the
+business — who produced, what the team netted, where the money went. They are **not** tax filings, **not**
+agent payout statements, and **not** reconciled to the penny against a closing disclosure.
+
+- Use **today's rules for all legacy deals**, except where the deal itself names its rate era (§4).
+- **Do not** build rate-history versioning for legacy.
+- **Round numbers are fine.** No reconciliation passes, no tolerance checks, no per-deal audits against
+  SISU's recorded figures. They **will** differ. That is expected and accepted.
+- When a legacy input is missing, approximate it and mark it `derived`. Do not stall a deal over it.
+
+Everything flagged "verify before real payouts" is **forward-looking precision** — it matters when
+HouseLoop disburses actual money, not when the dashboard renders history.
+
+---
+
+# PART 1 — WHERE THE DATA LIVES TODAY
+
+## The third database nobody signed off on
+
+HouseLoop is constitutionally **exactly two databases** — WEB (`Listing`, homes) and CRM (people, deals).
+There is a **third**, and it is where every closing actually lives:
+
+| | |
+|---|---|
+| **Connection** | `HL_TXN_DATABASE_URL` (`apps/houseloop-crm/lib/db-txn.ts`) |
+| **Host** | its own Railway project — `houseloop-transactions` |
+| **Schema** | `hl_txn` |
+| **Rows** | **11,639 transactions**, 1,947 of them `status = 'Closed'` |
+| **Provisioned by** | `tools/houseloop-transactions-db/` (`provision.mjs`, `migrate-srg-from-sisu.mjs`) |
+
+It is the **SISU replacement**. Every row carries `legacy_sisu_id`, so nothing lost its lineage when SISU
+shut down in June 2026.
+
+<Warning>
+**This database is a standing exception to the two-database law that the record never acknowledged.** It
+also means the schema lock does **not** cover it — which is exactly how a twin-hunt missed `brokerage_id`
+on 8/3 and nearly minted a duplicate `team` column in the CRM. Lee's fix: `model.lock.json` grows an
+`hl_txn` estate inventory so no future hunt can miss it.
+</Warning>
+
+## The six tables — the estate
+
+They only work together. Move `transactions` alone and you get history with no engine.
+
+| Table | Rows | What it is | Renamed to |
+|---|---|---|---|
+| `hl_txn.transactions` | 11,639 | every closing — 64 columns | *(stays)* |
+| `hl_txn.commission_adjustments` | **0** | referral · pre-split · post-split · final · not-on-DA | *(stays)* |
+| `hl_txn.commission_splits` | **3** | per-agent split, with eXp cap fields | *(stays)* |
+| `hl_txn.commission_forms` | **3** | the CDA (Commission Disbursement Authorization) | *(stays)* |
+| `hl_txn.vendors` | **0** | everyone who touches a transaction — lender · title · warranty · inspection · insurance · moving | **`transaction_partners`** |
+| `hl_txn.brokerages` | 2 | **the comp plan** — tiers, eXp fees, referral sources | **`comp_plans`** (with a `team` column) |
+
+<Warning>
+**The engine is real and it is EMPTY.** `commission-math.ts` is a complete, tested implementation —
+verified against 1007 Skyline Drive (Donna Mason: team net \$2,084.02 / agent net \$2,094.04). But
+adjustments hold **zero rows**, vendors **zero**, splits **three**, and `commission_pct` is **NULL on all
+1,947 closed deals**. It was built in May 2026 and never turned on. `/transactions` is not even in the CRM
+left-nav — the only route in is one button on the dashboard.
+</Warning>
+
+### Two tables are badly named
+
+#### `vendors` → **`transaction_partners`** (Zach, 8/3)
+
+> *"Transaction partners would include every loan officer, every home warranty company, every moving
+> company, every title company — even if they were a referral, a preferred vendor, or not a preferred
+> partner."*
+
+**It is everyone who touches a transaction, not just the preferred list.** SISU held these as five loose
+text columns per deal (`title_company`, `mortgage_company`, `home_inspection`, `home_warranty`,
+`insurance_company`); this makes them real records you pick from instead of retyping.
+
+**Preferred is a FLAG on the row, not the definition of the table** — a referral partner you used once
+still belongs in there.
+
+<Warning>
+**`type` cannot carry "preferred" — that column already means the CATEGORY.** Overloading it is the
+two-facts-in-one-column disease (the same bug that put do-not-contact into an agent-history bucket, §5.6).
+Two columns:
+
+| Column | Values |
+|---|---|
+| `partner_type` | `lender` · `title` · `home_warranty` · `inspection` · `insurance` · `moving` · `other` |
+| `is_preferred` | true, or null/false — **this is the preferred-partner list** |
+
+"Show me my preferred lenders" is then one filter, and a one-off moving company still has a home.
+</Warning>
+
+#### `brokerages` → **`comp_plans`** (Zach, 8/3)
+
+It is not a list of brokerages. It holds **the payout rulebook** — the tier ladder, each tier's
+percentages, flat fees, thresholds, eXp constants, and referral sources.
+
+> *"Isn't it really just a comp plan? We don't need to say team plus comp plan, right? It's just comp plan
+> with team as a column, correct?"* — **Correct. There is NO teams table.**
+
+`team` only ever holds the two values Zach named — `spradling_realty_group` and `houseloop` — so it
+is a **value carried on the row**, not an entity needing its own table. A teams table would exist purely
+to hold two names.
+
+<Warning>
+**⚠ THE TOKEN IS NOT THE LABEL — this exact confusion nearly cost a pour attempt (8/3).**
+
+| | |
+|---|---|
+| **Machine token** (the only legal stored values) | `spradling_realty_group` · `houseloop` |
+| **Display label** (UI only) | "Spradling Realty Group **Legacy**" · "HouseLoop" |
+
+The live CHECK is `team IS NULL OR team IN ('spradling_realty_group','houseloop')` (mig 0575,
+co-signed 7/31). Zach says **"Spradling Realty Group Legacy"** when he talks about it, and that word
+belongs on screen — but **"Legacy" is a skin, never a third token.** Caleb wrote
+`spradling_realty_group_legacy` into the pour plan and into three documents; Lee caught it before the
+pour ran. **One concept, one token; render the word in the UI layer. Do NOT widen the CHECK.**
+</Warning>
+
+**GRAIN: one row per team, per effective period.** The plan carries an **effective date** so a 2023 deal
+computes on the 2023 rules; changing the plan adds a row rather than editing history. SRG's row has 5
+tiers and its own eXp constants; HouseLoop's has one tier today.
+
+## What the dashboard actually does today
+
+`app/(crm)/dashboard/SisuDashboard.tsx` + `app/api/sisu-transactions/summary/route.ts`.
+
+**Only ONE money number is stored: `gci`.** Every other figure on that screen is computed **in the browser,
+on every page load, and discarded**:
+
+| KPI | How it is produced today |
+|---|---|
+| Zillow Paid | `gci × ` a **hardcoded price ladder**, only when `lead_source`/`lead_type` text-matches "zillow flex" / "zillow preferred" / "zillow sellers" |
+| Ana Income | `SUM(gci) WHERE agent = 'Ana Spradling'` — **a literal string match** |
+| Agent Net | Ana → full GCI; everyone else → `gross_paid_income × (1 − ladder%)` |
+| SRG Net | `gci − ana − zillow`, floored at zero |
+
+<Warning>
+**This is why the Ana Income card reads "—" with 0 deals for 2026:** not one 2026 closed row spells the
+agent exactly `Ana Spradling`. One spelling drift and an entire KPI silently goes blank. There are **83
+distinct agent name strings** across the closings. The fix is an agent **ID**, resolved once at pour.
+</Warning>
+
+---
+
+# PART 2 — THE PAYOUT POLICY (Zach, 8/3/2026)
+
+## 2.1 — The waterfall. The order IS the policy.
+
+| # | Step | Detail |
+|---|---|---|
+| 1 | **GCI** | `(sale price − price deduction) × commission rate`. The **actual** rate — 2.5%, 2.8%, 3%. **Never assume 3%.** |
+| 2 | **Referral off the top** | team-provided leads only, computed on GCI → **adjusted GCI** |
+| 3 | **Tier split** | `adjusted GCI × the agent's tier %` — which table depends on lead status |
+| 4 | **Add** | flat fee + ISA bonus |
+| 5 | **eXp fees** | the cap logic (§2.4) |
+| 6 | **Stock** | 5% withheld |
+| 7 | **Net to agent** | what lands |
+
+## 2.2 — Lead status is the first fork
+
+- **Team-provided** — the team supplied it. Zillow, Google PPC, and going forward **HouseLoop**. A referral
+  fee comes off the top.
+- **Agent-provided** — the agent brought it. **No referral fee, ever.**
+
+## 2.3 — The tier ladder, measured in CLOSED VOLUME
+
+| Tier | Closed volume | Agent keeps — **team lead** | Agent keeps — **own lead** |
+|---|---|---|---|
+| 1 | \$0 – \$2.5M | 50% | 75% |
+| 2 | \$2.5M – \$5M | 55% | 80% |
+| 3 | \$5M – \$7.5M | 60% | 85% |
+| 4 | \$7.5M – \$10M | 65% | 90% |
+| 5 | \$10M+ | 70% | 95% |
+
+The stored plan's `agent_pct` (0.75 → 0.95) and `group_pct` (0.50 → 0.70) match these two columns exactly.
+**`group_pct` is misleadingly named** — it is the *agent's* share on group-provided leads, not the group's.
+
+### ⭐ THE TIER FLOOR — the rule that will bite any implementer
+
+> *"closed volume resets every january 1 for the tier structure, but they keep the previous deals
+> percentage they gained for the entire year but they have to earn it again."* ·
+> *"floor is always set by the previous year."* — Zach
+
+Two things happen on January 1: **the volume counter resets to zero, and the payout tier does not.**
+
+```
+tier(deal) = MAX(
+    floor    = tier EARNED by volume in the previous calendar year,
+    current  = tier reached by volume so far in THIS calendar year
+)
+```
+
+**Worked example (Zach's own).** An agent closes \$6M in 2026 → Tier 3. On Jan 1 2027 volume resets to
+zero, but their **first closing of 2027 still pays Tier 3**. To reach Tier 4 they must close **\$7.5M of
+new volume** in 2027 — no credit carries.
+
+**The floor RATCHETS DOWN.** It is set by volume *earned*, never by what they were *paid at*. If that agent
+then closes only \$2M in 2027 — paid at the Tier 3 floor all year but earning Tier 1 by volume — their
+**2028 floor is Tier 1**. Status is kept for a year, not forever.
+
+**Without the floor, every agent's January and February deals compute at Tier 1**, understating a strong
+producer at the start of *every single year*.
+
+## 2.4 — eXp fees: the cap flips which fees apply
+
+| Fee | **Before cap** | **After cap** |
+|---|---|---|
+| eXp company split | **20% of gross** | **\$0** |
+| Capped transaction fee | \$0 | **\$75** |
+| Risk management | \$60/deal | \$0 |
+| Broker review | \$25 | \$25 |
+| Stock | 5% | 5% |
+
+**The cap is per-person, by role — not one number:**
+
+| Who | eXp cap |
+|---|---|
+| **Team agent** | **\$4,000** |
+| **Team / team leader** | **\$16,000** |
+
+✅ **CONFIRMED BY ZACH 8/3:** *"i do confirm the 4,000 and the 16K for caps for agents vs team."*
+
+✅ **THE CROSSING DEAL — CONFIRMED 8/3:** *"the cap cross a deal does cap at 4,000 to the pennies."*
+A deal that takes an agent past their cap charges **exactly to the cap and not a cent more** — the 20% is
+prorated to land on \$4,000 (or \$16,000) precisely, and the remainder of that deal is treated post-cap.
+Same rule for the \$750 risk-management ceiling: the deal that crosses it charges only the room left.
+
+**Risk management has its own annual ceiling: \$750.** \$60 per deal until the agent has paid \$750 that
+year, then it stops.
+
+## 2.5 — Three running totals force the order of calculation
+
+| Running total | Threshold | Controls | Resets |
+|---|---|---|---|
+| Closed volume | \$2.5M steps | which tier | Jan 1 — **carries the floor (§2.3)** |
+| eXp paid | \$4,000 / \$16,000 | when 20% becomes flat \$75 | Jan 1 |
+| Risk management paid | \$750 | when the \$60 stops | Jan 1 |
+
+**Therefore every deal must be computed in close-date order, per agent, per year.** A deal cannot be
+calculated in isolation — its numbers depend on everything that agent closed before it. An agent who closed
+in November was on a different tier than the same agent in February. **Compute in any other order and every
+number is wrong.**
+
+---
+
+# PART 3 — THE REFERRAL (Zillow today, HouseLoop tomorrow)
+
+## 3.1 — The current success-fee ladder
+
+Taken **off the top of GCI**, on transaction price:
+
+| Transaction price | Success fee |
+|---|---|
+| \$0 – \$74,999.99 | **15%** |
+| \$75,000 – \$149,999.99 | **25%** |
+| \$150,000 – \$224,999.99 | **30%** |
+| \$225,000 – \$299,999.99 | **35%** |
+| \$300,000+ | **40%** |
+
+## 3.2 — The rate era: read it off the deal, never chase the date
+
+Zillow changed rates at the **Flex → Preferred** switch — old Flex ran roughly **20–35%**, current runs
+**15–40%** (more at the high end, less at the low end). **We do not need to know when.** SRG already tagged
+the era on the deals:
+
+| `lead_type` | Closed deals | Ladder |
+|---|---|---|
+| `Zillow Flex Originated 2024 and Later` | 385 | current (15–40) |
+| `Zillow Flex Originated 2023 and Earlier` | 30 | old Flex (20–35) |
+| `Zillow Sellers Originated Lead` | 68 | current |
+| `Team Provided Lead` | 356 | current |
+| **`Agent Provided Lead`** | **16** | **NONE — no referral, even under a Zillow source** |
+| unlabeled | 305 | fall back to close date: before 2024 → old, else current |
+
+**One rule: use the label; if absent, use the close date.**
+
+## 3.3 — HouseLoop occupies the same slot Zillow does
+
+Going forward, **HouseLoop is a referral source** taking its cut off the top exactly where Zillow does —
+at a **flat 30%** rather than a ladder (Zach's design, being finalized). Same mechanism, different party
+and rate. The comp plan's referral model must therefore support **both a flat rate and a price ladder**
+per source.
+
+---
+
+# PART 4 — THE FOUR DEFECTS IN LIVE CONSTANTS
+
+Each one moves real money. All four are why the dashboard disagrees with the actual comp plan.
+
+| # | Defect | Impact |
+|---|---|---|
+| 1 | **Tiers stored as GCI, not volume** — `min_gci_ytd` = 0 / 40k / 80k / 120k / 160k | At 3% commission, \$2.5M of volume is ~\$75k GCI vs the stored \$40k threshold. **Every agent past \$2.5M sits on the wrong tier**, so every split of theirs is wrong. → rename `min_volume`, reset the values |
+| 2 | **eXp cap applied as \$16,000 to everyone** | **Every team agent's cap is overstated by \$12,000** — they keep paying the 20% four times longer than they did. `commission_splits.exp_cap_amount` already supports per-person; it was just filled with 16000 for all |
+| 3 | **The \$750 risk-management annual cap is never applied** | `commission-math.ts` charges \$60 every deal with no ceiling — overcharges anyone past ~12 deals in a year |
+| 4 | **Dashboard's Zillow ladder starts at 20%** | The real success fee starts at **15%**. Affects 16 sub-\$75k deals |
+
+---
+
+# PART 5 — THE FOLD (the pour)
+
+## 5.1 — The shape, in Zach's words
+
+> *"This needs to be in the CRM, not as a separate Railway database… all the closings would get one home."*
+> *"everything else should be full on real, like the real railway table that has all the exp commissions,
+> the formulas, the real referral payouts and all of that stuff, we are going to need that for good."*
+
+**Same pattern as FUB, twice.** FUB's 49,000 leads sit in a mirror; ~1,700 become real HouseLoop leads.
+Railway's 11,639 transactions sit in what is effectively a mirror; the good ones become real CRM
+transactions. **A mirror is where data waits until it is clean enough to be real — never a second home for
+the truth.**
+
+**Why consolidation is structural, not cosmetic:** the links only work inside one database. A lead → a
+transaction → an agent → a commission split cannot hold together across separate Railway projects. That is
+exactly why `houseloop_lead_id` exists on `hl_txn.transactions` and is populated on **zero of 11,639 rows**.
+
+## 5.2 — What makes it "real" instead of a copy
+
+1. **Agent becomes an ID, not typed text** (83 spellings today → real people).
+2. **`team`** — `spradling_realty_group` | `houseloop`. **Not `brokerage_id`** (Zach, 8/3).
+   `brokerage_id` (1 = SRG · 11,636 rows, 2 = HouseLoop · 3 rows) folds into it.
+3. **The lead link gets filled** — every past client becomes a real HouseLoop lead with a real lead ID.
+4. **Commission is entered, not computed in a browser.**
+
+## 5.3 — Legacy agents are records, never users
+
+> *"I don't want to make Alisha Hanks a user in HouseLoop… kinda like the FUB mirror, the past agent is
+> just a record… the agent does need to be an ID because I need to sort by agent in the dashboard, I just
+> don't want them to be active users."*
+
+**A separate legacy agent roster**, not `hl_users` rows. **Measured 8/3: 92 files read `hl_users`, and 31
+of them never filter `is_active`** — so an inactive legacy agent would still surface in roughly a third of
+the app's pickers, assignment dropdowns and notification lists. A separate roster is *structurally*
+incapable of leaking into a user picker. When a legacy agent later joins for real, they get a normal user
+account that points back at their legacy record.
+
+## 5.4 — Order is forced
+
+**Leads first, transactions second.** A transaction cannot point at a lead that does not exist yet.
+
+## 5.5 — What gets written per transaction
+
+Computed **once, at pour, in one place** — never in a component.
+
+| Column | Meaning |
+|---|---|
+| `gci` · `gross_paid_income` | recorded (legacy SISU) |
+| `commission_rate` | the actual rate — never a 3% default |
+| `lead_status` | `team_provided` \| `agent_provided` |
+| `referral_payee` · `referral_pct` · `referral_amount` | Zillow / HouseLoop / none |
+| `agent_tier` · `agent_split_pct` | resolved from volume **at that close date** |
+| `agent_net` · `team_net` | the split |
+| `exp_company_fee` · `exp_transaction_fee` · `risk_mgmt_fee` · `broker_review_fee` · `stock_payout` | the fee stack |
+| `was_capped` | had this agent capped at close time |
+| **`commission_source`** | **`recorded` \| `derived` \| `not_captured`** |
+| `comp_plan_version` | which rules produced it |
+
+**`commission_source` is the honesty column.** `recorded` = a real CDA exists (a receipt). `derived` = we
+computed it from this policy (a real number, honestly labeled). `not_captured` = no GCI exists. Going
+forward a real CDA **overwrites** the derived values and flips the flag to `recorded` — same columns,
+better source, no schema change.
+
+## 5.6 — Excluded from the pour: a team agent's own transaction
+
+**14 people / 17 deals.** A past-client book is a list of **people we can market to**; an agent's own
+closing is not a client relationship.
+
+- the client **is** the agent — April Atkinson · Savannah Gilbert
+- the client is the agent's **family** — Robert David/Jeremy David · Kaixi Shen/Kathy Shen ·
+  James Duston/Stephanie Duston
+- the client is a **past team agent** — Mark Tallent · Zak Zimmerman · Julie Lazzo · Tyler Harris
+- genuine **do-not-contact** — Will Arnett · Katie & Trent Harrison · Megan Young · Yvonne Burdette
+- **family, no transaction access** — Lilian Radke
+
+Written to `hl_srg_deal_overrides` with `decided_by = 'zach'` (the only rebuild-proof surface — the
+"509 deletions" law), reversal file committed. **Nothing was deleted.** Every transaction stays in
+`sisu_transactions` and on the dashboard as history — it simply does not make the trip into the clean
+table. *Excluded from the pour ≠ deleted from history.*
+
+## 5.7 — The dashboard cutover is the acceptance test
+
+When the dashboard reads the CRM table and the numbers still tie out, the fold is done.
+
+### Expected differences on cutover — corrections, not regressions
+
+1. The bottom Zillow band moves **20% → 15%** (16 deals).
+2. Tiers switch from **GCI thresholds to volume thresholds** — moves many agents up a tier.
+3. Team agents' eXp cap drops **\$16,000 → \$4,000** — they cap far earlier, keeping more.
+4. The **\$750 risk-management ceiling** starts applying.
+
+**Measured for context:** legacy Zillow deals recorded a flat **~50% withheld in every price band** (45%
+over \$300k) across 1,155 closings, with **no laddering at all** — because a flat rule was typed at entry
+rather than the real policy computed. Non-Zillow deals sat at 15–30%. The true per-deal breakdown was never
+recorded, which is precisely why it must be computed from this policy and stamped `derived`.
+
+---
+
+## Still open
+
+| # | Question | Status |
+|---|---|---|
+| 1 | Volume reset + tier floor | ✅ **CLOSED 8/3** — annual reset, floor = last year's EARNED tier, ratchets down |
+| 2 | Zillow ladder + rate era | ✅ **CLOSED 8/3** — ladder in §3.1, era from `lead_type`, close-date fallback |
+| 3 | Does a cap-crossing deal charge exactly to the cap? | ✅ **CLOSED 8/3** — yes, **to the penny** |
+| 4 | eXp caps \$4,000 / \$16,000 | ✅ **CONFIRMED 8/3 by Zach** |
+| 5 | Where the noun **closing** finally lives | ✅ **RULED 8/3 — the CRM.** Lee schedules the fold as Phase 3 |
+
+**THE POLICY IS FULLY CLOSED.** Every rule that moves money is answered and confirmed. What remains is
+Lee's sequencing of the fold, not a decision about the rules.
+
+
+---
+
+# 📎 Past-Client Schema (folded 8/5)
+
+> 🔏 **SIGNED BY ZACH: 7/30/2026** · **LAST AMENDED: 7/31/2026** (the Sitting Verdicts V1–V5).
+
+<Info>
+**Locked 2026-07-30** (Lee × Caleb) and **SIGNED BY ZACH 2026-07-30** at the #47 lock session — every ruling below is final law. Caleb's measured table map: `.claude/reports/caleb-pastclient-table-map-2026-07-30.md`. Anything marked **⚖️ Sitting** goes to Zach's Table Sitting for its Rule-0 sentence; everything else is LAW — queries follow this page, not habit.
+
+**⛔ THIS PAGE ANSWERS ALL PAST-CLIENT SCHEMA QUESTIONS.** Any schema decision, any "which table," any "what does this value mean" — the answer lives HERE. The [Seller Engine guide](/guides/seller-engine) carries the operating playbook and points back to this page for schema; if the two ever disagree, THIS page wins and the guide gets fixed.
+</Info>
+
+## The shape in one breath
+
+**One truth spine, everything else is evidence or a pointer.** `hl_srg_canonical` (one row per DEAL: client × house × side, keyed `pc_id:hlid:our_side` — never MLS in the key) is THE deal record. `hl_srg_past_clients` (one row per PERSON) carries who they are and their bucket. `hl_srg_past_client_homes` (one row per person × home) carries the relationship to each rooftop. Every value number lives on the **WEB `Listing`** — the CRM points by `website_hlid` and **never copies** (no copy = no drift).
+
+
+## ZACH'S SEVEN RULES — signed 2026-07-30 (eyeball catches that became law the same day)
+
+1. **THE SOURCE HIERARCHY LAW.** Canon = `hl_srg_mls_deals` + `hl_mls_property_history` (the MLS-UI harvests). Rank-2 = real `Listing` rows, dates cross-checked against canon. **`Listing.priceHistory` (Zillow, address-glued) is BANNED from the book pipeline** — it carried the neighbor's history and falsely flagged the Frittz. A weak source raises a QUESTION; only canon writes an ANSWER.
+2. **THE SELF-CONSISTENCY TEST.** A price history that does not contain the house's OWN sale is not that house's history (61 contaminated carriers found).
+3. **THE CONDO UNIT GUARD.** A harvest/building event joins a unit-keyed home ONLY when it NAMES that unit (shared parser — handles the MLS's `UNIT##2002` double-hash). An ambiguous, unit-less event NEVER counts.
+4. **THE IDENTITY KEY BEATS THE COLUMN.** A home's unit reads from `identity_key`'s middle segment; the `unit` column is a cache that goes NULL. Key-vs-column drift is a red-flag sweep (Guardian Tier 5).
+5. **ROSTER MATCHING NEEDS THE INITIAL.** A surname match requires a first-initial match with a roster member of that surname — no more Blaire-via-Jordan Lawrence.
+6. **DISPOSITION = SISU DATES + THE MLS SHEET + THE HARVEST** (the Mettman rule): the sheet's `close_date` beats the web listing's `soldDate`; the client's own later sell deal beats everything.
+7. **THE CONFIRMATION STANDARD.** Every buy disposition carries a chip — canon ✓ / listing-only / no-harvest / mismatch. Unconfirmed SAYS SO; gaps are filled by harvesting, never substituted.
+
+## The rulings (the lock session's verdicts)
+
+### 1. ONE disposition vocabulary — and it is NOT transaction status
+The child table's four words are canonical: **`owns` · `sold_moved` · `lost_listing` · `lost_buy`** (matches the deterministic disposition engine). The canonical table's synonyms (`still_owns`/`sale_side`/`lost_opportunity`/`sold_repped_by_us`) MAP onto these — one migration, alias-documented.
+**Deliberately NOT merged into the transaction ladder**: `transaction_status` (pending → closed → lost) answers *"what happened to a deal"*; disposition answers *"what is this rooftop's relationship to us now."* Two questions, two vocabularies — forcing them together would be a false merge (the interchangeability test).
+
+### 2. The `verified` gate values — SIGNED
+`PASS · WARN_NO_ADDRESS · WARN_UNIT_DROPPED · FAIL_WRONG_UNIT · FAIL_WRONG_HOUSE · FAIL_NOT_SOLD · FAIL_PRICE`
+Locked as a CHECK constraint on `hl_srg_canonical.verified`. The resolver door refuses non-PASS. Signed by Zach 2026-07-30.
+
+### 3. `identity_key` format — LOCKED
+**`street::unit?::zip5`** — unit is the optional MIDDLE segment. The **columns are the source; the key derives** — when a column repair (like the 7/27 zip fix) makes key and column disagree, the KEY regenerates by migration, collisions resolve oldest-wins with the quarantine trail. Key-vs-column drift is a red-flag query in the reconciliation gate.
+
+### 4. The three words, applied here
+The canonical row IS a **transaction** · "deal" is display language · `hl_srg_loop` is the **loop** (the immutable party/document record). Existing table names that predate the law (`hl_srg_deal_ledger`) are **grandfathered in place** — registered here, renamed only if a natural migration touches them. No churn renames.
+
+### 5. `hl_srg_master_houses` repoint — ASSIGNED
+A truth view must not stand on a deprecated table (`hl_srg_pastclient_gt`). Caleb repoints it onto the canonical spine; the gt table then joins the dead list.
+
+### 6. Value provenance — CONFIRMED COMPLIANT + one addition
+All value lives on WEB `Listing`: `hlEstimate(+Low/High/Source/At)` · `zestimate(+Low/High)` · `redfinEstimate(+Low/High/Url/At)`. The signed `hlEstimateSource` provenance list gains **`zestimate_spread_rule`**: `zestimate · zhvi_floor · sold_floor · sold_price · fresh_contract · closing_price · zestimate_spread_rule`. Trend series = **`hl_value_history`** (the `Listing.valueHistory` COLUMN is a dead lookalike — never read it). Photos = `photosCached` objects, never the empty `photos` jsonb.
+
+### 7. ⚖️ Sitting — the dead weight
+The parent's `current_home_*` columns + the `closings` jsonb (221 entries with lost years — display-only, never a ledger input) and section D's dead tables (`hl_srg_pastclient_gt`, the staging/quarantine litter, empty `hl_transactions`) were sentenced at the 7/31 Sitting (see V4 below) — snapshots first, drops only after pour verification + Zach's typed Rule-0 approval. Marked deprecated here so nobody builds on them meanwhile.
+
+
+## ⚖️ THE SITTING VERDICTS — SIGNED BY ZACH 2026-07-31 (the five decisions, with his design)
+
+The 7/31 Sitting closed Caleb's five open decisions. Zach redesigned #1 and #5 in his own words; the rest
+approved as recommended. **These verdicts amend the blueprint (v2.4, artifact 5af32816) — the blueprint is
+APPROVED AS AMENDED and this page is the binding copy.**
+
+### V1 · Household = LINKS, never a hand-kept number (Zach's design)
+- **The relationship LINKS are the ONLY truth** (`hl_lead_relationships`): spouse · child · referred_by — and
+  the vocabulary is EXPANDABLE (Zach: spouse, children, who referred, "they have a dog" notes for a dog event).
+- **A spouse is a REAL `hl_leads` row.** Never a text field on someone else's record.
+- **Divorce = ONE UI action: unlink the spouse.** Nothing else to clean — that requirement shaped the design.
+- `household_id` may exist ONLY as a **DERIVED, regenerable cache** computed from the spouse links (regenerates
+  after any link/unlink; never hand-edited). Mailer dedupe = one GROUP BY on it.
+- **Per-person scale columns on `hl_leads`** (Zach 7/31): `is_primary_contact` (exactly ONE primary per
+  household — ALL primary communication routes through them) · `receives_newsletter` y/n ·
+  `receives_home_value_report` y/n. Every send honors the toggles AND dedupes by household.
+- **UI BUILD REQUIRED (queued, CRM lane):** a "Connected Contacts" section on lead detail under the referral
+  view — spouse, children's names, important notes, expandable. Zach: *"right now in the ui i dont have a
+  spouse or connected contact and i am really going to need that."*
+
+### V2 · Past clients BECOME real `hl_leads` rows — but ONLY through the gate
+- Converge at the pour: every verified past client becomes a REAL `hl_leads` row with
+  **relationship = `past_client`** (SOI tagged likewise).
+- **ONLY when the data is perfect** — a lead pours only when its CHECK-OFF MATRIX row (V5) is 100% green.
+- **The working leads table default-HIDES relationship ∈ {past_client, soi}** via the relationship filter
+  column — Zach's day-to-day working view stays clean; the book is one filter flip away.
+
+### V3 · Value tables: EXTENDED, never duplicated — every value reads from the WEBSITE
+- `hl_value_history` + `hl_home_owner` are the EXISTING WEB tables gaining columns. **NO new value table, ever.**
+- The monthly home value report AND the "your home went up $13K since last month" message **pull from the
+  WEBSITE at read time** (`Listing` by `website_hlid` + `hl_value_history`). The CRM never stores a value —
+  no copy = no drift (doctrine law 6, reaffirmed 7/31).
+
+### V4 · The dead list: SENTENCED — snapshots first, Rule-0 lever later + THE READER BAN
+- ~20 legacy tables (gt, staging, quarantines, resolver trio, post-merge dotloop trio, post-merge
+  ledger+canonical, post-merge mls pair) + 169 aliased `hl_property` husks + the parent's dead columns:
+  **sentenced.** Snapshot BEFORE anything; physical drops ONLY after pour verification AND Zach's typed
+  Rule-0 approval naming the tables, in-session.
+- **THE READER BAN (effective immediately):** the refinery may QUERY ONLY the truth spine + the eight +
+  frozen evidence. Querying a sentenced table for a count is how "oops — 90 more thin-photo leads" appears
+  AFTER the resolver already ran. A number from a sentenced table is a BUG, not diligence.
+
+### V5 · The pour gate: THE CHECK-OFF MATRIX (Zach's addition — the anti-spin device)
+- **TWO final buckets:** the REFINERY final bucket (Zach's order: **resolve TODAY, 7/31**) → then the
+  HOUSELOOP final bucket (the pour).
+- **NO lead pours with an unchecked box.** Caleb DEFINES and MATERIALIZES the matrix — a real, queryable
+  structure, ONE row per lead, every box explicit. Zach's named boxes (the starting spec, Caleb extends):
+  unique HLID · rich photos · schools history · tax history · ALL home sale history · HouseLoop home value ·
+  home value history · sold pill · social engagement views · days-on-HouseLoop / days-until-contract.
+- **"Resolved" = the matrix says so.** The matrix is the ONE progress meter. If a count changes, a matrix
+  cell changed — with a reason. Fresh ad-hoc recounts from side tables are the spin this kills.
+
+## The truth spine (query THESE, in this order)
+
+| Question | The ONE object | Never instead |
+|---|---|---|
+| What deals did we do? | `hl_srg_canonical` (1,987) | closings jsonb, MLS sheets directly |
+| Who is in the book? | `hl_srg_book` view (1,730) | hand-joins |
+| Who is this person / which bucket? | `hl_srg_past_clients` (1,779) — **bucket = DERIVED from per-transaction agent history (SIGNED 7/31: originated(X)/handoff(X)/team_only(X), parameterized by agent, never hardcoded to Ana; the stored column is a regenerable CACHE)** | FUB tags, `is_ana`, hand-set buckets |
+| Which homes do they touch? | `hl_srg_past_client_homes` (2,106) | address string matching |
+| Which sources agree? | `hl_srg_deal_ledger` (tiers GREEN/YELLOW/RED) | re-deriving |
+| What did a human rule? | `hl_srg_deal_overrides` (negative sisu_id = promote) | editing evidence tables |
+| The home's identity | WEB `hl_property` (`identity_key`) + `hl_hlid_alias` | address regex |
+| The home's value | WEB `Listing` by `website_hlid` + `hl_value_history` | any CRM copy |
+
+## Evidence tables — inputs only, with their traps
+
+`hl_srg_mls_deals` (only `Sold` is a closing; buy-side rows name OUR client, list-side rows name the BUYER) · `sisu_transactions` (frozen; absence proves nothing; address is veto-only) · `hl_srg_loop` (party truth; agent fields are JSONB objects — read `.name`) · `hl_srg_dotloop_contracts` (a contract is NOT a closing) · `fub.*` (dossier inputs only — the no-dogfood law). **An answer is never read from an evidence table.**
+
+
+---
+
+# 📎 The Wiring Truth — measured, not intended (folded 8/5)
+
+**Provenance:** the Master Enterprise CRM Audit, 2026-08-03 (Lee). Every claim here was produced by DOING the
+action as a real user and diffing the database — never by reading code alone. Receipts:
+`.claude/reports/lineage-matrix-2026-08-03.md` · the Master Audit Results artifact (263c8b2d) · the Lead
+Engine board's red-framed audit section (209ff52e).
+
+## The concern grid — where each concern ACTUALLY lives
+
+| Concern | THE table (measured) | One home? | Run-log wiring (measured) |
+|---|---|---|---|
+| Leads | `hl_leads` (+ pipeline membership + `hl_user` mirror) | ✅ | ⚠ partial — name/phone/email edits log `lead_edited`; address/source/relationship/assignment/trash/AI-toggle edits log NOTHING; manual create logs the WRONG kind (`user_created`) |
+| Texts/iMessage | `hl_messages` (the spine) | ✅ | ✅ `sms_sent` — FROM→TO stamped, delivered; the cleanest path in the app |
+| Email | `hl_email_send_log` + `hl_inbound_emails` (blob stores) → `hl_messages` spine | ✅ by design | ✅ `email_sent/received/opened/clicked` (spine `sender` unstamped on email — gap) |
+| Calls | `hl_calls` | ✅ | ❌ manual log writes `phone_call_received` on an OUTBOUND row |
+| Notes | `hl_notes` | ❌ **split-brain keys**: 536 rows carry both `entity_*` and `lead_id`, 178 carry entity-only | ✅ `note_added` |
+| Tasks | `hl_tasks` | ✅ | ✅ `task_created` + `task_status_changed` |
+| Appointments | `hl_appointments` | ✅ | ⚠ `appointment_created` stamped at the appointment's FUTURE start time; disposition logs `appointment_edited` while `appointment_dispositioned` sits unused |
+| Templates | `hl_templates` (`kind` discriminates text/email/block) | ✅ | ❌ no template CRUD logs; **composer picker drops key-less rows** → settings-created templates invisible |
+| Users/team | `hl_users` + `hl_user` mirror (trigger-synced, migs 0569–0573) | ✅ | ❌ user CRUD logs nothing (while lead-create logs `user_created` — the symmetric defect) |
+| Loops/TC | `hl_transactions` + `hl_tc_loop_*` children | ⚠ DS-1 RULED (Zach 8/3): `hl_txn` (third DB, 11,639 rows) folds IN — Phase 3 | ❌ loop CRUD logs nothing; `milestone` has two writer vocabularies |
+| Activity log | `hl_lead_activity` — ONE writer (`logActivity`/`logMessage`) | ✅ | the log is sound; the WRITERS are the gap |
+| Notifications | `hl_notification` + `hl_notify_classes` registry | ✅ | independent of the run log — several actions notify without logging. Gate: `scripts/notification-registry-audit.ts` (first run 0·3·0·0) |
+| Saved searches | WEB `"SavedSearch"` → CRM activity bridge (50 ms measured) | ✅ per side | ✅ full arc certified: `saved_search_created` → `saved_search_alert_sent` → `email_opened` → `email_clicked` |
+| Pixel/web signals | `hl_pixel_event` → activity via alias closure | ✅ | ✅ for existing leads; ❌ **no mint path for lead-less signals** (`api/pixel/track` never reads `creates_lead`) |
+| AI | `hl_lead_dossier` + `hl_role.tools` (jsonb) + `hl_tool_fire` | ✅ | ⚠ `ai_fact_captured` wired; `ai_summary_generated` + `ai_toggle_*` signed-but-unwired |
+
+## The 148-kind wiring map
+
+**Measured 2026-08-03: WIRED 40 · DATA-ONLY 14 · UNWIRED 94.**
+
+- **WIRED** — a code writer names the kind literal.
+- **DATA-ONLY** — rows arrive but no literal writer: these flow through DYNAMIC writers (the pixel lane, the
+  FUB lane, `logMessage` channel mapping) that a literal-grep cannot see. Several were live-certified during
+  the audit (`contact_requested`, `saved_search_alert_sent`, `sms_received` ×861) — treat DATA-ONLY as alive.
+- **UNWIRED** — zero writers AND zero rows ever: signed vocabulary nothing produces. This is the load-bearing
+  number. The 94 split into (a) the audited-invisible actions above — Batch 1 of the fix plan wires them —
+  and (b) pre-built vocabulary for unshipped surfaces (campaigns, merge fields, voicemail, loan status),
+  ruled wire-or-wait at the consolidation review.
+
+**The map is GENERATED, never hand-kept** (the no-hand-kept-copies law): regenerate with
+
+```bash
+cd apps/houseloop-crm && HL_CRM_DATABASE_URL=... npx tsx scripts/kind-wiring-map.ts
+```
+
+Latest generated copy: `.claude/reports/kind-wiring-map-2026-08-03.md` (per-kind status + writer file:line).
+
+## The standing gates this page rides on
+
+1. `scripts/trigger-event-audit.ts` — trigger-board truth, caged pre-push (gate 5/5), 0·0·0·0.
+2. `scripts/notification-registry-audit.ts` — notification registry truth; cages as gate 6 after Batch 1.
+3. `scripts/kind-wiring-map.ts` — this page's numbers; re-run after any Batch-1 wiring change.
+
+The fix batches (mechanical rewires · data repairs · the Zach decision sheet) live on the Lead Engine
+board's Master Audit section and execute in Phase 3 — this page records the measured baseline they start from.
+
+
+---
+
+# 📎 Activity Card Design Lock (folded 8/5)
+
+## What this is
+
+On 2026-07-30 Zach locked the universal design for **every card in the lead-detail feed** — messages, notes,
+emails, calls, inquiries, registrations, website activity, appointments, tasks, documents, deals, AI actions,
+system moves. It was designed the constitutional way (`UI_ITERATION_HTML_FIRST`): iterated as an HTML
+wireframe, signed, then ported node-by-node and refined live on real leads the same day.
+
+**The pinned wireframe:** `Docs/wireframes/card-chrome-locked-2026-07-30.html` (repo, version-pinned).
+This page carries the FINAL law including the same-day refinements Zach ruled during the live walk.
+
+## THE SENTENCE LAW — the one grammar
+
+Every card is: **[family icon in a colored circle] + a plain-English sentence "[Who] [did what] [· the facts]"**
+(+ a VIA chip when it came from a portal) · **date+time top-right, always** · **hover actions below the date,
+star first** · **click the card → its family's tab**.
+
+The verb phrase is **DATA — a column on the signed activity catalog** (`hl_activity_catalog.sentence`,
+migration 0513, 127 kinds authored): "created a note", "changed the stage", "requested a tour". The renderer
+is one dumb line: `who + the catalog's sentence + the payload facts`. A new kind writes its sentence in its
+catalog row — no code, no pills, no drift. NULL sentence = the label renders atomically (insight/system kinds).
+
+### Who is the "Who" (all Zach's exact rulings)
+
+- **Full names, always**: "Msale Olongo requested a tour", "Zach Spradling created a note".
+- **The WHO comes from the actor lane** (lead / agent / Myli / System) — never guessed from message direction.
+- **Users ACT, strangers ARRIVE**: a known system user reads active ("Ana Spradling sent an email");
+  an outside sender reads "Email received from John Nelson". The email thread API resolves the sender
+  against `hl_users` (`sender_is_user`) so the card knows which grammar to speak.
+- **The machine never takes a person's credit**: "System opened a document" was the SIGNER opening their
+  e-sign link — the writer credits the lead (mig 0514 re-credited history). The multi-party completion
+  event reads atomic: "Document fully executed" — a system observation, not a signature.
+- **Pink #EC4899 (`--hl-ai-pink`) = Myli/AI only.** Purple is retired from the feed (email = teal #0F766E).
+  System moves wear the mechanical Settings icon in slate.
+
+### Every card names its OBJECT
+
+- **Appointments**: title from `hl_appointments` + the schedule line —
+  "Wednesday, Jul 29, 2026 · 11:00 AM – 1:00 PM · 116 se 8th street, Lees Summit MO · with Zach Spradling".
+  Meta fallback keeps history when an appointment is deleted.
+- **Email engagements**: "Bradley Bengel opened an email · *subject*". Engagement rows key on the SEND
+  PROVIDER'S id (Resend), which the send log never stored — the thread API triangulates it (same lead,
+  same recipient, provider sent-event within ±2 min). Lesson from the walk: a "missing" record is
+  usually the right row in the wrong table — check the id's LANGUAGE before declaring data deleted.
+- **Documents**: "Zach Spradling sent a document for signature · Exclusive Buyer Agency Contract" (0515) ·
+  "Bradley Bengel signed a document · *name*" · "Bradley Bengel opened a document · *name*".
+  The document NAME links to the **sealed PDF** (our R2 archive — never rots), and the whole card jumps
+  into the **TC loop** (`?view=tc`). The multi-party COMPLETION event ("fully executed") is internal
+  machinery — it drives transaction status and never renders on the feed; the signer's row is the story.
+- **Stage moves**: "changed the stage · First Appointment Set → First Appointment Met".
+- **Calls**: "Outbound call to Msale Olongo · from your line · 1:52" — the person by NAME, number as fallback.
+- **Myli's facts**: "Myli captured a new fact — Search Criteria", the slot underneath, the evidence quoted.
+  Never the raw payload salad.
+- **Comms provenance**: the from→to line ("from Msale · (816) 756-9634 → Zach Spradling") rides every
+  message card, FUB-style.
+
+## NO pills — not for users, not for kinds
+
+The actor is plain bold text in the sentence. Kind pills ("Note Added", "Stage Changed", "Phone Call
+Logged") are dead — **the icon IS the kind; VIA (source) is the only chip a card may wear.** Per-user
+colors are whack-a-mole and banned forever.
+
+## The chrome (top-right, every card)
+
+- **Row 1, always visible**: date + time, ONE token (`CARD.date`), one format, same corner on every card
+  type — compact rows, notes, emails, heroes.
+- **Row 2, hover, below the date**: action icons, **☆ ALWAYS FIRST**; per-family extras follow
+  (note: ✏ edit · 🗑 delete).
+
+## Click-through — every row leads somewhere
+
+Clicking any feed card opens its family's tab: note → Notes · appointment → Appointments · text/in-app →
+Messages · call → Calls · task → Tasks · inquiry → Inquiries · home view → Website. A guard skips real
+controls (links, buttons, the audio player) so they keep working.
+
+## The email card — Gmail's grammar (Zach's ours-vs-Gmail ruling)
+
+- **ONE icon** (the left-rail mail circle). The avatar double-icon is dead.
+- Line 1: **the sentence** ("Email received from John Nelson" / "Zach Spradling sent an email").
+- Line 2: "to Trish.redenbaugh, zach, bradleybengel, Ana **▾**" — the triangle opens the Gmail details
+  block: from / to (every full address) / date / subject.
+- Chrome: date + ☆ top-right only. **Reply · Reply All · Forward · ⋯ (Delete/Block) at the BOTTOM** of the
+  expanded message.
+- **Full expansion** — no height cap, no inner scroll; the feed scrolls.
+- **Sender names are captured at sync** (mig 0512 `from_name`) and resolved from-name → `hl_users` → bare
+  address; old rows self-heal as new mail arrives.
+- **Attachments**: paperclip row per genuine file (name + size + View + Download) riding
+  `GET /api/email/attachment`. **Inline signature images** (cid: parts) are rewritten to the attachment
+  endpoint so signatures render like Gmail — inline parts never clutter the file list.
+- **FUB twin dedupe**: FUB mirrors the same email as a `[CONTENT HIDDEN]` row; redacted fub rows are
+  dropped only when the native capture exists within ±2 minutes.
+- **All-feed match**: activity rows may reference an email by `gmail_message_id` — the email map keys BOTH
+  ids so the real card always renders, never a fallback; the fallback itself is atomic and can never
+  invent a speaker.
+
+## The locked pieces that must not be touched
+
+- **Home-card links**: Zillow-origin → `Look up on HouseLoop · View on Zillow`; HouseLoop-origin →
+  `View on HouseLoop` only.
+- **In-app Zillow messages always wear the little round Zillow circle** — hero included.
+- **Registrations are ALWAYS hero** with a big round SOURCE icon (HouseLoop / Zillow / generated
+  color+initial for unbranded sources).
+- **Hero shapes** for inquiries/tour requests (icon chip on photo, quote box, VIA chip).
+
+## The family palette (migration 0511)
+
+| Family | Icon | Color |
+|---|---|---|
+| AI / Myli | Sparkles ✦ | `#EC4899` — RESERVED |
+| Messages | MessageSquare | `#2D6DFF` |
+| Calls | Phone | `#0891B2` |
+| Emails | Mail family | `#0F766E` teal |
+| Notes | StickyNote | `#D97706` |
+| Appointments | Calendar | `#059669` |
+| Tasks / Views / System | CheckSquare / Eye / Settings | `#64748B` |
+| Rental inquiry | Key | `#0891B2` |
+
+Full 145-kind truth: [Activity Catalog](/schema-lock/activity-catalog) + `/settings/activity-catalog`.
+
+## Where the code lives
+
+| Piece | File |
+|---|---|
+| Pinned wireframe | `Docs/wireframes/card-chrome-locked-2026-07-30.html` |
+| Sentence seed + paint | migrations `0511`, `0513`, `0515` (+ `0512` from_name, `0514` signer credit) |
+| Badge source + catalog swap | `apps/houseloop-crm/lib/leads/activity-badges.ts` (+ `.generated.ts`) |
+| Feed rows, chrome, click-through, sentences | `apps/houseloop-crm/components/leads/detail/CenterLane.tsx` |
+| Hero card + portal circle | `apps/houseloop-crm/components/leads/detail/ActivityHeroCard.tsx` |
+| Website-activity rows | `apps/houseloop-crm/components/leads/detail/PixelFeedStream.tsx` |
+| Email card + attachments + cid rewrite | `apps/houseloop-crm/components/leads/detail/EmailsStream.tsx` |
+| Email thread API (names, dedupe, flags) | `apps/houseloop-crm/app/api/email/thread/route.ts` |
+| Call card | `apps/houseloop-crm/components/leads/detail/CallsStream.tsx` |
+
+## How to add or change a card (the maintenance rule)
+
+1. **New kind?** Catalog row first: key, label, **sentence**, icon, color, `card_layout`. The feed inherits
+   everything.
+2. **Recolor / re-word a family?** One catalog `UPDATE` migration + regenerate badges, same commit.
+3. **New card SHAPE or action set?** STOP — that's a wireframe change. Edit the pinned HTML, get Zach's
+   re-lock, then port. A shape that exists only in React is vibe code.
+4. **A card that reads wrong is a DATA bug first**: check the sentence column and the actor lane before
+   touching a component.
+
+## Why this exists
+
+By 2026-07-30 the feed had drifted into pill soup and word salad: three pills on a note, stars over dates,
+purple on system moves, "Msale SMS Received" non-sentences, "Bradley Bengel replied by email" on another
+man's email, "System opened a document" for a human signature. Zach walked real leads screen by screen and
+locked one grammar; every fix became either a catalog row or an honest writer — which is the whole design:
+**the card is data, the renderer is dumb, and drift has nowhere to live.**
