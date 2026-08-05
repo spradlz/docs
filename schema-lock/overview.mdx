@@ -664,6 +664,61 @@ on the web `Listing` (keyed by HLID), the CRM points at it by `website_hlid` and
 
 
 
+## 🗺️ THE MASTER BLUEPRINT (Zach 8/5: "how do we put this all together … a master blueprint that Caleb has to use")
+
+**This is the check-target. The Refinery pour, every backfill, and every new reader builds against
+THIS map — measured 8/5 from both live databases, locked by the freeze + the schema-drift cage.**
+
+```
+CRM DATABASE (autorack)
+═══════════════════════
+hl_leads · THE PERSON · 55 columns
+  primary email/phone as columns · secondaries as labeled lists on data (alt_emails/alt_phones)
+  │
+  ├── hl_connected_people          spouse / co-buyer / friend LINKS between leads —
+  │                                relationship is FREEHAND TEXT (Zach: "it's just a label")
+  │
+  └── hl_transactions · THE DEAL · 48 columns · one row per deal, lead_id FK CASCADE
+        THE SIX FACTS as columns: list_price · contract_price · sale_price ·
+        contract_date · closing_date · transaction_status_key
+        status stamps: transaction_status_at / _by_user_id / _reason · working_status_id
+        │
+        ├── hl_transaction_participant   everyone ON the deal in a role (person, agent,
+        │                                lender, title, TC, or an LLC/trust) · lead_id
+        │                                nullable FK · free-text contact survives
+        ├── hl_transaction_commission    🔨 building — the money, keyed txn + participant
+        ├── hl_tc_loop_task (719)        → renames hl_transaction_task      (#553)
+        ├── hl_tc_loop_event (170)       → renames hl_transaction_milestone (#553)
+        ├── hl_tc_loop_document (33) / _folder (8) / _document_share → hl_transaction_* (#553)
+        ├── hl_contract_fill (20) · hl_tc_email
+        │
+        └── website_hlid ─────────────────────────────┐
+                                                      │ the ONE cross-database join
+WEB DATABASE (centerbeam)                             ▼
+═════════════════════════
+hl_property · THE HOUSE IDENTITY · ~360k rows · one row per ROOFTOP, forever
+  mints the HLID (sequence-backed, opaque, frozen) · identity_key = street+unit+zip5
+  active_listing_hlid points at the keeper Listing
+Listing · THE HOUSE RECORD · ~372k rows · hlid · canonicalSlug · identityKey ·
+  hlEstimate/zestimate (THE value — the CRM reads it by website_hlid, never copies)
+
+CONFIG VOCABULARIES (hl_tc_* = what you edit in TC Configure)
+  hl_tc_transaction_status (+_section) · hl_tc_working_status · hl_tc_transaction_type ·
+  hl_tc_task_category · milestone/task templates · hl_loop_role → hl_tc_participant_role (#553)
+
+🏭 THE REFINERY (Caleb, separate estate): hl_srg_* + sisu_* + the TXN source DB (hl_txn schema,
+  11,639/1,947 closed) POUR INTO the product tables above — the product never reads down into them.
+```
+
+**Zach's naming note:** the website table he calls "hl_properties" is TWO tables by design —
+`hl_property` (the permanent rooftop identity that mints the HLID) and `Listing` (the full house
+record the site renders). The blueprint join is always by HLID.
+
+**How it is locked:** ① the schema-drift cage blocks any push where the live DB differs from
+schema.lock.json ② destructive DDL = Rule-0 typed approval ③ every change lands as a migration +
+ledger + lock/board regen in ONE push ④ this page + [the master board](https://claude.ai/code/artifact/f7c5bb65-eb28-4e8b-b82e-3e4d2fab6c12)
+regenerate from the lock, so the blueprint cannot drift from the database silently.
+
 ## 📋 Run log
 
 *(newest first — append via /dev-doc log; never collapse, never edit past entries)*
@@ -861,7 +916,7 @@ hl_transactions.lead_id  →  hl_leads.id     (real FK, ON DELETE CASCADE)
 
 **Today's limit, and the signed fix:** `lead_id` is SINGULAR — one person per deal. That is why
 splitting a glued couple ("Michael & Katherine") without more machinery makes the second person
-unservable. The signed fix is **`hl_transaction_party`** (8/4, unbuilt): each person on the deal gets a
+unservable. The signed fix is **`hl_transaction_party`** (8/4, unbuilt — BUILT 8/5 as `hl_transaction_participant`, Zach's participants ruling, mig 0634): each person on the deal gets a
 row with a role (co_buyer / co_seller / other), exactly ONE flagged primary, and a party can be a named
 entity (a trust holding title) instead of a person. `lead_id` then remains as the primary-party mirror.
 **The value queries repoint from "which deals does this person OWN" to "which transactions is this
