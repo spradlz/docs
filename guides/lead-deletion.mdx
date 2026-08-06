@@ -4,9 +4,10 @@ description: "The three ways a lead leaves your view — Trash (hides, reversibl
 ---
 
 <Info>
-**Last updated 2026-08-06 by adam.** Rewritten from the ground up: the previous version (2026-07-08)
-opened with *"there is no soft-delete, no trash bin at the database level, and no tombstone row"* — and
-all three of those now exist. It described a hard-delete-only world that has not been true since 23 July.
+**Last updated 2026-08-06 by adam.** Two structural changes since this morning's rewrite: **trashed is
+now a STATUS**, not a timestamp read as one, and **hidden joined it as a fourth status** — so a lead
+leaves your view four ways, not three. The desktop trash view, both tombstones, and all four entry
+doors have shipped since the "not built" list below was written.
 </Info>
 
 ## What is true today
@@ -15,9 +16,27 @@ A lead can leave your view three different ways, and they are **not** the same t
 
 | | What it does | Who | Reversible |
 |---|---|---|---|
-| **Trash** | Hides the lead from the leads table. History kept. Never blocks anybody. | Any agent | Yes |
+| **Trash** | `status = 'trashed'`. Gone from your world. History kept. Never blocks anybody. | Any agent | Yes |
+| **Hidden** | `status = 'hidden'`. Not a separate job — but still fully reachable. | Any agent | Yes |
 | **Block** | The number cannot call, text, or iMessage you. Deliberate, for harassment. | Any agent | Yes |
 | **Hard delete** | The record is destroyed. Cannot be restored. | **Owner only** | **No** |
+
+<Warning>
+**Hidden is not a quiet trash, and the difference is the whole point.** Trash means *gone from your
+world*. Hidden means *not a second job*: it removes somebody from the leads table, the queues, the
+counts and workflow enrolment, and it removes them from **nothing else**. A hidden person still
+receives texts, email, search alerts and home-value reports; their tour requests, replies and property
+views still arrive, still notify, and land on the **primary lead's** page attributed to them.
+
+Zach, 2026-08-06: *"i still need these leads to receive comms, to make comms, to receive search alerts,
+to receive home value alerts. basically the only thing they need to be is HIDDEN FROM VIEW FROM A
+LEADS TABLE, but i have to be able to text, email, etc."*
+
+The two questions live as two predicates in `lib/leads/workable.ts` and must never be collapsed into
+one: `workableLead()` (may we put WORK on them — active only) and `contactableLead()` (may we SEND to
+them — active **and hidden**). Applying the first to a send path silences exactly the alerts a hidden
+household member is switched on for, and it looks like a broken toggle rather than a wrong gate.
+</Warning>
 
 The model deliberately mirrors Follow Up Boss, because FUB is the system of record and the two must never
 disagree about what "deleted" means: in FUB, trash hides and restores, and a real delete is permanent and
@@ -38,8 +57,29 @@ important rule on this page.
 
 ## Trash — the reversible one
 
-Trash sets `hl_leads.deleted_at`. Nothing is destroyed. The trash bin lives at `/m/trash`
-(`app/api/m/trash/route.ts`) and supports list, restore, delete-one-permanently, and empty-trash.
+Trash sets `hl_leads.status = 'trashed'` **and** `deleted_at`. Nothing is destroyed. The trash bin lives
+at `/m/trash` (`app/api/m/trash/route.ts`) and supports list, restore, delete-one-permanently, and
+empty-trash; the desktop CRM reaches the same endpoint through the trash-can icon on the leads toolbar.
+
+<Note>
+**Trash became a real STATUS on 2026-08-06 (migration `0680`).** It had been a timestamp that several
+surfaces *read as* a status while the status dropdown offered "Trashed" as though it were one — Zach:
+*"why isn't trash a status? it needs to be a fucking status, otherwise this is vibe coded, because it
+is in the status dropdown."* He was describing one word in the UI standing for two different questions
+in the code, which is the same defect class as the notification `new_message` outage the same week.
+
+The two columns can never disagree, because the migration added the invariant rather than trusting
+writers to keep them in step:
+
+```sql
+ALTER TABLE hl_leads ADD CONSTRAINT hl_leads_trashed_pairs_with_deleted_at
+  CHECK ((status = 'trashed') = (deleted_at IS NOT NULL));
+```
+
+**Hidden deliberately does NOT pair with a timestamp.** A trashing is an event and has a moment; hiding
+is a household arrangement and has none. Inventing a `hidden_at` would be a second column carrying a
+fact the status already holds.
+</Note>
 
 **Nothing in the trash ever expires** — Zach, 2026-07-25: *"let's not do the auto delete… I don't want
 that."* There is no retention window and no sweeper. A trashed lead sits untouched until a human acts.
@@ -48,8 +88,11 @@ Trashing is `DELETE /api/leads/[id]?soft=1` (optionally `&block=1`), which lives
 the mobile app and the desktop CRM share one code path and can never disagree about what "deleted" means.
 
 <Note>
-**Today the trash bin is mobile-only.** The desktop CRM has no trash view and no status filter — that is
-specced but not built. See *What is not built yet* below.
+**The desktop trash shipped 2026-08-06.** The leads toolbar carries a trash-can icon with a live count;
+opening it lists every trashed lead with the date it was trashed and a **Blocked** chip where the number
+is also on the blocklist, and offers Select-all, Restore and Delete-permanently. Filtering the leads
+table to **Status: Trashed** shows the same two facts as a view-scoped **Trashed** column — restoring
+somebody whose number is still blocked should never be a surprise.
 </Note>
 
 ## Block — stopping contact
@@ -155,13 +198,52 @@ work. Learned 2026-07-08 when a raw-SQL purge skipped it.
 
 Honest list, so nobody reads this page as a description of a finished feature:
 
-- **The desktop trash view and status filter.** Trash is mobile-only today.
-- **The loud delete dialog** with the two tiers on the lead detail.
-- **`purgeLead()` writing both tombstones.** The CRM tombstone table exists; the write is not wired.
-- **The four lead-creating doors consulting the blocklist and the tombstone.** This is the half-enforcement
-  gap described above, and neither guard ships one door at a time.
+**Three of the four items that stood here have shipped, and each was checked against the code before
+being struck — not assumed from a commit message:**
+
+- ~~The desktop trash view and status filter~~ — **shipped.** Trash-can panel + `Status: Trashed` +
+  the view-scoped Trashed column.
+- ~~`purgeLead()` writing both tombstones~~ — **shipped.** `lib/leads/purge-lead.ts` writes
+  `hl_deleted_leads` (CRM) and calls `tombstoneWebEmail` (web), and it writes them **before** the
+  destroy: a tombstone written afterwards is a tombstone with no name on it.
+- ~~The four lead-creating doors consulting the blocklist and the tombstone~~ — **shipped.** All four
+  call `checkLeadEntry` (`lib/leads/entry-guard.ts`): `mint-phone-lead`, `lead-intake/process-intake`,
+  `fub-import/import-fub-lead`, and `POST /api/leads`. The blocklist half is enforced on all three
+  inbound paths through `isNumberBlocked` (`lib/phone/blocklist.ts`).
+
+**Genuinely still open:**
+
+- **A delete control on the LEAD DETAIL page.** `RemoveLeadDialog` — which states both tiers plainly and
+  is the only path to permanent deletion — is reachable from the leads table and the row `⋯` menu, and
+  from nowhere on the lead's own page. You must go back to the table to remove the lead you are reading.
 
 ## Run log
+
+### 2026-08-06 · adam (later)
+**Closed board items [#24](https://claude.ai/code/artifact/a85ac5f4-c863-41ad-9474-e76fcbbf4810) and #44,
+and corrected #45.** Trash became a **status** (`0680`) with a CHECK invariant pairing it to
+`deleted_at`, and **hidden** joined the vocabulary (`0682`) as a fourth status that gates the table and
+the queues while gating no send and no inbound. The Trashed view gained a view-scoped column carrying
+the trashed date and a Blocked chip.
+
+**Found — four separate cases of one shape, and it is the shape worth remembering:** a single word in
+the UI standing for more than one question in the code. `trashed` was a status in the dropdown and a
+timestamp in the schema. `hidden` was a view setting being built as a send setting. And on the way in,
+the leads table's `quickStatus` reader silently narrowed the vocabulary — it accepted `trashed` and
+`staged` but dropped `hidden` to `active`, so the SQL filtered correctly while the control on screen
+read **"Status: Active"** over a list of hidden leads. **The fix is always to split the question, never
+to widen the answer.**
+
+**Also found:** the Home Value view's `← Back` set a local flag and rendered a stub reading *"Use the
+Home Value button above to reopen it"* — false, because at that moment that button is the ACTIVE one
+and the bar is a toggle, so following the instruction took you further away. The exit was never
+missing; its sign pointed the wrong way. Deleted the state rather than rewording the sign, so both
+owner's views now leave the same way.
+
+**Receipts:** `scripts/probe-trashed-columns.ts` (27 trashed leads / 27 dates / 4 blocked, with a
+control that reproduces the failure the correct expression avoids) · `scripts/walk-trashed-column.ts`
+(column absent in Active, present in Trashed, 12/12 dates, 3 Blocked chips on screen) ·
+`scripts/walk-owner-view.ts` (both owner's views: open → back → one-click reopen). **Verdict:** pass.
 
 ### 2026-08-06 · adam
 **Migrations `0648` (owner role) and `0649` (`hl_deleted_leads`) applied.** Both constraints proven to
