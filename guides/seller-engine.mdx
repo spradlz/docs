@@ -2048,6 +2048,111 @@ the proof; the diff is.
 
 ---
 
+## 11d · THE CUTOVER MIRROR — the legacy book becomes real HouseLoop rows (2026-08-06)
+
+**Zach, verbatim:** *"We're going to be having a table here that mimics exactly HouseLoop transactions,
+HouseLoop leads, everything that a HouseLoop lead would have... The only thing that we're changing is the
+team: is it Spradling Realty Group legacy or Spradling Realty Group powered by HouseLoop."*
+
+**There is no separate mirror table.** The poured past clients ARE `hl_leads` rows and their closings ARE
+`hl_transactions` rows — same schema, same columns, same surfaces. **One field distinguishes them.**
+
+### The team meaning (signed 2026-08-06)
+
+| token | means | who |
+|---|---|---|
+| `spradling_realty_group` | **SRG Legacy** — the pre-HouseLoop book we pour in | 5 leads · 10 transactions today |
+| `houseloop` | **SRG powered by HouseLoop** — everything native | 39 leads · 11 transactions |
+
+No third value, **no migration** — both `hl_leads` and `hl_transactions` already CHECK to exactly these two.
+Labels live in ONE module, `lib/leads/team-labels.ts` (the `notifyClassLabel` pattern); **no surface
+hand-writes the strings.** A null team returns null, never a default — a row with no team is not *known* to
+be legacy, and defaulting it asserts an era we cannot evidence.
+
+**The retroactive-meaning gate:** 15 rows already carried `spradling_realty_group` before the meaning
+existed. All 15 were walked by eye *before* the ruling applied backwards — **all legacy-correct, zero flips**
+(the leads are all `integration=follow_up_boss`; the transactions close 2020-01-29 → 2024-12-18 under Ana
+Spradling, April Atkinson and Amanda Barbieri). A ruling that reclassifies existing rows gets walked first,
+or it mislabels silently and nothing ever flags it.
+
+### The origination model (mig 0653)
+
+**Origination is a RELATIONSHIP fact, not a TRANSACTION fact, and it cannot be derived.** The measurement
+that proves it: **72 of the 83 `ana-handoff` clients have exactly ONE agent across every deal they ever
+did** — Ana owned the relationship, handed it on, and no second closing ever happened. The transaction
+record cannot know.
+
+| column | on | is |
+|---|---|---|
+| `originating_agent_key` | `hl_srg_past_clients` | who STARTED the relationship · FK → `hl_srg_agent_roster(key)` |
+| `current_agent_key` | `hl_srg_past_clients` | who owns it NOW · same FK |
+| `lead_id` | `hl_srg_past_clients` | → the minted lead · UNIQUE where present · ON DELETE SET NULL |
+
+**The handoff is NOT a column** — it *is* `originating_agent_key IS DISTINCT FROM current_agent_key`. A
+stored third value is free to disagree with the two it derives from, which is exactly how "who was this
+client's agent" came to live in six places.
+
+⚠ **`primary_agent` is not the originating agent.** Measured, it equals the *first deal's* agent on **1,637
+of 1,709 clients (96%)**. It names who CLOSED and can never name who ORIGINATED.
+
+⚠ **`is_originating` on the transaction was proposed and declined** (Zach confirmed): the originating
+transaction is `ORDER BY closing_date LIMIT 1`. A stored flag drifts the first time an older closing is
+backfilled. **Store what cannot be computed; compute what can.**
+
+### `disposition` does not pour — it is a HOME fact in a TRANSACTION costume
+
+| side | disposition | rows |
+|---|---|---|
+| buy | `owns` | 1,287 |
+| buy | `lost_listing` | 158 |
+| buy | `sold_moved` | 83 |
+| sell | `sold_moved` | 416 |
+| **sell** | **`lost_listing`** | **0** |
+
+**`lost_listing` never appears on a sell row.** It does not mean "we lost this deal" — it means *"this client
+bought a house WITH us and later sold it WITHOUT us"*: the home's **later fate**, welded onto the purchase
+that created it. That is why a client we repped on both sides reads "lost listing" on his own card.
+
+**The split:** the TRANSACTION records WHAT HAPPENED — side, price, date, agent, address — immutable, **never
+a verdict about today.** DO-THEY-STILL-OWN-IT is a *current, decaying* fact about the person + home, on the
+home pin, refreshable, with a **"no longer live here — update your address"** affordance. `disposition` does
+not pour, and the existing `hl_transactions.disposition` column dies at the freeze.
+
+**Scale of the claim:** 1,287 rows assert `owns` on the strength of a purchase up to twelve years old.
+
+### `website_hlid` is TWO different houses
+
+| | |
+|---|---|
+| `hl_srg_past_clients.website_hlid` | the person's **current home** — stays on the person |
+| `hl_transactions.website_hlid` | **the transacted house** — resolved per deal, at pour time |
+
+**David Mettman: four deals, three houses, one current home.** He bought 928 NE 87th Terrace, bought 609 W
+Edgewood, *sold* 609 W Edgewood, bought 10013 Webster. Copying his current-home pin onto all four deals
+would say he bought and sold the house he lives in today, four times — **a fabricated property history that
+looks perfectly plausible on the card.** Deal addresses resolve through
+`tools/houseloop-cards/resolve-address.mjs` (house-number → stem → unit). **Never hand-rolled.**
+
+### Zero house data pours
+
+`hl_leads` ← `hl_transaction_participant` → `hl_transactions` → `website_hlid` → **`Listing`** (WEB db).
+Photos, price, value, price history and schools live on the `Listing` and **only** there; the deal row
+carries exactly one pointer and every card reads the house live. **No copy, no drift** — the same law as
+home values (doctrine law 6).
+
+This collapses the "123 columns must match" problem: **~60 of the past client's columns (`home_*`,
+zestimate, photos, tax, schools, `houseloop_value`) are a cached copy the doctrine already forbids.** They do
+not need to match anything — they need to stop existing.
+
+### ⚠ Pour-one is not repeatable yet
+
+Ten live `hl_transactions` rows carry an **empty `sisu_transaction_id`** — the map's own stated lineage and
+idempotency key. A pour cannot tell they are already there, and `6424 Evanston Avenue` already sits in the
+table twice ($230,000 and $236,000, both 12/18/2024, same agent). **"Pour ONE and it is perfect" requires
+being able to pour it TWICE safely.**
+
+---
+
 ## 12 · Related
 
 - [Commission & Transactions Model](/schema-lock/commission-model) — **the money + the fold**: the six-table estate, the payout waterfall, eXp caps, the Zillow ladder eras
