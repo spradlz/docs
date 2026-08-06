@@ -3,7 +3,7 @@ title: "Lead Detail Page"
 description: "The /leads/[id] command center — the SINGLE-SCROLL FUB-style page: three lanes that scroll as one, the inline composer at the top of the center iPad, the icon filter row of read-only feed lenses, the AI Context + FUB tabs, and the TC / Referral mode bands. The hub that ties every lead-detail surface together."
 ---
 
-> **Last updated 2026-08-04 14:44 by adam** · [How we work](/how-to/dev-doc-discipline)
+> **Last updated 2026-08-06 12:45 by adam** · [How we work](/how-to/dev-doc-discipline)
 
 ## 📌 Summary
 
@@ -31,20 +31,27 @@ present in `hl_messages` means the message is not lost, it is **unrendered** —
 
 ## 🔗 The board
 
+**[The Household — connected people, hidden leads, and the lead-detail lane](https://claude.ai/code/artifact/a85ac5f4-c863-41ad-9474-e76fcbbf4810)** · owner **adam** · 25 items · 11 done · 6 active · 8 to do
+
+<Info>
+**Zach ruled on 2026-08-06: lead detail gets its OWN board.** This page previously carried an honest empty
+band explaining that no board owned this screen and that pointing it at the Lead Engine board would create
+two sources of truth for one subject. That ruling is now made, and the band is filled.
+
+The board carries the **ten gates** that must pass before any of this reaches a real person, every
+**correction** made during the build, and all three **wireframes rendered as pictures** — not described,
+shown. Protocol: [How we work — the /project-board skill](/how-to/artifact-checklist).
+</Info>
+
 <Warning>
-**THIS DOC HAS NO BOARD YET — and that is a finding, not an oversight to paper over.**
+**GATE 10 IS OPEN AND IT BLOCKS 629 REAL PEOPLE.** A hidden lead is still a lead: 121 files read
+`hl_leads`, 13 of them can reach or enrol a person, and **two have no gate at all**.
+`saved-search-digest-due.ts:32` does `SELECT id FROM hl_leads WHERE lower(email) = lower($1)` — no
+`deleted_at`, no `status` — and it is a **SEND lane keyed on email**. 533 of the 629 legacy spouses have an
+email.
 
-I searched every board in `.claude/artifacts/`. Lead detail is **mentioned** by the Lead Engine board (7
-references) and Lead Engine v2 (5), but neither **owns** it — both are the lead-engine build plan (items
-0–137) and each already belongs to its own doc.
-
-**So I deliberately did not link one.** Pointing this page at a board that belongs to another doc would
-create exactly the failure the one-doc-one-board rule exists to prevent: two sources of truth for one
-subject, disagreeing quietly. An honest empty band beats a convenient wrong link.
-
-**Needs a ruling:** either lead-detail gets its own board (`/project-board new`), or it is formally a
-*surface of* the Lead Engine board and this doc becomes a reference page under it. That is Zach's call —
-it decides who owns the screen, not just where a hyperlink points.
+**Until all 13 lanes honour `hidden`, hiding somebody protects nobody.** That is the half-enforced blocklist
+shape, and this time it points at people who never asked to hear from us. The pour waits on the lanes.
 </Warning>
 
 ## 📋 Run log
@@ -53,6 +60,50 @@ it decides who owns the screen, not just where a hyperlink points.
 **Newest first. Append-only. Nothing is ever collapsed or summarised**, no matter how old — an idea
 written six months ago and built today is exactly what people come here to find.
 </Info>
+
+### 2026-08-06 · adam — the household build, and the board this doc now owns
+
+**Closed items [1–11](https://claude.ai/code/artifact/a85ac5f4-c863-41ad-9474-e76fcbbf4810).** A connected
+person can now exist as a real record, be reachable without being a second job, and the lane that shows them
+has been redesigned from a photograph of the shipped page.
+
+**Built:** `hl_connected_people` gained a nullable lead link plus name/email/phone (mig 0670) and two
+per-connection send toggles defaulting FALSE (mig 0673). Both migrations **prove their own rules inside
+themselves** — 0670 runs five real cases against the live constraint and aborts on a wrong outcome; 0673
+inserts a row without mentioning the toggles and aborts if either comes back true. Three wireframes locked
+or drafted and, for the first time, **committed to git** — they had been untracked, one `rm` from gone.
+
+**Found — nine things, and every one of them was something that looked wired and was not:**
+1. **13 notification types were silently dead.** A foreign key landed while 13 callers still passed a notify
+   CLASS where an event KIND belongs, so every insert threw and every caller was fire-and-forget. No row, no
+   error, no log line. Zach lost roughly a day of texts, Zillow messages, voicemails and missed calls.
+2. **The safety net could not have caught it** — `dispatch.ts` has drop-logging and dead-letter paging and it
+   never fired once, because it guards the DISPATCH stage and this failed at CREATE. *A dead-letter box only
+   catches what got as far as being a letter.*
+3. **The pre-push cage had been disarmed for a day** — `.git/hooks/pre-push` was a static copy, so every gate
+   added after it ran on nothing while printing a green with the old count.
+4. **The hand-typed cage counter was concealing a missing gate** — it read `1/4 … 5/8 … 7/7 … 8/8`, and
+   deriving it revealed cage 6 did not exist.
+5. **The file named `connected-people-LOCKED` was the design Zach REJECTED** — so `UI_ITERATION_HTML_FIRST`
+   was pointing the next builder at the search-gate he killed.
+6. **Two of my commits shipped EMPTY.** `git log`, `git branch --contains` and ancestry all said SHIPPED. The
+   code was not in them. Only grepping the file content on origin found it.
+7. **A bare `ADD CONSTRAINT` froze the migration queue for every agent** — 7 stuck, including Gate Zero's own
+   step. *A migration must be safe to run twice, because sooner or later it will be.*
+8. **`findLeadByPhone` mints a twin for any spouse who texts in** — it reads `hl_leads` only, and its own
+   header has promised "handled by household linking" since 2026-07-17. Household linking never existed.
+9. **A hidden lead is not actually hidden** — item 14, and it is the open gate. Two of the thirteen
+   person-reaching lanes have no gate at all and one of them SENDS, keyed on email.
+
+**Corrected by Zach, on the record:** there is no household object (*"the person is Kyle Nations"*); history
+never moves (*"we dont undue history"*); everyone is a lead, hidden by default — which solved the
+book-inflation problem from a direction neither Caleb nor I had proposed; and **hidden does not mean
+blocked** — the rule an engineer compresses into a `WHERE` clause, which would have made a spouse's tour
+request silently vanish.
+
+**Receipts:** items 1–11 on the board · `scripts/probe-notify-revival.ts` · `scripts/probe-loud-failure.ts` ·
+`tools/vocab/notify-key-cage.mjs` (proven by planting a violation and watching the push BLOCK).
+**Verdict:** pass, with Gate 10 open and blocking the pour.
 
 ### 2026-08-04 · adam — migrated to the run-log format (first run of the `/dev-doc` skill)
 
