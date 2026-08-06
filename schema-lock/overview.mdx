@@ -448,7 +448,7 @@ on the web `Listing` (keyed by HLID), the CRM points at it by `website_hlid` and
 
 ### uncategorized (1)
 
-**`hl_deleted_leads`** — *grain not yet registered* · 7 columns · links to `hl_users`
+**`hl_deleted_leads`** — one row per hard-deleted lead identity · 7 columns · links to `hl_users`
 
 ## The activity catalog (all 175 kinds)
 
@@ -687,6 +687,7 @@ on the web `Listing` (keyed by HLID), the CRM points at it by `website_hlid` and
 
 
 
+
 ## 🗺️ THE MASTER BLUEPRINT (Zach 8/5: "how do we put this all together … a master blueprint that Caleb has to use")
 
 **This is the check-target. The Refinery pour, every backfill, and every new reader builds against
@@ -745,6 +746,63 @@ regenerate from the lock, so the blueprint cannot drift from the database silent
 ## 📋 Run log
 
 *(newest first — append via /dev-doc log; never collapse, never edit past entries)*
+
+### 2026-08-06 · benji — THE COMMISSION ESTATE: 3 kinds, 1 bell, 1 frozen roster, and a dead vocabulary found still walking
+
+**REFERENCE BOARD (not a second board — this page's board is the schema artifact above):**
+[TC Loop — Contract Engine](https://claude.ai/code/artifact/cd761514-1600-4e12-aaf1-2af99c1ae98f),
+items 137–142. Doc: [Transaction Coordination](/guides/transaction-coordination).
+
+**SHIPPED — migrations 0645 · 0646 · hl_txn schema 003.**
+
+**0645 — three commission kinds.** `commission_submitted` · `commission_approved` (the AGENT) ·
+`commission_certified` (the BROKER/TC). Two kinds for approve-vs-certify because they are **two
+people at two moments**, and `hl_txn.commission_forms` already carries both column pairs
+(`cda_approved_by` / `certified_by`). Twin hunt against 172 kinds: `WHERE sentence ~* 'approv|certif|
+sign off|authoriz'` returned **zero rows** — the concept was absent. The near-twin `document_signed`
+was argued against, not ignored: it is a fact about a PDF, `commission_approved` is a fact about
+money, and they come apart both ways.
+
+**0646 — the commission bell, all three legs in one pass.** `hl_notify_classes` row + template-registry
+entry + catalog `notify_class`. **The money is in the heading** (`{{commission.agent_net}}`) because a
+document bell cannot say the number. `commission_submitted` and `_certified` stay silent — Zach
+toggled ONE moment.
+
+**hl_txn schema 003 — `hl_srg_legacy_agent`**, 83 agents derived from the closings. Signed by Lee with
+three amendments, all taken: no `team` column (one value for all 83 rows), no derived stats (they are
+`hl_srg_legacy_agent_stats`, a **VIEW** — a stored copy of a derivable number drifts), no `is_active`
+(derivable from `left_on IS NULL`).
+
+**⚠ FOUND — a ruled-dead vocabulary still walking.** Building 577 I could not find the WHO axis Lee
+specified. The record ALREADY held the ruling verbatim — *"There is no actor. There never was. It is
+a USER"* — and it had **never been executed**. `hl_activity_runlog` still carries `actor` ·
+`actor_kind` · `actor_role`, holding `lead` 14,614 · `human` 1,806 · `system` 796 · `ai_agent` 603
+against a closed set of **user | lead | system**. Now **board 578** as the run-log era's step zero:
+a ONE_COMMIT_RENAME across 78 files and 17,819 rows. `ActivityActorRole` has been WIDENED to include
+`user` (additive, breaks no caller) so new code writes the correct vocabulary and 578 carries those
+rows with no second touch.
+
+**⚠ FOUND — two document stores, and a FK between them is IMPOSSIBLE.** `hl_tc_loop_document` +
+`hl_tc_loop_folder` (the dotloop model, 33 docs in 19 folders, e-sign aware) live on the **CRM db**;
+`commission_forms` + `hl_txn.transaction_documents` live on **hl_txn**. Cross-database FKs do not
+exist in Postgres, so the link is unenforceable until the estate converges. Lee ruled the dotloop tree
+the tree of record and **froze** `hl_txn.transaction_documents` (2 rows, no folder, no e-sign) — it
+takes no `form_id` and no new writes. The interim is ONE growing store plus a loose crm-document id on
+`commission_forms`, explicitly commented **pour-debt**. My proposal to move `commission_forms` to the
+CRM db was **struck**: it trades the existing FK to `hl_txn.transactions` for the documents FK. That
+is the estate question, and it is Zach-gated.
+
+**⚠ FOUND — the seating probe earned its keep twice.** My first probe hit *"relation hl_lead_activity
+does not exist"* — I had taken the table name from a comment in 0636 rather than looking. The writer
+is `hl_activity_runlog`. Three green catalog rows would have read as "seated" while shipping an audit
+trail for PAY DECISIONS that logs nothing. Probed properly with a **control**: an unseated kind
+returns *"violates foreign key constraint fk_activity_kind_catalog"*. Without the control the probe
+only proves the inserts ran, not that the test could fail.
+
+**Verdict:** pass on 0645, 0646, 003. **⚠ NOT DONE and not claimed:** the 577 webhook change is
+committed but **UNWALKED** (localhost points at the production databases, so a synthetic Documenso
+payload writes real rows against a real lead — it needs a genuine test loop), and **no computed
+commission value has been stored anywhere**.
 
 ### 2026-08-06 morning · lee — THE ONE-RUNLOG RULINGS: Zach overturned receipt #48's reversal; the WHO tokens stand as signed
 

@@ -1,201 +1,204 @@
 ---
 title: "Lead Deletion"
-description: "How HouseLoop CRM hard-deletes a lead: one purgeLead() source of truth, ON DELETE CASCADE for FK tables, an anonymous-aware pixel purge, phone-matched messages, the cross-database website User, and a schema guard so a new table can never be forgotten."
+description: "The three ways a lead leaves your view — Trash (hides, reversible), Block (stops contact), and Hard Delete (owner-only, permanent) — plus the purgeLead cascade, the two tombstones, and the four doors that must consult them."
 ---
 
-When a lead is deleted in HouseLoop CRM, **every trace is permanently removed**
-from both the CRM database and the website database. There is no soft-delete, no
-trash bin at the database level, and no tombstone row. The "Trash" concept lives
-as a pipeline stage for leads the operator wants to hide temporarily — an actual
-delete is irreversible and total.
+<Info>
+**Last updated 2026-08-06 by adam.** Rewritten from the ground up: the previous version (2026-07-08)
+opened with *"there is no soft-delete, no trash bin at the database level, and no tombstone row"* — and
+all three of those now exist. It described a hard-delete-only world that has not been true since 23 July.
+</Info>
 
-## Why hard-delete
+## What is true today
 
-Soft-delete (a `deleted_at` timestamp) was removed in May 2026 because orphaned
-data kept resurfacing. A lead marked as deleted would still match inbound texts
-by phone number, still appear in notification queries, and still pollute pixel
-analytics. The hard-delete model eliminates every class of ghost data by removing
-the rows entirely.
+A lead can leave your view three different ways, and they are **not** the same thing.
 
-## One source of truth: `purgeLead()`
+| | What it does | Who | Reversible |
+|---|---|---|---|
+| **Trash** | Hides the lead from the leads table. History kept. Never blocks anybody. | Any agent | Yes |
+| **Block** | The number cannot call, text, or iMessage you. Deliberate, for harassment. | Any agent | Yes |
+| **Hard delete** | The record is destroyed. Cannot be restored. | **Owner only** | **No** |
 
-All purge logic lives in a single function — `lib/leads/purge-lead.ts` —
-exported as `purgeLead(id)`. Both delete paths call it:
+The model deliberately mirrors Follow Up Boss, because FUB is the system of record and the two must never
+disagree about what "deleted" means: in FUB, trash hides and restores, and a real delete is permanent and
+owner-only.
 
-- `DELETE /api/leads/[id]` — single lead
-- `POST /api/leads/bulk` with `action: "delete"` — loops `purgeLead()` per id
-
-This is deliberate. The purge used to be hand-copied into both routes, and the
-two copies drifted (and both carried the same pixel bug). **There is now exactly
-one nuke button**; the routes are thin wrappers around it.
+**Trash never blocks, and blocking never trashes.** They are separate deliberate acts. A trashed lead who
+calls or texts again **resurfaces** — trash means hidden, not gone.
 
 <Warning>
-**NEVER hand-roll a lead purge with raw SQL.** Deleting a lead means calling `purgeLead()` — via
-`DELETE /api/leads/[id]`, the bulk-delete route, or the test harness (`hl_reg_purge_lead`, which calls the real
-DELETE cascade). A hand-written `DELETE FROM hl_leads …` (or any subset of these steps) **skips the parts that
-have no lead FK** — the anonymous pixel purge (step 2), phone-keyed inbound (step 4), and **the cross-DB website
-`User` delete (step 6)** — which is exactly how a "deleted" lead leaves an orphaned website identity that
-resurfaces on re-registration. If you need to purge a test identity, call the endpoint / harness. Do not
-reinvent this function. *(This warning exists because a raw-SQL "purge" on 2026-07-08 skipped step 6 and
-stranded a website `User` + its saved searches — the whole point of the one-button rule.)*
+**Trash hides a lead from your TABLE, never from the matcher.** If a trashed person comes back, the system
+must still recognise them so they land on their own record with their history. A gate on the matching path
+turns a returning person into a **duplicate** while the original sits orphaned. This is the single most
+important rule on this page.
 </Warning>
 
-Purge is built from two layers:
+**Full build spec (signed by Zach + Lee, 2026-08-06):**
+[Trash, Block and Delete](https://claude.ai/code/artifact/a7470f03-37b3-4aa0-8c95-645a5f226770)
 
-1. **Structural (automatic) — `ON DELETE CASCADE` foreign keys.** Every table
-   with a `lead_id` FK to `hl_leads(id)` is purged by the database itself when the
-   lead row is deleted. A *new* table is covered the moment its FK is declared
-   `REFERENCES hl_leads(id) ON DELETE CASCADE` — no code change to `purgeLead()`.
-2. **Explicit — `purgeLead()` handles the exceptions** that have no lead FK:
-   pixel events (keyed by visitor), polymorphic notes, phone-keyed inbound, and
-   the cross-DB website user.
+## Trash — the reversible one
 
-## The purge sequence
+Trash sets `hl_leads.deleted_at`. Nothing is destroyed. The trash bin lives at `/m/trash`
+(`app/api/m/trash/route.ts`) and supports list, restore, delete-one-permanently, and empty-trash.
 
-### 1. Snapshot the lead
+**Nothing in the trash ever expires** — Zach, 2026-07-25: *"let's not do the auto delete… I don't want
+that."* There is no retention window and no sweeper. A trashed lead sits untouched until a human acts.
 
-`purgeLead()` reads the lead's `id`, `email`, and `phone` from `hl_leads`. These
-drive the explicit cleanup steps below. If the lead doesn't exist it returns
-`{ ok: false }` and the route responds `404`.
-
-### 2. Purge the pixel tables (anonymous-aware)
-
-`hl_pixel_event` and `hl_pixel_visitor` are the only two lead-referencing tables
-with **no foreign key** to `hl_leads` (a visitor is anonymous-first: `lead_id` is
-`NULL` until the visitor identifies). Deleting `WHERE lead_id = $id` alone is a
-trap — it **misses the anonymous events** (page views recorded under the browser's
-`visitor_id` before signup). Those survive and **re-link by email** the next time
-the same person registers (the lead-intake backfills
-`pixel_visitor/event SET lead_id WHERE email = ...`), producing "ghost views" on a
-brand-new lead.
-
-`purgeLead()` deletes every pixel row for the lead's **email-linked visitor IDs**,
-anonymous rows included:
-
-```sql
-DELETE FROM hl_pixel_event
- WHERE lead_id = $1
-    OR visitor_id IN (
-         SELECT visitor_id FROM hl_pixel_visitor
-          WHERE lead_id = $1 OR ($2 <> '' AND lower(email) = lower($2))
-       );
-
-DELETE FROM hl_pixel_visitor
- WHERE lead_id = $1 OR ($2 <> '' AND lower(email) = lower($2));
-```
-
-A future lead with the same email or browser therefore inherits **zero** history.
-
-### 3. Purge polymorphic tables
-
-`hl_notes` uses `entity_type` + `entity_id` instead of a direct FK:
-
-```sql
-DELETE FROM hl_notes WHERE entity_type = 'lead' AND entity_id = $1
-```
-
-### 4. Purge phone-matched messages
-
-`hl_inbound_messages` links to leads **by phone number**, not by `lead_id`. If the
-lead has a phone, `purgeLead()` normalizes it to the last 10 digits and deletes
-every row where `from_number` or `to_number` matches:
-
-```sql
-DELETE FROM hl_inbound_messages
-WHERE right(regexp_replace(from_number, '\D', '', 'g'), 10) = $1
-   OR right(regexp_replace(to_number, '\D', '', 'g'), 10) = $1
-```
-
-This stops a future lead with the same number from inheriting the deleted lead's
-message history — otherwise the [comms resolver](/guides/team-communications)
-would re-attach old messages and create ghost conversations.
-
-<Warning>
-Phone-matched deletion is aggressive by design. If two leads share a phone number
-(rare — see [deduplication](/guides/lead-deduplication)), deleting one removes
-inbound messages that matched _both_. Intentional: nothing from a deleted lead
-survives.
-</Warning>
-
-### 5. CASCADE delete from `hl_leads`
-
-```sql
-DELETE FROM hl_leads WHERE id = $1
-```
-
-Every FK that references `hl_leads.id` is `ON DELETE CASCADE`. As of the current
-schema that is **42 of the 44** tables holding a `lead_id` (the other two are the
-pixel tables in step 2; the newest cascade table is `hl_trigger_fire`, the trigger-fire
-ledger, mig 0355). One `DELETE` wipes all dependent tables automatically —
-`hl_messages`, `hl_notification`, `hl_tasks`, `hl_appointments`, `hl_calls`,
-`hl_lead_tags`, `hl_lead_collaborators`, `hl_stage_transitions`,
-`hl_saved_search_match`, `hl_bb_events`, `hl_lead_addresses`, and more. No
-application code enumerates these — the database enforces it.
-
-### 6. Cross-database website purge
-
-The CRM and website run on **separate PostgreSQL databases**. The website stores a
-`User` row (sessions, saved searches, `ListingReaction`/`SavedListing`, profile)
-matched to the CRM lead by email. After the CRM cascade, `purgeLead()` calls
-`deleteWebUserByEmail(email)` against `HL_WEB_DATABASE_URL`:
-
-```sql
-DELETE FROM "User" WHERE lower(email) = lower($1)
-```
-
-The website `User` table also cascades on all its FKs, so one delete cleans
-everything (including the likes/saves that back the `/favorites` page).
+Trashing is `DELETE /api/leads/[id]?soft=1` (optionally `&block=1`), which lives on the main leads route so
+the mobile app and the desktop CRM share one code path and can never disagree about what "deleted" means.
 
 <Note>
-The cross-DB delete is **best-effort with error logging**. If the website DB is
-unreachable, the CRM lead is still deleted and the failure is logged.
+**Today the trash bin is mobile-only.** The desktop CRM has no trash view and no status filter — that is
+specced but not built. See *What is not built yet* below.
 </Note>
 
+## Block — stopping contact
+
+Blocking writes the number to `hl_blocked_numbers` (`lib/phone/blocklist.ts`). It is enforced at the three
+**contact** doors:
+
+| Door | What a blocked caller gets |
+|---|---|
+| Inbound call (`app/api/phone/webhooks/voice`) | TwiML `Reject` — the call never connects |
+| Inbound SMS (`app/api/phone/webhooks/sms`) | Empty TwiML — silently dropped, no lead minted |
+| Inbound iMessage (`app/api/bb/inbound`) | Dropped, no lead minted, no notification |
+
+Unblock in Settings → Phone. When the contact has a real name, the confirm names them, so blocking an
+actual lead is always deliberate rather than a reflex (`lib/leads/blockable.ts`).
+
 <Warning>
-**An orphaned website `User` row is NOT harmless — it silently blocks re-registration** (learned the hard way,
-2026-07-08). The website's complete-profile step calls `GET /api/auth/complete-profile`, which returns
-`complete = !!(name && phone)`. If a leftover `User` row still carries a name + phone, the site treats the next
-sign-in with that email as a **returning, already-complete user**, **skips the complete-profile POST, and never
-calls the CRM lead-intake** — so the person gets a website account but **no CRM lead and no General Registration
-door fires**. The website `User` delete in step 6 is therefore **not optional cleanup; it is what makes
-re-registration work.** If step 6 ever fails (web DB down), the delete is *incomplete* — re-run it, don't leave
-the orphan.
+**Blocking only half-works today, and this is the known gap.** It is checked at the three contact doors
+above and at **zero** of the four doors that CREATE a lead — website registration, the Follow Up Boss
+import, `mint-phone-lead`, and the manual add. So a blocked spam caller genuinely cannot ring you, and
+still lands back in the table on the next FUB sync. Measured 2026-08-06.
+</Warning>
+
+## Hard delete — owner only, permanent
+
+Hard delete destroys the record. It is gated to the `owner` role (migration `0648`), one tier above admin.
+
+<Warning>
+**Rule #0 applies.** A hard delete is destructive by design and the owner gate is the product. Any
+**backfill or sweep** that hard-deletes in bulk needs Zach's typed approval naming the target — the owner
+gate covers a human deleting one lead, not a script deleting many.
+</Warning>
+
+### The two tombstones
+
+A hard delete must write **both** guards, or the person resurrects through whichever one was forgotten.
+
+| Tombstone | Database | Keyed on | Guards against |
+|---|---|---|---|
+| `hl_deleted_leads` (mig `0649`) | CRM | `fub_person_id`, phone, email — any signal | The **FUB import** re-creating them |
+| `hl_deleted_web_emails` | Website | email | **Magic-link** resurrection |
+
+**The CRM tombstone is not about barring humans.** You cannot delete a person in Follow Up Boss, so when a
+lead is destroyed here the next sync sees them, finds no match, and re-creates them with every field
+intact. The tombstone tells the import to skip them permanently. Barring a human is what **Block** is for.
+
+A hard-deleted person who returns under their own steam comes back as a **stranger with a blank record**,
+which is honest — the old one was destroyed.
+
+<Note>
+`hl_deleted_web_emails` guards a subtler hole: a magic-link token is a forever `HMAC(email)` with no
+expiry, so a purged user's old link would silently re-create the account. The tombstone is written
+**before** the delete for exactly that reason.
+</Note>
+
+## The purge sequence — `purgeLead()`
+
+All purge logic lives in one function, `lib/leads/purge-lead.ts`. **Never hand-roll a lead purge with raw
+SQL** — a hand-written `DELETE FROM hl_leads` skips every step that has no lead FK, which is exactly how a
+"deleted" lead leaves an orphaned website identity that blocks re-registration.
+
+Callers today: `app/api/leads/[id]`, `app/api/leads/bulk`, `app/api/m/trash` (delete-one and empty-trash),
+and the test harness `lib/test-harness/audit.ts`.
+
+1. **Snapshot** the lead's `id`, `email`, `phone` — these drive the explicit steps.
+2. **Pixel tables, anonymously aware.** `hl_pixel_event` and `hl_pixel_visitor` have no FK to `hl_leads`
+   (a visitor is anonymous-first). Deleting `WHERE lead_id = $id` alone **misses the anonymous events**
+   recorded before signup, which then re-link by email on the next registration and show as ghost views on
+   a brand-new lead. The purge deletes by the lead's email-linked visitor ids, anonymous rows included.
+3. **Polymorphic tables.** `hl_notes` keys on `entity_type` + `entity_id`, not a FK.
+4. **Phone-matched inbound.** `hl_inbound_messages` links by phone, not `lead_id`. Normalised to the last
+   10 digits — the same normalisation `hl_blocked_numbers` and `hl_deleted_leads` use. **One phone rule in
+   this estate, not three that drift.**
+5. **`DELETE FROM hl_leads`** — every FK referencing `hl_leads.id` is `ON DELETE CASCADE`, so one delete
+   wipes the dependents. 51 `hl_` tables carry a `lead_id`; the guard confirms all are covered.
+6. **Cross-database website purge** — `deleteWebUserByEmail()` against `HL_WEB_DATABASE_URL`, which
+   tombstones the email first, then deletes the `User` (whose own FKs cascade).
+
+<Warning>
+**An orphaned website `User` row is not harmless — it silently blocks re-registration.** If a leftover row
+carries a name and phone, the site treats the next sign-in as a returning complete user, skips the
+complete-profile step, and never calls the CRM lead-intake. The person gets a website account, **no CRM
+lead, and no registration door fires**. Step 6 is not optional cleanup; it is what makes re-registration
+work. Learned 2026-07-08 when a raw-SQL purge skipped it.
 </Warning>
 
 ## The guard — why you never have to remember
 
-A schema-scan guard, `tools/lead-purge-audit.mjs`, makes a forgotten table
-impossible. It reads `information_schema` and **fails (exit 1)** if any `hl_` table
-has a `lead_id` column that is covered by *neither*:
-
-- an `ON DELETE CASCADE` FK to `hl_leads`, nor
-- the explicit allow-list in the guard (`hl_pixel_event`, `hl_pixel_visitor`),
-  which must also be handled inside `purgeLead()`.
-
-```bash
-HL_CRM_DATABASE_URL=... node tools/lead-purge-audit.mjs
-# every lead-referencing table is covered (CASCADE or explicit purge).
-```
-
-Run it in CI / drift-check. When someone adds a new lead-referencing table the
-guard forces them to either give it a cascade FK or wire it into `purgeLead()` —
-the table can never silently orphan on delete.
+`tools/lead-purge-audit.mjs` reads `information_schema` and **fails (exit 1)** if any `hl_` table has a
+`lead_id` covered by neither an `ON DELETE CASCADE` FK nor the explicit allow-list handled inside
+`purgeLead()`. It runs on every migration. A new lead-referencing table can never silently orphan.
 
 ## What is NOT deleted
 
 | Item | Why |
 |---|---|
-| `hl_lead_sources` | Shared config, not per-lead data. |
-| `hl_stages` / `hl_pipelines` | Pipeline configuration. |
-| `hl_templates` | Team-level email/text templates. |
-| `hl_run_log` | Inngest run history — operational audit. |
+| `hl_lead_sources` | Shared config, not per-lead data |
+| `hl_stages` / `hl_pipelines` | Pipeline configuration |
+| `hl_templates` | Team-level templates |
+| `hl_run_log` | Inngest run history — operational audit |
 
-## Source files
+## What is not built yet
+
+Honest list, so nobody reads this page as a description of a finished feature:
+
+- **The desktop trash view and status filter.** Trash is mobile-only today.
+- **The loud delete dialog** with the two tiers on the lead detail.
+- **`purgeLead()` writing both tombstones.** The CRM tombstone table exists; the write is not wired.
+- **The four lead-creating doors consulting the blocklist and the tombstone.** This is the half-enforcement
+  gap described above, and neither guard ships one door at a time.
+
+## Run log
+
+### 2026-08-06 · adam
+**Migrations `0648` (owner role) and `0649` (`hl_deleted_leads`) applied.** Both constraints proven to
+**reject**, not merely to exist: role `superuser` rejected / `owner` accepted; a tombstone with no identity
+key rejected / one key accepted and a repeat deduped to a single row — all inside transactions, all rolled
+back. **Found:** `hl_users.role` had **no check constraint at all**, so this was a new constraint that had
+to permit every live value (agent 4 · admin 2 · clone 2 · broker 1). A CHECK permits NULL, so the null
+question was decided rather than discovered — the column was already `NOT NULL`, verified rather than
+assumed. **Found:** the blocklist is enforced at 3 contact doors and 0 creation doors. **Verdict:** schema
+in, enforcement next.
+
+### 2026-08-06 · adam
+**The working-state gate shipped** (`142f01f2c8`). The leads table now defaults to `status = 'active'`, so
+`staged` rows — Caleb's 1,779 past clients — stay invisible until cutover. Written once and shared by the
+row query and the count query so they cannot drift. **Proven on one row before the pour:** 51 active →
+flip one to staged → table shows 50, the Status filter finds the 1, the database still holds 51 → flip
+back → 51. **Verdict:** pass; a gate never observed hiding anything is a gate nobody has tested.
+
+### 2026-07-25 · zach
+**Trash + Block, the swipe model.** *"Do you want to trash this lead only, or trash and block this lead?"*
+Both reversible. Hard delete deliberately unreachable from a swipe — it lives only inside the trash view.
+Nothing auto-expires.
+
+### 2026-07-08 · (prior author)
+**`purgeLead()` became the single source of truth** after the purge was hand-copied into two routes and the
+copies drifted, carrying the same pixel bug. **Found:** a raw-SQL purge skipped the cross-database website
+delete and stranded a `User` row plus its saved searches, which then blocked that person re-registering.
+
+## Reference
 
 | File | Role |
 |---|---|
-| `lib/leads/purge-lead.ts` | **The single source of truth** — `purgeLead(id)` |
-| `app/api/leads/[id]/route.ts` | Single-lead DELETE handler (calls `purgeLead`) |
-| `app/api/leads/bulk/route.ts` | Bulk delete handler (loops `purgeLead`) |
-| `lib/web-db.ts` | Cross-DB pool + `deleteWebUserByEmail()` |
-| `tools/lead-purge-audit.mjs` | Schema-scan guard against forgotten tables |
+| `lib/leads/purge-lead.ts` | The single hard-delete choke point |
+| `lib/leads/blockable.ts` | Trash vs Trash+Block, and the named-person confirm |
+| `lib/phone/blocklist.ts` | `isNumberBlocked` / block / unblock / list |
+| `lib/web-db.ts` | Cross-DB pool, web tombstone, `deleteWebUserByEmail()` |
+| `app/api/m/trash/route.ts` | The trash bin — list, restore, purge, empty |
+| `tools/lead-purge-audit.mjs` | Schema guard against a forgotten table |
+| `db/migrations/0648_owner_role.sql` | The owner role constraint |
+| `db/migrations/0649_deleted_leads_tombstone.sql` | The CRM tombstone |

@@ -7,10 +7,46 @@ description: "TC Loop — HouseLoop's own Transaction Coordination platform (our
 
 ## 📌 Summary
 
-<Warning>
-**TODO — write the summary.** One or two paragraphs: what is TRUE about this subject today. This band
-is REWRITTEN on every update; everything else appends.
-</Warning>
+**TC Loop is HouseLoop's own transaction coordination platform — our dotloop, owned end to end.** A
+transaction is a Loop: a folder of documents, signatures and activity, contract to close. The left
+menu is now **three sections**, and it mirrors the CRM 1:1:
+
+| Section | Items |
+|---|---|
+| **TC Loop** | Loops · Forms · Email Queue |
+| **Commission** | eXp Grid · Commission Settings · Commission Forms · Commission Docs · CDAs |
+| **Configure** | Transaction Types · Transaction Status · TC Working Status · Milestones · Tasks |
+
+**The Commission section is new (2026-08-06)** and it is the current build. Five of its pages already
+existed and were **completely unreachable** — `/transactions/settings`, the editor for the tiers, the
+eXp fees and the referral sources, had no link from anywhere in the app. That is the root of why the
+comp plan drifted into four disagreeing copies: the one surface that could have kept them in sync was
+invisible.
+
+**What is true about the money today:**
+
+- **The comp plan is per TEAM and effective-dated in shape.** Two teams exist: *Spradling Realty Group
+  - Legacy* (`srg-legacy`, frozen — `is_legacy=true`, writes rejected server-side) and *Spradling Realty
+  Group powered by HouseLoop* (`srg-powered-by-houseloop`, fully editable). A historical plan is locked
+  because editing it silently recomputes what past deals paid.
+- **ONE era boundary: 2022-05-01.** Before it, Keller Williams — flat 50/50 team-provided, 75/25
+  agent-provided, $8,000 cap, 30% to cap, and a **6% franchise fee that survives the cap**. After it,
+  eXp and the 5-tier system: $4,000 for a team agent, and **one shared $16,000 couples cap** for Zach
+  and Ana (never $16k each).
+- **The tier lives in the SISU agent name**, and absence is the value: no `- Tier N` suffix means
+  **Tier 1**. That rule resolves 1,947 of 1,947 closed deals with zero guesses.
+- **The cap is COMPUTED, not asserted.** The deal on which an agent crosses their cap pays the
+  remaining headroom and stops — the case the old yes/no boolean could not express at all.
+- **Equity stock is shown but never deducted** (Zach 2026-08-06). It was being taken from every agent
+  on every deal with no election, understating every net by 5%.
+
+**Where the numbers stand:** 1,947 closed SRG deals · **1,786 with GCI recorded by SISU** ($16.25M) ·
+140 pre-2019 estimated at 2.9% (SISU did not exist yet) · 18 agent-own deals where $0 is correct.
+Residual to SRG on the real deals: **$5.81M** before company fees.
+
+**⚠ Nothing computed has been stored yet.** `commission_splits` holds 3 rows against 11,639 deals and
+its output columns are null even there. The engine exists, is tested against 1007 Skyline Drive, and
+has never been pointed at the book. That backfill is gated on the estate question below.
 
 ## 🔗 The board
 
@@ -22,6 +58,55 @@ is REWRITTEN on every update; everything else appends.
 **Newest first. Append-only. Nothing is ever collapsed or summarised**, no matter how old — an idea
 written six months ago and built today is exactly what people come here to find.
 </Info>
+
+### 2026-08-06 · benji — the commission estate
+
+**Closed [items 137–142](https://claude.ai/code/artifact/cd761514-1600-4e12-aaf1-2af99c1ae98f) plus
+migrations 0645 · 0646 · schema 003.** Built the commission estate end to end: the reconciliation, the
+eXp Grid calculator, the Commission menu, the frozen agent roster, and the audit vocabulary.
+
+**Built:** the cap became computable (`cap_amount` + `ytd_paid_in` on the engine); the referral row
+became a source picker carrying every band in Zach's format — `Zillow ($150,000 - $224,999)  30%`;
+a **Commission** section on the TC menu; `hl_srg_legacy_agent` (83 agents, populated from closings)
+with its stats as a **VIEW**, not columns; three activity kinds; and the commission bell.
+
+**Found — and this is the valuable half:**
+
+- **The tier was in `agent_raw` the whole time and the importer threw it away.** It parsed
+  `Hanks - Tier 2, Alisha` into `agent`, then left `agent_tier` NULL on all 11,639 rows — the column
+  built to hold it, sitting right beside it.
+- **The engine could not express a cap being crossed.** `is_exp_capped` was a boolean, so the one deal
+  a cap exists for was always all-or-nothing.
+- **`risk_mgmt_annual_cap` was read from the DB and silently dropped**, so the grid printed
+  "$60/Deal Capped at $750/Yr" while the math charged $60 forever.
+- **Five commission pages were built and unreachable.** No link from anywhere.
+- **Two document stores in two databases**, so `commission_forms` cannot hold a FK to the real
+  document tree — cross-database FKs do not exist. Lee ruled the dotloop tree
+  (`hl_tc_loop_document` + `_folder`) the tree of record and froze `hl_txn.transaction_documents`.
+- **Every agent signature was an unrecorded moment.** The signed branch sat behind a `buyerSigned`
+  guard; a 3-party agreement recorded one of three signings.
+- **`actor` was a ruled-dead vocabulary still walking.** The record already said *"There is no actor.
+  There never was. It is a USER"* and it had never been executed. Now board 578.
+
+**Corrections on the record — mine, in order:**
+1. Called four rows "genuinely missing GCI" when they were agent-own deals we took no commission on.
+   A name test cannot find an agent deal; it is a business fact.
+2. Told Caleb the unmatched deals were "concentrated in 2019-2020" from a head-slice of an unsorted
+   list. The real peak is 2021-22 across every year.
+3. Handed Caleb two "unexplained closings" that were Zach's own signed `agent-dnc` exclusions.
+4. Told Lee an e-signed CDA would double-ring, and he **signed a suppression on that false premise**.
+   The existing bell is buyer-scoped; the collision cannot happen. Both names on that one.
+5. Called the agent-signature gap an ALL_FEED violation. It is not — `document_signed` does log at
+   `DOCUMENT_COMPLETED`. The real defect is narrower: no bell, and no per-signer row.
+
+**Receipts:** 0645 (3 kinds, seated with a control proving the probe can fail) · 0646 (three legs:
+class row + template registry + catalog) · schema 003 (83 agents, VIEW reconciles exactly to source —
+1,947 closings and $16,252,147 on both sides) · canonical 1007 Skyline still computes to the cent.
+
+**Verdict:** pass on everything shipped. **⚠ Two things are explicitly NOT done and not claimed:** the
+577 webhook change is committed but **NOT WALKED** (localhost points at production databases, so a
+synthetic payload writes real rows — it needs a real test loop), and **no computed commission has been
+stored anywhere**.
 
 ### 2026-08-06 · migrated to the run-log format
 
