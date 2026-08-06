@@ -48,7 +48,10 @@ twins, the `hl_srg_*` refinery is FROZEN (20 tables, trigger-enforced — no mor
 verified silent. That two-client rehearsal surfaced **six class defects** — a backdated `created_at` that
 killed the FUB legacy band, call summaries filed as texts, calls double-counted in the All feed, three of
 five call kinds missing the call card, and a "new leads" count that would have read ~2,300 on pour day.
-Five are fixed at the WRITER. **Full detail: [Update log → 2026-08-06](#update-log).**
+Five are fixed at the WRITER. Two more surfaced after: **the mirror had silently drifted again** (third
+time in three days) and **three separate columns had readers, documentation and no writer** — including
+the pour's own idempotency handle, which meant a re-run would have created a second Kyle.
+**Full detail: [Update log → 2026-08-06](#update-log).**
 **The gate before 1,779:** a pre-pour audit that asserts those invariants automatically — today every one
 was found by Zach looking at a screen, which does not scale to the ~50K waiting in the FUB mirror.
 
@@ -592,7 +595,31 @@ on 8/2**, not a live leak. And 77 `hl_calls` rows with no feed row are `lead_id 
 calls from unknown numbers, which correctly appear on nobody's card. **Reading the write path before
 calling something a gap is the only thing that stopped all three.**
 
-**Receipts:** commits `ef6d04a89f` · `94014b402f` · `f335503403` · pour stamp (auto-saved) ·
+**FOUND — 7 · The mirror drifts silently, and that is now the third time in three days.**
+Adam added `hl_leads.last_opened_at` today; `srg_leads` never got it. A pour would simply have **DROPPED
+the column** — an INSERT that never names a column cannot complain about it. `LIKE … INCLUDING ALL` is a
+**SNAPSHOT, NOT A SUBSCRIPTION**: correct the instant it is cut, drifting the moment anyone touches the
+twin, and nothing fails when it does. Three drifts (mig 0677 moved 3 columns · 0683 the status CHECK ·
+0689 this), **every one found by running `mirror-parity.mjs` on purpose, never by something breaking.**
+Fixed as mig 0689 with a both-directions probe that ABORTS on any mismatch. **The rule that matters more
+than the migration: re-run the parity tool immediately before ANY pour.**
+⚠ My own probe then caught a second drift in the direction people forget — a column the MIRROR has that
+production does not (`poured_id`). Exempted **by name with its reason**; the tempting fix was to delete
+that arm of the check, which would have permanently blinded the direction that lets a pour write a value
+nothing downstream reads.
+
+**FOUND — 8 · THREE COLUMNS IN ONE DAY WITH READERS, DOCUMENTATION AND NO WRITER.** This is the day's
+most transferable finding. `hl_leads.import_batch_id` — Adam's new-leads filter read it, nothing wrote
+it, so it excluded nothing while looking correct. `srg_leads.poured_id` — signed in `model.lock.json`,
+exempted in the parity tool, documented in `column-verdicts.json`, and populated on **0 of 2,339 rows,
+including Kyle and Karlie, who are poured**; re-running the pour would have silently created a second
+Kyle, a second Karlie and a duplicate set of deals. The FUB call summary — captured, then filed on the
+wrong row. **A documented column proves what somebody INTENDED, never what anything DOES.** Fixed: the
+pour now stamps both, an idempotency gate refuses an already-poured household (proven by re-running it
+live and watching it REFUSE), and `--delete` clears the stamp in the same transaction so the guard cannot
+become a permanent lock. **At pour scale, count a column's non-null rows before trusting it.**
+
+**Receipts:** commits `ef6d04a89f` · `94014b402f` · `f335503403` · `f344fe429f` · mig `0689` ·
 `.claude/reports/call-notice-dedupe-2026-08-06.json` · `.claude/reports/call-mirror-duplicate-rows-2026-08-06.json`.
 **Verdict: PASS — the rehearsal did its job.** Six class defects found on two clients, five fixed at the
 WRITER rather than the surface. **Not yet done:** a pre-pour audit that asserts these invariants
