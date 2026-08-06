@@ -3,7 +3,7 @@ title: "Lead Detail Page"
 description: "The /leads/[id] command center — the SINGLE-SCROLL FUB-style page: three lanes that scroll as one, the inline composer at the top of the center iPad, the icon filter row of read-only feed lenses, the AI Context + FUB tabs, and the TC / Referral mode bands. The hub that ties every lead-detail surface together."
 ---
 
-> **Last updated 2026-08-06 12:45 by adam** · [How we work](/how-to/dev-doc-discipline)
+> **Last updated 2026-08-06 19:30 by adam** · [How we work](/how-to/dev-doc-discipline)
 
 ## 📌 Summary
 
@@ -31,7 +31,7 @@ present in `hl_messages` means the message is not lost, it is **unrendered** —
 
 ## 🔗 The board
 
-**[The Household — connected people, hidden leads, and the lead-detail lane](https://claude.ai/code/artifact/a85ac5f4-c863-41ad-9474-e76fcbbf4810)** · owner **adam** · 25 items · 11 done · 6 active · 8 to do
+**[The Household — connected people, hidden leads, and the lead-detail lane](https://claude.ai/code/artifact/a85ac5f4-c863-41ad-9474-e76fcbbf4810)** · owner **adam** · 47 items · 34 done · 2 active · 11 to do
 
 <Info>
 **Zach ruled on 2026-08-06: lead detail gets its OWN board.** This page previously carried an honest empty
@@ -43,16 +43,21 @@ The board carries the **ten gates** that must pass before any of this reaches a 
 shown. Protocol: [How we work — the /project-board skill](/how-to/artifact-checklist).
 </Info>
 
-<Warning>
-**GATE 10 IS OPEN AND IT BLOCKS 629 REAL PEOPLE.** A hidden lead is still a lead: 121 files read
-`hl_leads`, 13 of them can reach or enrol a person, and **two have no gate at all**.
-`saved-search-digest-due.ts:32` does `SELECT id FROM hl_leads WHERE lower(email) = lower($1)` — no
-`deleted_at`, no `status` — and it is a **SEND lane keyed on email**. 533 of the 629 legacy spouses have an
-email.
+<Info>
+**GATE 10 IS CLOSED — `hidden` is a shield, not a label.** The four lanes that GO LOOKING for leads to
+act on (`agent-nudge-scan`, both `sla-sweep` queries, `floor-backstop`) are gated to `active`, and
+`saved-search-digest-due` — which selected by email with no filter at all and SENDS — now uses the
+contactable predicate.
 
-**Until all 13 lanes honour `hidden`, hiding somebody protects nobody.** That is the half-enforced blocklist
-shape, and this time it points at people who never asked to hear from us. The pour waits on the lanes.
-</Warning>
+**Two predicates, because "hidden" answers two different questions** (`lib/leads/workable.ts`):
+`workableLead()` for work (queues, sweeps, counts — active only) and `contactableLead()` for sends
+(texts, email, alerts — **active AND hidden**). Zach's rule: *"the only thing they need to be is hidden
+from view from a leads table, but i have to be able to text, email, etc."*
+
+⚠ **Two lanes are correct UNGATED and must not be "fixed":** `fub-high-intent-sweep` and the
+`process-intake` dedup ask *does this person EXIST* in order to EXCLUDE them. Gate those and a hidden or
+trashed person looks absent and gets **re-imported** — manufacturing the duplicate the step prevents.
+</Info>
 
 ## 📋 Run log
 
@@ -60,6 +65,43 @@ shape, and this time it points at people who never asked to hear from us. The po
 **Newest first. Append-only. Nothing is ever collapsed or summarised**, no matter how old — an idea
 written six months ago and built today is exactly what people come here to find.
 </Info>
+
+### 2026-08-06 (evening) · adam — trash became a status, hidden became a shield
+
+**Closed items [12–17, 26–47](https://claude.ai/code/artifact/a85ac5f4-c863-41ad-9474-e76fcbbf4810).**
+
+**Built:** `trashed` and `hidden` are real statuses (migs 0680/0682), with an invariant that makes
+`status='trashed'` and `deleted_at` inseparable. The trash can is a place you open, not a filter. One
+remove dialog on every path. Make primary inverts a household in one statement; Disconnect ends a
+relationship and keeps both histories. The topbar search — which was **`disabled`** — works, including
+by phone digits. The lead feed reads the **household**, so a hidden person's activity stays on the
+primary's card, attributed.
+
+**Found — and the pattern is the finding.** Four separate bugs turned out to be the same shape: **one
+word in the UI mapping to several different questions in the code.**
+1. `new_message` — a notify CLASS where an event KIND belongs → 13 notification types silently dead.
+2. `trashed` — a STATUS in the dropdown, a TIMESTAMP in the data → a filter comparing `status` to a
+   value the CHECK made impossible, so it matched everything and counted trashed leads as registrations.
+3. `hidden` — a VIEW setting read as a SEND setting → I gated the alert lane on active-only, which would
+   have silenced every hidden spouse's alerts. **Zach caught it mid-build.**
+4. "a click" — a dismiss and a drag-select are the same two events in a different order → highlighting
+   text closed panels and switched tabs in four places.
+**Every time the fix was to SPLIT THE QUESTION, never to widen the answer.**
+
+**Also found:** the topbar search input was literally `disabled`; the Columns dropdown closed on any
+scroll anywhere; the count pill was hand-rolled in five files; and `saved-search-digest-due` selected
+people by email with **no filter of any kind** and sends — 533 of the 629 people being poured have one.
+
+**Corrections, on the record:** I hand-ran a migration twice and the runner silently undid the second,
+erasing `hidden` minutes after I called it proven — **Zach found it, not me**. A correct new constraint
+broke his trash button because his server still ran the old writer (*a constraint lands instantly;
+deployed code does not*). I claimed the blocklist was half-enforced after grepping a function name that
+does not exist, and started building a duplicate guard on a working one. One of my own patches
+overwrote another. My walk selectors reported working UI as broken three times.
+
+**Receipts:** every migration proves itself inline; `probe-hidden-behaviour` asserts **both** directions
+(invisible as work, visible as participant) because a test that only checks what disappeared would have
+passed every near-miss above. **Verdict: pass.**
 
 ### 2026-08-06 · adam — the household build, and the board this doc now owns
 
