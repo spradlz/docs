@@ -3,7 +3,7 @@ title: "Transaction Coordination"
 description: "TC Loop — HouseLoop's own Transaction Coordination platform (our own dotloop, owned end-to-end): transactions, fillable contracts, self-hosted e-sign, the compliance archive, plus the architecture, data model, and build state."
 ---
 
-> **Last updated 2026-08-06 06:15 by benji** · [How we work](/how-to/dev-doc-discipline)
+> **Last updated 2026-08-06 16:20 by benji** · [How we work](/how-to/dev-doc-discipline)
 
 ## 📌 Summary
 
@@ -58,6 +58,41 @@ has never been pointed at the book. That backfill is gated on the estate questio
 **Newest first. Append-only. Nothing is ever collapsed or summarised**, no matter how old — an idea
 written six months ago and built today is exactly what people come here to find.
 </Info>
+
+### 2026-08-06 · benji — the loop model, and the money written down
+
+**Closed [items 147, 149–153](https://claude.ai/code/artifact/cd761514-1600-4e12-aaf1-2af99c1ae98f);
+opened 154–158.** Migrations 0660 · 0661 · 0666 · 0667 · 0668.
+
+**Built:** commission is **stored** for the first time — 1,962 closed deals, agent net $9,072,516 /
+house net $4,429,076, reconciled to the dollar across both databases (Inngest run
+`01KZBJ49JHKW59JHZXQ4XDWKKX`). ONE commission table with the era as a `team` column, not two tables.
+`hl_tc_loop_event` → **`hl_transaction_milestone`**. `expected_close_date` added as the 7th transaction
+fact. The status fold: **1/24 → 24/24** deals carrying a status.
+
+**Found — five things, and three were my own defects:**
+- **The split never needed computing.** `gross_paid_income / gci` is the split that was actually PAID,
+  present on 1,802 of 1,989 deals and landing exactly on the rate card. A rate card is what you use when
+  you have no receipt; there were 1,802 receipts.
+- **The referral columns were a constant wearing the costume of data** — `0.40/0.30/0.30` identical on
+  all 1,989 rows (the top band frozen onto every deal). 884 deals with no referral carried a phantom
+  40%; 1,542 of 1,978 were wrong.
+- **I was writing JSON into the CDA's legal funding authorization.** `commission_instructions` is the
+  disbursement instruction printed for the title company. Caught on a 50-row proof run, before the book.
+- **I built a duplicate milestone table** after a twin hunt that searched the TOKEN "milestone" — the
+  live table was called `loop_event`, and I had printed it in my own query output 90 minutes earlier and
+  read past it.
+- **A rename reached origin without its 11 readers** — the ONE_COMMIT_RENAME violation that causes the
+  0488 outage shape. Caught only because a stand-down order forced an audit of my own commits.
+
+**The thread through all of them:** four times I confirmed a command RAN and never checked that it DID
+anything — a patch script whose guard was weaker than its replace, `git add` staging nothing silently, a
+regex using `\b` where Postgres needs `\y` (returning ZERO duplicates on a broken system), and backticks
+executing inside a quoted message. **Every one produced a plausible success; the failure mode was never
+an error, it was silence that reads as confirmation.**
+
+**Verdict:** pass, with the loop model opened as the next arc — the container 21 signed contracts have
+been missing.
 
 ### 2026-08-06 · benji — the commission estate
 
@@ -157,18 +192,47 @@ the *lead*, **Transaction Coordination is about the deal** — the contract-to-c
 |---|---|---|
 | **Listing** (the home) | `Listing` (web DB) | renders `/home/<slug>`, value, history |
 | **Lead** (the person) | `hl_leads` (CRM DB) | CRM, AI follow-up, activity log |
-| **Transaction / Loop** (the deal) | **`hl_transactions`** (CRM DB) | the deal record — written by disposition |
+| **Loop** (the container) | **`hl_loop`** (CRM DB) — ⚠ NOT YET BUILT | one property + one side; holds the documents |
+| **Transaction** (the deal) | **`hl_transactions`** (CRM DB) | the deal record — written by disposition |
 
 **The transaction record already exists: `hl_transactions`** (disposition-driven — marking a lead
-*Under Contract* or *Closed* in the pipeline writes a row with address · price · closing · commission;
-`milestone` = `under_contract` \| `closed` \| `fell_through`). **Past clients = leads with a `closed`
-transaction.** A **loop is ONE side** (`hl_transactions.transaction_type`: `purchase` → Buyer, `sale` →
-Seller); a client buying AND selling has **two loops**.
+*Under Contract* or *Closed* in the pipeline writes a row with address · price · closing · commission).
+**Past clients = leads with a `closed` transaction.**
 
-The child tables that make up the loop file: `hl_tc_loop_folder` / `hl_tc_loop_document` (**our document
-source of truth**), `hl_tc_loop_participant` (people), `hl_tc_loop_task` (per-loop task instances),
-`hl_contract_template` / `hl_contract_fill` (fillable forms + a filled contract), `hl_tc_email` (email
-queue).
+<Warning>
+**⚠ A LOOP IS NOT A TRANSACTION — and the loop table does not exist yet** (Zach, 2026-08-06). This doc
+previously treated them as one row; they are two things.
+
+A **LOOP is a container for one property and one side**, holding every document for it. It exists **from
+the first tour**, whether or not a deal ever happens — *"one client could have a loop for every house
+they toured or wrote an offer on or closed."* Most loops never become transactions.
+
+**The measurement that proves it:** `hl_contract_fill` has **21 rows — `lead_id` on 21/21,
+`deal_id` on 0/21**. Every signed buyer agency belongs to a PERSON and not one belongs to a transaction,
+because the business signs people before deals. That empty column is the missing table, visible in data.
+
+**And the schema cannot represent the common case today:** `hl_tc_loop_document.transaction_id` is
+`NOT NULL`, so a house someone toured — or wrote a losing offer on — has real paperwork and nowhere to
+put it.
+
+**ONE LOOP CAN PRODUCE MANY TRANSACTIONS** (a duplex or a portfolio — rare, but real), so the pointer
+runs `hl_transactions.loop_id → hl_loop`, never a single `transaction_id` on the loop. A column holds
+one value; "very rare" is not "never", and a schema that cannot express the rare case is wrong rather
+than simplified.
+
+**A document carries BOTH pointers** — *"documents are related to the transaction and are held inside
+the loop."* `transaction_id` (related to) **and** `loop_id` (held in). Never a choice between them.
+
+Spec: `.claude/reports/the-loop-model-spec.md` · board items **154–158**. Builds after pour-one
+acceptance. **No legacy pour** — the 13,449 dotloop loops stay in the workings estate as history.
+</Warning>
+
+The child tables that make up the loop file: `hl_tc_loop_folder` (the **sections** of a loop) /
+`hl_tc_loop_document` (**our document source of truth**), `hl_transaction_participant` (people — 3,206
+rows), `hl_tc_loop_task` (per-loop task instances), `hl_transaction_milestone` (the dates — renamed from
+`hl_tc_loop_event` on 2026-08-06 because it FKs to `hl_transactions` and never had a `loop_id`),
+`hl_contract_template` / `hl_contract_fill` (the 5 blank forms + a signed document — ⚠ `contract_fill`
+is misnamed; "fill" is the mechanism, not the thing, rename pending Zach's word), `hl_tc_email`.
 
 ## ⚙️ HOW A LOOP IS RUN — the two dials (WORKED OUT 2026-07-31 · schema LOCKED)
 
