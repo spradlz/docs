@@ -82,6 +82,68 @@ This is the whole point — adding an event is two steps, no per-surface edits:
 
 It now appears, correctly labeled and colored, in the All feed, the relevant Website-tab lens, and the dossier — automatically.
 
+## A LENS IS A CLAIM — and it must be measured, never reviewed
+
+<Warning>
+**Every tab and filter is a claim ("these are your property views"). The claim is only true if every
+token it filters on resolves to a real kind AND the union covers what a human expects. Reading lenses
+one at a time cannot find the bug — a tool must.**
+
+`node apps/houseloop-crm/scripts/audit-lenses.ts`
+</Warning>
+
+Zach, 2026-08-06: *"this is what's biting me and i refuse to play whack a mole"* … *"i need every
+fucking lens measured vs what that lens is rendering."*
+
+**Why review cannot catch it.** A lens that filters on a token the data does not use renders **empty
+forever**. Nothing errors, nothing turns red — and an empty tab is indistinguishable from a lead with no
+activity. Every lens looks perfectly reasonable in isolation; the defect only appears when you compare
+what a lens *asks for* against what the data *is called*.
+
+**The tool scores three questions per lens, never one:**
+
+| | Question | What a failure looks like |
+|---|---|---|
+| ① | Is every token a real kind (**after** alias resolution)? | a permanently empty tab |
+| ② | How many rows does its actual predicate match? | a dead lens on a populated table |
+| ③ | Which kinds have data that **no** lens shows? | the inverse bug — activity nobody can reach |
+
+Question ③ is the one an author cannot ask of their own code, because they filter on the token they were
+thinking of. **59 kinds** currently have data and no lens in the feed catalog: some are legitimately
+rendered elsewhere (Texts/Calls/Emails read their own tables) — the point is that each must resolve to
+*"rendered by &lt;surface&gt;"* or *"genuinely invisible"*, and today nobody can say which.
+
+### The transaction lenses — one kind, three values
+
+Pending / Closed / Lost filtered on `deal_under_contract`, `deal_closed`, `deal_fell_through`. **None is a
+catalog kind and none has an alias**, so all three rendered zero and always had — and the top-level All
+lens named the same three, silently under-reporting deals.
+
+**The fix was NOT to seat three kinds.** The concept is already seated as `transaction_status_changed`,
+and the row carries its own status (`meta.to` / `meta.toLabel` / `meta.milestone`). Pending/Closed/Lost
+are three **values** of one fact. Minting three tokens to paper over a filter reading the wrong column
+would put one concept in three homes. The lenses now select the one kind and discriminate on the payload
+(`metaTo` on the lens definition; inert on every other lens).
+
+<Warning>
+**The pill count uses the SAME predicate as the list.** A pill counting one thing while the list shows
+another is the same defect as a leads-table badge counting messages its own cell excluded.
+</Warning>
+
+<Note>
+**And the lens was never the main defect.** `hl_transactions` holds **22** rows; `hl_activity_runlog`
+holds **exactly one** `transaction_status_changed`. Deal status changes are not reaching `logActivity()`,
+so a perfect lens still renders ~1 deal. The writer is the gap — tracked separately, not folded into the
+lens fix.
+</Note>
+
+<Warning>
+**The tool must name the question it answers.** The audit's first version counted by KIND alone, so after
+the transaction fix it reported all three deal lenses as "1 row" — three healthy tabs — when only one can
+match. It is payload-aware now and reports the truth: Lost 1 · Pending 0 · Closed 0. **A verification tool
+that over- or under-reports is worse than none, because it converts an unknown into a false assurance.**
+</Warning>
+
 ## Surfaces
 
 All lead-detail surfaces read the one reader:
@@ -107,3 +169,19 @@ An AI action's token cost is **two columns on its `hl_lead_activity` row — not
 ### The one allowed exception to append-only (cost columns only)
 
 `logActivity()` is append-only (callers INSERT, never UPDATE/DELETE the event). The single exception: **`stampActivityTokens(sourceTable, sourceId, in, out)`** may annotate the two cost columns (`input_tokens`/`output_tokens`) of an already-written row — and only those two — for self-logged AI tools (text/email/note) whose row is written by `logMessage`/`execAddNote` (which don't know the LLM turn's tokens). It is idempotent (sets only when the column is currently 0) and never touches an event-identity field (kind / actor / title / body / occurred_at). Token cost is metadata *about* the event, not the event itself — which is why this narrow stamp is permitted where event mutation is not.
+
+## Run log
+
+### 2026-08-06 · adam
+**Built `scripts/audit-lenses.ts` — every lens measured against what it actually renders.** Zach: *"i
+refuse to play whack a mole."* Reading lenses one at a time cannot find this class; a lens filtering on a
+token the data does not use renders empty forever and nothing errors.
+**Found:** the three transaction lenses (Pending/Closed/Lost) filtered on tokens that are neither kinds
+nor aliases, so they had **always** rendered zero — and the top-level All lens named the same three.
+Fixed by reading the one seated kind and discriminating on the payload, **not** by minting three tokens.
+**Found, bigger:** `hl_transactions` has 22 rows and the log has **one** `transaction_status_changed` —
+the writer is the real gap, boarded separately rather than folded in.
+**Corrected my own report:** the first run claimed SEVEN dead tabs; it was THREE. My alias query used the
+wrong column and my own `.catch(() => [])` swallowed the error, handing back an empty map that read as
+"there are no aliases." Zach caught it from the product before the code did.
+**Verdict:** pass, with the correction on the record.

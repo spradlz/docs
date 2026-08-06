@@ -480,6 +480,62 @@ difference between a system that scales to a hundred lines and one that needs a 
 
 ---
 
+## The KIND is the direction — never a second column
+
+<Warning>
+**A kind that names its direction IS the direction. `logActivity()` derives it and OVERRIDES whatever the
+caller passes.** `*_received` → inbound. `*_sent` / `*_made` → outbound. Kinds that name no direction keep
+theirs. A "received" row marked outbound is now **structurally impossible** rather than something an
+author has to remember.
+</Warning>
+
+Zach, 2026-08-06, after reading a call he had placed described as one he received: *"we had outbound and
+inbound directions really wired wrong before"* … *"don't we have activity kinds phone call received, and
+phone call placed, without a direction?"* He was right — the kind already carried the fact, and a separate
+`direction` column carried it again.
+
+**Measured on live before the fix, because the size is the argument:**
+
+| | |
+|---|---|
+| `hl_activity_runlog` rows | 25,190 (3,785 carrying a direction) |
+| rows whose KIND already names the direction | **3,400** — the column is redundant for these |
+| rows where the column **contradicts** the kind | **23** (received-but-outbound 15 · sent-but-inbound 8) |
+| rows where direction is genuinely NOT derivable | 416 — `tour_requested` 137 · `email_opened` 133 · `email_clicked` 39 · `property_inquired` 33 · `virtually_toured` 17 · `contact_requested` 16 · `seller_inquired` 9 |
+
+**Why it was never cosmetic:** `lib/notifications/dispatch.ts` selects the body to quote by
+`direction = 'inbound'` / `'outbound'`. A wrong direction does not merely mislabel a feed row — **it puts
+the wrong words in the alert**, quoting our own outbound message back as if the lead had said it.
+
+**The rule this generalises to:** a synced pair is two things to remember and it drifts the first time
+somebody forgets; a derived value is one. **Never sync the pair — delete one home.**
+
+<Note>
+**One kind is deliberately excluded, and it is a live gap.** `voicemail_left` and `voicemail_received`
+carry the **identical** catalog sentence ("left a voicemail"), so the token alone cannot say who left it
+and deriving would be a guess recorded as a fact. It keeps its passed direction until the twin is resolved.
+</Note>
+
+## Aliases are load-bearing — 111 of them, and they are not decoration
+
+<Warning>
+**Never judge a token against `hl_activity_catalog` alone. Resolve it through `hl_trigger_event_alias`
+first** (columns `alias` → `canonical`, **not** `alias` → `key`).
+</Warning>
+
+The website still emits `property_view` while the catalog kind is `property_viewed`; `like_home` →
+`property_liked`; `property_inquiry` → `property_inquired`; `seller_get_started` → `seller_inquired`.
+**111 aliases are live**, and they are the only reason large parts of the product render at all.
+
+**The autopsy, and it is about a verification tool rather than the product.** The first run of the lens
+audit reported **seven permanently empty tabs**. It was **three**. The audit queried
+`SELECT alias, key FROM hl_trigger_event_alias` — the column is `canonical` — the query threw, a
+`.catch(() => [])` swallowed it, and the alias map came back **empty**, which reads exactly like *"there
+are no aliases."* Every aliased token was then reported as a broken one.
+
+**The catch was the defect, not the column name.** A swallowed error is a lie with a default value. Zach
+caught it from the product (*"I can see properties viewed and saved"*) before the code did.
+
 ## The three fields that fight over one column
 
 Channel, integration and source are **three different questions**. Today they are crammed into one `source`
@@ -640,3 +696,17 @@ missing count as a verdict.
 | [Lead Sources](/guides/lead-sources) | The brands that arrive through an integration |
 | [Follow Up Boss](/integrations/follow-up-boss) | The pipe that carries every Zillow signal |
 | [Lead Activity Log](/guides/lead-activity-log) | `hl_lead_activity` — where the *instances* land |
+
+## Run log
+
+### 2026-08-06 · adam
+**The KIND is now the direction, and aliases were documented as load-bearing.** Zach read a call he had
+placed described as one he received. Root cause was not the data — `direction` was a **second home** for a
+fact the kind already carried, and they had drifted on 23 rows. `logActivity()` now derives it and
+overrides the caller, so the contradiction is structurally impossible.
+**Found:** the notification dispatcher selects the body to quote *by direction*, so a wrong direction
+quotes our own outbound message back as if the lead sent it — the defect reaches a human, not just a feed
+row. **Also found:** `voicemail_left` / `voicemail_received` share one catalog sentence, so the token
+cannot say who left the voicemail; excluded from the derivation rather than guessed.
+**Receipts:** 25,190 rows measured · 3,400 derivable · 23 contradicting · 416 genuinely not derivable.
+**Verdict:** pass.
