@@ -1,13 +1,17 @@
 ---
-title: "Lead Deletion"
-description: "The three ways a lead leaves your view — Trash (hides, reversible), Block (stops contact), and Hard Delete (owner-only, permanent) — plus the purgeLead cascade, the two tombstones, and the four doors that must consult them."
+title: "Lead Trash, Block & Deletion"
+description: "The three ways a lead leaves your view — Trash (hides, reversible), Block (stops contact + re-creation), and Hard Delete (owner-only, permanent) — how a trashed lead STAYS trashed instead of regenerating, the entry guard on all four creation doors, the purgeLead cascade, the two tombstones, and the optimistic-removal that makes the row actually leave your screen."
 ---
 
 <Info>
-**Last updated 2026-08-06 by adam.** Two structural changes since this morning's rewrite: **trashed is
-now a STATUS**, not a timestamp read as one, and **hidden joined it as a fourth status** — so a lead
-leaves your view four ways, not three. The desktop trash view, both tombstones, and all four entry
-doors have shipped since the "not built" list below was written.
+**Last updated 2026-08-07 by adam.** Three things landed since the 8/06 rewrite, all from live debugging
+with Zach: **(1)** the matcher no longer gates out trashed leads, so a trashed person who calls/texts
+again lands back on their EXISTING trashed record and STAYS trashed — it no longer mints a fresh active
+duplicate (the "I trashed it and it regenerated" bug). **(2)** The blocklist/tombstone entry guard is
+confirmed live on **both** creation paths that matter — `mint-phone-lead` AND the FUB import — so a
+blocked/trashed number cannot be rebuilt by the next FUB sync. **(3)** The leads-table trash is now
+**optimistic**: the row leaves your screen the instant the trash succeeds, instead of waiting on a
+`router.refresh()` that could race the commit and make a successful trash look like it "did nothing."
 </Info>
 
 ## What is true today
@@ -42,14 +46,28 @@ The model deliberately mirrors Follow Up Boss, because FUB is the system of reco
 disagree about what "deleted" means: in FUB, trash hides and restores, and a real delete is permanent and
 owner-only.
 
-**Trash never blocks, and blocking never trashes.** They are separate deliberate acts. A trashed lead who
-calls or texts again **resurfaces** — trash means hidden, not gone.
+**Trash never blocks, and blocking never trashes.** They are separate deliberate acts.
 
 <Warning>
-**Trash hides a lead from your TABLE, never from the matcher.** If a trashed person comes back, the system
-must still recognise them so they land on their own record with their history. A gate on the matching path
-turns a returning person into a **duplicate** while the original sits orphaned. This is the single most
-important rule on this page.
+**A trashed lead STAYS trashed — it must never regenerate as a fresh active duplicate (Zach 2026-08-07).**
+Zach, verbatim: *"when i trash a lead and it's in FUB, it can't regenerate itself"* — while also keeping
+the FUB record so *"if i ever wanted to pull it back in i would want to be able to."* So trashing is
+sticky in HouseLoop and non-destructive in FUB at the same time.
+
+**Trash hides a lead from your TABLE, never from the matcher.** If a trashed person comes back, the
+system must resolve them to **their own existing record** so their activity logs there and they stay
+trashed — never a new lead, never auto-un-trashed. A gate on the matching path turns a returning person
+into a **duplicate** while the original sits orphaned. This is the single most important rule on this page.
+
+⚠ **This was actually broken until 2026-08-07, and it is the exact "it regenerated" bug.** `findLeadByPhone`
+(`lib/leads/mint-phone-lead.ts`) carried `AND deleted_at IS NULL`, so a trashed lead's number was
+**invisible** to the matcher — the next call/text found no match and minted a **brand-new active
+duplicate**. That filter was a deliberate 2026-07-17 "mint clean" design (a returning trashed person came
+back fresh, without their old history); Zach's 8/7 ruling reverses it. The fix: `findLeadByPhone` now
+matches trashed leads too (ordering `(deleted_at IS NULL) DESC` so an active record still wins when both
+exist), and the FUB import already matched them — so a returning contact lands on the trashed record and
+it stays trashed. Hard-DELETED leads are gone from `hl_leads` entirely and are still caught by the
+`hl_deleted_leads` tombstone in `checkLeadEntry`; this change does not resurrect those.
 </Warning>
 
 **Full build spec (signed by Zach + Lee, 2026-08-06):**
@@ -109,12 +127,17 @@ Blocking writes the number to `hl_blocked_numbers` (`lib/phone/blocklist.ts`). I
 Unblock in Settings → Phone. When the contact has a real name, the confirm names them, so blocking an
 actual lead is always deliberate rather than a reflex (`lib/leads/blockable.ts`).
 
-<Warning>
-**Blocking only half-works today, and this is the known gap.** It is checked at the three contact doors
-above and at **zero** of the four doors that CREATE a lead — website registration, the Follow Up Boss
-import, `mint-phone-lead`, and the manual add. So a blocked spam caller genuinely cannot ring you, and
-still lands back in the table on the next FUB sync. Measured 2026-08-06.
-</Warning>
+<Note>
+**Blocking now stops re-creation too (verified live 2026-08-07).** Beyond the three contact doors, the
+block is enforced at lead **creation** through `checkLeadEntry` (`lib/leads/entry-guard.ts`), which every
+creation path calls. Confirmed on the two that spam actually rides in on: `mint-phone-lead` (the
+inbound-call/text mint) checks it, and the **FUB import** checks it — its own code says *"without this, a
+lead destroyed in HouseLoop is rebuilt in full by this very function on the next sync, because you cannot
+delete a person in Follow Up Boss."* So a blocked number can no longer ring you AND can no longer be
+rebuilt by the next FUB sync. `checkLeadEntry` sits AFTER the existing-lead match (an existing lead must
+still resolve even when blocked), so only the CREATE is guarded — matching a returning person is never
+blocked, which is the matcher rule above.
+</Note>
 
 ## Hard delete — owner only, permanent
 
