@@ -4,13 +4,16 @@ description: "The three ways a lead leaves your view — Trash (hides, reversibl
 ---
 
 <Info>
-**Last updated 2026-08-07 by adam.** Three things landed since the 8/06 rewrite, all from live debugging
-with Zach: **(1)** the matcher no longer gates out trashed leads, so a trashed person who calls/texts
-again lands back on their EXISTING trashed record and STAYS trashed — it no longer mints a fresh active
-duplicate (the "I trashed it and it regenerated" bug). **(2)** The blocklist/tombstone entry guard is
-confirmed live on **both** creation paths that matter — `mint-phone-lead` AND the FUB import — so a
-blocked/trashed number cannot be rebuilt by the next FUB sync. **(3)** The leads-table trash is now
-**optimistic**: the row leaves your screen the instant the trash succeeds, instead of waiting on a
+**Last updated 2026-08-07 by adam.** From a long live-debugging session with Zach, three things to know:
+**(1)** The blocklist + hard-delete tombstone entry guard (`checkLeadEntry`) is confirmed live on **all
+four** lead-creating paths, including the two spam rides in on — `mint-phone-lead` and the **FUB import**
+— so a **blocked** or **hard-deleted** number cannot be rebuilt by the next FUB sync. **(2)** Trashing
+behaves **asymmetrically by channel**, and that asymmetry is the source of "I trashed it and it came
+back": the **FUB import** matches a trashed lead and leaves it trashed (no duplicate), but a **phone
+call/text** from a trashed-but-not-blocked number **mints a fresh clean lead** by the 2026-07-17
+"mint-clean" design (`findLeadByPhone` excludes `deleted_at`). To make trashing stick against a returning
+*caller*, you must **block** the number (Trash + Block in one action). **(3)** The leads-table trash is
+now **optimistic**: the row leaves your screen the instant the trash succeeds, instead of waiting on a
 `router.refresh()` that could race the commit and make a successful trash look like it "did nothing."
 </Info>
 
@@ -49,25 +52,27 @@ owner-only.
 **Trash never blocks, and blocking never trashes.** They are separate deliberate acts.
 
 <Warning>
-**A trashed lead STAYS trashed — it must never regenerate as a fresh active duplicate (Zach 2026-08-07).**
-Zach, verbatim: *"when i trash a lead and it's in FUB, it can't regenerate itself"* — while also keeping
-the FUB record so *"if i ever wanted to pull it back in i would want to be able to."* So trashing is
-sticky in HouseLoop and non-destructive in FUB at the same time.
+**Trashing sticks against a FUB re-sync, but a returning CALLER mint-cleans unless you also Block —
+know the asymmetry, it is the whole "it regenerated" story.** Zach's goal, verbatim: *"when i trash a
+lead and it's in FUB, it can't regenerate itself"* while keeping the FUB record so *"if i ever wanted to
+pull it back in i would want to be able to."*
 
-**Trash hides a lead from your TABLE, never from the matcher.** If a trashed person comes back, the
-system must resolve them to **their own existing record** so their activity logs there and they stay
-trashed — never a new lead, never auto-un-trashed. A gate on the matching path turns a returning person
-into a **duplicate** while the original sits orphaned. This is the single most important rule on this page.
+- **FUB import path — trashing sticks.** The import resolves the existing lead by `fub_person_id` with
+  **no `deleted_at` filter** (`fub-lead-import.ts`), so it matches the trashed record and leaves it
+  trashed. Its own comment: *"without this, a lead destroyed in HouseLoop is rebuilt in full by this very
+  function on the next sync, because you cannot delete a person in Follow Up Boss."* A trashed FUB lead
+  does **not** regenerate.
+- **Phone matcher — a returning caller mint-cleans.** `findLeadByPhone` (`mint-phone-lead.ts`) carries
+  `AND deleted_at IS NULL` **by design** (2026-07-17, "one-phone-one-lead"): a trashed number that calls
+  or texts again is invisible to the matcher, so it **mints a fresh clean lead without the old history**
+  rather than resurrecting the trashed one. To stop a returning *caller* from re-appearing, **Block** the
+  number (Trash + Block) — `checkLeadEntry` then refuses the create. Removing that `deleted_at` filter to
+  make trash-alone sticky for callers was tried 2026-08-07 and reverted; the mint-clean design stands.
 
-⚠ **This was actually broken until 2026-08-07, and it is the exact "it regenerated" bug.** `findLeadByPhone`
-(`lib/leads/mint-phone-lead.ts`) carried `AND deleted_at IS NULL`, so a trashed lead's number was
-**invisible** to the matcher — the next call/text found no match and minted a **brand-new active
-duplicate**. That filter was a deliberate 2026-07-17 "mint clean" design (a returning trashed person came
-back fresh, without their old history); Zach's 8/7 ruling reverses it. The fix: `findLeadByPhone` now
-matches trashed leads too (ordering `(deleted_at IS NULL) DESC` so an active record still wins when both
-exist), and the FUB import already matched them — so a returning contact lands on the trashed record and
-it stays trashed. Hard-DELETED leads are gone from `hl_leads` entirely and are still caught by the
-`hl_deleted_leads` tombstone in `checkLeadEntry`; this change does not resurrect those.
+**The one rule that is absolute: `checkLeadEntry` sits AFTER the existing-lead match, never before it.**
+Matching a returning person must never be gated — only the CREATE is guarded — or a blocked/tombstoned
+person landing on their *own* record turns into a duplicate while the original sits orphaned. Hard-DELETED
+leads are gone from `hl_leads` entirely and are caught by the `hl_deleted_leads` tombstone.
 </Warning>
 
 **Full build spec (signed by Zach + Lee, 2026-08-06):**
@@ -104,6 +109,24 @@ that."* There is no retention window and no sweeper. A trashed lead sits untouch
 
 Trashing is `DELETE /api/leads/[id]?soft=1` (optionally `&block=1`), which lives on the main leads route so
 the mobile app and the desktop CRM share one code path and can never disagree about what "deleted" means.
+The endpoint's soft-delete is one unconditional statement — `SET deleted_at = COALESCE(deleted_at, now()),
+status = 'trashed'` — and it is idempotent: re-trashing keeps the ORIGINAL `deleted_at` so "Trashed &lt;date&gt;"
+still tells you when it actually went in the bin.
+
+<Warning>
+**The row must leave the screen the instant the trash succeeds — never on a `router.refresh()` that can
+race the commit (Zach 2026-08-07, "I trashed it and it did nothing").** Proven live: two leads were
+trashed AND blocked correctly in the database, yet the rows never left the leads table, so it read as a
+no-op. Root cause: the table re-synced from a `router.refresh()` that re-fetched the list **before the
+delete's commit was visible**, so it got the stale list WITH the row and re-rendered it. The fix in
+`components/leads/LeadsTable.tsx` is **optimistic removal**: on a successful trash the row's id goes into
+a `removedIds` guard and is filtered out of the rendered list immediately, and stays out even if the
+refresh returns the pre-commit list; an id is dropped from the guard once the server stops returning it,
+so **Restore** still shows the row. The endpoint was never the problem — trashing worked every time; the
+list was lying. When auditing a "trash didn't work" report, check the DB first: `status='trashed'` +
+`deleted_at` set means it worked and the SCREEN is stale, which is a different bug than a DELETE that
+never fired.
+</Warning>
 
 <Note>
 **The desktop trash shipped 2026-08-06.** The leads toolbar carries a trash-can icon with a live count;
@@ -241,6 +264,34 @@ being struck — not assumed from a commit message:**
   from nowhere on the lead's own page. You must go back to the table to remove the lead you are reading.
 
 ## Run log
+
+### 2026-08-07 · adam
+**A long live-debugging session with Zach on "trashing doesn't work."** Three separate things wore the
+same mask, and separating them is the lesson:
+
+1. **"I trashed it and it did nothing" was the SCREEN lying, not the trash failing.** Two leads
+   (`+18332279759`, `+19134210485`) were confirmed `status='trashed'` with `deleted_at` set AND on the
+   blocklist — the trash + block worked perfectly server-side. The row just never left the leads table,
+   because it re-synced from a `router.refresh()` that re-fetched the list **before the delete's commit
+   was visible**. **Fix (shipped):** optimistic removal in `LeadsTable.tsx` — a `removedIds` guard drops
+   the row instantly and keeps it out even if the refresh returns the pre-commit list; an id leaves the
+   guard once the server stops returning it, so Restore still works. **The debugging rule:** on a "trash
+   didn't work" report, read the DB first — `status='trashed'` + `deleted_at` = it worked, the screen is
+   stale (a different bug than a DELETE that never fired).
+
+2. **"It regenerated" is the trash-channel asymmetry, not one bug.** A trashed FUB lead does not
+   regenerate (the FUB import matches the trashed record). But a trashed *number* that calls again
+   mint-cleans a fresh lead — `findLeadByPhone` excludes `deleted_at` by the 7/17 design. I removed that
+   filter to make trash-alone sticky for callers; it was **reverted** (intentional), so the mint-clean
+   design stands and **Block is the way to stop a returning caller.** See the Trash Warning above.
+
+3. **The blocklist half-enforcement gap is CLOSED (verified, not assumed).** `checkLeadEntry` is on all
+   four creation paths; confirmed live on `mint-phone-lead` and the FUB import — a blocked/tombstoned
+   number cannot be rebuilt on the next sync. The 8/06 "half-works" warning was stale and is corrected.
+
+**Also confirmed:** the DELETE endpoint's soft-delete is a single unconditional, idempotent statement and
+works every time it fires (proven by firing it directly for a stuck lead — 200, `trashed:true`). No
+endpoint bug was ever found; every "trash" symptom this session was UI-side or channel-asymmetry.
 
 ### 2026-08-06 · adam (later)
 **Closed board items [#24](https://claude.ai/code/artifact/a85ac5f4-c863-41ad-9474-e76fcbbf4810) and #44,
