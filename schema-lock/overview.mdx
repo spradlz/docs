@@ -774,6 +774,51 @@ on the web `Listing` (keyed by HLID), the CRM points at it by `website_hlid` and
 
 
 
+## 🧬 SIGNED RULING — THE PERSON MODEL (8/7, parked · gated future build · DO NOT boil the ocean)
+
+**A person is the entity; `lead`, `sphere of influence`, `past client`, and `connected person` are TYPES/relationships on that person. A lead is just a type of person** — the actor model one level down (person = the umbrella, "lead" = a type on it).
+
+**Already true in the data — only the name is wrong.** `hl_leads` is the de-facto people table: connected people are `hl_leads` rows (`related_lead_id`), past clients resolve to `hl_leads`, everyone lands there. So **`hl_leads.id` IS the person key today.**
+
+**FUTURE build (gated — needs Zach's day-of word, NOT now — do not boil the ocean):**
+- rename `hl_leads` → `hl_people`; the "type of person" (lead / SOI / past-client / connected) becomes a **column**, not the table's identity.
+- add a human-facing **sequential number** — the HLID pattern applied to people (`people/237`): minted once, sequence-backed, never re-derived; the uuid stays the internal key.
+- every FK stays `lead_id` until then and **flips together** at rename time (never one table off on its own — the frequency clause).
+
+Reference: SureSend and Follow Up Boss both use **"people"** with a simple sequential per-account number (`/people/view/5768`); a "lead" is a status, not the person.
+
+## 🔖 SIGNED RULING — SAVED SEARCH IS A CRM OBJECT (8/7 · `hl_saved_search` · BUILD PENDING)
+
+**A saved search belongs to a PERSON and is a CRM object — not a website row.** You can't have a saved search unless you're a person in the CRM. Follow Up Boss (a CRM) proves it — Zillow saved searches live in `fub.saved_searches`. **Alerts are sent OUT of the CRM.**
+
+**Current state (measured 8/7):** the website `SavedSearch` table (centerbeam WEB) = **3 rows**, starved because a lead can't own one without a website account; `fub.saved_searches` = **6,465** real Zillow searches (the FUB scrape); `sys_saved_search_digest` is the CRM digest **workflow** (Inngest), **0 runs/30d** from that starvation.
+
+**The build — `hl_saved_search` (CRM), keyed to the PERSON (`hl_leads.id`):**
+
+| Column | Type | Note |
+|---|---|---|
+| `id` | uuid pk | the saved search itself |
+| `lead_id` | uuid → `hl_leads` (cascade) | **the owner = the person** (not email/phone; column named `lead_id` for consistency, flips at the person rename) |
+| `source` | text | `houseloop` \| `zillow` |
+| `integration` | text | `houseloop` \| `follow_up_boss` |
+| `external_id` | text | the FUB row id (traceability, not the dedup key) |
+| `beds_min · baths_min · price_min · price_max` | int | criteria as columns |
+| `location` | text | area / city / zip |
+| `property_types` | text[] | single_family, condo… |
+| `for_rent` | bool | rent vs buy |
+| `criteria` | jsonb | raw catch-all so nothing from the source is lost |
+| `criteria_key` | text | normalized hash of the criteria → the dedup key |
+| `label` | text | rendered "3-bd 2-ba … $200k–$350k" |
+| `alert_frequency` | text | instant \| daily \| weekly \| never |
+| `actor_kind · actor_type · actor_user_id · actor_lead_id · actor_name` | — | **who created it** — client vs agent/system |
+| `created_at` | timestamptz | the **real** created date from source (not import time) |
+| `last_run_at · last_alert_at` | timestamptz | matcher/send bookkeeping (later slice) |
+| `active` | bool | live or paused |
+
+**Upsert key:** `UNIQUE (lead_id, source, criteria_key)` — same person + same source + same criteria = one row (kills the duplicate cards). **FUB import upserts in** (source=zillow, integration=follow_up_boss); the website `SavedSearch` (3 rows) **retires into** this table; it renders as the composed activity card — *"{person} created a saved search via {source} — {criteria}."* Keying to `hl_leads.id` cures the account-wall starvation. The send/refresh mechanism is a later slice.
+
+**Status: RULING SIGNED 8/7 · BUILD PENDING (not migrated).**
+
 ## 🗺️ THE MASTER BLUEPRINT (Zach 8/5: "how do we put this all together … a master blueprint that Caleb has to use")
 
 **This is the check-target. The Refinery pour, every backfill, and every new reader builds against
