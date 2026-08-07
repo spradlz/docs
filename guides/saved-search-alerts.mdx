@@ -5,6 +5,30 @@ description: "How HouseLoop's saved search alert engine works — the compute-on
 
 > **Last updated 2026-08-04 16:19 by caleb** · [How we work](/how-to/dev-doc-discipline)
 
+<Info>
+🔒 **Follows the [Schema Lock](/schema-lock/overview).** The architecture law lives there; this guide references it.
+</Info>
+
+> ## 🔖 SIGNED RULING (Zach, 8/7) — SAVED SEARCH IS A CRM OBJECT (`hl_saved_search`, build pending)
+>
+> **A saved search belongs to a PERSON and lives in the CRM — not the website.** You can't own a saved
+> search unless you're a person in the CRM; Follow Up Boss (a CRM) proves it (Zillow searches live in
+> `fub.saved_searches`); alerts are sent OUT of the CRM. This **supersedes** the "compute-on-web /
+> `SavedSearch`-on-web" model this guide describes below (that placement is the starvation root — a lead
+> couldn't own a search without a website account).
+>
+> **The target:** one CRM table **`hl_saved_search`**, keyed to the person (`hl_leads.id`), with `source`
+> = `houseloop` \| `zillow`, the criteria as columns, actor-stamped (client vs agent/system), and an
+> upsert key of `(lead_id, source, criteria_key)`. The FUB scrape (`fub.saved_searches`, 6,465 rows)
+> **upserts into it** (source=zillow, integration=follow_up_boss); the website `SavedSearch` (3 rows)
+> **retires into it**; it renders as the composed activity card — *"{person} created a saved search via
+> {source} — 3-bd 2-ba single-family, Overland Park KS, $200k–$350k."* Keying to the person cures the
+> account-wall starvation described below. **Full column spec: the [Schema Lock](/schema-lock/overview).**
+>
+> **Note:** `sys_saved_search_digest` is the CRM digest **workflow** (Inngest), not a table — it's real,
+> just starved (0 runs/30d) for the same reason. Build order: the table + FUB upsert + the activity card
+> first; the send/refresh mechanism is a later slice. **Status: signed 8/7, not yet migrated.**
+
 ## 📌 Summary
 
 **Saved Search is the lever that turns a Zillow lead into ours** — their criteria, our inventory,
