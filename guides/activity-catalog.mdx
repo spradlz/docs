@@ -3,7 +3,12 @@ title: "Activity Catalog"
 description: "THE inventory of every single thing that can happen in the CRM — one row per activity, ordered by integration. A toggle promotes an activity into a Trigger Event; a trigger's category runs a Playbook. This is the layer above Trigger Events, and the reason the two vocabularies drifted."
 ---
 
-🕐 **Updated 2026-08-08 · Lee** — the catalog now drives **card RENDERING** (color · sentence · card_layout): FUB-style activity colors (mig 0709), property activity says "a property" not "a home" (mig 0710), the ONE shared task card + a "Created By" capture picker, source as a white pill on the card tile. See the Run log (2026-08-08) + the card-catalog PRD. Prior: actor canon signed + step 0 (`actor_type` live, migs 0699–0701).
+🕐 **Updated 2026-08-08 · Lee** — **FUB signals: converter wins + every kind maps to a card.** The
+*"created a note"* bug fixed at the root (`backfill-fub-comms.ts` runs `convertNote()` first — a FUB insight can
+never double-import as a note again); 157 duplicate `note_added` rows deleted (Rule #0, receipt); all 187 kinds
+now declare a `card_layout` (mig 0712). NO new table — FUB vs HouseLoop is the `integration` column on
+`hl_trigger_events` (ONE_ANSWER_TABLE). Prior: the catalog drives card rendering (color/sentence/layout, migs
+0709/0710), the ONE task card + "Created By" capture, source pill on the tile.
 
 ## 📌 Summary — what is true today
 
@@ -779,6 +784,34 @@ missing count as a verdict.
 | **The Build Spec (PRD)** | `GT/GT - ACTIVE/GT_HOUSELOOP_ACTIVITY_CATALOG_UNIFICATION_PRD.md` — the actor canon + 4-projection reconciliation + the 6-step build order with acceptance criteria (the doc that turns this guide + the board into an executable plan) |
 
 ## Run log
+
+### 2026-08-08 · lee — FUB signals: converter wins, every kind maps to a card, insights un-filed from notes
+**The FUB signal → activity card architecture is locked (Zach signed: "that is the whole thesis") and the
+"created a note" bug is fixed at the root.** Spec: [FUB Signals in the Activity Catalog](https://claude.ai/code/artifact/f72e155a-a515-45b0-a64d-9e3b43d9b4a9).
+Companion doc: [Trigger Events](/guides/trigger-events#how-a-fub-signal-becomes-an-activity-card-the-converter-zach-2026-08-08).
+- **NO new table** (`ONE_ANSWER_TABLE`): FUB vs HouseLoop is a `integration` COLUMN on the existing
+  `hl_trigger_events` (one row per activity × integration), never a second table. Three layers: catalog =
+  dictionary (per kind) · `hl_trigger_events` = automation triggers (per kind × integration) · `hl_activity_runlog`
+  = the activity cards. A `property_inquiry` via FUB and via HouseLoop are the same kind, two rows, split by
+  `integration`.
+- **Converter wins (root-cause fix, `backfill-fub-comms.ts`):** every FUB note now runs through `convertNote()`
+  first; a note the converter claims (a Zillow insight, a property save/view) is skipped as a note — it's already
+  logged as its true `zillow_insight_*` / `property_*` kind by `backfillFubBehavior`. Only a genuine human note
+  (`convertNote` → `[]`) becomes `note_added`. **A FUB insight can never double-import as "created a note" again.**
+- **Every catalog kind maps to a card (mig 0712):** 34 kinds carried a NULL `card_layout` → set to `plain`. All
+  187 kinds now declare their card shape in the table, so no card falls back to un-declared TypeScript. The
+  catalog PAINTS every card.
+- **Found:** the *"Jeremy David created a note"* bug was a **double-import** — `backfill-fub-comms.ts` imported
+  FUB notes as `note_added` in parallel with the converter minting the same insight as `zillow_insight_*`.
+  Measured: 195 `note_added` rows were really Zillow insights — **157 duplicates** (a `zillow_insight_*` twin
+  existed) deleted from `hl_activity_runlog` (Rule #0, Zach-approved, reversible receipt at
+  `.claude/reports/card-catalog/fub-note-cleanup-receipt.json`); **38 sole-copies** flagged for a converter
+  re-run. `note_added` went 681 → 524.
+- **Corrections on the record:** pulled a proposed `origin: zillow_mapped → relayed` rename (the 8/4 two-natures
+  law signed `zillow_mapped`) and a proposed new `hl_fub_automation_trigger` table (violates ONE_ANSWER_TABLE —
+  source is a column, not a table; the table already exists as `hl_trigger_events`).
+- **Verdict:** root-cause fix + delete + every-kind-mapped shipped to the working tree; anti-drift parity gate +
+  the 38-sole converter re-run remain.
 
 ### 2026-08-08 · lee — the catalog now drives CARD RENDERING (color · sentence · layout)
 **Shipped the Lead Activity Card Catalog rendering pass — the catalog is now the paint source for the cards,
