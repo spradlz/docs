@@ -3,12 +3,12 @@ title: "Activity Catalog"
 description: "THE inventory of every single thing that can happen in the CRM — one row per activity, ordered by integration. A toggle promotes an activity into a Trigger Event; a trigger's category runs a Playbook. This is the layer above Trigger Events, and the reason the two vocabularies drifted."
 ---
 
-🕐 **Updated 2026-08-08 · Lee** — **FUB signals: converter wins + every kind maps to a card.** The
-*"created a note"* bug fixed at the root (`backfill-fub-comms.ts` runs `convertNote()` first — a FUB insight can
-never double-import as a note again); 157 duplicate `note_added` rows deleted (Rule #0, receipt); all 187 kinds
-now declare a `card_layout` (mig 0712). NO new table — FUB vs HouseLoop is the `integration` column on
-`hl_trigger_events` (ONE_ANSWER_TABLE). Prior: the catalog drives card rendering (color/sentence/layout, migs
-0709/0710), the ONE task card + "Created By" capture, source pill on the tile.
+🕐 **Updated 2026-08-08 · Adam** — **THE ACTIVITY HARNESS: a catalog kind that never fires can no longer
+ship.** Every kind in the registry must have a proof that FIRES the real write-path and ASSERTS the runlog
+row (actor · type · id · from→to); a new kind with no green proof BLOCKS the push (cage 9, shrink-only floor,
+186 grandfathered → 0). See **[Rule 0c](#0c-it-is-impossible-to-ship-a-kind-that-never-fires-the-activity-harness-zach-2026-08-08)**.
+Prior (Lee): FUB signals converter wins + every kind maps to a card (mig 0712); the catalog drives card
+rendering (color/sentence/layout, migs 0709/0710); the ONE task card + "Created By" capture.
 
 ## 📌 Summary — what is true today
 
@@ -816,8 +816,38 @@ missing count as a verdict.
 | [Follow Up Boss](/integrations/follow-up-boss) | The pipe that carries every Zillow signal |
 | [Lead Detail — activity architecture](/guides/lead-detail#activity-architecture-one-store-one-writer-one-catalog-one-reader) | `hl_activity_runlog` — where the *instances* land |
 | **The Build Spec (PRD)** | `GT/GT - ACTIVE/GT_HOUSELOOP_ACTIVITY_CATALOG_UNIFICATION_PRD.md` — the actor canon + 4-projection reconciliation + the 6-step build order with acceptance criteria (the doc that turns this guide + the board into an executable plan) |
+| **The Harness PRD** | `GT/GT - ACTIVE/GT_HOUSELOOP_ACTIVITY_HARNESS_PRD.md` — the proof-of-firing cage: the proof contract, the shrink-only floor, the git-ancestry staleness check, and the operator loop for adding a kind. Operator card: `tools/harness/README.md` |
 
 ## Run log
+
+### 2026-08-08 · adam — THE ACTIVITY HARNESS: every catalog kind must be PROVEN to fire, or it can't push
+**Built the harness Zach asked for — the layer that makes the disposition silent-no-op structurally
+impossible.** The activity catalog is the registry; every kind must have a proof that FIRES the real
+write-path and ASSERTS the runlog row. Board (this doc's board): the master audit artifact `ac8e921b`.
+PRD: `GT/GT - ACTIVE/GT_HOUSELOOP_ACTIVITY_HARNESS_PRD.md`.
+- **The gap it fills:** `kind-gate` proves a kind is *spelled right*, `catalog-parity` proves it *renders*,
+  `notify-key-cage` proves notify keys *resolve* — but **nothing fired the feature and looked for the row.**
+  `lead_dispositioned` passed every static gate and logged nothing, because its `logActivity` call vanished
+  in a rebase and nobody ran it.
+- **The pieces (`tools/harness/`):** `proofs/<kind>.proof.mjs` fires the endpoint + asserts the row;
+  `run-proofs.mjs` runs them against localhost:3020 and writes receipts (the "must run" half);
+  `activity-harness-gate.mjs` is **cage 9** in `pre-push.sh`. A new catalog kind with no green proof BLOCKS;
+  a write-path changed *after* its last green proof BLOCKS (git-ancestry). Shrink-only floor (`unproven.floor`,
+  mirrors `door-zero.floor`): 186 grandfathered, `lead_dispositioned` proven, target 0.
+- **The proof lead never touches the refinery:** creating+deleting a lead cascades through `hl_user` into the
+  FROZEN `hl_srg_past_clients`, so the harness owns ONE persistent probe lead it flips in place and resets —
+  zero lead inserts/deletes.
+- **Found (this session):** BOTH the disposition write-path fix (`lead_dispositioned` logging) AND the
+  leads-query gate had been **silently reverted by a rebase** — that is why moving a lead to a disposition
+  logged nothing and the filter never hid it. Re-applied, committed explicitly, verified in HEAD, walked
+  (Kristen → DNC logged + disappeared from the table). **Also found:** mig 0711's `lead_dispositioned` was
+  never added to the signed `kind-vocab.txt`, so the kind-gate was blocking edits to disposition code —
+  regenerated.
+- **Proven both ways:** GREEN when the write-path logs (`actor 556fb76d · human · hl_leads · Active→Incoming`),
+  RED the instant the log call is removed (`endpoint returned 200 but NO lead_dispositioned runlog row fired`).
+  The block fires (exit 1) for a new unproven kind and for a stale proof; green passes.
+- **Verdict:** shipped + cage green (187 catalog · 1 proven · 186 grandfathered). The harness extends to every
+  future kind by default — the next new kind cannot compile-and-ship until its proof runs green.
 
 ### 2026-08-08 · lee — FUB signals: converter wins, every kind maps to a card, insights un-filed from notes
 **The FUB signal → activity card architecture is locked (Zach signed: "that is the whole thesis") and the
