@@ -1,72 +1,41 @@
 ---
-title: "Lee (Lee — Current Workflow (WIP))"
-description: "Work-in-progress dossier — Lee · Infra · Pipeline & Workflow · FUB · Notifications. Lee — Current Workflow (WIP)."
+title: "Lee (Lee — WIP (updated 2026-08-08))"
+description: "Work-in-progress dossier — Lee · Infra · Pipeline & Workflow · FUB · Notifications. Lee — WIP (updated 2026-08-08)."
 ---
 
 <Info>Live dossier — auto-generated from `.claude/state/wip/lee.md` on every push. **Progress: checklist pending.**</Info>
-
-<Warning>⚠ **Possibly stale:** this work-stream file was last written 611h ago. If Lee has shipped since, this dossier under-reports — refresh `.claude/state/wip/lee.md`.</Warning>
 
 **Owner:** Lee — Infra · Pipeline & Workflow · FUB · Notifications
 
 ## Checklist
 
-_Last updated: 2026-07-13 NIGHT (end of a marathon lead-flow session)_
+### ACTIVE: THE ONE ACTIVITY CARD CATALOG (Zach 8/8)
+Scope lock: `.claude/state/session-scope-card-catalog.lock` (READ FIRST — the round-hole plan + phases).
+Board: `.claude/artifacts/activity-catalog-master-audit.json` item id `card-catalog`.
 
-### 🗺️ THE MASTER SSOTs (artifacts Zach locked today)
-- **Master lead-flow architecture:** https://claude.ai/code/artifact/0b65eae5-d1e2-4a15-afb0-973eba93d6fb
-- **Workflow taxonomy (3 axes):** https://claude.ai/code/artifact/4080f692-ab08-4d06-8ce0-5f81a52cb407
-- **Workflows folder view:** https://claude.ai/code/artifact/78dc6927-3730-4bd0-8485-a314f06dd9e1
-- **Create Workflow modal v2:** https://claude.ai/code/artifact/f70490d3-8f11-4753-aa12-7cc9b0426cd5
-- **Section management (both pages):** https://claude.ai/code/artifact/52619da1-f9c4-40ca-b0d2-95623345fce4
+**Goal:** one catalog defines the card → `resolveCard` resolves ONE `CardModel` → endpoint returns it →
+every client (All feed, Website tab, mobile) renders `<ActivityCard>`. New kind = a catalog row, no client code.
+Zach: "do it correctly, not vibe. not rendered at view time."
 
-**The spine (LOCKED):** `Lead Integration → Source → Trigger Event → (fires a Workflow + sends a Notification)`.
-- **Family (Integration):** `houseloop` · `follow_up_boss` · `inbox` (Company Inbox) · `transaction` · `manual`. (`custom`/"Other/Custom" KILLED — catch-all is now Manual.)
-- **Lead Stage (arm):** `new_lead` · `existing_lead` (which arm-slot a workflow fills).
-- **Type (band):** `activity` · `communication` · `insight` (trigger-event `band`).
-- **Validity:** Insights = Existing-only (hard-locked); Communication mints only via Company Inbox; TC = existing-only.
-- **Trigger events are NEVER hand-created** — they come from a lead integration (auto-populated) or are Manual. You CONFIGURE them.
+### 🟢 DONE + LIVE (committed f6b9005d6e P1 · ba4daa4371 P2)
+- P1: `lib/activity/render-activity.ts` → `CardModel` + `resolveCard` + `densityFor` (density = DATA from
+  `card_layout`+category+hasHouse, ZERO kind literals). Migration 0707 fixed the 2 drifted kinds
+  (virtually_toured, zillow_message_received → `card_layout='request'` = hero-engagement). Endpoint
+  `app/api/leads/[id]/activity/route.ts` returns `card` per row. Test `render-activity.card.test.ts` 14/14.
+- P2: `components/leads/detail/ActivityCard.tsx` — the ONE renderer (CardModel → ActivityHeroCard hero/compact),
+  no actor chip.
 
-### 🔴 NEXT SESSION — LEAD SOURCES is the unfinished arc (Zach flagged HARD, end of 07-13)
-Lead Sources got the DESIGN LOCK + half the build today; the trigger-events/workflows arc took the rest. Three pieces:
+### 🟡 NEXT — resume here
+- **P3 — All feed (CenterLane.tsx):** render `<ActivityCard model={a.card} timeStr=…>` for ACTIVITY rows
+  (the endpoint now returns `a.card`). Retire AllStreamRow's bespoke headline/actor/density/picture. Keep
+  StarWrap + hover actions + call player (CallCard) + doc/appt specials. Verify live on Melissa
+  (bb1412cd-e764-44f2-b8c4-c9f1a5c9444e): property_viewed = compact, NO gap, NO black actor chip.
+- **P4 — Website tab (PixelFeedStream.tsx):** render `<ActivityCard>` for activity rows; REVERT the interim
+  per-frame patches (heroTitle/meta.label/actor + the `sentence` threading + the cast on line ~303). Deals +
+  standing saved-searches keep their own cards. Verify live: name shows, VIA blue, one vocab across All/Website/Inquiries.
+- **P5 — Docs + board:** update `docs-site/guides/lead-detail.mdx` "activity card catalog" section to document
+  CardModel + resolveCard + `<ActivityCard>` (one catalog, all clients incl mobile). Flip board item `card-catalog`
+  to done. Melissa walk screenshots → `.claude/reports/card-catalog-2026-08-08/`.
 
-**LOCKED MODEL (what it SHOULD be):**
-- **Lead Sources = VIEW + ROUTE, never CREATE.** Creating/connecting a source (webhooks, API keys, "how leads arrive: landing page / manual / email forward / website pixel") lives on the **Lead Integration** page (`settings/lead-platform`) — NOT on Lead Sources.
-- **Edit Source** = identity only: name · type · status (connection → Lead Integration). ✅ built.
-- **Manage Routing Rules** = the default rule ONLY: Default AI responder (Myli) · Default human owner or Pond · AI appointment hand-off · Default stage · Default tags.
-
-**#1 — Manage Routing Rules BROKEN:** a huge per-event-override table (`SourceLeadSourceEvents`, "Liked Home Intent / Saved Home Intent" noise) got wrongly bolted into `components/settings/lead-sources/ManageRoutingRulesModal.tsx`. RIP it out; keep only the clean default-rule fields above.
-**#2 — "Add New Lead Source" is still the OLD vibe-coded modal** (arrival method + assigned-to + stage + workflow). It should just NAVIGATE to the Lead Integration page. Kill the old create modal.
-**#3 — Build the Lead Integration page** (`settings/lead-platform`) as the CREATE/CONNECT home (identity, API keys, webhooks, name trigger events). Designed, never built — it's the dependency for #2.
-
-### ✅ SHIPPED TO PROD (2026-07-13 — the whole lead-flow arc)
-1. **Trigger Events Configure** (two-arm workflow+notification) — replaced Create modal/landing/webinars; ⋮ = Configure + Pause.
-2. **FUB + TC wired to Configure**; TC single-arm "Existing Leads Only"; wider modal; centered ⚡ counts.
-3. **Sectioned notification dropdown** (`lib/notifications/notification-sections.ts`) — 10 gray-band-header catalog.
-4. **Lead Source Edit-Source / Manage-Routing split** (identity vs routing). ⚠️ routing modal now BROKEN — see #1.
-5. **HouseLoop Insights → single-arm** "Existing Leads Only" (like TC). Property Viewed → Insights band (mig 0395).
-6. **Workflows taxonomy** — Create Workflow cascade → collapsed to Family → Lead Stage → Trigger event (Type became the grouping in the trigger dropdown, not a field). `lib/workflows/workflow-taxonomy.ts` + `lead_stage` col (mig 0394).
-7. **Every dropdown = solid-white HlDropdown + light-gray band headers** (killed native OS selects). Wider Create modal, scrollable panels.
-8. **Workflow builder:** inline-expandable step config (shared `StepConfigBody`, chevron per node) + **removed the workflow-level default sender** (sender is per-message now) + Duplicate-as-Custom → thorough `/duplicate`.
-9. **Workflow row kebab:** Open Builder · **Edit Settings** (reopens Create modal in edit mode) · Duplicate · Lock · Delete.
-10. **Trigger resolver fix** — 8 "New Lead —" workflows showed "Choose a trigger" (door-key `*_registration` is inactive in catalog); resolver now strips `_registration` → base intent. DATA was always fine.
-11. **Workflows FOLDER VIEW** — trigger event = gray folder header (once), workflows nested as rows, arm pills (NEW/EXIST/CUSTOM/MANUAL). `WorkflowsTable.tsx` (hand-rolled, NOT DataTable — REUSE departure, Zach-approved via locked wireframe). ⚠️ **bulk-delete checkbox was dropped** (per-row ⋮ delete remains) — open Q whether to re-add.
-12. **Create Workflow modal v2:** Integration (Manual + Company Inbox, NO Other/Custom, defaults houseloop) → required Trigger event → New/Existing toggle (hard-locks Existing on Insights) → Manual hides trigger+arm.
-13. **Manual section** on Workflows (flat rows). **Company Inbox** = first-class blue section on BOTH pages (surfaced 3 real native comms events: Text/Call/Email Received). **Other/Custom KILLED** → Manual catch-all.
-14. **Cross-page section management** (mig 0396 `hl_lead_flow_section_order` + `/api/lead-flow/order`): drag-reorder SECTIONS + trigger EVENTS, one shared order both pages. Routing fix (Direct Registration → HouseLoop.ai, not a dumping ground).
-
-### ⚪ DEFERRED (next slices, after #1)
-- **＋ Add Section picker** (pull in a connected integration as a section / Manual) — the create UI, both pages.
-- **Manual custom folders** (create/rename/delete folders within Manual).
-- **Folder-level drag** on Workflows (reorder gray trigger-folders within a section — needs its own persistence).
-- **Bulk-delete** on Workflows table (re-add multi-select? — Zach open Q).
-- Custom (`other`) sections don't render on the Trigger Events board (pre-existing `platforms` filter `p !== 'custom'`).
-
-### 🤝 COORDINATION
-- **Company Inbox** = Adam's NEXT after My Team (C7 shipped). Seams agreed: minting = MY intake identity gate (Adam's inbox has ZERO minting), his doors carry source via `hl_phone_numbers`, Inbox = a Family in the taxonomy (Communication events that mint via phone-dedupe). Wire the Inbox family end-to-end together when he picks it up.
-
-### SHARED-TREE NOTE
-Adam active in CRM. Push pattern: verify `tsc --noEmit` 0 → stash Adam's tracked WIP + park untracked (`??`) docs → push → restore + `git stash pop`. Migrations run on deploy (Dockerfile `node db/migrate.mjs && next start`). Never ship Adam's uncommitted WIP.
-
-### KEY FILES (lead-flow)
-`components/settings/trigger-events/{TriggerEventsBoard,ConfigureTriggerEventModal,trigger-row-cells}.tsx` · `components/workflows/{WorkflowsTable,CreateWorkflowModal,WorkflowBuilder}.tsx` · `lib/workflows/{workflow-taxonomy,trigger-catalog}.ts` · `lib/notifications/notification-sections.ts` · `components/settings/lead-sources/{EditSourceModal,ManageRoutingRulesModal}.tsx` · `app/api/lead-flow/{route,order}.ts` · migrations 0391/0394/0395/0396.
+Gate each phase: `npx tsc --noEmit` = 0 · card test green · push · Railway deploy · live screenshot (cache-bust ?cb=).
+CRM prod = https://crm.houseloop.ai. Deploy latency ~8-12 min.
