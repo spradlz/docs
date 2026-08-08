@@ -720,36 +720,16 @@ conversation, not a silent addition.
 ## 0c. It is impossible to SHIP a kind that never fires — the activity harness (Zach 2026-08-08)
 
 Rule 0 stops you *inventing* a kind. But a kind can be perfectly legal — signed, in the union, spelled
-right — and still **log nothing**, because its `logActivity` call was never wired, or vanished. That is
-exactly what happened to `lead_dispositioned`: signed in the catalog, renderable, notify-resolvable, and
-it logged **nothing** the day it shipped, because the write-path call was lost in a rebase and **nobody
-ran it.** Every gate we had is *static* — none of them fire the feature and look for the row.
+right — and still **log nothing**, because its `logActivity` call was never wired, or vanished in a
+rebase. That is exactly what happened to `lead_dispositioned`: it passed every gate above and logged
+nothing the day it shipped, because **every gate above is static** — none of them fire the feature and
+look for the row.
 
-> Zach, 2026-08-08: *"nothing can compile if the new feature is not walked, logged, checked… every time we
-> build something it must be registered in the activity catalog, and for the next compile to build, that
-> new activity catalog kind must go through the harness."*
-
-**The harness is the enforcement, and the activity catalog IS the registry it enforces against.**
-
-| Layer | What it is |
-|---|---|
-| **The registry** | `hl_activity_catalog` — the 187 kinds. The harness enumerates it directly. |
-| **A proof per kind** | `tools/harness/proofs/<kind>.proof.mjs` — **fires the real write-path** (the endpoint the UI calls) and **asserts the runlog row**: actor, actor_role (the type), source_table + source_id, and the meta the kind carries (e.g. `from_disposition → to_disposition`). |
-| **It RUNS and logs** | `node tools/harness/run-proofs.mjs <kind>` fires against localhost:3020, checks `hl_activity_runlog`, resets its probe lead, writes a receipt. This is the *"the harness has to run and log for it to work"* half. |
-| **The cage** | `tools/harness/activity-harness-gate.mjs` — cage 9 in `tools/hooks/pre-push.sh`. A catalog kind with **no green proof** cannot be pushed. |
-| **A shrink-only floor** | `tools/harness/unproven.floor` grandfathers today's 186 unproven kinds (mirrors `door-zero.floor`) so it never cries wolf — but a **new** catalog kind with no proof is not on the floor, so it **BLOCKS**. Writing a green proof drains the kind off the floor. Target: empty. |
-
-**What the cage catches, that nothing else did:**
-- **A new kind with no proof** → BLOCKED (not on the floor).
-- **A write-path changed *after* its last green proof** → BLOCKED by git-ancestry: the old green proof
-  predates the change, so it proves nothing about the new code. Re-run it. *(This is the disposition bug
-  itself — the log call removed after the kind was "proven.")*
-- **Proven both ways:** the proof is GREEN when the write-path logs, and goes RED the instant the log
-  call is removed (`endpoint returned 200 but NO runlog row fired`). A cage that cannot go red is theatre.
-
-**Adding a kind, end to end:** add the catalog row → write `proofs/<kind>.proof.mjs` → run it green →
-commit the proof **and its receipt**. The floor shrinks by one, automatically. Operator card:
-`tools/harness/README.md`.
+The **[Activity Harness](/guides/activity-harness)** is the dynamic enforcement: every catalog kind must
+have a proof that FIRES the real write-path and ASSERTS the runlog row (actor · type · id · from→to), and
+a new kind with no green proof BLOCKS the push (cage 9 in `pre-push.sh`, shrink-only floor). It is the
+runtime complement to this rule — Rule 0 is "can't invent a kind," the harness is "can't ship a kind that
+never fires." **Full doc: [Activity Harness](/guides/activity-harness).**
 
 ## 1. One name per thing
 

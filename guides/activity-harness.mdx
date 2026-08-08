@@ -1,0 +1,145 @@
+---
+title: "Activity Harness"
+description: "The build-time cage that makes it impossible to ship an activity kind that never fires. Every catalog kind must have a proof that FIRES the real write-path and ASSERTS the runlog row (actor, type, id, from→to); a new kind with no green proof BLOCKS the push. The dynamic complement to the catalog's Rule 0."
+---
+
+🕐 **Updated 2026-08-08 · Adam** — **v1 shipped.** `lead_dispositioned` is the first proven kind; the
+shrink-only floor grandfathers the other 186 (target: 0). Cage 9 is live in `pre-push.sh`.
+
+## 📌 Summary — what is true today
+
+**The activity catalog is the registry, and every kind in it must have a proof that FIRES the real
+write-path and ASSERTS the runlog row — a catalog kind with no green proof cannot be pushed.**
+
+The harness is the **dynamic** complement to the [Activity Catalog](/guides/activity-catalog)'s Rule 0.
+Rule 0 makes it impossible to *invent* a kind (the DB is the list; a writer takes a generated type).
+The harness makes it impossible to *ship a kind that never fires* — because a kind can be perfectly
+legal and still log **nothing**, if its `logActivity` call was never wired or was lost in a rebase.
+
+- **Registry:** `hl_activity_catalog` (187 kinds) — the harness enumerates it live.
+- **A proof per kind:** `tools/harness/proofs/<kind>.proof.mjs` — fires the endpoint the UI calls, then
+  asserts the `hl_activity_runlog` row (actor · actor_role · source_table · source_id · the kind's meta).
+- **It RUNS and logs:** `node tools/harness/run-proofs.mjs <kind>` fires against localhost:3020, checks
+  the DB, writes a green receipt.
+- **The cage:** `tools/harness/activity-harness-gate.mjs` — **cage 9** in `tools/hooks/pre-push.sh`.
+- **Shrink-only floor:** `tools/harness/unproven.floor` grandfathers today's unproven kinds (mirrors
+  `door-zero.floor`) so it never cries wolf; a **new** kind with no proof is not on the floor → it blocks.
+
+## Why it exists — the disposition autopsy (2026-08-08)
+
+A new disposition axis shipped. Moving a lead to "Has Other Agent" was meant to log `lead_dispositioned`
+(from → to → by whom) and drop the lead from the working list. In production it did **neither** — the
+`logActivity('lead_dispositioned', …)` call had **vanished from the write-path in a rebase** and was
+never in HEAD (the endpoint returned `200`; no row was written), and the leads-query gate that hides
+parked leads was reverted by the same rebase.
+
+Zach: *"you fube coded the shit out of this… how can we make this impossible to vibe code… nothing can
+compile if the new feature is not walked, logged, checked."*
+
+The kind was not invented illegally, misspelled, or unrenderable — so **every existing gate passed it:**
+
+| Existing gate | Proves | Does NOT prove |
+|---|---|---|
+| `kind-gate.sh` | the token is in the signed vocab | that anything writes it |
+| `catalog-parity` | the kind can RENDER | that anything FIRES it |
+| `notify-key-cage` | notify keys resolve | that the feature emits the kind |
+| `generate-event-kinds --check` | the union matches the catalog | that a writer runs |
+
+Every one is **static.** None fire the feature and look for the row. The harness is the missing dynamic
+layer: it RUNS the feature and asserts the effect.
+
+## How a proof works
+
+A proof (`tools/harness/proofs/<kind>.proof.mjs`) exports three things:
+
+- `kind` — the catalog key it proves.
+- `writePath` — the source file whose behavior it guards (the cage's staleness check uses it).
+- `run(ctx)` — fires the real write-path, asserts the runlog row, resets the probe in `finally`.
+
+`ctx` provides `db` (CRM query), `http` (fires the endpoint), `cookie` (a minted admin session — same
+HMAC pattern as the registration harness), `crmUrl`, `getProbeLead`, `resetProbeLead`, and `assertRunlog`.
+
+The `lead_dispositioned` proof, in one breath: dispositions the probe lead into a `hide` disposition via
+`PATCH /api/leads/[id]/disposition`, then asserts a `lead_dispositioned` runlog row exists with
+`actor` set, `actor_role = 'human'`, `source_table = 'hl_leads'`, `source_id` set, and
+`meta.from_disposition → meta.to_disposition`. Green:
+
+```
+actor 556fb76d · human · hl_leads · Active→Incoming
+```
+
+### The probe lead never touches the refinery
+
+Creating + deleting a lead per run is unsafe: an INSERT mirrors the lead into `hl_user`, and a DELETE
+cascades through that mirror into the **frozen** refinery (`hl_srg_past_clients`, `zz_frozen` guard). So
+the harness owns **one persistent, unmistakably-labelled probe lead** (`harness-probe@houseloop.ai`) that
+a proof flips in place and resets — **zero lead inserts, zero lead deletes.** Seed it idempotently with
+`node tools/harness/run-proofs.mjs --seed`.
+
+## The cage — three checks
+
+1. **A new unproven kind** (in the catalog, no proof, not on the floor) → **BLOCK.** *"You added kind X
+   and never wrote a harness proof."*
+2. **A write-path changed *after* its last green proof** → **BLOCK** (git-ancestry: the code's
+   last-change commit must be an ancestor of the receipt's commit). The old green proof predates the
+   change, so it proves nothing about the new code. *This is the disposition failure itself — the log
+   call removed after the kind was "proven."*
+3. **Ratchet** → any floored kind that gains a green proof drops off the floor. The floor only shrinks.
+
+**Proven both ways** (a cage that can't go red is theatre): the `lead_dispositioned` proof is GREEN when
+the write-path logs, and goes RED the instant the log call is removed —
+`endpoint returned 200 but NO lead_dispositioned runlog row fired`.
+
+## Adding a kind — the operator loop
+
+1. Add the catalog row (a Zach-signed migration, per the [catalog rules](/guides/activity-catalog#0-it-is-impossible-to-invent-a-kind-shipped-2026-07-27)).
+2. Write `tools/harness/proofs/<kind>.proof.mjs` — fire the real write-path, assert the row.
+3. `bash tools/houseloop-crm/restart-dev.sh && node tools/harness/run-proofs.mjs <kind>` → GREEN.
+4. Commit the proof **and its receipt.** The floor shrinks by one automatically; the cage lets the push through.
+
+A kind that only *renders* is not proven. The harness must **fire** it and **see the row.**
+
+## Commands
+
+```bash
+node tools/harness/run-proofs.mjs --seed          # seed/confirm the probe lead (idempotent)
+node tools/harness/run-proofs.mjs <kind>          # run one proof (needs the dev server up)
+node tools/harness/run-proofs.mjs                 # run all proofs
+node tools/harness/run-proofs.mjs --list          # proofs + last receipt status
+node tools/harness/activity-harness-gate.mjs      # the cage (green/red)
+node tools/harness/activity-harness-gate.mjs --list        # proven / unproven / floor
+node tools/harness/activity-harness-gate.mjs --seed-floor  # one-time bootstrap (already done)
+```
+
+## Files
+
+| File | Role |
+|---|---|
+| `tools/harness/lib/harness-core.mjs` | mint cookie · http · DB · probe lifecycle · assertRunlog · receipts · floor |
+| `tools/harness/proofs/<kind>.proof.mjs` | one proof per kind |
+| `tools/harness/run-proofs.mjs` | runs proofs, writes receipts |
+| `tools/harness/activity-harness-gate.mjs` | the cage (cage 9 in `pre-push.sh`) |
+| `tools/harness/unproven.floor` | shrink-only grandfathered set |
+| `tools/harness/receipts/<kind>.json` | evidence a proof ran green, and at which commit |
+| `tools/harness/README.md` | operator card |
+
+## Reference
+
+- **The spec (PRD):** `GT/GT - ACTIVE/GT_HOUSELOOP_ACTIVITY_HARNESS_PRD.md` — the proof contract, the
+  floor, the git-ancestry staleness check, acceptance criteria.
+- **The catalog it enforces:** [Activity Catalog](/guides/activity-catalog) — Rule 0 (can't invent a
+  kind) is the static sibling to this doc's dynamic cage.
+- **The board:** the Activity Catalog master audit — artifact `ac8e921b-f4ba-4aed-bd05-674345a102fd`.
+
+## Run log
+
+### 2026-08-08 · adam — v1 shipped: the proof-of-firing cage
+**Built the harness so a catalog kind that never fires can't ship.** Fired the real disposition endpoint,
+asserted the `lead_dispositioned` row (actor · human · hl_leads · Active→Incoming); proved RED when the
+log call is removed; wired cage 9 into `pre-push.sh`; seeded the shrink-only floor (186 grandfathered,
+1 proven).
+**Found:** BOTH the disposition write-path fix and the leads-query gate had been silently reverted by a
+rebase — the actual root cause of the disposition failure. Re-applied, committed explicitly, verified in
+HEAD, walked. Also regenerated `kind-vocab.txt` (mig 0711's `lead_dispositioned` was missing, so the
+kind-gate was blocking edits to disposition code).
+**Verdict:** shipped + cage green (187 catalog · 1 proven · 186 grandfathered).
