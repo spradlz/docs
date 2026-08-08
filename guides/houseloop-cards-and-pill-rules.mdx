@@ -1,0 +1,93 @@
+---
+title: "HouseLoop Cards & Pill Rules"
+description: "The listing card + the pills on it — ONE pill object, one color source, a fixed count. What every pill means, where it renders, and the one component + one file that enforce it so it can never sprawl again."
+---
+
+🕐 **Updated 2026-08-08 · Lee** — new page. Locks the pill taxonomy Zach signed 8/8: ONE `StatusPill` component + one color source, **max 2 pills, filled to a consistent count**, New/Coming Soon mutually exclusive, features (incl. acreage + price-drop) gray, map all-green. Mirrors the constitutional ground truth `GT/GT - ACTIVE/GT_HOUSELOOP_CARD_PILL_RULES.md`.
+
+## 📌 Summary — what is true today
+
+Every listing surface (the `/listings` grid, home shelves, saved-search previews, the search dropdown, the detail hero, the map) shows the same small set of **pills**. The bug we are killing: the pill was hand-rolled in ~12 files, so colors drifted and meant opposite things by surface (green = *For Sale* on a card but *Coming Soon* on the map), the count was inconsistent (1, 2, or 3), and "New" stacked with "Coming Soon."
+
+**The lock (Zach 2026-08-08):**
+
+- **ONE component, ONE color source.** Every pill renders through `components/listing/StatusPill.tsx`; every color comes from `lib/listings/pill-class.ts`. No surface hand-rolls a pill. Change a color once, there, forever.
+- **The pill object is always the same:** white background · black text · one colored dot. Only the dot color changes (Coming Soon = white pill, no dot).
+- **A fixed, consistent count — max 2 pills, filled to 2.** Never 1, never 3. Pill 1 = the top signal; pill 2 = the next-best fact. This kills the "some cards have 1, some 3" randomness.
+- **New and Coming Soon are mutually exclusive** — never on the same card.
+
+## The color law — the dot carries the meaning
+
+| Pill | Dot color | Notes |
+|---|---|---|
+| **New** (first 24h) | 🟢 green | The first-24h face of a For-Sale listing |
+| **For Sale** (active) | 🟢 green | |
+| **Coming Soon** | ⚪ white pill, **no dot** | Carries the date ("Coming Soon · 8/20") |
+| **Under Contract** (pending) | 🔴 red | Distinct from Sold |
+| **Sold** | 🟡 gold | |
+| **Off Market** | ⚫ grey | A neutral/fact state, not a live status |
+| **Open House** | 🔵 blue | Time-sensitive tour signal |
+| **Price drop** | grey | A **fact** (money fact), fills a fact slot |
+| **Feature** (Built 2023 · 3-Car Garage · Kitchen Island · **acreage**) | grey | Facts. Same size, no colored dot. Acreage is a feature, NOT a green-dot pill |
+
+**Green means one thing: an active/new listing.** A fact never wears a status color — that's why acreage moved from a green-dot pill to a plain gray feature.
+
+## The count law — always two, consistently filled
+
+Priority fills the two slots, highest first; features backfill to reach two:
+
+1. **Status** — Sold → Under Contract → Coming Soon → New (under 24h) → For Sale (mutually exclusive; one slot)
+2. **Open House** (blue) — time-sensitive
+3. **Price drop** (gray fact)
+4. **Features** (gray) — from the feature dictionary (`lib/listings/feature-dictionary.ts`), backfilled so the card always shows two (e.g. "3-Car Garage" + "Kitchen Island")
+
+**Never in a pill:** beds, baths, days-on-market, status-as-text — those live in the card body.
+
+## The three surfaces, one pill
+
+| Surface | Renders | Note |
+|---|---|---|
+| **Listing card** (grid / shelves / previews) | `<StatusPill>` + fact pills | `ListingCard.tsx` — cap = 2, always filled |
+| **Search dropdown** | `<StatusPill>` | `SearchAutocomplete.tsx` — wired 8/8 (the rogue inline pill was removed) |
+| **Detail page** | `<StatusPill>` top-left, **ALWAYS**, for every status | `ListingDetail.tsx` — For Sale included (today it only pills Sold/UC) |
+| **Map markers** (own medium) | canvas markers | See "The map is its own medium" below |
+
+## The map is its own medium (Zach 2026-08-08)
+
+The map is not a card — it needs legibility, not the pill palette:
+
+- **All markers GREEN** (active homes). **No red anywhere.**
+- **Hover → the compact card preview pops up** on the map (Redfin behavior). Hover does **not** recolor the marker.
+- Keep the **"New" label** on the green marker when under 24h, and the **▼ price-drop arrow**.
+- Source: `lib/listings/map-markers.ts` (canvas) — reads the same color source, updated in tandem.
+
+## The engagement hydration bug (still open)
+
+Documented in [Engagement Stats](/guides/engagement-stats): social engagement can render dead / "0 until you refresh" on first visit — a React **#418** hydration mismatch when a **client** component computes time from `Date.now()` at render (server-now ≠ hydration-now). Fix pattern: compute lifecycle time **server-side, pass as a prop** (`lib/listings/lifecycle-time.ts`), never `Date.now()` in a client component/builder. Reported again 2026-08-08 on the detail page → treat as a regression or a new `Date.now()` leak.
+
+## 🔗 The board
+
+**This doc is the past tense; the board is the present tense.** The ONE board is
+**[Home Search · Pills · Map — the fix list](https://claude.ai/code/artifact/2827a254-58c0-4df6-8daa-533b831d926c)** (13 items, the pill-taxonomy build + the map + the engagement bug). Everything else here links is a **reference**, not a second board.
+
+## Run log
+
+### 2026-08-08 · lee — the pill taxonomy, locked
+**Signed the pill taxonomy with Zach and started the consolidation.**
+- **Found:** the status pill was hand-rolled in ~12 files (ListingCard, ListingDetail, SearchAutocomplete, ListingsMap, HeroCarousel…). Colors drifted and meant opposite things by surface (green = For Sale on a card, Coming Soon on the map); the count was 1/2/3; "New" stacked with "Coming Soon." Root: no single component/source.
+- **Built:** `components/listing/StatusPill.tsx` (white pill · black text · dot) reading `lib/listings/pill-class.ts` (the one color source — added `statusDot`/`statusLabel`, Under Contract → red, Off Market → grey, For Sale label). Wired the **search dropdown** to it and removed a rogue inline pill I had hand-rolled there.
+- **Locked (Zach):** max 2 pills, filled to a consistent count; New XOR Coming Soon; features (incl. acreage, price-drop) gray; Open House blue; detail page always shows a status pill; map all-green, no red, hover pops the card, keep New (under 24h) + ▼.
+- **Also shipped (search):** the deterministic address resolver — a full typed address ("4916 W 78th Pl Prairie, Village, KS 66208") now resolves to `/home` across every status (a1b67d0dee); Under Contract dot red (cd005ba283).
+- **Still open** (board): wire StatusPill into the card + detail, set cap=2 + always-fill, kill the New/Coming-Soon stack, acreage → gray feature, map changes, the engagement #418 regression.
+- **Verdict:** design signed; search dropdown wired; card/detail/map build in progress.
+
+## Related
+
+| Doc | Covers |
+|---|---|
+| **GROUND TRUTH** `GT/GT - ACTIVE/GT_HOUSELOOP_CARD_PILL_RULES.md` | The constitutional card-pill rules (Change Order required to edit) |
+| **Signed wireframe** [The Locked Pill Taxonomy](https://claude.ai/code/artifact/a004251e-2723-4d3c-872b-e5dd702be590) | The pixels + before/after, the dot legend, the map decision |
+| [Listing detail page](/guides/listing-detail-page) | The detail surface the status pill lives on |
+| [Listing lifecycle](/guides/listing-lifecycle) | The statuses (active/coming_soon/pending/sold/off_market) the pills read |
+| [Engagement Stats](/guides/engagement-stats) | The #418 hydration bug on engagement counts |
+| [Home Search](/guides/home-search) | The search bar + the address resolver that lands on a home |
