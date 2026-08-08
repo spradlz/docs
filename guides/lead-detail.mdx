@@ -377,22 +377,52 @@ the recipient resolves the SAME way for native and imported rows — a data fix,
   recipient renders an honest blank — never a guessed name. See [the FUB Master Scraper SSOT](/fub/master-scraper-ssot).
 </Note>
 
-## The card catalog — every card the feed can render
+## The composed sentence (§5) — one who-did-what line
 
-One table, one contract per card. **A card is chosen by the row's CANONICAL event token**, resolved through
-`canonicalEventType()` from the catalog in `lib/leads/activity-badges.ts` — never by a raw string typed into a
-component. Renderers: `components/leads/detail/CenterLane.tsx` (the lead feed) and `PixelFeedStream.tsx`
-(website activity), both assembling `ActivityHeroCard`.
+Every non-hero row leads with ONE sentence — **`{actor} {verb-phrase} {relation} {counterparty}`** —
+composed server-side at the one reader, never hand-rolled per surface. It is **catalog-driven**: the grammar
+is DATA on the [activity catalog](/guides/activity-catalog) (`hl_activity_catalog`), not a map in the
+component.
 
-| Card | Canonical token | Picture | Body / quote | Link row |
+- **`composeSentence(row, grammar, portal)`** (`lib/activity/render-activity.ts`) is pure. The verb phrase is
+  the catalog's `sentence` ("sent a text", "called", "saved a home"); `relation` (`to` · `about` · `for` ·
+  `via` · `''`) is the catalog column that decides how the actor joins the counterparty.
+- The **actor** is the run-log row's `by_kind` / `by_name` (the [actor model](/schema-lock/overview)); a lead
+  acting on their own behalf reads "{lead} {phrase} [via {source}]".
+- The **counterparty** is resolved by DIRECTION: an agent→lead row names the lead; an inbound lead→agent comms
+  row names the RECIPIENT agent (see the [note above](#how-a-message-row-renders-the-messages-lens)). Add a
+  badge/grammar to the catalog → it composes correctly everywhere, with no code change.
+
+<Note>
+Signed wordings that are NOT the plain sentence are preserved deliberately: a **call** reads "Outbound call to
+{lead}" / "Call received from {lead}" (Zach 2026-08-06); a **fully-executed document** reads "Document fully
+executed". Everything else is the composed sentence. The acceptance test
+(`render-activity.sentence.test.ts`) loads the REAL catalog grammar and pins every signed sentence.
+</Note>
+
+## The card catalog — hero vs compact, every card the feed can render
+
+**Two densities, one component.** `ActivityHeroCard` renders both: a **hero** card (big photo tile, address,
+links) and a **compact** row (a small ROUND accent icon + the black who-did-what headline + a gray facts line
++ the body underneath — exactly like a text message). **A card is chosen by the row's CANONICAL event token**,
+resolved through `canonicalEventType()` from `lib/leads/activity-badges.ts` — never a raw string in a
+component. Renderers: `CenterLane.tsx` (the lead feed) and `PixelFeedStream.tsx` (website activity).
+
+**Hero is reserved for a house-bearing first-class event** (Zach 2026-08-08): a **Zillow in-app message with a
+home**, or a **registration**. Everything else — texts, **calls**, notes, website behavior — is a compact row
+with a round icon. A **phone call reads like a text**: round phone icon, "Outbound call to {lead}", a gray
+line "from {agent}'s old line · (number) · duration", then the recording player / AI summary / transcript
+underneath (Zach 2026-08-08; calls were removed from `isHero`).
+
+| Card | Canonical token | Density | Picture | Body / quote |
 |---|---|---|---|---|
-| **Zillow in-app message** | `in_app_message_received` | Zillow mark. **With** a home → hero card w/ photo tile; **without** a home → ordinary message row (see below) | **ALWAYS renders the message body** in the quote block | **Single: "View in Follow Up Boss"** — Zillow has no per-lead page and the address doesn't resolve to a HouseLoop home |
-| **Tour request / inquiry** | `tour_requested`, `contact_requested`, `seller_inquiry`… | Home photo, else the portal mark | The buyer's typed message | "View on HouseLoop │ View on Zillow" |
-| **Text / email received** | `text_received`, `email_received` | Channel icon | The message body, never truncated | "View in HouseLoop" |
-| **Home saved / viewed / shared** | `home_saved`, `home_viewed`, `home_shared` | The home photo | — (no message exists) | "View on HouseLoop │ View on Zillow" |
-| **Saved search** | `saved_search` | Representative home photo, else the HouseLoop tile | The criteria summary | **Single: "View on HouseLoop"** |
-| **Registration** | `registration` | HouseLoop tile (direct/no-home) else the home photo | The registration message if one was typed | "View on HouseLoop" |
-| **Call** | `call_completed`, `missed_call`, `voicemail` | Channel icon | Disposition / transcript | "View in HouseLoop" |
+| **Zillow in-app message** | `in_app_message_received` | **Hero** with a home; compact without | Zillow mark | **ALWAYS the message body** in the quote block |
+| **Tour request / inquiry** | `tour_requested`, `contact_requested`, `seller_inquiry`… | Compact (hero only with a home) | Home photo, else portal mark | The buyer's typed message |
+| **Registration** | `registration` | **Hero** | HouseLoop tile (direct/no-home) else the home photo | The registration message if one was typed |
+| **Text / email** | `sms_sent`/`sms_received`, `email_sent`/`email_received` | Compact | Round channel icon | The message body, never truncated; gray line = from · number → to · number |
+| **Call** | `phone_call_made`, `phone_call_received` | Compact | Round phone icon | Gray line = the line + number + duration; player / summary / transcript below |
+| **Home saved / viewed / shared** | `property_saved`, `property_viewed`, `property_shared` | Compact | The home photo | — (no message exists) |
+| **Saved search** | `saved_search_created` | Compact | Representative home photo, else the HouseLoop tile | The criteria summary |
 
 ### The in-app card contract (Zach, locked across three sessions)
 
@@ -552,6 +582,44 @@ it should land:
 
 Full param reference: [CRM Deep-Linking](/guides/lead-detail-routing).
 
+## Activity architecture — one store, one writer, one catalog, one reader
+
+The feed above is not assembled from a dozen fetches. Everything that ever happens to a lead — texts, emails
+(sent/opened/clicked), notes, tasks, appointments, calls, website activity, saved searches, stage/contact
+changes, AI actions — is **one append-only row** in the canonical run-log, and every lead-detail surface (and
+Myli's dossier) reads the **one** endpoint. There are no parallel sources of truth. The kinds, their
+sentences, and their grammar are the [Activity Catalog](/guides/activity-catalog); the whole model is locked
+in the [Schema Lock](/schema-lock/overview).
+
+| Layer | What | Where |
+|---|---|---|
+| **One store** | `hl_activity_runlog` — one row per event (renamed from `hl_lead_activity`, mig `0632`). Carries `kind` (a catalog key), `occurred_at`, `by_kind`/`by_name` (the [actor](/schema-lock/overview)), `direction`, `title`/`body`/`photo`, `source`/`source_table`/`source_id`, and `meta` (jsonb — listing, criteria, from/to numbers, `recipient_name`, old→new values). Idempotent on `(source_table, source_id)`; append-only. | migration `0632` |
+| **One writer** | `logActivity()` — the only function that writes the run-log. Best-effort (a log failure never breaks the real action) and fires a realtime frame so open feeds update with no refresh. Every source double-writes through it right after its own insert (`logMessage`, workflow/manual email, the Resend + pixel webhooks, notes/tasks/appointments, lead-record edits, voice). | `lib/activity/log-activity.ts` |
+| **One catalog** | Every kind → `{ label, color, Icon, category }` **and its sentence grammar** (`sentence` · `relation` · `sentence_subject` · `via_source`). The code catalog (`activity-badges.ts`) paints the tile; `hl_activity_catalog` carries the grammar that drives [§5](#the-composed-sentence-5-one-who-did-what-line). **The one place to recategorize or reword anything.** | `lib/leads/activity-badges.ts` · `hl_activity_catalog` |
+| **One reader** | `GET /api/leads/{id}/activity?limit=&kinds=&savedSearchId=` — reads only the run-log, newest first, composes the sentence server-side, and returns `label`/`color`/`request`/`sentence` beside the raw row. `?kinds=` is a lens (a catalog subset). | `app/api/leads/[id]/activity/route.ts` |
+
+**Adding a new event = two steps, no per-surface edits:** (1) call `logActivity({ leadId, kind, … })` at the
+source with `sourceTable`+`sourceId`; (2) add the kind to the catalog (label/color/icon + sentence grammar).
+It then appears — correctly labeled, colored, and phrased — in the All feed, the right lens, and the dossier.
+
+<Warning>
+**A LENS IS A CLAIM — measure it, never review it.** A tab that filters on a token the data does not use
+renders **empty forever**, and an empty tab is indistinguishable from a lead with no activity — nothing errors.
+Reading lenses one at a time cannot find this; a tool must: `node apps/houseloop-crm/scripts/audit-lenses.ts`
+scores every lens on three questions — is every token a real kind (after alias resolution), how many rows its
+predicate actually matches, and which kinds have data **no** lens shows. (Zach 2026-08-06, the transaction-lens
+audit: Pending/Closed/Lost had always rendered zero because they filtered on non-kinds.)
+</Warning>
+
+**AI cost rides on the row, not a second table.** An AI action's token cost is two columns on its run-log row
+(`input_tokens`/`output_tokens`); dollar cost is derived at read time from the model's $/M (never frozen).
+"What is the AI costing" is a VIEW over the one catalog (`WHERE by_kind`/type = AI), split per agent. The one
+allowed exception to append-only is `stampActivityTokens()`, which annotates ONLY those two cost columns of an
+already-written self-logged AI row — never an identity field. Full model: [Activity Catalog](/guides/activity-catalog).
+
+**History backfill** — `leadActivityBackfill` (Inngest, event `hl/lead-activity.backfill`) replays the source
+tables into the run-log, idempotent and re-runnable, visible in the [Run Log](/guides/run-log).
+
 ## Related lead-detail docs
 
 | Doc | Covers |
@@ -560,7 +628,8 @@ Full param reference: [CRM Deep-Linking](/guides/lead-detail-routing).
 | [Lead Detail — Parity Lanes](/guides/lead-detail-parity-lanes) | the left/right lane shared skeleton + Tasks & Appointments / AI Workflow |
 | [Lead Detail — AI Agent](/guides/lead-detail-ai-agent) | the right-lane AI agent card, capabilities, context + brain map |
 | [Lead Detail — Stages, Deals, and the Audit Trail](/guides/lead-detail-stages-and-deals) | stage transitions, pending/closed deals, the audit log |
-| [Lead Activity Log](/guides/lead-activity-log) | the canonical `hl_lead_activity` run-log every surface reads |
+| [Activity Catalog](/guides/activity-catalog) | every event kind + its sentence + grammar — the catalog the feed derives from |
+| [Schema Lock](/schema-lock/overview) | the one SSOT — the actor model, tables, and kinds every surface points to |
 | [Leads Table](/guides/leads-table) | the `/leads` list that links into this page |
 
 ## 📎 Reference
