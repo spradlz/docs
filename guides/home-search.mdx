@@ -150,6 +150,59 @@ is a deliberate product decision, not a gap — do not "fix" it into distinct pi
 under ONE HLID is separate, future work.)
 </Note>
 
+### The two-source address dropdown — KNOWN ISSUE (not yet scheduled)
+
+<Warning>
+**Cataloged 2026-08-08 by Lee — outline only, no refactor scheduled. This is tech debt, written down so
+it stops biting us blind.**
+
+**What it is.** The address dropdown resolves from **two different places**:
+- **Active homes** → a **live Repliers API** call (`status=A`).
+- **Non-active homes** (coming-soon / pending / sold / off-market) → **our `Listing` cache** (centerbeam DB).
+
+**Why it's wrong — three ways, in order of how much they cost us:**
+
+1. **It bypasses the HLID / canonical-home system.** The Repliers path builds `hl_heartlandmls_<mls>` and a
+   URL **on the fly** — no canonical slug, no dedup, no alias resolution, none of the identity spine the rest
+   of the site runs on. That is the exact "a string used as an identity with nothing enforcing it" anti-pattern
+   the [Seller Engine](/guides/seller-engine) locks against ("identity lives in a constraint, never in a
+   string"). Every other surface — the detail page, the cards, the map — is cache-first through `Listing` by
+   **HLID**, by design ("the table is the truth / the website is our Zillow"). The address dropdown is the one
+   place still reaching around it.
+2. **It causes field drift, and we've already paid for it.** A Repliers hit carries **only** what Repliers
+   returns — none of the columns our `Listing` row owns. On 2026-08-08 this shipped a visible bug: a
+   coming-soon home showed **"On Market" with no date** in the dropdown while its detail page showed the real
+   date, because the Repliers hit had no `comingSoonDate` and the DB row that *did* got deduped away. The live
+   fix is a **backfill patch** in the endpoint (query our DB by hlid, fill the missing status date) — a patch
+   over the seam that shouldn't need to exist.
+3. **The seam is invisible until someone eyeballs it.** Which source a given home came from depends on its
+   status and cache state — so a field can silently be present or absent with no error.
+
+**The fix (when we do it) — one source.** The dropdown reads **only our cached `Listing` DB**, active and
+non-active alike, keyed by **HLID**. Repliers stays where it belongs: **upstream**, populating the cache via
+the sync/webhook — never called live from the bar. That single move deletes the live Repliers call, the
+ad-hoc hlid construction, **and** the date backfill, and it kills this whole class of drift.
+
+**Why our DB can already serve it** (measured 2026-08-08, centerbeam `Listing`, `deletedAt`/`quarantinedAt` null):
+
+| status | rows in our cache |
+|---|---:|
+| active | 11,196 |
+| pending | 4,911 |
+| coming_soon | 727 |
+| sold | 339,232 |
+| off_market | 2,964 |
+
+…and the typeahead indexes already exist (`Listing_canonicalSlug_idx`, `listing_streetaddress_pattern_idx`).
+
+**The one real caveat:** a listing that is seconds-old and not yet synced into the cache wouldn't appear
+until the sync lands it. The active set (~11.2K) is essentially the full metro inventory, so the window is
+tiny — and the detail page already lives with this exact cache-first tradeoff.
+
+**Files:** `app/api/locations/autocomplete/route.ts` (the two sources + the current date backfill),
+`components/site/SearchAutocomplete.tsx` (the dropdown render + `addrPillLabel`).
+</Warning>
+
 <Note>
 **One brain, two surfaces.** The bar (`classify`) and the AI modal (`nlp`) share `search-defaults.mjs`, so
 they emit **identical** params for the same query — the bar just never converses.
