@@ -42,6 +42,42 @@ notified" now goes RED in pre-push the moment the weld stops firing. (See the 8/
 written six months ago and built today is exactly what people come here to find.
 </Info>
 
+### 2026-08-08 · adam — NOTIFY-ON-RENDER: the 8 notifiers become one weld on the activity log
+
+**The bug (5th of its kind).** Ubah Mindingall In's Zillow in-app message rendered to the feed
+(`zillow_message_received`, 8/8) but created **zero** notification rows — no bell, no text — with every
+config green (`notify=true`, `_global` on, SMS master on, Zach's `new_message` SMS toggle on). Root
+cause: the feed row is written by `logActivity`, but the notification was the job of a **separate,
+decoupled Camp David sweep** (`fub-body-recovered`) that silently missed it. Two systems, one trigger
+each — they drift, and when the parallel one fumbles you get "in my feed, not my bell." Zach, verbatim:
+*"the notification should be that we rendered it… keyed off the activity catalog table… did the activity
+catalog fire, is a notification turned on, send the notification… not vibe-coded with 8 different
+notification systems."*
+
+**The fix — one trigger, one dispatcher.** A notification is now a **projection of the activity log**.
+The weld lives inside `logActivity` (`lib/activity/log-activity.ts`): on a fresh insert of a `notify=true`
+kind, it calls `notifyInboundOwnerAware` once. The five dedicated creators
+(`notifyLeadEvent`, `notifyStageChanged`, `notifyInboundMessage`, `routeFubNotification`) are neutered
+no-ops; `notifyLeadAssigned` stays direct (`lead_assigned` isn't an activity kind yet). Net effect on
+the FUB path was **2→1** (the import used to fire both `notifyLeadEvent` *and* the router) — the dedup win.
+
+**Coverage was proven before neutering, not assumed.** Every `notify=true` kind's live writer was traced
+to a `logActivity` call: FUB inquiries/tours/messages (`fub-lead-import`, the live path — Zillow comes
+through FUB), website pixels (`process-intake`), native texts (`sms_received`/`imessage_received`),
+stage moves, task/note/appointment, `lead_created`. The `stage_changed` title was enriched from the flat
+"Stage changed" to "Moved from A to B" (in `set-lead-stage.ts` + `pipeline/route.ts`) so the notification
+isn't degraded. Known minor follow-up: `collaborator_added` is not a catalog kind (rare in-app teammate
+ping) — re-add via `logActivity` + a catalog row.
+
+**Safety gates (each earned):** FRESHNESS (15-min window — a backfill can't blast the team, the near-miss
+caught in the 8/8 draft), CATALOG-GATED (keys off `catalog.notify`, never `args.notify`), DEDUP on
+`source_table`+`source_id`.
+
+**Walked on localhost (all green):** fresh in-app → 1 notification · OLD/backfill → 0 · fresh stage → 1
+(not 2) · `notify=false` (`lead_dispositioned`) → 0 · idempotent re-log → no double. **Caged:** the new
+harness proof `note_added.proof.mjs` fires the real notes endpoint and asserts BOTH the run-log row and
+the `hl_notification` row — floor ratcheted 186→185. **PRD:** `GT_HOUSELOOP_NOTIFY_FROM_ACTIVITY_LOG_PRD`.
+
 ### 2026-08-05 · lee
 
 **Closed item [541](https://claude.ai/code/artifact/209ff52e-468f-46e1-a9da-8d763217c547) · opened
