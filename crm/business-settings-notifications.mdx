@@ -3,7 +3,7 @@ title: "Notifications"
 description: "How you and the team get alerted — personal channels, per-event toggles, agent nudges, inbox subscriptions, and the outbound sender identity."
 ---
 
-> **Last updated 2026-08-05 12:40 by lee** · [How we work](/how-to/dev-doc-discipline)
+> **Last updated 2026-08-08 by adam** · [How we work](/how-to/dev-doc-discipline)
 
 ## 📌 Summary
 
@@ -12,14 +12,24 @@ workflows). Each agent owns their channels and per-event BELL / TEXT / EMAIL tog
 outbound sender identity. Delivery is gated three layers deep: the event's toggle → the recipient's
 saved per-class prefs → the account channel masters.
 
-**What is true as of 8/5:** the notification CLASS (which category a signal rolls up to) has ONE owner
-— the **Activity Catalog** (`notify` + `notify_class`, mig 0630) — and notifications are stamped with
-their class at creation by resolving through the catalog via the alias closure. A signal switched ON
-with no class is now a **push-blocking cage failure** (registry audit rule 6) — that exact shape
-silently swallowed tour requests and Zillow in-app messages twice, seven days apart, on the same lead
-(the Bradley incidents). The registry gate audits notifications that exist; the **coverage gate (gate
-7, in build)** audits the question nobody asked: did everything that should notify, notify — one line
-per kind, never a blended number.
+**What is true as of 8/8 — a notification is a PROJECTION of the activity log.** There is ONE trigger:
+`logActivity`. When it writes a run-log row whose kind is `notify=true` in the **Activity Catalog**, a
+single weld inside `logActivity` fires the one notification through `notifyInboundOwnerAware` (the lead
+owner + every `notif_scope='all'` admin, per each recipient's channel prefs). Nothing notifies that is
+not in the activity log — the bell is a *lens on the log*, exactly like the feed
+([ALL = EVERYTHING](/guides/lead-activity-log)), so **"in my feed but not my bell" is now structurally
+impossible.** This retired the ~8 scattered notifier paths (`notifyLeadEvent`, `notifyStageChanged`,
+`notifyInboundMessage`, the FUB `routeFubNotification` router) onto the one weld; they are no-ops.
+`notifyLeadAssigned` is the one kept direct — `lead_assigned` is not yet an activity kind.
+
+**Three safety gates make the one path safe:** (1) **FRESHNESS** — only an activity whose `occurred_at`
+is within 15 minutes notifies, so a FUB backfill re-importing thousands of historical rows can never
+blast the team's phones; (2) **CATALOG-GATED** — the weld keys off the catalog's `notify` flag, never
+the `args.notify` live-feed flag; (3) **DEDUP** on the activity's own signal (`source_table`+`source_id`),
+so a reprocess never doubles. The whole chain is caged: the **activity harness** proof `note_added`
+fires the real endpoint and asserts BOTH the run-log row AND the `hl_notification` row — "rendered ⟹
+notified" now goes RED in pre-push the moment the weld stops firing. (See the 8/8 run-log entry + PRD
+`GT_HOUSELOOP_NOTIFY_FROM_ACTIVITY_LOG_PRD`.)
 
 ## 🔗 The board
 
