@@ -1,0 +1,191 @@
+---
+title: "Engagement Stats (Views / Likes / Saves / Shares)"
+description: "How every HouseLoop listing card and /home page gets its views, likes, saves, and shares — a synthetic hourly ticker seeds believable activity, and real first-party events increment the same counters on top. Single source of truth: the ListingStats table."
+---
+
+{/* legacy-banner */}
+<Warning>
+  **LEGACY — UNVERIFIED.** This page predates the Master QA build and has NOT been verified
+  against the product. The canonical docs are being rewritten lane-by-lane as each lane goes
+  green — check the lane's tab first.
+</Warning>
+
+<Info>
+🔒 **Follows the [Schema Lock](/schema-lock/overview).** The architecture law lives there; this guide references it.
+</Info>
+
+> ## 🌐 SIGNED RULING (8/7) — engagement DERIVES from `hl_website_activity`
+>
+> The view / like / save / share counters on this page (`ListingStats`) are **derived from** the one
+> website-activity table: **`hl_website_activity`** (rename of `hl_pixel_event` — the tracking *pixel* is
+> the mechanism that drives it, not the table's name; name the thing, not the plumbing). Every real
+> first-party view/like/save/share is a **row** in `hl_website_activity` (by **visitor/IP** or **lead**),
+> and these counters are the **aggregate** of those rows per home. **`site` is a COLUMN** on that table
+> (`houseloop_kc` / `houseloop_dallas` / …) — one table, filter by site, **never a table per site**.
+> Buyer insights and per-lead browsing history derive from the **same** source. Nothing is stored twice.
+> Full model + build status (gated rename, not yet migrated): the [Schema Lock](/schema-lock/overview).
+
+Every listing card and `/home` page shows **views · likes · saves · shares** (plus "N days on
+HouseLoop"). Pre-PMF we have thousands of listings and few visitors, so a card reading "0 views, 0 saves"
+signals a dead site. HouseLoop solves this exactly the way the model is meant to work: a **synthetic hourly
+ticker** seeds believable activity, and **real first-party events increment the same counters on top**. The
+day real volume eclipses synthetic, the ticker turns off and the numbers keep growing organically.
+
+<Info>
+**Ground truth:** `GT/GT - ACTIVE/GT_HOUSELOOP_ENGAGEMENT_SYNTHESIS.md` (locked 2026-05-17). Owner: Benji.
+Any change to magnitudes, cadence, caps, or floors requires a Change-Order edit to that GT doc in the same
+commit.
+</Info>
+
+## Single source of truth — `ListingStats`
+
+Counts live in columns on the `ListingStats` table (web DB, centerbeam), keyed by `hlid`. **Both synthetic
+ticks AND real-user events `INCREMENT` the same columns** — the card reads the column verbatim, no merge
+math at render time.
+
+| Column | What |
+|---|---|
+| `totalViewsCount` | All-time views |
+| `views24h` | Rolling 24h views |
+| `reactionsCount` | All-time likes |
+| `savesCount` | All-time saves |
+| `sharesCount` | All-time shares |
+| `currentlyViewing` | Live TTL-based "N people viewing" (not touched by the ticker) |
+| `commentsCount` | Real comments only |
+| `syntheticTicksApplied` | How many synthetic ticks this row has had |
+| `lastSyntheticTickAt` | Timestamp of the last tick (detects missed runs) |
+
+The `/home` page reads it directly: `HomeDetailView` does `prisma.listingStats.findUnique({ where: { hlid } })`
+and passes `{ views24h, savesCount, reactionsCount, sharesCount, totalViewsCount }` into `ListingDetail`.
+A home with no row yet falls back to the synthetic seed on its next tick (see below) — **no listing should
+read all-zero** once it's been seeded.
+
+## The synthetic ticker (the floor)
+
+An hourly Inngest cron drips believable activity into `ListingStats` for **active** listings.
+
+| Field | Value |
+|---|---|
+| Inngest function id | `engagement-stats-drift` |
+| File | `apps/houseloop-web/lib/inngest/functions/engagement-stats-drift.ts` |
+| Algorithm | `apps/houseloop-web/lib/listings/synthesize-engagement.ts` → `computeTickDelta()` |
+| Schedule | `0 * * * *` (hourly) |
+| Manual trigger | event `engagement-stats-drift/manual.run` |
+| Writes | `ListingStats` (upsert per active listing, batched 200/txn) |
+
+Each tick computes a per-listing delta and `upsert`s it (creating the row on first touch). The delta is:
+
+- **Age-decay** views/hour: `0–24h → 8 · 1–7d → 6 · 7–30d → 2 · 30–90d → 0.6 · 90+d → 0.15` (never plateaus).
+- **Per-listing popularity factor** `0.35–2.20`, deterministic from an FNV-1a hash of the `hlid` (so the same
+  listing always trends the same — some "hot," some "quiet" → organic variance).
+- **Multipliers** stacked: photo count, price quintile (luxury-biased), property type (land loses hard,
+  SFR wins), year built, upcoming open house, active price drop.
+- **Poisson sampling** per tick → natural hour-to-hour variance.
+- Likes/saves/shares are a **proportion of the views** that tick (≈1.5% / 3.0% / 0.6%, each with a
+  per-listing bias) so the ratios stay industry-realistic at every magnitude.
+
+### Caps + floors — never "frozen at 4,000," never "0 views"
+
+- **Saturation caps** (clamped each run): views `4000` · likes `400` · saves `200` · shares `80`, with a
+  per-listing soft-cap jitter so they don't all render the identical "4K."
+- **Floors / day-0 minimums** (`seedListingStats`): a brand-new listing lands at non-zero minimums
+  (views `55` · likes `4` · saves `3` · shares `1`, per-listing jittered) and ramps to the full floor
+  (`140/8/5/3`) over ~3 days. **Nothing ever reads 0** on an active home.
+
+A CLI replay tool (`tools/houseloop/synthesize-tick.mjs`) can dry-run a single tick or replay N hours of
+growth for one listing or the whole active set.
+
+## Real events on top (first-party)
+
+Real engagement increments the **same** `ListingStats` columns via the website's own endpoints:
+
+| Endpoint | Increments | Fired by |
+|---|---|---|
+| `POST /api/listings/[hlid]/view` | `totalViewsCount` + `views24h` | `HlPropertyTrack` on every listing detail mount |
+| `POST /api/listings/[hlid]/save` | `savesCount` | Save button |
+| `POST /api/listings/[hlid]/reactions` | `reactionsCount` | Like button |
+| `POST /api/listings/[hlid]/share` | `sharesCount` | Share button |
+
+These are atomic upserts capped at a hard `9999` (a leak fix — bots once pushed a sold listing to 300k+
+views). Because real and synthetic write the same columns, a real visitor's activity simply stacks on the
+synthetic floor — exactly the intended model.
+
+<Note>
+**"Real on top" today = first-party website clicks, not FUB lead browsing.** A lead's FUB property-view /
+save history lives in the CRM (`hl_pixel_event`) and feeds the lead-detail Homes/Requests tabs — it is **not**
+currently rolled into the website's `ListingStats`. Wiring FUB/pixel activity into `ListingStats` (aggregated
+by `hlid`) is a possible future enhancement, not current behavior. See [Pixel Tracking](/guides/pixel-tracking).
+</Note>
+
+## The hydration bug — "0 views until you refresh" (root-caused 2026-07-02)
+
+**Symptom:** on an **active** `/home` listing the engagement bar rendered **0 views / blank counts on first
+load**, and only showed the real numbers after a hard URL refresh. The console logged **React error #418**
+(a hydration text mismatch).
+
+**Root cause — NOT the data.** The `ListingStats` columns are correct and the server HTML ships the right
+numbers (verified: SSR shipped `172 views / 139 days / Like 10 / Save 5 / Share 3`). The bug is a **render
+determinism** problem: `ListingEngagementBar` is a **client component** that computed the "**X days on
+HouseLoop**" metric inline via `lifecycleTimeMetric()`, whose *active* branch uses **`Date.now()`**
+(`lib/listings/lifecycle-time.ts` line ~58). The server rendered that text at server-now; the client
+recomputed it at hydration-now. When the two disagree, React throws **#418** and **discards the server HTML
+for that whole subtree**, re-rendering it on the client — which is what blanks the counts to 0 until a full
+reload. **Only ACTIVE/coming-soon listings hit it** — sold/pending freeze the metric on stored dates
+(`listDate → soldDate`), so they're deterministic and never mismatched.
+
+**Fix shipped (2026-07-02, Adam).** Compute the lifecycle metric **once on the server** and pass it down as
+a prop, so the client renders it verbatim and never calls `Date.now()` during hydration:
+- `lib/listings/get.ts` — `getListing()` now computes `lifecycleTime` server-side and returns it on the
+  domain `Listing`.
+- `components/listing/HomeDetailView.tsx` — recomputes `lifecycleTime` with the reconciled sold-pill date
+  (kept server-side) so days-to-sale matches the pill.
+- `lib/listings/types.ts` — added the optional `lifecycleTime` field to `ListingSchema`.
+- `components/listing/ListingEngagementBar.tsx` — reads `listing.lifecycleTime` and only falls back to the
+  live compute when the prop is absent.
+
+## One derive step for every builder (the structural fix — 2026-07-09)
+
+**Why the detail-page fix didn't land on the cards:** the domain `Listing` object is built by **three
+separate mapper functions**, and the 2026-07-02 fix was applied to only one of them:
+
+| Builder | File | Feeds |
+|---|---|---|
+| `readFromCache` | `lib/listings/get.ts` | the detail page (had the fix) |
+| `dbRowToListing` | `lib/listings/cache.ts` | active search / feed cards (didn't) |
+| `historyRowToListing` | `lib/listings/cache.ts` | sold-archive cards (didn't) |
+
+So the feed/search cards still recomputed the "X days on HouseLoop" label — and the "New · Xh ago" fresh
+pill — from **`Date.now()` at render time**, mismatching SSR↔hydration → the same **#418 → the card's
+engagement blanked to 0 until refresh**.
+
+**The fix is one derive step, not three patches.** `lib/listings/derive.ts` → **`deriveListingFields()`**
+computes the read-time, time-derived display fields **once, server-side** — `lifecycleTime`,
+`listedHoursAgo` (drives the fresh pill), and `openHouseUpcoming`. **All three builders funnel their return
+through it** (one compute site, three call sites), and **`ListingCard` reads those props** — its time
+helpers are now pure formatters, with a live compute only as a fallback for an un-derived listing. No
+component calls `Date.now()` during render on any surface.
+
+<Note>
+**The rule going forward:** a new read-time, time-derived display field goes in `deriveListingFields()` —
+never inline in a builder or a client component. That is the single place, so it lands on the detail page
+AND every card at once. This is the data-layer counterpart to "one way to render a home."
+</Note>
+
+## Turning the ticker off (later)
+
+When real volume eclipses synthetic (target: real > 5× synthetic), set the `engagement-stats-drift` cron
+`triggers` to `[]` (disable the cron, keep the manual trigger). The function + columns stay so we can audit
+or roll back. The accumulated counts continue to grow from real events alone.
+
+## Key files
+
+| Concern | File |
+|---|---|
+| Synthetic cron (the shell) | `apps/houseloop-web/lib/inngest/functions/engagement-stats-drift.ts` |
+| Tick algorithm + caps/floors + `seedListingStats` | `apps/houseloop-web/lib/listings/synthesize-engagement.ts` |
+| Real view/save/share/reaction endpoints | `apps/houseloop-web/app/api/listings/[hlid]/{view,save,share,reactions}/route.ts` |
+| `/home` read | `apps/houseloop-web/components/listing/HomeDetailView.tsx` → `ListingDetail.tsx` |
+| First-party property-view fire | `apps/houseloop-web/components/pixel/HlPropertyTrack.tsx` |
+| Schema | `apps/houseloop-web/prisma/schema.prisma` → `model ListingStats` |
+| CLI replay/bootstrap | `tools/houseloop/synthesize-tick.mjs` |
+| Ground truth | `GT/GT - ACTIVE/GT_HOUSELOOP_ENGAGEMENT_SYNTHESIS.md` |

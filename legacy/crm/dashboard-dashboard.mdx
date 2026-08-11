@@ -1,0 +1,97 @@
+---
+title: "Dashboard"
+description: "The HouseLoop CRM landing dashboard — a year-scoped, brokerage-scoped production scoreboard (KPI waterfall, monthly GCI chart, transactions table, agent breakdown) driven by the HouseLoop Transactions database."
+---
+
+{/* legacy-banner */}
+<Warning>
+  **LEGACY — UNVERIFIED.** This page predates the Master QA build and has NOT been verified
+  against the product. The canonical docs are being rewritten lane-by-lane as each lane goes
+  green — check the lane's tab first.
+</Warning>
+
+**In the app:** CRM sidebar → **Dashboard** — [`/dashboard`](https://crm.houseloop.ai/dashboard)
+
+**Code:** `apps/houseloop-crm/app/(crm)/dashboard/page.tsx` → renders `SisuDashboard` (`apps/houseloop-crm/app/(crm)/dashboard/SisuDashboard.tsx`).
+
+<Info>
+**This page documents the SCREEN. The money model behind it lives in
+[Commission & Transactions Model](/schema-lock/commission-model)** — the six-table commission estate, the
+third Railway database, SISU as frozen evidence, the payout waterfall (referral off the top → tier ladder
+with its annual floor → eXp caps → stock), the Zillow rate eras, and the plan to fold it all into the CRM.
+Read that page before changing anything financial here.
+</Info>
+
+<Warning>
+**Every money figure on this dashboard except `gci` is computed in the browser on each page load and
+discarded — nothing is stored per transaction.** Three of those hardcoded constants **do not match the
+real comp plan** (see [the four defects](/schema-lock/commission-model#part-4-—-the-four-defects-in-live-constants)).
+The descriptions below are faithful to **what the code does today**, not to the signed policy. They are
+marked where they differ.
+</Warning>
+
+## What it does
+
+The Dashboard is the CRM's production scoreboard. It reads closed and in-flight deals from the **HouseLoop Transactions database** (`hl_txn.transactions`) and renders them as a set of KPI cards, a monthly GCI chart, a filterable transactions table, and a per-agent breakdown.
+
+Two controls sit at the top and drive everything below them:
+
+- **Brand toggle** — **HouseLoop** vs **Spradling Realty Group**. This selects the `brokerage_id` used for every query (`2` = HouseLoop, `1` = SRG). SRG is treated as read-only legacy (KPIs + chart + tables only); HouseLoop mode adds the Add Transaction / Transaction Forms / Settings action row.
+- **Year selector** — populated from the years present in the data (`availableYears`); every card, the chart, and the tables are scoped to the selected year.
+
+The page defaults to the **HouseLoop** brand and the current build year.
+
+## The cards / widgets
+
+**KPI waterfall (6 cards).** A single row that walks gross commission down to the brokerage's net:
+
+- **Closed** — count of deals closed in the year, with total volume underneath.
+- **Gross GCI** — total gross commission income, broken down by source (Zillow / Agent-provided / Other) when those buckets are present.
+- **Zillow Paid** — total Zillow Flex referral fees, with deal count and volume. Computed from a tiered percentage of GCI based on sale price (20% under $75k, rising to 40% at $300k+). ⚠ **The real success fee starts at 15%, not 20%** — and the code applies one ladder to every year, ignoring the Flex → Preferred rate change ([rate eras](/schema-lock/commission-model#3-2-—-the-rate-era-read-it-off-the-deal-never-chase-the-date)).
+- **Agent Net** — what the team's agents were paid after Zillow fees, with deal count and volume. ⚠ **Ignores the tier ladder entirely** — the real split depends on the agent's tier, which is earned by closed volume and carries an annual floor.
+- **Ana Income** — Ana Spradling's GCI (she always keeps full GCI), with deal count and volume. ⚠ **Matched on the literal string `'Ana Spradling'`.** Any spelling drift silently zeroes the card — this is why it reads "—" for 2026. There are 83 distinct agent name strings in the data; the fix is an agent **ID**.
+- **SRG Net** — the brokerage override retained, computed client-side as `Gross GCI − Zillow fees − Agent Net − Ana Income`. ⚠ Floored at zero, so a negative never surfaces.
+
+**Monthly GCI chart (`MonthlyChart`).** A 12-month stacked bar chart of closed-deal GCI. Each bar is split into up to four segments — Agent Net (gray), Zillow Flex fees (blue), SRG Net (green), Ana income (red). Clicking a bar opens the **Month Detail modal** (`MonthDetailModal`) showing that month's closed/pended counts, GCI, volume, and the GCI split (Team Net / ZF Fees / Ana).
+
+**Transactions table (`DataTable`).** The deal list for the selected year, with a filter toolbar for **status**, **agent**, and **type** (Buyer/Seller), plus a running "N deals · volume · GCI" summary. Columns include agent (Ana flagged with a red dot), client, address, type, a colored **status pill**, amount, GCI, computed **ZF Fee** and **Agent Net**, signed date, closed/forecasted-close date, and an external link to the deal's FUB record. Rows are capped at 200 (with a "refine filters" note past that) and clicking a row navigates to `/transactions/{id}`.
+
+**Agent breakdown table (`DataTable`).** Per-agent closings for the year — deals, total GCI, net GCI, total volume, and average per deal — with a computed **Team Total** row appended.
+
+**Add Transaction modal (`AddTransactionModal`).** HouseLoop-mode only (in the action row). In HouseLoop mode it requires selecting a real CRM lead (agent + client prefill from that lead); in SRG mode the agent is free-text. Saving POSTs to `/api/sisu-transactions`, then refreshes the table and summary.
+
+**Production & Activity scoreboard (`MetricCard`, HouseLoop side only).** A SISU-style scoreboard of **six clickable
+cards**, each one block showing a **total** with **two nested, individually clickable sub-tiles**. Order (Zach-locked
+2026-07-22): **Communication Activity** (Calls / Text Messages) · **Appointment Set** · **Appointment Met** ·
+**Under Contract** · **Closings** · **Gross Commission Income** (each split **Buyers / Sellers**). Every number —
+the total or a sub-tile — is clickable and drills into **ONE shared normalized table** rendered below (a `MenuTable`
+with **All / Buyers / Sellers** tabs welded to a `DataTable`), columns **Client · Agent · Buyer/Seller · Date ·
+Type · Location · Amount** — so the same table serves a closings click, an appointments click, or a calls/texts
+click. Scoped to the selected **year** and `brokerage_id=2` (HouseLoop). Renders only when `brand==='hl'`; the SRG
+side is unchanged.
+
+**Buyer/Seller carriers:** closings/GCI/under-contract split by `hl_txn.transactions.transaction_type`
+(`'Buyer'`/`'Seller'`); appointments split by the appointment **`type`** (`first_buyer_appointment`/`buyer_showing`
+= Buyer, `listing_appointment` = Seller); an appointment is **"Met"** when a disposition means they showed
+(`status='completed'` or outcome `showed_up`/`listing_signed`/`met_with_customer_*`). Communication has no side.
+
+## Data source
+
+All financial data comes from the **HouseLoop Transactions DB** — its own Railway Postgres project, separate from the CRM DB, connected via `HL_TXN_DATABASE_URL` (`apps/houseloop-crm/lib/db-txn.ts`). It is multi-tenant by `brokerage_id` (`BROKERAGE_IDS`: SRG = 1, HouseLoop default = 2).
+
+| Widget | API route | Tables |
+|--------|-----------|--------|
+| KPI cards, monthly chart, agent breakdown, year/agent filters | `GET /api/sisu-transactions/summary?year=&brokerage_id=` | `hl_txn.transactions` |
+| Transactions table (list + summary) | `GET /api/sisu-transactions?year=&status=&agent=&type=&brokerage_id=&limit=` | `hl_txn.transactions` |
+| Add Transaction (create) | `POST /api/sisu-transactions` | `hl_txn.transactions` |
+| Add Transaction lead picker (HouseLoop mode) | `GET /api/sisu-transactions/hl-leads` | CRM DB: `hl_leads` LEFT JOIN `hl_users` |
+| Production & Activity KPIs (HL side) | `GET /api/dashboard/production?year=&brokerage_id=2` | **BOTH DBs**: `hl_txn.transactions` (closings/GCI/under-contract) + CRM `hl_calls`, `hl_messages`, `hl_appointments` |
+| Production drill-down table (the shared table) | `GET /api/dashboard/production/drill?metric=&side=&year=&brokerage_id=2` | same two DBs; returns ONE normalized row shape `{ client_name, agent, side, date, kind, location, amount }` |
+
+`summary/route.ts` runs the KPI aggregations, the per-month rollup, the pended-by-month rollup, the agent breakdown, and the distinct-years / distinct-agents lists. Zillow Flex detection keys off `lead_source` / `lead_type` (matching "zillow flex" / "zillow preferred" / "zillow sellers"), and the tiered fee percentages live in both the SQL (server totals) and `SisuDashboard.tsx` (per-row `zfFee` / `agentNet`). Brokerage economics used elsewhere (commission math) resolve from `hl_txn.brokerages.settings_json` via `resolveBrokerageExpFees`.
+
+The `hl-leads` route reads from the **CRM** database (`hl_leads`, with the assigned agent joined from `hl_users`) — the only cross-database read on this page — so HouseLoop transactions always originate from a real CRM lead rather than a free-text name.
+
+## How it fits
+
+`page.tsx` is a thin shell (`PageShell` + `PageHeader title="HouseLoop Dashboard"`) wrapping the `SisuDashboard` client component, which owns all state and fetching. The dashboard is the read/entry surface for the transactions system: row clicks and the Add flow lead into the transaction detail pages (`/transactions/{id}`), and the action row links out to Transaction Forms and `/transactions/settings`. Deal financial truth lives in the separate HouseLoop Transactions DB; this page is its primary reporting view.

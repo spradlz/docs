@@ -1,0 +1,78 @@
+---
+title: "CRM Comms — Texts, Calls, iMessage"
+description: "The one-writer comms subsystem: how a text/call/iMessage lands, who answers, and where it's logged."
+---
+
+{/* legacy-banner */}
+<Warning>
+  **LEGACY — UNVERIFIED.** This page predates the Master QA build and has NOT been verified
+  against the product. The canonical docs are being rewritten lane-by-lane as each lane goes
+  green — check the lane's tab first.
+</Warning>
+
+<Info>Written in the Fable 5 audit (Lee, 2026-07-06) — the comms subsystem had no docs-site guide despite
+being live (docs-first law gap). This is the map.</Info>
+
+## The one-writer law
+
+Every person-to-person message — SMS, iMessage, inbound/outbound — is written to **`hl_messages`** through
+**ONE function, `logMessage()`** (`lib/messages/log-message.ts`). Nothing else inserts into `hl_messages`.
+That function also mirrors the message into the canonical activity feed (`hl_lead_activity`) with the right
+`kind` (`text_sent` / `text_received` / `email_sent` / `email_received` / `call_logged`). `direction` is
+locked to `'inbound' | 'outbound'` by a CHECK constraint (mig 0351) — the old stray `'in'/'out'` rows were
+normalized and can't drift again.
+
+<Warning>**SSOT scope (audit correction 2026-07-06):** `hl_messages` is the one table for **texts +
+iMessage**. Email and calls have their own tables (`hl_email_send_log`, `hl_calls`) and are NOT mirrored
+into `hl_messages` today — the "one table for ALL comms" claim was aspirational. The one-writer law holds
+per-channel; a cross-channel union is a future step, not a current guarantee.</Warning>
+
+## Inbound routing — by DESTINATION identity
+
+A text/email/iMessage lands AT one of our owned identities (Myli's number/email/BB line, or an agent's).
+**Whoever's identity was contacted is who answers** — routing is channel-agnostic and keyed to the
+destination address, not the lead's number (`lib/comms/resolve-inbound-owner.ts`). This is the reverse of
+`resolveAgentSendIdentity` (lead → who sends).
+
+## Calls — the stack
+
+- **Inbound voice** hits `/api/phone/webhooks/voice`. Order: (1) caller-based forwarding **rules**
+  (`hl_phone_forward_rules`, Settings → Phone) win for any caller; (2) else the **FUB front-router** hands
+  non-HouseLoop callers to FUB; (3) else the per-dialer default forward. A dead-end **records a voicemail**
+  (`<Record>` → `/api/phone/webhooks/recording`), which seats the `hl_calls` row + fires
+  `phone_call_received`.
+- **`hl_calls.lead_id` is nullable** (mig 0351): an unknown-caller call still seats (was silently
+  insert-failing before, losing the call + recording).
+- **Twilio webhooks are signature-verified** (`lib/phone/twilio-verify.ts`, X-Twilio-Signature HMAC-SHA1) —
+  a forged POST is 403'd before any write or dial.
+- Idempotency: both the voice seat (NOT EXISTS on call_sid) and the recording UPDATE (recording_url IS NULL)
+  guard against Twilio's retry double-fires.
+
+## Send identity
+
+Outbound is sender-configured, never hardcoded: `resolveAgentSendIdentity(leadId)` picks the acting
+identity (Myli default → the agent's clone if configured → the human owner). System/brand sends are
+agent-agnostic (HouseLoop Team). Numbers: Myli iMessage/SMS on the one number via BlueBubbles; Twilio for
+voice + SMS on the dialer lines.
+
+### The manual composer "From" default (the human is using the UI)
+
+When a **human** opens the Text or Call composer on the lead detail, the default "From" is **the assigned
+agent's own line** — because a person composing sends from their own number, regardless of the AI mic. Both
+bars resolve the same way via `GET /api/leads/[id]/send-identity` (`defaultSenderId` for Text, the new
+`defaultVoiceNumber` for Call), in strict priority:
+
+1. **Lead has an assigned agent** → that agent's own line — their `is_text_default` dialer for texts, their
+   `is_voice_default` dialer for calls, or their default BlueBubbles line for iMessage. This uses
+   `resolveUserSendIdentity(assigned_user_id)`, which is **not** AI-gated, so it holds even when the AI is
+   paused. Reassign the agent → reopen → it's the new agent's line (resolved live from `assigned_user_id`).
+2. **No assigned agent (company / inbound lead)** → **the number the lead came in on** — the most-recent
+   inbound call's destination line (`hl_calls.to_number`), e.g. the SRG Company Line `913-320-0906`. A
+   Myli-active but human-unassigned lead still defaults to its company line, not Myli's line.
+3. Neither → the AI-lane (Myli) default, then the first available line.
+
+Myli's own automated sends are unaffected — they still resolve through `resolveAgentSendIdentity`.
+
+## Where it's managed
+Settings → Phone (dialers + forwarding rules) · Settings → Voice & Recording · Settings → iMessage.
+Run Log surfaces every call-analyze / sms-dispatch run.

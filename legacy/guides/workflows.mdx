@@ -1,0 +1,530 @@
+---
+title: "Workflows"
+description: "The HouseLoop CRM workflow engine — the folder view (integration → trigger-event folder → arm workflow rows), the Create Workflow modal (Integration → Trigger event → New/Existing), per-message sender, the row kebab, the inline-expandable builder, and the communication-recency condition matrix. Runs on Inngest."
+---
+
+{/* legacy-banner */}
+<Warning>
+  **LEGACY — UNVERIFIED.** This page predates the Master QA build and has NOT been verified
+  against the product. The canonical docs are being rewritten lane-by-lane as each lane goes
+  green — check the lane's tab first.
+</Warning>
+
+<Note>
+**Brought current 2026-07-13 night (Lee) — the FOLDER VIEW + taxonomy.** The current model: **one trigger event per
+human action, TWO SEPARATE workflows per event** — a **New Lead** arm and an **Existing Lead** arm — and the router
+picks the arm automatically from the intake's created-flag. **Never a fork inside a canvas.** Every workflow is
+`Family (Integration) × Lead Stage (arm) × Type (band) → a trigger event` (`lib/workflows/workflow-taxonomy.ts`);
+`hl_workflows.folder` holds the Family token, `hl_workflows.lead_stage` (mig 0394) holds the arm, `trigger_type`
+holds the event. The Workflows page renders these as a **folder view** — each trigger event is a gray folder header
+(shown once) with its arm workflows nested as rows. New workflows are built through the **Create Workflow modal**;
+one on/off per arm lives on the [Trigger Events](/guides/trigger-events) board (Configure).
+
+**Row order is LOCKSTEP with the Trigger Events board — by construction (Zach 2026-07-22).** `WorkflowsTable`
+orders **purely by `trigger_sort`** (= the same `hl_fub_webhook_settings.sort_order` / `hl_lead_source_events.sort_order`
+the board renders in), NOT by a separate hardcoded band rank. Because `sort_order` already runs Activity →
+Communication → Insights in order, that one number reproduces the board top-to-bottom. The band (`bandOf`/`LABEL_BAND`)
+is now **cosmetic only** — a folder subtitle chip — so it can never reorder a row. Reorder or add an event in the
+DB and both tables move together; the two can't drift apart by a stale band map again. ONE sort key, ONE source of truth.
+</Note>
+
+A **workflow** is a trigger + a sequence of steps (send a text, send an email, assign the lead,
+wait, branch on a condition) laid out on the **workflow canvas**. Workflows are how a lead event —
+a registration, a tag applied, a saved search created, a tour requested — turns into outreach
+without anyone touching a keyboard. Everything runs through **Inngest**, so every step is
+auditable in the [Run Log](/guides/run-log).
+
+## How it flows
+
+```
+event (e.g. houseloop/lead.tag-added)
+      │
+      ▼
+workflowDispatcher (Inngest)      ← matches the event to workflows whose trigger fits
+      │
+      ▼
+workflowRunner (Inngest)          ← walks the canvas steps: send / assign / wait / condition gate
+      │
+      ├─▶ Send Text   → execute-step.ts → BlueBubbles / Twilio (per the sender chain)
+      ├─▶ Send Email  → execute-step.ts → Gmail/Resend
+      ├─▶ Assign Lead → execute-step.ts → sets the lead's owner (human or AI)
+      └─▶ Condition   → evaluate-condition.ts (continue if true, else stop)
+```
+
+Both Inngest functions live in `apps/houseloop-crm/lib/workflows/runtime.ts`. Step execution is
+`lib/workflows/execute-step.ts`.
+
+<Note>
+After deploying a new or changed workflow function, **re-sync Inngest**:
+`curl -X PUT https://crm.houseloop.ai/api/inngest`. New functions don't appear in the Inngest
+dashboard until you do.
+</Note>
+
+## One trigger event, TWO workflows (the taxonomy)
+
+**A workflow is built around a trigger event — a thing a person actually did — and every event carries TWO
+separate workflows:** the **New Lead arm** (this event just minted the person; first-touch copy) and the
+**Existing Lead arm** (a known lead did it again; follow-up copy). The two arms are two REAL workflow rows —
+each with its own canvas, its own name ("New Lead — Saved Home" / "Existing Lead — Saved Home"), and its own
+on/off (the arm toggle in the trigger event's Configure modal). The dispatch's created-flag picks the arm at
+fire time; a canvas never forks on new-vs-existing internally.
+
+Every workflow is `Family (Integration) × Lead Stage (arm) × Type (band)` — the taxonomy in
+`lib/workflows/workflow-taxonomy.ts`, the anti-drift SSOT. Families: **HouseLoop.ai Website · Follow Up Boss ·
+Company Inbox · Transaction Coordination · Manual** ("Other/Custom" was retired — the catch-all is Manual). Lead
+Stages: `new_lead` · `existing_lead`. Types are the Trigger-Events bands: `activity` · `communication` · `insight`.
+Structural hard rules fall out of the `VALIDITY` map: **Insights = Existing-only** (no insight under any new-lead
+arm), **Communication · New exists only for Company Inbox**, and **Transaction Coordination is Existing-only with no
+Type selector**.
+
+### The naming law (Zach LOCKED 2026-07-20)
+
+Every workflow is named **`PLATFORM: ARM - EVENT`** - platform abbreviated with a **colon**, then the arm,
+then a hyphen and the trigger event:
+
+- `FUB: New Lead - Tour Request` · `FUB: Existing Lead - Tour Request` · `FUB: New Lead - Property Inquiry`
+- Not "Follow Up Boss —", not "FUB —", not "… — First Touch". The arm leads so the two arms of one event
+  sort and scan together under the platform prefix in every dropdown (Workflows page, Test Cockpit, Configure modal).
+- Before naming a new workflow on any platform, check the existing sibling names and match the pattern - never
+  invent a new one.
+
+**INBOX workflows (Zach LOCKED 2026-07-20): the workflow name = the trigger event's name, verbatim, and the
+identity IS the name.** Lines follow `<Name>'s <Platform> Twilio Line (XXX-XXX-XXXX)`; emails carry the address:
+
+- `Phone Call Received - Company Line (913-320-0906)` · `Text Received - Sign Call Line (913-354-8600)`
+- `FUB: Phone Call Received - Zach's FUB Twilio Line (913-490-2988)` (a FUB-carried door wears the FUB: prefix)
+- `Email Received - info@houseloop.ai` (one workflow per ADDRESS - every mailbox is its own trigger event)
+- One workflow can never serve two doors (the FUB Zach Seat workflow was split call/text for exactly this).
+- The number/address is BAKED into hl_lead_sources.name, so every surface (boards, dropdowns, Lead Sources
+  page) shows it; the label builders never double-append a number onto a name that already carries one.
+
+### The row contract (how a workflow files - and how misfiling happens)
+
+The Workflows page files a workflow by **`folder` FIRST** (the Family token); the trigger/name heuristics are
+legacy fallback only. So every `hl_workflows` row - **including system workflows created by migration or SQL** -
+MUST be stamped at creation with:
+
+| Column | Required value |
+| --- | --- |
+| `folder` | the Family token: `houseloop` / `follow_up_boss` / `inbox` / `transaction` / `manual` |
+| `lead_stage` | the arm: `new_lead` / `existing_lead` (null only for Manual) |
+| `name` | per the naming law above |
+| `trigger_type` | the event key for native/HouseLoop workflows; **NULL for FUB-bound workflows** (their trigger is the seat binding in `hl_fub_webhook_settings`) |
+
+A row with an empty `folder` falls to the heuristics, and a FUB workflow whose `trigger_type` happens to match a
+website trigger label will misfile under **HouseLoop.ai Website** (this exact bug shipped 2026-07-20: the FUB
+property-inquiry workflow, created by SQL with `folder=''`, rendered inside the HouseLoop table). Stamp the
+taxonomy at insert; never rely on the guesser.
+
+**FUB workflows bind via the seat, both arms:** the seat row (`hl_fub_webhook_settings`) carries `workflow_id` +
+`workflow_active` (New) and `existing_workflow_id` + `existing_workflow_active` (Existing), and the FUB import's
+arm-picker (`resolve-fub-settings-workflow` in `lib/inngest/functions/fub-lead-import.ts`) reads the arm by the
+`created` flag - fail-closed, same law as the native doors. (Wired 2026-07-20; before that the Existing arm
+columns were decorative and FUB only ever fired the New arm.)
+
+### The folder view (how the page renders) — THE BOARD'S MIRROR (Zach locked 2026-07-20)
+
+The Workflows page is a **folder view** (`components/workflows/WorkflowsTable.tsx`), not a flat grid: an **integration
+section** contains **trigger-event folders** (a gray folder header, shown **once** per event), and each folder nests
+its **workflow rows**. **The page mirrors the Trigger Events board top to bottom**:
+
+- **Section order = the board's** (HouseLoop.ai - FUB - TC - the 6 inbox sections in the locked order - AI Tools).
+- **Folder order = the board's row order** (the seat/catalog sort rides the API as `trigger_sort`), never alpha.
+- **Each folder wears its trigger event's REAL lucide icon** (`hl_trigger_events.icon`) - never a generic 🗂.
+- **The inbox lane renders one section PER inbox** (Company - Spradling Realty Group - Past Agents - Myli -
+  Zach - Ana), chaptered 📞/💬/📧, rows in the board's line order (`inbox_line_sort`).
+- Every board event with no live workflow shows an honest **"Needs built" stub** (native + FUB + TC + AI Tools +
+  inbox parity stubs in `/api/workflows`), so the two pages match count for count.
+
+Every workflow row carries an **arm pill** — **NEW · EXIST · MANUAL** — derived from `lead_stage` FIRST (the name
+prefix is legacy fallback). **The CUSTOM pill is dead** (Zach 2026-07-20: "Nothing's custom") — a non-arm row
+(locked infra, stubs) shows no pill. A folder is **1-to-N** (one trigger event → a New arm + an Existing arm, NEW
+always on top). **Manual** is its own section of flat rows (a Manual workflow IS its own trigger — no event folder,
+no arm).
+
+### The Create Workflow modal
+
+New workflows are built through the **Create Workflow modal** (`components/workflows/CreateWorkflowModal.tsx`), a
+cascade:
+
+1. **Integration** — Family picker (defaults to HouseLoop.ai; includes Manual + Company Inbox; **no Other/Custom**).
+2. **Trigger event** — required; the dropdown is **grouped by band** (Activity / Communication / Insights) with gray
+   band headers.
+3. **New Lead / Existing Lead toggle** — the arm. **Hard-locked to Existing on Insights** (and any Existing-only
+   validity combo).
+4. **Manual integration hides the trigger + arm** entirely — a Manual workflow is the trigger, so it carries no
+   trigger event and a null `lead_stage`.
+
+On save the modal writes `folder` (the Integration token), `lead_stage` (mig 0394, the arm), and `trigger_type`
+(the event).
+
+### The row kebab
+
+Each workflow row's ⋮ menu: **Open Builder** · **Edit Settings** (reopens the Create Workflow modal in **edit mode**
+— change integration/trigger/arm without leaving the page) · **Duplicate** · **Lock** · **Delete**.
+
+Two kinds of workflow exist in the builder:
+
+| Kind | Badge | Behavior |
+| --- | --- | --- |
+| **System** | 🔒 system | Ships locked. Read-only in the builder — use **Duplicate as Custom** to change it. |
+| **Custom** | ⚡ custom | Fully editable — your duplicate to reshape. |
+
+### ONE switch — where on/off actually lives (shipped 2026-07-08)
+
+A workflow used to have TWO on/off gates that could disagree (`hl_workflows.status` — the real gate the
+dispatcher checks — and the Trigger Events board's "Workflow Active" toggle). General Registration once showed
+"active" on the board while never running. Fixed structurally:
+
+- **The Trigger Events board is the control** (`/settings/trigger-events`) — each arm's on/off inside the event's
+  **Configure** modal. Flipping it also drives the bound workflow's `hl_workflows.status`, so the two can never
+  diverge. Locked infrastructure workflows are exempt (always on).
+- **The Workflows page status is a READ-ONLY mirror** — a colored-dot badge. You turn a workflow on/off at its
+  **trigger event**, not on the Workflows page. Actions on a workflow row still open the Builder.
+- **Every real fire is a ledger row:** `dispatchDoor` writes exactly one per-lead row to `hl_trigger_fire`
+  (mig 0355) per dispatch (`lead_id` · `event_key` · `platform` · `matched` · `routed_by`) — the board's TRIGGERED
+  count and its drill-down both read that one table, so imported FUB history / system-seeded searches / pixel
+  replays can never masquerade as fires. The native board is scoped `platform <> 'follow_up_boss'`, so a
+  FUB-origin fire never shows on a houseloop.ai door (FUB fires live on the FUB board).
+
+The FUB side has its own 22-door catalog + gates — [FUB Trigger Events & Notifications](/guides/trigger-events).
+
+## The workflow canvas is the truth (constitutional)
+
+<Warning>
+**Every step a workflow runs must be a visible step on a visible path on the workflow canvas. No
+step may be shared between two branches, and no hidden connection may exist. If you can't see the
+step do the thing on the canvas, the step doesn't get to do the thing.**
+</Warning>
+
+The workflow canvas (the builder / workbench) **is** the behavior — what runs equals exactly
+what's laid out on the canvas, nothing hidden. This is the workflow sibling of
+[Inngest or it doesn't exist](/guides/run-log): a job doesn't exist unless it ran through Inngest
+and shows in the Run Log; a workflow **step** doesn't exist unless it's a visible step on a visible
+path on the canvas. Same principle — no invisible side-effects.
+
+This extends to **what a send step does to the message itself**. Anything the runtime would do to
+an outbound — attach an image, rewrite a link, suppress a re-send, append a signature — is either a
+**control you can see and set on the step**, or a **read-only note the step shows you** for the
+safety/compliance/delivery behaviors that must always run. Nothing silently rewrites your copy. See
+[Send-step controls](#send-step-controls-what-you-see-is-what-sends).
+
+When a **Branch** step splits the flow, each side must be a **complete, self-contained chain**
+down to its own terminal step. **Never** wire one branch into another branch's step to "reuse" it
+— that makes the canvas lie about what runs.
+
+Example — the General Registration workflow, both branches built out independently on the canvas:
+
+```
+New Registration (trigger)
+  → Update Stage (New Lead)
+  → Create Saved Search
+  → Branch: Phone is not empty
+       ├─ YES → Add Note → Send Text  → Send Email → Update Stage (Attempted Contact)
+       └─ NO  → Add Note → Add Tag     → Send Email → Update Stage (Attempted Contact)
+                          "Registered: No Phone"
+```
+
+Both branches do their **own** Note, their **own** Email, and their **own** Update Stage. The only
+difference: **YES sends a text; NO adds the "Registered: No Phone" tag and skips the text.** Neither
+branch borrows a step from the other.
+
+**Verify on the canvas, not in the database.** A green run record ("the lead advanced to Attempted
+Contact") is **not** proof the workflow is correct. Open the workflow canvas and trace every branch
+end-to-end — every action must be a step drawn on a drawn path.
+
+<Note>
+This rule exists because it bit us: the phone branch visually dead-ended at "Send Text" on the
+canvas while secretly running the email + stage-advance through the *other* branch's steps (a
+cross-link the canvas never drew). It worked in the data; the canvas lied. Fixed by giving each
+branch its own complete chain. Full rule: `.claude/rules/WORKFLOW_CANVAS_IS_TRUTH.md`.
+</Note>
+
+## Data model
+
+A workflow is one `hl_workflows` row:
+
+| Column | Meaning |
+| --- | --- |
+| `trigger_type` | what starts it — e.g. `tag_added`, `tour_request`, `property_saved` |
+| `folder` | the **Family (Integration)** token — `houseloop` / `follow_up_boss` / `inbox` / `transaction` / `manual` |
+| `lead_stage` | the **arm** (mig 0394) — `new_lead` / `existing_lead` (null for Manual) |
+| `trigger_config` | JSONB. For Tag Added: `{ tag_ids: ["…","…"] }` (multi-tag, "is one of") |
+| `workflow_config` | JSONB `{ nodes, connections }` — the steps + connections the canvas draws and the runner walks |
+| `is_system` / `locked_at` | system default — locked in the builder, customized via Duplicate as Custom |
+| `kind` | grouping / category |
+
+<Note>
+**The workflow-level default sender was removed (2026-07-13).** There is no longer a `sender_default` column /
+toolbar "Sends as" — **sender is per-message**, set on each Send step. See [Send steps & the sender chain](#send-steps--the-sender-chain).
+</Note>
+
+The `workflow_config.connections` array is the set of **connections** — `{ source, target }`, plus
+`branch: "true" | "false"` on the two connections leaving a Branch step. Every connection in this
+array is a line the canvas draws and the runner walks; there are no connections that run but aren't
+drawn (see [The workflow canvas is the truth](#the-workflow-canvas-is-the-truth-constitutional)).
+
+## Triggers
+
+A **trigger** is the event that starts a workflow. Every lead action maps to a trigger, and the
+**server-side intake decides new-lead vs. existing-lead routing** so each gets its own atomic
+workflow with its own editable message.
+
+### The chain: action → event → trigger → workflow
+
+A lead action only fires a workflow if every layer of the chain agrees — there is **no single
+"trigger map."** There are five code maps across three files plus one DB table:
+
+```
+WEBSITE                        CRM INGEST                            INNGEST EVENT            DISPATCHER                 WORKFLOW
+hlTrack("<event_type>")   ──▶  /api/pixel/track                  ──▶ houseloop/property.*  ──▶ EVENT_TO_TRIGGER     ──▶ trigger_type match (active)
+                               PIXEL_EVENT_TO_INNGEST                                           │
+action:"<x>" (signup) ────▶  /api/integrations/website/          ──▶ houseloop/<x>  +       ──▶ TRIGGER_TO_EVENT_KEY ─▶ hl_lead_source_events
+                               lead-intake (ACTION_TO_EVENT,          houseloop/lead.tag-        + REG_SUBEVENTS         (event_key → workflow_id)
+                               REG_VARIANT, EVENT_TO_INNGEST)         added                                              ◀── the routing hub
+```
+
+| Map | File | Role |
+| --- | --- | --- |
+| `hlTrack("…")` literals | `apps/houseloop-web` (8 sites) | the emitted pixel `event_type` |
+| `PIXEL_EVENT_TO_INNGEST` | `app/api/pixel/track/route.ts` | pixel event_type → Inngest event |
+| `ACTION_TO_EVENT` + `REG_VARIANT` + `EVENT_TO_INNGEST` | `app/api/integrations/website/lead-intake/route.ts` | signup `action` → eventKey → Inngest event |
+| `EVENT_TO_TRIGGER` + `TRIGGER_TO_EVENT_KEY` + `REG_SUBEVENTS` | `lib/workflows/runtime.ts` | Inngest event → trigger_type → source-event key |
+| `EVENT_TRIGGER` | `lib/workflows/event-trigger-map.ts` | Lead Flow UI presets |
+| `hl_lead_source_events` (DB) | CRM Postgres | **event_key → workflow_id** — the real routing hub |
+
+<Note>
+The full canonical trigger truth table (every event, its new/existing workflows, and the
+maintenance rule) is the private ground-truth doc `GT_HOUSELOOP_WORKFLOW_TRIGGERS_SSOT.md`. This
+page is the public engine reference.
+</Note>
+
+### New lead vs. existing lead (the arm picker — v4)
+
+The same website action routes to a **different WORKFLOW** depending on whether the person is brand-new or
+already known. **The intake's `created` flag is the authority** — it dedupes by email, then by the last-10
+digits of the phone (the same way Follow Up Boss / SureSend dedupe), so it works whether or not the visitor
+is logged in:
+
+- **Logged in** → the Tour / Contact form pre-fills name, email, and phone from the session → on
+  submit the intake matches their existing lead → the **Existing Lead workflow**.
+- **Logged out, types a known email/phone** → the intake matches it → the **Existing Lead workflow**.
+- **Logged out, brand-new email/phone** → no match → mint (if the event's Creates Lead gate is ON) →
+  the **New Lead workflow**.
+
+Under the hood (v4, mig 0381): there is ONE flat event key per action (`property_saved`, `tour_request`, …) —
+the `*_registration` twin keys are retired (in-flight stragglers normalize onto the flat key via
+`FLAT_KEY` in `dispatchDoor`). The seat row (`hl_lead_source_events`) carries BOTH arms: `workflow_id` +
+`workflow_active` (New) and `existing_workflow_id` + `existing_workflow_active` (Existing). `created=true`
+reads the New columns, `created=false` the Existing columns — fail-closed: an unbound or toggled-off arm is
+a logged skip, never a fallback guess. Registration-guard belt intact: a minting dispatch never falls
+through to the platform/agnostic tiers.
+
+### Tag Added (FUB-style)
+
+The Tag Added trigger fires when a tag lands on a lead **anywhere** — website intake
+(`houseloop/lead.tag-added`) or a manual bulk-tag in the CRM. The editor mirrors Follow Up
+Boss:
+
+- A searchable **multi-tag picker** — type to filter, click to add. Selected tags render as
+  blue, removable **tag pills** (the same blue chip used in Settings → Tags, tokenized via
+  `--hl-tag-pill-border` + `components/shared/TagPill.tsx`).
+- An inline **trigger-type dropdown** so you can switch the trigger without leaving the canvas.
+- A canvas summary line: **"When tag is one of: A, B, C."**
+
+Matching is **"is one of"** — the dispatcher fires if the applied tag is in `trigger_config.tag_ids`
+(with back-compat for a legacy single `tag_id`, plus a no-tag fallback). The runner only fires for
+a tag that was genuinely **new** on the lead (the intake INSERT … RETURNING tells it which tags
+were added vs already present), so re-applying a tag doesn't re-trigger.
+
+## Send steps & the sender chain
+
+Each Send Text / Send Email step answers one question: **"Who does this message come from?"** — and **sender is
+per-message** (the old workflow-level default sender was removed 2026-07-13). Resolved through
+`resolveStepSendIdentity()` in `execute-step.ts`:
+
+1. **Step "Send as"** — the step's own select: the lead's owner (default), the system identity, or a **specific
+   member** (pins that one message to that member's line + inbox no matter who owns the lead). Each Send step sets
+   its own sender — there is no workflow-wide "Sends as" to inherit.
+2. **Lead's owner** — `lead_owner` resolves at send time to the lead's AI agent (Myli) or assigned human; the
+   AI-clone rule applies (a clone sends as the human it clones).
+
+| Resolved sender | Sends as |
+| --- | --- |
+| system | the HouseLoop system identity (Client Updates inbox / outbound SMS number) |
+| lead's owner | the owner's BlueBubbles iMessage line or dialer number + their inbox; falls back to system if nobody is assigned |
+| specific member | that member's line + inbox (`resolveUserSendIdentity()` in `lib/agent-runtime/resolve-send-identity.ts`) |
+
+A message sent as Myli logs to `hl_messages` as `imessage / ai_agent / sent` — it shows up in the
+lead's thread as if Myli texted them, not as a system blast. **AI Message** steps are the one
+exception: they always send as the lead's AI agent (that's the point of the step).
+
+**A lead-facing text never goes out as System.** If a step (or the workflow default) is set to
+`system`/`brand` for a lead-facing **text**, the runtime coerces it to the lead's agent — a lead
+always hears from a person. System voice is valid only for an **agent-alert** text or over email.
+
+### "This sends as →" (resolved-sender preview)
+
+The "Send as" dropdown shows the **source** of the choice; right under it the step shows the
+**outcome** the runtime actually computes — encoding the override that would otherwise be
+invisible: the lead-text System→agent coercion above. Because the lead's concrete owner resolves
+per-lead at send time, the preview labels it honestly (*"Myli — the lead's owner · resolved when
+this runs"*) rather than guessing a name. If an **Assign Lead** step runs upstream, "the lead's
+owner" is whoever it set.
+
+### Assign Lead (lead routing as a canvas step)
+
+The **Assign Lead** step (palette group *Lead Routing*) sets who owns the lead from that step on —
+a human (`assigned_user_id`) or an AI member (`assigned_ai_agent_id`). Because send steps resolve
+"lead's owner" live at send time, an Assign step upstream changes who every following message goes
+out as: `Trigger → Assign to Myli → Send Text` texts from Myli's line.
+
+## Send-step controls — what you see is what sends
+
+Every send step exposes, as a **visible field**, anything the runtime would do to the outbound. The
+rest (safety, delivery, compliance, audit) is shown as a read-only note so the canvas never hides a
+behavior. All fields default to the engine's prior behavior — an existing step is unchanged until
+you touch a field.
+
+### Attach image (text) — the Media Gallery
+
+The **Attach image** control on a Send Text step is *None* / *From gallery* / *The home's photo*:
+
+- **From gallery** opens the **Media Gallery** picker (a grid of saved images, like inserting an
+  image in an email editor). Pick one and it attaches to that text, every run; the thumbnail shows
+  on the step. **Upload from your computer** adds a new image (file → R2 → gallery), or add one by
+  URL. The gallery is `hl_media`; the picker is `MediaPickerModal.tsx`; uploads go to the R2 photos
+  bucket under `media/` via `/api/media/upload`.
+- **The home's photo** attaches the dynamic listing photo when the text is about a specific home
+  (served by the web app's `/api/home-image/<code>`).
+- **None** = text only.
+
+There is **no hidden contact-card auto-attach** — to send an agent's contact card, pick it from the
+gallery on the step. (The seeded gallery includes Myli/Zach/Ana contact cards + the HouseLoop logo.)
+
+### Link handling (text)
+
+Shown when *The home's photo* is selected: **Auto-format the home link** vs **Leave my copy exactly
+as written**.
+
+- **Auto-format** (default) replaces any houseloop.ai link in your copy with a clean tappable short
+  link (`houseloop.ai/h/<code>`) and lays the text out as *opening → link → question*.
+- **Verbatim** sends your exact words and links, untouched — the photo still attaches. Use this when
+  the copy is hand-written and must ship as-is.
+
+### Don't repeat this exact message (text dedupe)
+
+The previously-fixed 10-minute re-fire guard is now a field: *Within 10 minutes (default)* / *Never
+suppress* / *Within 1 hour* / *Within a day*. If the lead already got a word-for-word identical body
+in the window, the step skips instead of double-sending (`alreadySent()` in `execute-step.ts`, with
+an injection-safe integer window; `0` = never suppress). It matches on **exact body**, so an
+`{{ai.*}}`-composed message — which differs every run — rarely trips it.
+
+### Signature (email)
+
+*The lead's agent's signature (default)* / *No signature*. Default appends the acting agent's saved
+signature (Team Email → Configure) via the `{{agent.signature}}` token — even when the email sends
+from the System address (the "every lead email is signed" law). Branded marketing blasts are
+unsigned by design regardless.
+
+### Always on (can't be turned off)
+
+A read-only note on every send step states the safety / delivery / compliance / audit behaviors that
+must keep running:
+
+- **Texts** — *Leak guard* (a text that somehow contains AI scaffolding is blocked rather than sent,
+  and the block shows in the Run Log); *Auto-routing* (Apple → blue iMessage, Android → green SMS,
+  both from the same line; Twilio failover if BlueBubbles is down); *Logged* to the lead's timeline;
+  AI blocks are auto-flattened to plain text so no HTML ships over SMS.
+- **Emails** — *Auto-login links* (every houseloop.ai link is wrapped so the recipient is signed in
+  on click; unsubscribe + API links left alone); *Logged* to the timeline; registration emails
+  (`new_reg_*`) send at most once per lead per day; **brand** mode adds the legal CAN-SPAM
+  unsubscribe footer + one-click header and skips anyone who opted out.
+
+## Condition & branch steps (the communication-recency matrix)
+
+A **Condition** step is a gate (continue if true, else stop). A **Branch** step forks into a
+**true** path and a **false** path — and per
+[The workflow canvas is the truth](#the-workflow-canvas-is-the-truth-constitutional), each path
+must be its own complete chain on the canvas. Conditions/branches are how you split "new lead vs.
+returning lead," "has phone vs. no phone," or "only text if we haven't talked in 3 days."
+
+Fields and operators live in `lib/workflows/condition-fields.ts`; evaluation in
+`evaluate-condition.ts`. The communication-recency matrix:
+
+| Field | Reads from |
+| --- | --- |
+| `last_communication` | any message, either direction |
+| `last_contact_attempt` | any **outbound** message (text/email/call) |
+| `last_contact_received` | any **inbound** message |
+| `last_text` / `last_text_sent` / `last_text_received` | `hl_messages` (channel = text) by direction |
+| `last_email` / `last_email_sent` / `last_email_received` | `hl_messages` (channel = email) by direction |
+| `last_call` / `last_call_made` / `last_call_received` | `hl_calls` by direction |
+| `last_activity` | comms ∪ `hl_pixel_event` (texts/emails/calls *and* website activity) |
+
+**Operators**: text/number fields support `is`, `is_not`, `contains`, **`is_not_empty`**, `is_empty`;
+date-valued fields support `is_empty`, `is_not_empty`, `less_than_days`, `more_than_days`. The
+`*_empty` operators take no value (the editor hides the value input for them) — e.g. the General
+Registration branch gates on **"Phone is not empty."**
+
+<Note>
+The new-lead vs. existing-lead split is normally decided at **intake** (see
+[New lead vs. existing lead](#new-lead-vs-existing-lead-the-atomic-split)) so each gets its own
+workflow. A Condition/Branch on **"Last Contact Attempt is empty"** is the in-workflow way to fork
+the same workflow when you'd rather not split it into two.
+</Note>
+
+Full spec: `GT/GT - ACTIVE/GT_HOUSELOOP_WORKFLOW_CONDITIONS.md`.
+
+## Editor UX notes
+
+- **Inline-expandable step config (shipped 2026-07-13).** Each node on the canvas has a **chevron**; expand it to
+  configure the step **inline** (a shared `StepConfigBody`) instead of a separate side panel.
+- **Template picker** is collapsible — collapsed shows the selected template + a "Change" link;
+  the selected category is pinned to the top; categories use human-readable labels.
+- The workflow canvas + editor live in `apps/houseloop-crm/components/workflows/WorkflowBuilder.tsx`.
+- System workflows show a lock banner with **Duplicate as Custom** in place of Save. **Duplicate-as-Custom uses the
+  thorough copy** (`/duplicate`) — it clones the full canvas + step config, not a shell.
+
+## Myli: Standing By — the standby workflow (dark, 2026-07-20)
+
+Myli's **standby** — her resting state between triggered workflows — is now a REAL workflow on the canvas
+instead of invisible code behind two toggles (`ai_conversations` + `ai_closed_loop`). This is the workflow
+sibling of the closed-loop "the active workflow IS the state": when a lead isn't in a triggered workflow, it
+parks on **Myli: Standing By**, and the lead-detail pill reads *"Myli · Standing By"* off `active_workflow_id`.
+
+Two new AI step types make the standby WYSIWYG (both master-gated by `aiMasterEnabled()` in `execute-step.ts`,
+so the All-AI failsafe can't leak):
+
+| Step | Type | What it does |
+| --- | --- | --- |
+| **Listen & Reply** | `ai_converse` | Myli reads every inbound text/email and replies in her voice with her tools; carries her standing-orders prompt (Context Block or one-off brief, like AI Message). The reply itself runs through the inbound engine (`dispatchInboundToAi`), which now obeys `ai_responder`. |
+| **Set Next Floor Touch** | `ai_standby` | Schedules the nurture floor on the lead's stage cadence (reuses `ensureFloor`), so Myli is never the last to leave a lead cold. |
+
+The workflow is seeded by `db/migrations/0434_myli_standby_workflow.sql` (`key='myli_standing_by'`,
+`kind='myli_auto'`, folder **AI Tools**) — canvas: **Manual → Listen & Reply → Set Next Floor Touch**.
+
+<Note>
+**Built DARK (status `draft`) on purpose.** Nothing routes here yet and no lead is enrolled — the code
+engines stay authoritative during dual-run. Auto-enroll + the override/resume stack (a triggered workflow
+suspends standby; on chain-end the lead re-enrolls) and the retirement of the two code toggles are the next,
+separately-verified steps (voice-safety: build dark → dual-run → prove in the Run Log → flip → retire last).
+See `guides/closed-loop-follow-up`.
+</Note>
+
+## Reference
+
+- `apps/houseloop-crm/lib/workflows/runtime.ts` — `workflowDispatcher` + `workflowRunner` (Inngest)
+- `apps/houseloop-crm/app/api/integrations/website/lead-intake/route.ts` — `ACTION_TO_EVENT` + `REG_VARIANT` (new-vs-existing split)
+- `apps/houseloop-crm/app/api/pixel/track/route.ts` — `PIXEL_EVENT_TO_INNGEST` (pixel events → workflows)
+- `apps/houseloop-crm/lib/workflows/execute-step.ts` — send steps, sender chain, image/link/signature/dedupe handling, Assign Lead
+- `apps/houseloop-crm/lib/workflows/event-trigger-map.ts` — event ↔ trigger mapping (one workflow per event)
+- `apps/houseloop-crm/lib/agent-runtime/resolve-send-identity.ts` — lead-owner + specific-member send identities
+- `apps/houseloop-crm/lib/media/r2.ts` + `app/api/media/*` — the Media Gallery (R2 upload, list)
+- `apps/houseloop-crm/components/workflows/MediaPickerModal.tsx` — the image gallery picker
+- `apps/houseloop-crm/lib/workflows/condition-fields.ts` — condition field + operator catalog
+- `apps/houseloop-crm/lib/workflows/evaluate-condition.ts` — condition evaluation
+- `apps/houseloop-crm/components/workflows/WorkflowBuilder.tsx` — the workflow canvas + editor
+- `.claude/rules/WORKFLOW_CANVAS_IS_TRUTH.md` — "the canvas is the truth" constitutional rule
+- `GT/GT - ACTIVE/GT_HOUSELOOP_WORKFLOW_TRIGGERS_SSOT.md` — the canonical trigger truth table (private)
+- `GT/GT - ACTIVE/GT_HOUSELOOP_WORKFLOW_CONDITIONS.md` — condition matrix PRD

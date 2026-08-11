@@ -1,0 +1,339 @@
+---
+title: "AI Cost & Attribution"
+description: "Every AI dollar, traced. How Anthropic + OpenAI spend attributes to two clean buckets (HouseLoop · BossLoop Infra), the ONE categorizer both the /ai-cost page and the Run Log read, the systemic cost-logging audit that made every LLM caller visible in real time, the daily 8am digest + sentinel, and the open holes (Deepgram STT voice cost)."
+---
+
+{/* legacy-banner */}
+<Warning>
+  **LEGACY — UNVERIFIED.** This page predates the Master QA build and has NOT been verified
+  against the product. The canonical docs are being rewritten lane-by-lane as each lane goes
+  green — check the lane's tab first.
+</Warning>
+
+# ═══ 2026-07-17 — CURRENT STATE (everything shipped in the AI-cost reckoning) ═══
+
+<Info>
+This is the live, current picture. The **2026-07-16 PM forensic audit** section below is history (how the
+$106.74 mystery was found + the first kills) — kept because it's the origin story, but everything here
+supersedes it where they differ.
+</Info>
+
+## Operation One Provider — OpenAI is (nearly) dead
+
+Every AI job HouseLoop runs now bills to Anthropic (Claude), with OpenAI shrunk to a couple of shrinking
+holdouts. Verified live:
+
+- **AI Search** — the website NLP route (`app/api/search/nlp/route.ts`): understanding, **re-rank
+  (gpt-4o → Claude Sonnet 4.6)**, follow-up intent + narration (→ Haiku) all run Claude now; `parseViaOpenAI`
+  survives only as the designed fallback. Caught a **live outage** doing this: OpenAI's balance went to $0
+  mid-week and search's re-ranker was silently down all day — the exact auto-reload disease.
+- **AI Vision** — listing photo tags (`lib/listings/vision-tags.ts` + `vision-catalog.ts`): **gpt-4o → Claude
+  Haiku**, full 200-photo galleries preserved by requesting Repliers CDN **`?class=small` thumbnails**
+  (400×300 ≈ 160 tok/photo — the Claude equivalent of gpt-4o's `detail:"low"` peephole). Real 7-day audit:
+  1,250 new listings × ~25 photos ≈ **$20/wk** (≈ half the old gpt-4o bill).
+- **Buckets** — TWO living: **HouseLoop** (the product) · **BossLoop Infra** (agents/memory/tooling). The old
+  skeleton keys were swapped: Anthropic "personLI" → **BossLoop Infra** key; a new `bossloop-infra-svc` OpenAI
+  key minted; the OpenAI "Memory OS" project renamed **BossLoop Infra**. **PlacedAgent is PAUSED** (its
+  Anthropic key DISABLED + OpenAI project ARCHIVED). After the swap, any spend in the **default** or
+  **PlacedAgent** buckets = a breach (a rogue/legacy key is alive). Browser-side `VITE_OPENAI_API_KEY` reads
+  (dashboard client) were **killed** — an API key must never ship in a client bundle.
+
+## The ONE categorizer — page and Run Log can't disagree
+
+`apps/houseloop-crm/lib/ai-cost/ai-category.ts` is the single source of truth for "what AI category is this
+`hl_run_log` row." It exports the fn→category map (`AI_CATEGORY_FNS`), the closed category allowlist
+(`KNOWN_AI_CATEGORIES`), the ONE SQL `aiCategorySql()`, and the ONE row filter `aiRowFilterSql()`. **Both**
+`app/api/ai-cost/route.ts` (the page) **and** `lib/run-log/feed.ts` (the Run Log) import it. This killed the
+drift where the page had a hardcoded `VISION_FNS` list saying vision=AI while the Run Log's registry said
+vision=IDX — so the page showed vision spend but clicking it dumped you into an empty log. Now they're
+identical (verified live: vision 4,288 · dossier 2,409 · seo 28,138 · follow_up 429 · ai_search 138 · call_analysis 76).
+
+## The AI Cost Run Log tab — atomic pills
+
+The Run Log's `ai` view (renamed **"AI Cost"** from "AI Search Cost") carries per-category filter pills the
+same way the Website tab does — **Search · Vision · Follow-Up · Dossiers · Calls & Voicemail · Rollups ·
+Narratives · SEO Articles · Home Blurbs · De-fork**. Counts are computed **server-side** (`aiCatCounts`, a
+30-day tally) so a pill reads the true count regardless of the active filter. Vision runs were **moved out of
+the IDX lane into the AI lane** (registry `category: 'ai'`). Every card on `/ai-cost` deep-links to its own
+pill (`/run-log?view=ai&cat=<category>`).
+
+## The systemic cost-logging audit — every caller now visible
+
+The trigger: vision spend looked stale on `/ai-cost` because the intake path never emitted a cost row and its
+cost was still computed with **gpt-4o pricing after the Claude swap**. A full 2-agent sweep of every LLM
+caller (CRM + website) against the canonical spec (every call → an `hl_run_log` cost row, **per-model
+pricing**, real category + model + real tokens) found the CRM mostly clean but the **entire website AI layer
+invisible**. Fixes shipped:
+
+- **NEW `apps/houseloop-web/lib/ai/emit-ai-cost.ts`** — the ONE web cost emitter (per-model pricing; the web
+  counterpart of the CRM's `lib/ai/log-ai-cost.ts`). Emits `houseloop/ai.call` → the CRM `ai-call-log` fn
+  writes the row. Before this the website had **nothing**.
+- Wired (were invisible): **market-narrative** (Sonnet — wasn't even reading `usage`), **seo-articles** (+
+  **killed a hardcoded `$2/$10` blended-pricing bug** that billed Haiku articles at Sonnet rates — same class
+  as the vision gpt-4o bug), **house-blurb**, **smart-features** (highest-frequency — fires on every search),
+  **defork**, and the CRM **buy-time-ack classifier** (one-line cost opt).
+- Added categories `seo_house` + `defork` to the allowlist + pills.
+- **CRM audit = clean**: Myli reply/compose, dossier, rollups, call-analysis, voicemail, coordination all log
+  correctly with the right category, real model, real tokens. The reporting fetches (sentinel, workspace-costs)
+  correctly don't self-log.
+
+## The daily digest + the sentinel
+
+`ai-cost-sentinel` (Inngest, `lib/inngest/functions/ai-cost-sentinel.ts`, cron `0 13 * * *` = 8am CT) sends
+**ONE text a day** with yesterday's spend by bucket, and folds any tripped alarm into that same text (never
+spam). It reads **yesterday's finalized** billing (not today's laggy feed — the first version false-positived
+on Anthropic's daily-bucket lag). Four alarms: **breach** (dead-bucket spend), **per-provider flatline** (a
+provider that averaged real spend reads $0 — how we'd catch a dead balance, the OpenAI auto-reload disease),
+**spike** (>3× baseline), **rogue key** (an Anthropic key id outside the known set). Alerts SMS from the
+**913-800-4470** Notifications line; every run lands in the Run Log (`category: 'alerts'`).
+
+## Open items (honest holes)
+
+- 🔴 **Deepgram STT is invisible** — call-recording + voicemail transcription (`lib/calls/analyze.ts`
+  `transcribe()`, reused by voicemail-triage) is billed **per audio-minute**, has no model in the pricing
+  table, and logs zero. Needs a `transcription`/`ai_voice` category priced per-minute from recording duration.
+  **This is the same shape as the AI-voice cost problem** (see [AI Voice](/guides/ai-voice) → NEED TO DO NEXT).
+- The `ai-search.event` row stamps `model: HAIKU` even when Sonnet re-rank tokens are inside `cost_usd`
+  (dollar-correct; model attribution imprecise). Minor.
+- **Scribe memory layer is dead** (last write 2026-04-20) — hive + the file/handoff/lock memory are the live
+  layers. Not a cost bug; noted so nobody "revives" a dead OpenAI-embedding path.
+- **Zach's clicks pending:** prepay OpenAI ~$20 + turn **auto-reload OFF** (embeddings-only now); revoke the
+  personLI + BossLoop-Master keys once the default buckets read $0.
+
+---
+
+# ═══ 2026-07-16 PM — THE FORENSIC AUDIT (the $106.74 mystery SOLVED + the kills) ═══
+
+<Check>
+**The "PlacedAgent" spend was never PlacedAgent.** Anthropic's per-key/per-hour usage API + Railway env
+forensics traced the $106.74/wk on the `placedagent-app` key to ONE caller: **the FUB Widget**
+(`apps/dashboard/server/fub-widget.ts`, served at realloop.co/fub-widget, embedded in every FUB person page).
+It **auto-fired 2 Haiku calls per page load** (line 453 `loadAI(false)`) on `ANTHROPIC_API_KEY_PLACEDAGENT`
+(line 26) — and the **Camp David FUB scraper** loads that iframe on every person page it visits, so the
+scraper paid an AI-summary tax nobody read, thousands of times a day. The Jul 12–13 explosion (14.8M + 22.9M
+input tokens) = the `fub-backfill-a/b` sweeps running all weekend. SEO articles were checked and are clean —
+the HouseLoop workspace key, pennies, delta-gated. Memory hooks were on the shared default key.
+</Check>
+
+## Executed 2026-07-16 (Zach's kill orders)
+
+1. ☠️ **`placedagent-app` Anthropic key → INACTIVE** (admin API, reversible). Every legacy-dashboard AI caller
+   (~40 call sites: widget, recruiting brains, whatsapp comms brain, shadow inference) is dark.
+2. ☠️ **FUB Widget KILLED in code** — `registerFubWidget` is a tombstone (410s + "moved to crm.houseloop.ai"),
+   deployed to realloop.co and live-verified. FUB-side embedded-app deregistration = a Zach admin click (cosmetic).
+3. 🏷️ **Anthropic workspace "Memory OS" → renamed "BossLoop Infra"** (Zach: "there is no more personLI — it's
+   BossLoop infrastructure"). Local `.env` now carries `ANTHROPIC_API_KEY_MEMORY` (the BossLoop Infra key), so
+   the memory hooks/tools (`_MEMORY || shared` chain) attribute there from their next run.
+4. 🔑 **Both provider ADMIN keys wired onto the CRM's Railway env** (`ANTHROPIC_ADMIN_API_KEY` +
+   `OPENAI_ADMIN_API_KEY`) — the `/ai-cost` page's real-billing reads can populate.
+
+## The verified runtime spend map (what ACTUALLY spends, post-kill)
+
+| Runtime | What calls AI | Provider · key → bucket | Metered internally? |
+|---|---|---|---|
+| **houseloop-crm (Railway)** | Myli conversations, extraction, rollups, call analyze/VM triage, search smart-features | Anthropic `_HOUSELOOP` → **HouseLoop** ✓ | ✅ callModel/logAiCost |
+| **houseloop-web (Railway)** | Monday SEO/geo article cluster (5 crons) · AI search/NLP · **AI Vision (gpt-4o)** · defork | Anthropic+OpenAI `_HOUSELOOP` → **HouseLoop** ✓ | partial (run-log) |
+| **placedagent.com (Railway)** | Myli recruiting brains (event-driven) + `pa-daily-etl` 7am narrations (gpt-4o) | Anthropic **bare shared → DEFAULT bucket ⚠** · OpenAI `_PLACEDAGENT` ✓ | ✅ pa_llm_call_log (the ONLY per-call $ ledger) |
+| **realloop dashboard (Railway)** | was: widget + recruiting brains + whatsapp | PA key → **DEAD as of today** ☠️ | never metered |
+| **THIS Mac (launchd)** | local dashboard :5173 (agent-ops analyzers) · brainstem daemon (mostly local Ollama, Claude on COMPLEX) · nightly `claude -p` stabilize 01:00 | shared/`_MEMORY` → **BossLoop Infra / default** | ❌ |
+| **Claude Code hooks** | PreCompact summarizer + per-edit Haiku one-liner (default ON) | `_MEMORY` → **BossLoop Infra** (post-rename) | ❌ |
+| **Camp David** | fub scraper structure-extraction (Haiku), dossier/cards harvests | `_HOUSELOOP` → HouseLoop ✓ | partial (some print $) |
+| **LiveKit Cloud** | 🔴 **the DEPLOYED voice agent is `agent.py` on Gemini native-audio** (`GEMINI_API_KEY`) — a THIRD provider bill, attributed nowhere | Gemini → **invisible** ⚠ | ❌ |
+| **tools/scribe (memory engine)** | summaries gpt-4o-mini + embeddings text-embedding-3-small | OpenAI bare shared → **Default project ⚠** | ❌ |
+| **AI Titans** | content pipelines (Haiku/Sonnet + ElevenLabs + FAL) | bare shared keys → **default buckets ⚠** | ❌ |
+
+## 🔴 Flags raised by the full-tree sweep (196 call sites inventoried)
+
+- **Client-exposed OpenAI keys:** `VITE_OPENAI_API_KEY` ships in realloop.co's browser bundle
+  (`myliService.ts`, `pillTransform.ts`) and `NEXT_PUBLIC_OPENAI_API_KEY` in the placedagent admin bundle —
+  anyone can lift them from the JS. **Rotate + rip.**
+- **PA-nextjs reads the BARE shared Anthropic key** (`config.ts:55 required('ANTHROPIC_API_KEY')`) while the
+  correct `_PLACEDAGENT` key sits unused in its env — its Myli brains bill to the default bucket.
+- **3 bare `new Anthropic()` clients** in the legacy dashboard (dossier-generator, fact-extractor,
+  conversation-intelligence) — no fallback chain at all.
+- **The deployed voice = Gemini on LiveKit Cloud**, not the Pipecat/Claude bot the phone docs describe —
+  Google spend is a fourth, totally untracked bill.
+- Zero internal metering in: the entire legacy dashboard, apps/lee, apps/sms, myli-openai-voice, both Python
+  voice agents, all of tools/ (except a few stdout printers), all of AI Titans.
+
+## The remaining wire-up plan (Block 2 tail)
+
+1. **Verify `/ai-cost` renders the real bills** (admin keys just wired; page reachable from the AI Cockpit's
+   "Full cost breakdown →" link per the locked C1 IA — no nav entry, that's intentional).
+2. **THE ATTRIBUTION LAW:** any spend in the DEFAULT workspace / Default project = a breach. Re-key:
+   PA-nextjs → its `_PLACEDAGENT` values (one env var name fix) *if the product lives* — Zach deciding
+   PlacedAgent's fate; scribe/tools OpenAI → the Memory-OS/BossLoop-Infra project svc key; AI Titans → own
+   workspace or BossLoop Infra (Zach call); then **retire the shared "personLI" + "BossLoop Master" keys.**
+3. **The sentinel** (Inngest): every 6h read both admin billing APIs → default-bucket breach, spend flatline,
+   negative/unfunded balance, new invoices → SMS Zach via 913-800-4470 + Run Log rows.
+4. **ONE-PROVIDER consolidation (Claude)** — pending Zach's formal go: AI Vision gpt-4o→Claude vision ·
+   lee/sms gpt→Claude · scribe summaries→Claude (embeddings stay OpenAI-tiny or move to Voyage) ·
+   myli-openai-voice experiment → kill · Whisper→Deepgram. Gemini voice = Block 3 decision.
+
+<Warning>
+**The section below is the pre-forensic morning audit (same day) — superseded where it conflicts.** Its
+"segmentation effectively undeployed" claim was HALF right: the workspace keys exist and the big products DO
+carry them; the rot was the widget + the default-bucket stragglers above.
+</Warning>
+
+# ═══ 2026-07-16 AM — WHAT'S ACTUALLY DEPLOYED (the reality gap) ═══
+
+<Warning>
+**The architecture described below this section is the DESIGN. As of 2026-07-16 it is largely NOT wired up.** A
+full read-only audit (triggered when Zach's OpenAI account went negative and nothing alerted him) found:
+
+1. **Where the `/ai-cost` page "went":** it was never deleted. `app/(crm)/ai-cost/page.tsx` still exists and
+   deploys (`crm.houseloop.ai/ai-cost` returns auth, not 404) — but **its nav link was dropped** in the
+   "C1 AI-section" rework (Sidebar comment: *"AI Cost + Run Log moved to the top-level AI section — 2026-07-13"*;
+   the actual `href` to `/ai-cost` is gone). So it's an **orphaned page** you can only reach by typing the URL.
+2. **The segmentation is DEFINED but effectively UNDEPLOYED.** **No runtime caller anywhere** references
+   `ANTHROPIC_WS_*`, `OPENAI_PROJ_*`, `ANTHROPIC_API_KEY_HOUSELOOP`, `OPENAI_API_KEY_HOUSELOOP`,
+   `ANTHROPIC_ADMIN_API_KEY`, or `OPENAI_ADMIN_API_KEY` **except the billing-readback in
+   `lib/ai-cost/workspace-costs.ts`.** Every actual AI call falls back to the **shared** `ANTHROPIC_API_KEY` /
+   `OPENAI_API_KEY`. So spend cannot attribute — it all lands "unattributed."
+3. **The admin keys aren't mapped.** They exist in the credential vault as `CRED_ANTHROPIC_ADMIN_API_*` /
+   `CRED_OPENAI_ADMIN_API_*` but were never set as the env-var NAMES the dashboard reads
+   (`OPENAI_ADMIN_API_KEY` / `ANTHROPIC_ADMIN_API_KEY`). So the provider-admin reads return nothing and the
+   dashboard shows blank. Keys were provided; they were never wired.
+4. **Cost logging is partial.** ONLY `apps/houseloop-crm` routes through `logAiCost`/`callModel`. The **website**
+   (except search), the **dashboard**, **placedagent-nextjs**, **all three voice agents**, and **every tool**
+   bypass the ledger — real spend, no `hl_run_log` row.
+5. **No alerting exists** for a negative/unfunded balance or a provider invoice. This is the gap that let the
+   OpenAI balance run to -$0.09 silently.
+</Warning>
+
+## The full spend map — every AI caller (2026-07-16)
+
+| Surface | Caller(s) | Provider / model | Key used | Logged? |
+|---|---|---|---|---|
+| **CRM — Myli conversation** | `lib/ai/lead-conversation.ts` | Anthropic `claude-sonnet-4-6` | shared (falls back) | ✅ |
+| **CRM — extraction / dossier** | `lib/ai/extract-context.ts`, `call-model.ts` | Anthropic `claude-haiku-4-5` | shared | ✅ |
+| **CRM — coordination** | `lib/coordination/mediation.ts` | Anthropic | shared | ✅ |
+| **CRM — call analyze / voicemail triage** | `lib/calls/analyze.ts`, `voicemail-triage.ts` | Deepgram + Claude | **DB `ai_keys` table** (3rd key source!) | ✅ |
+| **CRM — AI vision tagging** | vision pipeline | OpenAI `gpt-4o` | shared OpenAI ⚠️ (now dead) | ✅ |
+| **Website — AI search** | `app/api/search/nlp`, `classify`, `lib/search/smart-features.ts` | Anthropic Haiku | shared | search only ✅ / features ❌ |
+| **Website — SEO / narrative / defork** | `lib/seo/*`, `market-narrative-generate.ts`, `lib/listings/defork*.ts` | Anthropic | shared | ❌ |
+| **VOICE — Pipecat cascade (live)** | `apps/myli-voice-agent/pipecat_bot.py` | Deepgram + Claude Haiku 4.5 + ElevenLabs | **shared** `ANTHROPIC_API_KEY` ⚠️ | ❌ |
+| **VOICE — LiveKit worker (dead)** | `apps/myli-voice-agent/agent.py` | Gemini native-audio | `GEMINI_API_KEY` | ❌ |
+| **VOICE — OpenAI Realtime (experiment)** | `apps/myli-openai-voice/server.ts` | OpenAI `gpt-realtime-2.1` | **bare shared OpenAI** ⚠️ | ❌ |
+| **Lee text agent / SMS** | `apps/lee`, `apps/sms` | OpenAI `gpt-5.2` / `gpt-4.1` | `OPENAI_API_KEY_DIRECT` / shared | ❌ |
+| **PlacedAgent (legacy Express)** | `apps/dashboard/server/ai-recruiting/*` (~40 callsites) | Anthropic + OpenAI + Deepgram/Cartesia/ElevenLabs | `_PLACEDAGENT \|\| shared`; 3 files bare-`new Anthropic()` ⚠️ | ❌ |
+| **PlacedAgent (nextjs)** | `products/placedagent/.../config.ts` → all PA brains | Anthropic | **bare shared, NO `_PLACEDAGENT`** ⚠️ (whole product) | ❌ |
+| **Memory / tools** | `tools/scribe/*`, `tools/pa/*`, `tools/cheplak-*` (Whisper), `tools/hive`, MCP | OpenAI embeddings/transcription + Anthropic | mostly **bare shared** ⚠️ | ❌ |
+
+**Biggest un-attributed offenders to repoint first:** `products/placedagent/.../config.ts` (an entire product on
+the shared key) · `pipecat_bot.py` (voice) · `myli-openai-voice` · the 3 dashboard bare-`new Anthropic()` files ·
+the `tools/scribe` + `tools/pa` OpenAI paths.
+
+## The fix plan (for the wire-up)
+
+1. **Un-orphan the page** — restore the `/ai-cost` nav link (and the AI Run Log link) in the Sidebar AI section.
+2. **Wire the admin keys** — map the vault super-admin keys → `OPENAI_ADMIN_API_KEY` + `ANTHROPIC_ADMIN_API_KEY`
+   on **Railway** (the CRM's real env), so the provider-admin reads populate real spend.
+3. **Deploy the segmentation** — actually set `ANTHROPIC_API_KEY_HOUSELOOP` / `OPENAI_API_KEY_HOUSELOOP` (+ the
+   `_PLACEDAGENT` / `_MEMORY` variants) on each service, and repoint the bare-shared-key offenders above so spend
+   attributes. Until then the "Unattributed (legacy)" bucket is ~everything.
+4. **Close the logging gaps** — route the website/dashboard/PA/voice/tool callers through the cost ledger (or at
+   minimum stamp the voice line, since Zach wants "every penny including AI voice").
+5. **Build the alerting** (Inngest — *Inngest or it doesn't exist*): a scheduled function reads each provider's
+   admin API for balance / credit-grant / recharge status + new invoices, and NOTIFIES Zach via the **HouseLoop
+   alerts number 913-800-4470** on a negative / unfunded / failed-recharge / new-invoice event.
+
+---
+
+## The problem this solves
+
+Every AI call across the company used to run on **one shared API key** billing to a single default
+workspace. That made spend **unattributable** — you could not tell what HouseLoop cost vs. PlacedAgent vs.
+the agent-memory infrastructure. The in-app **AI Cost** page (`/ai-cost` in the CRM) even under-reported
+Anthropic to a few dollars, because it computed Anthropic spend from the internal run log (which only sees
+HouseLoop's *own* logged calls) instead of the provider's real bill.
+
+The fix: **segment spend at the source** by giving each product its own Anthropic workspace and OpenAI
+project, then read the **real billing** from each provider's admin API.
+
+## The three buckets
+
+Spend is attributed to one of three products by **which workspace / project its key belongs to**:
+
+| Bucket | What runs here | Anthropic workspace | OpenAI project |
+| --- | --- | --- | --- |
+| **HouseLoop** | CRM + website + FUB scraper (Myli replies, dossiers, AI search, SEO articles, AI vision) | `houseloop-app` | `HouseLoop` |
+| **PlacedAgent** | Recruiting (PlacedAgent app + dashboard AI-recruiting) | `placedagent-app` | `PlacedAgent` |
+| **Memory OS** | Agent infrastructure — memory crons, hive, brainstem, knowledge graph, Discord bots | `memory-os` | `Memory OS` |
+
+Anything still running on the legacy shared key lands in an **Unattributed (legacy)** bucket that drains
+toward $0 as each remaining caller is moved onto its workspace key.
+
+## How attribution works in code
+
+Each subsystem reads its **own** workspace/project key, falling back to the shared key so nothing breaks:
+
+```ts
+const key = process.env.ANTHROPIC_API_KEY_HOUSELOOP || process.env.ANTHROPIC_API_KEY;
+// PlacedAgent code uses ANTHROPIC_API_KEY_PLACEDAGENT; Memory OS uses ANTHROPIC_API_KEY_MEMORY.
+// OpenAI mirrors this with OPENAI_API_KEY_HOUSELOOP / _PLACEDAGENT / _MEMORY.
+```
+
+Locally-run jobs (the memory crons, the FUB scraper) read `.env` directly, so they attribute immediately.
+Deployed apps (CRM, website, PlacedAgent, dashboard) carry their workspace key in their Railway service
+environment.
+
+## The AI Cost dashboard
+
+`/ai-cost` shows **real billing pulled from the provider admin APIs** — not an internal estimate:
+
+- **Anthropic** `cost_report` grouped by `workspace_id`
+- **OpenAI** `organization/costs` grouped by `project_id`
+
+It renders one tab per bucket (HouseLoop · PlacedAgent · Memory OS · Unattributed), each with the
+Anthropic + OpenAI spend, token volume, **cache hit rate**, a per-model breakdown, and a daily chart. The
+HouseLoop tab additionally shows a **category breakdown** (AI Follow-Up, Dossiers, AI Search, SEO Articles,
+AI Vision, …) sourced from the internal run log.
+
+<Note>
+**Units gotchas** (the two traps when reading these APIs directly):
+Anthropic's `cost_report` `amount` is in **cents** — divide by 100. OpenAI's `costs` `amount.value` is a
+**USD decimal string** — `parseFloat` it. Both cost endpoints cap at **31 daily buckets per page**, so
+ranges longer than ~a month must paginate.
+</Note>
+
+The numbers on this page are the **single source of truth** for AI spend. If an internal table disagrees,
+the provider admin API wins.
+
+## Where caching saves money
+
+Anthropic **prompt caching** (`cache_control: ephemeral`) caches a stable prompt prefix for a 5-minute
+window; cached reads bill at ~10% of normal input price. It's applied where it pays off:
+
+- **Myli lead conversation** — the system prompt + tool definitions are cached on every turn, so a
+  multi-turn conversation only pays full price for the first turn.
+- **The shared model router** (`call-model.ts`) — caches the system prefix for single-shot calls
+  (e.g. the fact-extraction engine).
+
+Caching is a **safe no-op below the model's minimum cacheable size** (~1024 tokens), so it can be applied
+broadly without risk. It does **not** help small, high-frequency prompts — for those the lever is
+**frequency**, not caching.
+
+## AI Vision is already cost-bounded
+
+AI Vision (`gpt-4o`, photos sent at `detail: "low"`) is computed **exactly once per listing at ingest** and
+cached in the database (`Listing.visionTags`). It never re-runs on a page view, and the pipeline skips any
+listing that's already tagged. Steady-state vision cost is therefore bounded by **new-listing volume only**
+(~$0.006/listing); the large historical spend was the one-time catalog backfill.
+
+## The biggest lever: don't pay for low-value calls
+
+The single largest source of silent spend was the **LLM memory layer** — background jobs that called a
+cheap model on a schedule and on every file save to generate summaries. Because those prompts are small,
+caching can't help; the only lever is running them less often. The **deterministic** memory (progress,
+lock, and handoff files plus git history) delivers the continuity value at **$0** and is always on.
+
+## Summary of cost levers
+
+1. **Segment at the source** — per-product workspace/project keys make every dollar attributable.
+2. **Cache stable prefixes** — Myli + the model router cache system/tool prompts (Anthropic); OpenAI
+   caches long repeated prefixes automatically.
+3. **Compute once, store forever** — AI Vision and dossiers run once per entity and cache to the database.
+4. **Throttle low-value background LLM jobs** — frequency, not caching, is the lever for small prompts.
+5. **Read the real bill** — attribute and decide from the provider admin APIs, never an internal estimate.

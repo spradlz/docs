@@ -1,0 +1,161 @@
+---
+title: "Follow Up Boss — Lead Integration"
+description: "The FUB pipe: how Zillow/Realtor/PPC signals flow from Follow Up Boss into HouseLoop — the fail-closed creates-lead gate, the _global master switch, the 22 FUB trigger events. The six-bucket lead-source canonicalization lives on the Lead Sources guide (the model's ONE home)."
+---
+
+{/* legacy-banner */}
+<Warning>
+  **LEGACY — UNVERIFIED.** This page predates the Master QA build and has NOT been verified
+  against the product. The canonical docs are being rewritten lane-by-lane as each lane goes
+  green — check the lane's tab first.
+</Warning>
+
+<Info>
+**The connector, not a lane.** Follow Up Boss is where Zillow, Realtor.com, and PPC signals land first; this
+integration mirrors those signals into HouseLoop and — ONLY where a toggle explicitly says so — mints leads and
+fires workflows. The deep reference is the master page:
+**[FUB Trigger Events & Notifications](/guides/trigger-events)** (the 22-event map, four-toggle model, capture
+matrix — owned by Lee). This page is the integration overview; it links, never duplicates.
+</Info>
+
+## The law: FAIL CLOSED
+
+**No FUB signal creates a HouseLoop lead unless its trigger event's `Creates Lead` toggle is explicitly ON —
+and the `_global` master switch is ON.** A signal with no config row does NOTHING (logged skip). This is
+enforced in code with fail-closed defaults (`fub-lead-import.ts`) after the 2026-07-09 incident where fail-open
+defaults minted 422 unauthorized leads with every toggle off — all purged, gate live-fire proven (111 backlog
+imports vs the closed gate → 0 leads).
+
+Three belts keep it that way:
+1. **Import-layer door hygiene** — existing-person re-imports and behavioral/comms webhook types never fire
+   native registration doors.
+2. **Fail-closed config gate** — no row / toggle off / `_global` off → no lead, no workflow, receipt logged.
+3. **Dispatch registration guard** — a `*_registration` door can never route via a fallback tier
+   (`runtime.ts`), so first-touch outreach to imports is structurally impossible.
+
+## How a FUB signal flows
+
+```
+Zillow / Realtor / PPC → Follow Up Boss
+  → native webhook (POST /api/fub/webhook) → ALLOWLIST GATE → fan out one Inngest run per resource
+  → native webhook → fub.* mirror (raw truth, always captured)
+  → classification (classifyFubEvent → the atomic trigger event)
+  → hl_fub_webhook_settings row = THE decision:
+       Sync (ingest to history) · Creates Lead · Workflow · Notify — four independent toggles
+  → creates_lead ON → hl_leads (integration='follow_up_boss') → the FUB door fires → hl_trigger_fire ledger
+```
+
+<Note>
+**The allowlist gate (2026-07-24, cost).** `POST /api/fub/webhook` fans out one paid Inngest run per resource,
+so it now drops any event type the router doesn't handle **before** fan-out. Only the 6 mapped types proceed:
+`peopleCreated`, `notesCreated`, `eventsCreated`, `textMessagesCreated`, `callsCreated`, `emailsCreated`
+(derived from `FUB_ENDPOINT_MAP` so the allowlist can't drift from the router). FUB was firing ~183k
+`peopleUpdated` webhooks/month alone — each spawned a run that did nothing but return `unmapped event`
+(no fetch, no mirror write, no notify): ~35% of the entire Inngest bill, pure waste. The handler still returns
+`200` on a dropped type so FUB doesn't retry. Zero blast radius — the mapped comms/notes that mirror-sync then
+skip notification are untouched. See [Inngest plan &amp; cost](/crm/integrations-api-background-jobs#inngest-plan--cost).
+</Note>
+
+FUB-integration fires show on the **Follow Up Boss** section of [Trigger Events](/guides/trigger-events) — never
+on the native HouseLoop.ai board (ledger scoped by integration).
+
+<Note>
+**Behavioral signals honor Creates Lead too (Zach 2026-07-11).** A `property_saved` / `property_viewed` /
+`in_app_message` from a not-yet-lead now **mints a new lead when its `creates_lead` is ON** — a save fires the
+real `saved_home_registration` door, a view/in-app the generic `direct_registration`. OFF → lead-less notify.
+No hardcoded never-mint list; the toggle governs per event. Detail:
+[FUB Trigger Events → Behavioral signals mint](/guides/trigger-events#behavioral-signals-mint-when-creates-lead-is-on).
+</Note>
+
+## The second capture path — the Email Lead Safety-Net (2026-07-22)
+
+The webhook is the primary path, but it can DROP a lead (an unserviced type — the reason General Inquiry /
+Registration / Pre-Approval were completed in `SERVICED_FUB_EVENT_TYPES`) or MISS one (a webhook that never
+arrives — our endpoint has no auth and FUB gives no retry guarantee). Kenneth Hunt (FUB 50544) proved it: FUB
+created him and even emailed `New Lead from Zillow - Kenneth Eugene Hunt`, but HouseLoop never pulled him in.
+
+<Warning>
+**There is no longer a second capture path.** The **Email Lead Safety-Net** — a 5-min cron that parsed vendor
+alert emails out of `info@houseloop.ai` and minted any lead the webhook missed — was **deleted 2026-07-31** on
+Zach's instruction: *"get rid of this email parser, everything comes through fub right now."*
+
+**So the webhook + `importFubLead` is the ONLY intake path**, and the drop/miss risk described above is real and
+uncovered. That is a deliberate trade: over 9 days the email net minted **4** leads — 1 real, 2 internal tests,
+and 1 junk row built from a **listing agent's** phone number, because it took the first phone in the email body
+as the lead's. It duplicated FUB on everything else (26 `matched_existing`). The cure was worse than the disease.
+
+If a lead is ever confirmed missing again (the Kenneth Hunt shape), the fix is on the **FUB side** — the
+webhook's serviced types, or a reconciliation sweep against the FUB API — **not** a new email parser.
+Retirement record: [Trigger Events](/guides/trigger-events) · [Vendor Lead Email Capture](/guides/vendor-lead-email-capture).
+</Warning>
+
+## What a FUB signal becomes in HouseLoop — the 2026-07-10/11 hardening
+
+Once captured, a lead's activity is mirrored into HouseLoop the right way — governed by **one master**, **forward-only**,
+with **real timestamps**. What shipped this pass (deep detail: [FUB Lead Import](/fub/master-scraper-ssot)):
+
+- **ONE FUB master switch.** There were secretly **two** — the UI toggle wrote `hl_settings.fub_sync_master` while
+  the fail-closed notify/process gate read `hl_fub_webhook_settings._global.enabled`. They diverged, `_global` was
+  orphaned OFF, and it **silently killed every FUB notification for hours**. Collapsed: `getFubSyncMaster` /
+  `setFubSyncMaster` now read/write `_global.enabled` — the flag the UI shows and the code obeys (notify + process +
+  forward-sync). It can't orphan again.
+- **~~The lead-detail feed is FORWARD-ONLY.~~ RETIRED 2026-07-26 — the full history now comes in.**
+  The old rule: a pulled-in lead started clean, and pre-import texts/calls/emails stayed context-only under the
+  FUB tab (`backfillFubComms` watermark floored at the lead's `created_at`). Zach reversed it: *"I want to pull it
+  in… even if FUB goes away or the FUB mirror goes down, we have it here."*
+  The problem that law solved — old comms masquerading as today's activity — is now solved by **marking** rather
+  than **withholding**: everything imports, and anything older than the lead is stamped
+  `archived_from = 'follow_up_boss'` (migration 0456) and renders teal beneath a **Follow Up Boss · archive**
+  divider. Present, searchable, and unmistakably another era. The 24h lookback survives as the archive *cut*, so
+  the interaction that caused the pull-in still reads as current. **Notes** import for the first time
+  (`lib/fub/classify-note.ts`) — everything except FUB's property viewed/saved automation, which would
+  double-count events that already mint `save_home` / `property_view` cards.
+  Because every imported row is stamped, the whole import is reversible with one scoped `DELETE` that cannot
+  touch a native HouseLoop row — the undo statements live in the migration itself.
+- **Real timestamps, not "22 hours ago."** Property view/save activity is stamped from `scraped_at` (the real
+  trigger time, matches FUB to the minute) instead of a date-only midnight, and the feed renders the actual date +
+  time (Central), not a relative "Xh ago."
+- **ONE home-activity writer.** The dashboard's `parseZillowViewNote` ghost writer — which hardcoded every Zillow
+  home note as `activity_type='viewed'` (so **saved** homes recorded as **viewed**) — was removed;
+  `lib/fub/sync-lead-record.ts` is the sole, correct writer (derives saved-vs-viewed, stamps `fub_event_id`). 1,318
+  legacy mislabeled rows were cleaned (565 dup deletes + 753 corrected → `saved`).
+- **Inquiries/tours flow like texts.** `fub.events` is now stored **unconditionally** in the webhook router, so a
+  new inquiry/tour always lands and renders forward (the July-7 ingest ceiling is lifted).
+- **Both halves of a Zillow thread import (2026-07-27).** In-app chat arrives through the same webhook shape as an
+  SMS, so it was classified as a **text**; and the agent's replies were filtered out in three places, leaving the
+  feed a one-sided monologue while FUB held a full negotiation. Now `message_type='zillow_inapp'` mints
+  `in_app_message`, and outbound imports as a real reply. **Open:** the historical backlog is un-imported — 3,732
+  agent replies across 678 FUB people still sit in the mirror only. Detail + the constraints:
+  [Master Scraper SSOT → the import layer](/fub/master-scraper-ssot#from-the-mirror-to-the-leads-feed-the-import-layer).
+- **Myli's facts are distilled, not dumped.** The extractor locks the slot vocabulary (`canonicalSlot`) so facts
+  can't bloat, and raw house-view lists collapse into ONE synthesized signal ("viewed 32 homes in 2 days → high
+  urgency"). A bloated lead went **55 junk facts → 13** meaningful ones, stable on re-run.
+- **The import wizard is a filter + assign + tag builder.** Select who comes in by FUB **stage** and **tag** (a
+  searchable modal over all ~1,276 live FUB tags, AND'd with stages, with a live match count); **assign** every
+  imported lead to a person (or Myli-AI-only, never ownerless); **apply HouseLoop tags** (pick existing or create
+  new) on top of the origin tag + the lead's own imported FUB tags. One-way, stage-mapped, Rule #0-gated on the full run.
+
+## Lead-source canonicalization — moved
+
+<Note>
+**The six-bucket fold, the tag-don't-rewrite law, and the backfill receipts now live on
+[Lead Sources → Lead-source canonicalization](/guides/lead-sources#lead-source-canonicalization--the-six-fub-buckets)**
+(moved 2026-07-31, Zach's directive — the source model has ONE home). Short form: every messy FUB source
+string folds into six canonical buckets in ONE file (`lib/fub-import/source-canonicalize.ts`); FUB's own
+Source field is immutable so the bucket lives in FUB as an `HL Source:` tag; HouseLoop derives the bucket
+at import, never reads the tag.
+</Note>
+
+## Boundaries that never move
+
+- **Deleting a HouseLoop lead NEVER touches Follow Up Boss** — the delete path has zero FUB references
+  ([Lead Deletion](/guides/lead-deletion)); FUB people stay intact no matter what's purged here.
+- **The `fub.*` mirror is read-only truth** — capture everything, act on nothing without a toggle.
+- Notifications ship from the System line/address — never a person's, never Myli's.
+
+## Related
+
+- **[FUB Trigger Events & Notifications](/guides/trigger-events)** — THE master (22 events, toggles, capture matrix)
+- [FUB Lead Import](/fub/master-scraper-ssot) — the import engine + wizard
+- [FUB Scraper](/fub/master-scraper-ssot) — the on-demand body grabber (Caleb)
+- [Trigger Events](/guides/trigger-events) · [HouseLoop.ai integration](/integrations/houseloop-ai)

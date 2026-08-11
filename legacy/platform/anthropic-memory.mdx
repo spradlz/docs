@@ -1,0 +1,131 @@
+---
+title: "Anthropic Memory & Context Architecture"
+description: "How our Claude Code agents load memory and why. The lean context re-architecture that killed the cache bleed: gut the old AIOS empire injections, keep the deterministic 4-move anchors. Includes the checkpoint + full restore steps."
+---
+
+{/* legacy-banner */}
+<Warning>
+  **LEGACY — UNVERIFIED.** This page predates the Master QA build and has NOT been verified
+  against the product. The canonical docs are being rewritten lane-by-lane as each lane goes
+  green — check the lane's tab first.
+</Warning>
+
+<Note>
+**Internal platform doc.** This is how the Claude Code agents (Adam, Benji, Caleb, Lee) load context, memory,
+and rules — and the 2026-07-03 re-architecture that made it lean. Living record: updated as each phase ships.
+If this disagrees with the settings files, the settings are the intended state and this doc is stale — fix it.
+</Note>
+
+## Why this exists
+
+For months every agent prompt carried the old "AIOS empire" payload: a ~27KB block (identity + team status +
+evolution queue + AIOS inbox/tasks + a live Camp David DB call) **injected twice on every single prompt**, on top
+of a ~27KB `CLAUDE.md` and a ~93KB bundle of 14 constitutional rule files. In a long session that context is
+re-read every turn, so cache-read tokens ballooned (≈$5k-equivalent of read on a single marathon day).
+
+The operation had simplified to **four lean moves — build → scope-lock → plan mode → dev docs → ship** — but the
+context stack still served a multi-agent empire that no longer runs. This re-architecture makes the context serve
+the four moves and nothing else. **No law is deleted — constitutional rules relocate to load-on-demand.**
+
+## The three caching laws (the "why" behind every change)
+
+<Steps>
+  <Step title="Cache-read = context size × every turn">
+    A cache hit costs 0.1× input, but a marathon session re-reads the whole prefix hundreds of times. The single
+    biggest lever is shrinking the always-on prefix (`CLAUDE.md` + always-loaded rules).
+  </Step>
+  <Step title="Tail-volatile is safe; prefix-volatile is a 12.5× cache-nuke">
+    Hook injections land at the tail, so changing content there does not bust the cached prefix — but it silts the
+    transcript (every turn's block re-read forever), and doubled, that silt was the bleed. Never inject changing
+    content (timestamps, "8m ago" status) into the prefix (system / `CLAUDE.md` region) — that flips everything
+    below from 0.1× read to 1.25× write every turn.
+  </Step>
+  <Step title="CLAUDE.md under 200 lines; procedures to Skills; situational rules paths-scoped">
+    Anthropic's stated target is under 200 lines. `@import` does not save context (it expands at launch); `paths:`
+    frontmatter on a rule loads it only when you touch matching files. Enforce must-happen rules with PreToolUse
+    hooks (exit code 2), not prose.
+  </Step>
+</Steps>
+
+Sources: Anthropic prompt-caching docs, Claude Code memory/costs/hooks docs, Anthropic "effective context
+engineering" + "long-running agents" posts, and the Manus "Context Engineering for AI Agents" write-up.
+
+## Before → after (the target context shape)
+
+| | Before | After |
+|---|---|---|
+| Per-prompt hook block | ~27KB **× 2** (duplicate) | one tiny tail anchor (goal + step + next) |
+| Evolution queue / team status / AIOS inbox | injected every prompt | gone |
+| Camp David DB call | every prompt | gone |
+| `CLAUDE.md` | ~27KB (~6.7K tok) | under 200 lines |
+| 14 rule files | referenced as a 93KB bundle | 6 core + 5 `paths:`-scoped + 3 archived |
+| Memory recall | custom rig | native auto-memory (`MEMORY.md` + on-demand topic files) |
+
+**What survives (the lean, $0, deterministic drift-anchors):** `tools/hooks/prompt-progress-refresh.sh` (recites
+the scope-lock goal at the tail on a cadence — the Manus recitation pattern), `tools/hooks/session-progress-inject.sh`
+(SessionStart scope-lock + PROGRESS rehydration), `tools/hooks/inject-identity-law.sh` (DB doctrine at SessionStart).
+Those three already recite exactly the four moves.
+
+## What each phase changes
+
+- **Phase 1 — stop the bleed:** remove the duplicate `tools/aios/inbox-hook.sh` registration (it lives in BOTH
+  `~/.claude/settings.json` and `.claude/settings.local.json`); remove the phantom `ezra` from the daemon rosters.
+- **Phase 2 — delete the dead empire:** retire `inbox-hook.sh` entirely (orphans the evolution queue, team status,
+  AIOS inbox/tasks, the DB poll); delete the already-paused Haiku memory files (`CLAUDE_PROGRESS_LLM=0` since
+  2026-06-23).
+- **Phase 3 — slim the prefix:** `CLAUDE.md` under 200 lines; scope the situational rules with `paths:`; archive the
+  three legacy rules (`PING_PROTOCOL`, `CREDENTIAL_INTAKE`, `MCP_CREATION_MANDATE`); move multi-step procedures to
+  Skills; lean on native auto-memory.
+
+## Status
+
+<Info>Updated as each phase lands. Last update: 2026-07-03 — Phases 0–4 shipped. **Always-on context 122KB → 52KB (~17.5K tokens saved every session)**, plus the per-turn duplicate + empire block gone.</Info>
+
+| Phase | State |
+|---|---|
+| 0 — Checkpoint + this doc | ✅ done |
+| 1 — De-dup hook + kill Ezra | ✅ done |
+| 2 — Slim AIOS empire (keep comms) | ✅ done |
+| 3 — Slim CLAUDE.md + archive dead rules | ✅ done (`paths:` scoping deferred) |
+| 4 — Docs-first + trim the data doctrine | ✅ done |
+
+**Phase 1 shipped (2026-07-03):**
+- Removed the duplicate `inbox-hook.sh` registration from `~/.claude/settings.json` (kept the project one so team comms survive) → the ~27KB block now injects **once**, not twice.
+- Removed `ezra` from `sla-daemon.mjs` + `self-healing-daemon.mjs` rosters, `agent-model-config.json` is already `active:false`, and the 5 restart scripts (relay defaults repointed to `caleb`).
+- Deleted the single stale `ezra` row from `aios_agent_health` (last updated 2026-04-26) → he's gone from TEAM STATUS. `sla-daemon` (bare node PID 1182) left running with harmless stale roster; reloads clean on next natural restart.
+
+**Phase 2 shipped (2026-07-03) — comms preserved, empire cut:**
+- Zach's correction: **do NOT retire `inbox-hook.sh` — keep the ping pipe.** Instead, slimmed it to comms-only.
+- The DB query + message-delivery path are untouched. Two neuters: node-side (`data.team_status/tasks/urgent_events = []`) and bash-side (`EVOLUTION_DATA=SPRINT_SUMMARY=AGENT_MEMORY=""`). The `if`-guards then skip every empire section.
+- Verified live: hook emits valid JSON with **IDENTITY + AIOS INBOX** (adam's 14 pending messages deliver) and **zero** TEAM STATUS / EVOLUTION / SPRINT / TASKS / AGENT MEMORY. Agents can still ping each other any time.
+- Purged the **706 stale `ezra` rows** from `aios_agent_inbox` (Zach typed-authorized); live inboxes untouched.
+- **Not deleted:** the already-paused Haiku files (`synthesize-step-log.mjs` etc.) — they're no-ops (`CLAUDE_PROGRESS_LLM=0`), cost zero context, and deleting them means touching their callers for no cache benefit. Left as tombstones.
+
+**Camp David scrapers — unaffected (verified):** `self-healing-daemon` only restarts crashed *agent tmux sessions* (its Camp David touch is a read-only SSH health probe) and isn't even running; `inbox-hook` only reads the DB. Nothing here manages the David-owned pm2/cron scrapers, and no daemon was killed or restarted.
+
+**Phase 3 shipped (2026-07-03) — the always-on prefix, slimmed:**
+- **`CLAUDE.md`: 493 → 60 lines (26,985 → 6,870 bytes).** Every safety-critical law kept as a tight line + pointer (Rule #0, one-tree-one-branch, no-headless, FUB one-table, Inngest, 2-DB law, deploy=push, dev-docs, credentials, memory, the four moves, persona/voice). The empire prose (6-stage registration, master-sprint protocol, 5-gate, session checklists, memory-constitution verbosity, multi-agent pattern) is gone.
+- **Archived 3 dead rules** out of `.claude/rules/` → `.claude/_archived-rules/` (they stop auto-loading): `PING_PROTOCOL` (16KB), `CREDENTIAL_INTAKE` (8.9KB), `MCP_CREATION_MANDATE` (3.2KB).
+- **Net: always-on context 122,283 → 74,051 bytes — ~48KB / ~12K tokens saved every session,** cached-read on every turn for the whole session.
+- **Deferred (not gambled):** adding `paths:` frontmatter to scope the remaining situational rules. No rule in the repo uses frontmatter yet, so this needs a one-rule test + session-restart verification before applying it to constitutional law — otherwise a wrong key could silently drop a law. Follow-up, not done here.
+
+**Phase 4 shipped (2026-07-03) — docs-first + the data-doctrine trim:**
+- **New #1 habit in CLAUDE.md — DOCS-FIRST:** before any work, open the Mintlify guide that matches your task and read it; the guides carry the law and link the PRDs. Replaces force-feeding doctrine with just-in-time retrieval (what Zach was doing manually by pasting doc links).
+- **`HOUSELOOP_DATA_DOCTRINE.md`: 29,974 → 7,020 bytes.** Kept the always-on core (canonical tables, the 6 laws, HLID, the three numbers) + a docs-first pointer block. The ~24KB of deep law was **migrated into the guides first, verified by a coverage audit** — the core rules (agent waterfall, Ben Froeschl, bucket-from-SISU, off-market, past-agent-is-the-relationship, website=Zillow/CRM=contact-book, ZHVI two-tier) were already there; the specific gaps were added to: `lead-activity-log` (AI-cost-on-catalog), `srg-reconciliation-engine` (our-MLS structured source + master/backfill sequence + per-field sources), `houseloop-home-value` (`*_source` provenance + Repliers↔Ninja fallback), `lead-detail-stages-and-deals` (PCSOI lead model). Nothing lost — full pre-trim doctrine preserved in git + the checkpoint.
+- **Net always-on context: 122,283 → 52,008 bytes (~17.5K tokens saved every session).**
+
+## Checkpoint & restore (the undo)
+
+Everything is reversible.
+
+- **Git tag:** `pre-lean-context-2026-07-03` → commit `cf407b0d9b` on `houseloop-app`.
+- **File backups:** `.claude/checkpoints/lean-context-2026-07-03/` — a copy of every file the change touches,
+  including the two that are NOT in git (`~/.claude/settings.json`, `.claude/settings.local.json`), plus crontab and
+  daemon snapshots and a `RESTORE.md`.
+
+**Surgical restore** (preferred — does not touch other agents' in-flight work): copy the backups back over the
+changed files per `RESTORE.md`. **Critical:** the user-global `~/.claude/settings.json` is outside git — only the
+file backup restores it, `git reset` cannot. Nuclear restore (`git reset --hard pre-lean-context-2026-07-03`) exists
+but clobbers the shared tree's uncommitted work, so it's last resort.
+
+Plan of record: `.claude/plans/calm-giggling-pie.md`.

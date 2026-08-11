@@ -1,0 +1,204 @@
+---
+title: "⭐ Fable 5 Master Audit — Lee"
+description: "Lee's remediation lane: 7 subsystems, worked top to bottom with the resolve protocol (🟢 + timestamp + model + notes)."
+---
+
+{/* legacy-banner */}
+<Warning>
+  **LEGACY — UNVERIFIED.** This page predates the Master QA build and has NOT been verified
+  against the product. The canonical docs are being rewritten lane-by-lane as each lane goes
+  green — check the lane's tab first.
+</Warning>
+
+<Info>**THE REMEDIATION PROTOCOL (Zach 2026-07-06):** work ONLY from this sheet, top to bottom. For each item:
+(1) **deep-verify** the current functionality actually works — run it, click it, query it; never trust the doc or the code comment;
+(2) fix per the prescription (full detail in the repo: `.claude/reports/audit/<key>.md`);
+(3) flip the row to **🟢 RESOLVED** with the **date+time**, the **model you were running**, and **notes on what you did**.
+Many tables are near-empty — only ~15 leads exist (a few real Zillow leads + test leads); most machinery has never seen real volume.
+When a feature is spec-built-but-empty, say so explicitly and add a **visual of what the spec calls for** (screenshot or mock) so
+Zach can see intended vs actual. An unverifiable claim stays ⬜ — never green a row you didn't prove.</Info>
+
+<Warning>**🚨 RED lane:** Website Security scored RED — the unprotected-route list goes first.</Warning>
+
+<Warning>**🧨 NEW BUILD (Zach 2026-07-06): THE SYSTEMS HEALTH COCKPIT.** A maintainer-facing page (Run Log / Systems Health): ONE big GREEN state when everything runs, a big RED state + a ticket-style issue when anything fails — e.g. the AI vision catalog silently dying, OpenAI billing declines, a scraper down, a cron missed. Today NOTHING notifies Zach when a pipeline dies ("brittle as crap"). Wire it to the run-log capture + integration-health scan; every external dependency gets a probe. This is a first-class deliverable, not a nice-to-have.</Warning>
+
+<Warning>**🔐 ZERO HARDCODED CREDENTIALS (Zach directive):** every hardcoded username/password/key found by the security audits must move to env/vault. No exceptions.</Warning>
+
+> Master: [⭐ Fable 5 Master Audit (All)](/audit/fable5-all) · Full artifact: [the State of the Union](https://claude.ai/code/artifact/d5f808e0-3ab8-4fd3-a6b2-5a615d6b82a0)
+
+
+## External Services & Scrapers — RED (16/28 good · 9 gaps)
+
+Full report: `.claude/reports/audit/external-services.md`
+
+
+**Headline gaps found by the audit:**
+
+- CRITICAL: HouseLoop prod DB backup is a silent fake — dumps localhost (97KB web / 230KB crm), NOT Railway; logs 'complete' nightly
+- HIGH: Camp David is an unmitigated SPOF with NO off-box backup (exte-3 still open); DB + only backups on one disk
+- HIGH: health cockpit permanently RED from flaky engagement-stats-drift (20/24 fails, Prisma 5s tx timeout) — real outages hide in noise
+- MEDIUM: ops_health_all MCP falsely reports campDavidReachable:false while box is demonstrably up
+- MEDIUM: mls-daily-sync cron (25 4 1 5 *) fires once a YEAR, not daily; Twilio HouseLoop creds Railway-only (violates CREDENTIAL_ACCESS.md)
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| exte-1 | Repoint ~/houseloop-backups/run-backup.sh at Railway WEB/CRM URLs + add a row/size floor guard so an empty dump can never log success | ⬜ | — | — |
+| exte-2 | Add off-box R2 sync (rclone) after each dump + an R2-freshness cockpit probe to close exte-3 | ⬜ | — | — |
+| exte-3 | Fix engagement-stats-drift Prisma 5s transaction timeout so failed_inngest probe goes GREEN | ⬜ | — | — |
+| exte-4 | Fix ops_health_all reachability check to align with the working ssh_command path and judge FUB by data freshness | ⬜ | — | — |
+| exte-5 | Correct/rename the once-a-year mls-daily-sync cron and add HouseLoop Twilio creds to .env; fix mintlify.app-&gt;.io in docs | ⬜ | — | — |
+
+
+## Notifications — YELLOW (16/24 good · 7 gaps)
+
+Full report: `.claude/reports/audit/crm-notifications.md`
+
+
+**Headline gaps found by the audit:**
+
+- FUB insight classes (lead_intent_insight/lead_activity_insight/fub_note) are class-backed + pref-defaulted but have NO template-registry entry -&gt; silently drop email/SMS (DB: 0 sent of 11 fired); bell-only
+- port_update and clone_stepped_in fire but have no registry entry (clone_stepped_in vs clone_activated name mismatch) -&gt; email/SMS silently dropped
+- Structural: dispatch requires a NOTIFICATION_TEMPLATES entry, so a class row alone renders nothing -- adding a class the 'one-card way' silently fails to deliver
+- Doc row counts stale: lee-master says 40, message-catalog says 32; actual live count is 43 (router comment agrees)
+- Undocumented live events (message_sent/note_added/email_sent) not in catalog or registry; TC notifications unverified as ever delivering
+- Activity Card Catalog mostly WIP -- only Tour Request locked, cards 2-20 seated/designed only
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| crm--1 | In dispatch.ts, let a hl_notify_classes row render via the notify_card shells even with no NOTIFICATION_TEMPLATES entry (fixes lead_intent_insight/fub_note silent drop). Acceptance: firing lead_intent_insight yields a sms-dispatch success + channels_sent=sms. | ⬜ | — | — |
+| crm--2 | Add registry entries (or inAppOnly flags) for every event that calls createNotification: lead_intent_insight, lead_activity_insight, fub_note, port_update; reconcile clone_stepped_in vs clone_activated. Acceptance: zero dispatch-drop/no_template rows in 24h. | ⬜ | — | — |
+| crm--3 | Fix stale doc counts (40/32 -&gt; 43 = 35 team_alert + 8 transaction) and delete the '31 events all named templates' line; add the 3 FUB insight classes to the catalog table. | ⬜ | — | — |
+| crm--4 | Prove one Transaction Deal notification actually delivers end-to-end (channels_sent populated + success run-log row). | ⬜ | — | — |
+| crm--5 | Point the audit brief/nav at the real doc (platform/message-catalog.mdx); lee-master-notifications.mdx does not exist. | ⬜ | — | — |
+
+
+## Email System — YELLOW (11/21 good · 6 gaps)
+
+Full report: `.claude/reports/audit/crm-email.md`
+
+
+**Headline gaps found by the audit:**
+
+- hl_email_send_log has only 2 rows — dispatch/digest/exp-grid send but never call logEmailSend
+- The 'one door' sendEmail() is wired to just 3 callers; 6+ senders bypass it
+- Scheduled campaigns never send — status='scheduled' has no runner (no Inngest fn)
+- Open/click tracking is DEAD for all Gmail-sent email (provider-id split not shipped)
+- send-template (Myli's endpoint) skips suppression/footer/magic + targets dormant pool
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| crm--1 | Make logEmailSend non-bypassable in dispatch/digest/exp-grid so send log reflects real volume | ⬜ | — | — |
+| crm--2 | Route remaining 6 senders through sendEmail() the door (one caller/commit, live test each) | ⬜ | — | — |
+| crm--3 | Build the scheduled-campaign Inngest runner (currently silent-broken) | ⬜ | — | — |
+| crm--4 | Fix Gmail open/click tracking via provider split + own-domain pixel/click-wrapper | ⬜ | — | — |
+| crm--5 | Close send-template compliance hole (suppress+footer+magic) before warmup pool is connected | ⬜ | — | — |
+
+
+## Comms (Texts/Calls/iMessage) — YELLOW (25/30 good · 6 gaps)
+
+Full report: `.claude/reports/audit/crm-comms.md`
+
+
+**Headline gaps found by the audit:**
+
+- Twilio verify fails OPEN when no auth token configured (latent toll-fraud surface; token IS set in prod today)
+- conversation_key populated on only 46/669 hl_messages; pre-07-15 thread rendering UNVERIFIED after the identity refactor
+- Comms docs sprawled across 9+ pages with the one-writer law re-explained 3x — DOCS_SECTION_DISCIPLINE drift
+- Channel enum defines dead 'call'/'notification' members (0 rows); dual text store hl_messages + hl_bb_events understated in docs
+- hl_phone_forward_rules has 0 rows — the 'rules win first' routing step is a live no-op (confirm intentional)
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| crm--1 | Add a TWILIO_VERIFY_STRICT fail-closed switch so a cleared token can 403 forged webhooks (verify prod token set first) | ⬜ | — | — |
+| crm--2 | Spot-check a pre-2026-07-15 lead's Texts thread, then backfill conversation_key/our_identity_user_id for real two-party rows via the messages-backfill Inngest fn | ⬜ | — | — |
+| crm--3 | Consolidate the 9 comms docs into guides/crm-comms.mdx as the single map; add docs.json redirects for retired pages (mirror --dry must show no orphan) | ⬜ | — | — |
+| crm--4 | Document dead Channel members + that calls live in hl_calls and hl_bb_events is a live render source, not dead | ⬜ | — | — |
+| crm--5 | Confirm with Zach that zero caller-based forward rules is intentional vs a non-persisting UI | ⬜ | — | — |
+
+
+## Inngest & Run Log — YELLOW (11/20 good · 7 gaps)
+
+Full report: `.claude/reports/audit/crm-inngest-runlog.md`
+
+
+**Headline gaps found by the audit:**
+
+- Registry claims 9 fns/14 total but 105 distinct fnIds ran in 30d; ~30+ served fns unregistered
+- seo-articles-generate: armed cron but NOT served = dead pipeline (last run 2026-06-03)
+- Unregistered fns land in wrong Run Log lane (zillow-enrich misses Value, house-blurb misses AI, geo-page misses SEO)
+- ai-cost-sentinel code cron 0 */6 but live cadence is daily 0 13 (un-synced/experiment)
+- esign-reminder-sweep: armed daily cron, ZERO runs ever
+- SCHEDULES map missing ~30 armed crons so next-run cannot compute
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| crm--1 | Serve or delete seo-articles-generate (armed cron not in serve list = INNGEST_OR_IT_DOESNT_EXIST violation) | ⬜ | — | — |
+| crm--2 | Register every served-but-unregistered function with correct category so lanes/deep-links work | ⬜ | — | — |
+| crm--3 | Fix registry header ground-truth comment (9/14 is off by 10x); point at serve lists not a hand-typed count | ⬜ | — | — |
+| crm--4 | Reconcile ai-cost-sentinel cadence: code 0 */6 vs registry/live 0 13 - pick one and PUT-resync | ⬜ | — | — |
+| crm--5 | Verify esign-reminder-sweep actually fires on Inngest; refresh SCHEDULES map from armed crons | ⬜ | — | — |
+
+
+## CRM Security — YELLOW (20/34 good · 10 gaps)
+
+Full report: `.claude/reports/audit/crm-auth-security.md`
+
+
+**Headline gaps found by the audit:**
+
+- POST /api/team/users has NO admin gate — any member can create a role:'admin' user (privilege escalation)
+- POST /api/phone/myli/retell-inbound is unauthenticated and leaks contact name/stage/agent by phone enumeration
+- POST /api/fub/rebackfill uses hardcoded fallback secret 'hl-rebackfill-2026' if env unset
+- Secret-config routes (phone/provider Twilio token, email/infrastructure/resend key) have no admin gate
+- CRM session tokens have no exp claim — a leaked cookie is valid forever until secret rotation; is_active check fails open
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| crm--1 | Add requireAdmin() to POST /api/team/users (team/users/route.ts:137) — block member-&gt;admin creation | ⬜ | — | — |
+| crm--2 | Gate POST /api/phone/myli/retell-inbound with x-myli-voice-secret; return empty context on failure (no PII) | ⬜ | — | — |
+| crm--3 | Remove hardcoded secret fallbacks 'hl-rebackfill-2026'/'fubinbox2026'/'hl-unsub-fallback'; fail closed when env unset | ⬜ | — | — |
+| crm--4 | Admin-gate phone/provider + email/infrastructure/resend + phone/settings mutation handlers | ⬜ | — | — |
+| crm--5 | Add exp claim to lib/session.ts makeSessionToken/parseSessionToken so leaked tokens expire | ⬜ | — | — |
+
+
+## Website Security — YELLOW (42/59 good · 10 gaps)
+
+Full report: `.claude/reports/audit/web-auth-security.md`
+
+
+**Headline gaps found by the audit:**
+
+- saved-searches/[id]/context = unauthenticated IDOR (reads another user's search by id)
+- Webhooks FAIL-OPEN; both secrets ABSENT locally, prod enforcement UNVERIFIED
+- Rate limiter bypassable via X-Forwarded-For spoofing + in-memory per-instance
+- Lead-capture writes (tour/contact/waitlist) unthrottled: lead injection + email cost
+- email-exists is a working account-enumeration oracle (verified live)
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| web--1 | Gate saved-searches/[id]/context behind requireInternal (close the IDOR) | ⬜ | — | — |
+| web--2 | Confirm RESEND/REPLIERS webhook secrets set in Railway + log loudly when unset | ⬜ | — | — |
+| web--3 | Fix X-Forwarded-For trust in middleware clientIp() (use proxy-set real IP) | ⬜ | — | — |
+| web--4 | Add tour-requests/contact-agent/waitlist to rate-limit LIMITS array | ⬜ | — | — |
+| web--5 | Reconcile authentication.mdx to all 59 routes + implement the claimed CI route-gate check | ⬜ | — | — |

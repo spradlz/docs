@@ -1,0 +1,136 @@
+---
+title: "Care Team & Lead Routing"
+description: "How a HouseLoop lead is staffed — the AI Responder + Human Owner two-slot model, per-source defaults (AI-first front door) with an org-default fallback so every new lead gets Myli, the warm 3-way handoff, and the SLA failover engine (clone auto-on → Myli re-take + reassign)."
+---
+
+{/* legacy-banner */}
+<Warning>
+  **LEGACY — UNVERIFIED.** This page predates the Master QA build and has NOT been verified
+  against the product. The canonical docs are being rewritten lane-by-lane as each lane goes
+  green — check the lane's tab first.
+</Warning>
+
+Every lead has a **two-slot care team**, set independently. This drives who answers the lead, who
+owns it, and whose name appears on outbound messages.
+
+| Slot | Column(s) | Meaning | Nullable |
+|------|-----------|---------|----------|
+| **AI Responder** | `ai_agent_user_id` + `ai_role_id` + `ai_mode_enabled` | The **one** AI that answers the lead | ✅ |
+| **Human Owner** | `assigned_user_id` | The human responsible / hand-off target | ✅ |
+
+<Note>
+**Two AIs, two lanes — both can be active.** A lead carries **Myli** on the RIGHT lane
+(`assigned_ai_agent_id`, the relationship owner, present on every lead) **and** the human agent's
+**clone** on the LEFT lane (`ai_clone_id`, toggled by the human's AI Mode / SLA failover). These are
+two distinct AI actors — a **clone ≠ Myli**; the clone acts *as* the human it clones, never as Myli.
+The care team below staffs the human owner + the RIGHT-lane AI; the clone is the human's own AI. See
+[Lead Detail — Parity Lanes](/guides/lead-detail-parity-lanes).
+</Note>
+
+## The front-door flow
+
+```
+new website registration
+  → AI Responder = Myli (from the source default), Human Owner = null, ai_mode = on
+  → Myli works the lead (texts/emails as Myli)
+  → Myli books an appointment
+  → HANDOFF: Human Owner = source.handoff_user (default Zach)  [if auto-handoff is on]
+  → the human owns it; the AI responder stays in place to keep assisting
+```
+
+## Lead source = the default care team
+
+**Settings → Lead Sources → edit a source → Default Care Team:**
+
+- **Default AI Responder** — AI agents only (flattened to `agent · role`, e.g. "Myli · AI ISA").
+  Sets `ai_agent_user_id` / `ai_role_id` / `ai_mode_enabled=true` on new leads.
+- **Default Human Owner** — humans only (or *Unassigned*). Sets `assigned_user_id`.
+- **☑ Hand off to a human when the AI books an appointment → [human]** — sets `handoff_user_id` +
+  `auto_handoff_on_appointment`.
+
+Columns live on `hl_lead_sources` (migration `0089`): `default_ai_agent_user_id`,
+`default_ai_role_id`, `handoff_user_id`, `auto_handoff_on_appointment`. The legacy
+`default_assigned_user_id` is the **human** owner default.
+
+### Every new lead gets an AI responder (org-default fallback)
+
+The AI Responder resolves **source default → org default**: if a source has no
+`default_ai_agent_user_id` (or the lead is created manually / from a non-configured source), it
+falls back to the org-wide default AI agent in `hl_settings.default_assigned_ai_agent`
+(**Myli**). So **every** new lead lands on an AI responder with `ai_mode` on — whether it comes
+from the website intake **or** the manual **Add Lead** form. This applies to **NEW leads only** —
+changing a source or the org default never retroactively reassigns existing leads.
+
+## SLA Failover Engine (warm handoff → clone auto-on → Myli re-take)
+
+> **Ships OFF.** The entire engine is gated by a global master switch (`agent_sla_policy.auto_failover`,
+> default **false**) at **Settings → Team → AI Failover Engine**. Until it's on, handoff is a simple
+> silent owner-assign and nothing auto-texts or auto-reassigns.
+
+When **on**, it fixes the classic "agent ignores the group text, lead ghosts" death:
+
+```
+Myli books an appointment + hands off
+  → WARM 3-WAY HANDOFF: Myli texts the lead a warm intro naming the agent (handoff_intro template),
+    the agent gets an "acknowledge within N min" alert, lead → escalation_stage='awaiting_ack'
+   ├─ agent Acknowledges (cockpit button / POST /api/leads/[id]/ack) → human_active, ladder stops
+   └─ ack window (default 5 min) elapses → CLONE AUTO-ON
+        the agent's CLONE MODE flips on (ai_mode on — the human answers in AI state, mode-on-human), stage='clone_active', clone window starts (12h)
+        → agent notified "your clone stepped in"
+        ├─ agent Acknowledges → clone keeps running, reassign timer cleared
+        └─ clone window (default 12h) elapses → MYLI RE-TAKES + REASSIGNS
+             ai_agent_user_id = the source's AI (Myli), reassign to the least-loaded other human,
+             restart the ladder for the new agent
+```
+
+- **Engine:** `lib/leads/sla-sweep.ts` — a durable **1-minute Inngest cron** (`sla-failover-sweep`,
+  also fireable via `hl/sla.sweep`). Robust over per-lead timers (no orphans, self-healing).
+- **Windows + master switch:** `agent_sla_policy` in `hl_settings` (org default) overlaid by
+  per-agent `hl_users.data.ai_policy`. Helpers in `lib/leads/handoff-engine.ts` (`isFailoverEnabled`
+  is the single gate every auto behavior checks).
+- **Lead state:** `hl_leads.escalation_stage` / `ack_due_at` / `clone_ack_due_at` / `responder_mode`
+  (migration `0090`).
+- **Cockpit:** the lead-detail left AI lane shows a banner ("Awaiting your acknowledgment" /
+  "AI clone is working this lead") with an **Acknowledge** button while the ladder is active.
+- **Notifications:** `agent_ack_request`, `clone_activated`, `lead_reassigned` events + editable
+  templates (migrations `0092`/`0093`) — bell/SMS/email per prefs.
+- **Audit:** every transition logs to `hl_run_log` with `source='handoff'` (Inngest-or-it-doesn't-exist).
+
+## Where each piece is wired
+
+| Step | Code |
+|------|------|
+| Apply source defaults on a website lead (AI agent: source → org default) | `app/api/integrations/website/lead-intake/route.ts` |
+| Apply the same AI-agent default on a manually created lead | `app/api/leads/route.ts` (POST) |
+| Appointment handoff (+ warm intro when failover on) | `lib/leads/handoff.ts` `maybeHandoffOnAppointment(leadId, {summary})` — from `/api/calendar/events` POST + the clone's `schedule_appointment` |
+| Failover ladder (clone auto-on, Myli reassign) | `lib/leads/sla-sweep.ts` (`sla-failover-sweep` cron) |
+| Acknowledge | `POST /api/leads/[id]/ack` |
+| AI auto-reply | `lib/ai/lead-conversation.ts` `dispatchInboundToAi` — fires when `ai_mode_enabled` && `ai_agent_user_id` |
+
+## Message identity (`{{agent.*}}`)
+
+Outbound client/agent templates (welcome, tour/contact acks) resolve the **active handler** for
+`{{agent.*}}`:
+1. the **AI Responder** when `ai_mode_enabled` is on, else
+2. the **Human Owner**, else
+3. the first active human (fallback).
+
+So a lead defaulted to Myli gets a welcome signed by **Myli**; after handoff to Zach the next
+message is signed by **Zach** — no template edits needed. Outbound texts/emails resolve the
+sending channel identity the same way via `resolveAgentSendIdentity` — see
+[Team Communications](/guides/team-communications#outbound-sends-resolve-the-leads-assigned-agent).
+
+## Lead-detail layout
+
+The lead-detail page is three columns and follows the **two-lane parity** model: the **LEFT lane** is
+the **human agent + their AI clone**, the activity center is anchored in the middle, and the **RIGHT
+lane** is **Myli** (the assigned AI). Both lanes can be active at once — the clone (LEFT) and Myli
+(RIGHT) are two separate AI actors. Each lane renders the same skeleton (always-on Tasks &
+Appointments + a gated AI Workflow section); see
+[Lead Detail — Parity Lanes](/guides/lead-detail-parity-lanes).
+
+## Related
+- [Notifications](/guides/notifications) — Senders, client rules, templates, agent identity.
+- [Lead deduplication](/guides/lead-deduplication) — inbound phone→lead routing.
+- [CRM Deep-Linking](/guides/lead-detail-routing) — URL params for the lead-detail tabs.
+- [Team Communications](/guides/team-communications) — the one message store + channel identities.

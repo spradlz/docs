@@ -1,0 +1,182 @@
+---
+title: "Website Pixel Tracking"
+description: "HouseLoop's first-party tracking pixel — capture visitor behavior on your site and link anonymous activity to leads. No third party."
+---
+
+{/* legacy-banner */}
+<Warning>
+  **LEGACY — UNVERIFIED.** This page predates the Master QA build and has NOT been verified
+  against the product. The canonical docs are being rewritten lane-by-lane as each lane goes
+  green — check the lane's tab first.
+</Warning>
+
+The HouseLoop pixel is **first-party**: it tracks page views, property views, and
+high-intent actions on houseloop.ai, then POSTs them to **your own** CRM ingest
+(`/api/pixel/track`) — the data lands in your database, never a third party. When a
+visitor identifies (sign-up / login), all of their prior anonymous activity links to
+their lead automatically. Manage it in the CRM under **Settings → Website → Pixel
+Tracking**, and view per-lead activity on the lead-detail **Homes** and **Requests** tabs.
+
+## How it flows
+
+```
+houseloop.ai            CRM ingest                       CRM lead detail
+hl-pixel  ──fires──▶  POST /api/pixel/track  ──▶  hl_pixel_event  ──▶  Homes / Requests feed
+hlIdentify(email)        (identity-stitch by email)
+```
+
+## 1. Install
+
+On houseloop.ai the pixel is **built in** (`HlPixelInit` in the app layout) — it mints
+an anonymous `visitor_id`, fires `page_view` on every route, and POSTs to the CRM. There
+is no snippet to paste. To fire events from your own code, import the helpers:
+
+```ts
+import { hlTrack, hlIdentify } from "@/lib/pixel/hl-pixel";
+
+hlTrack("page_view", { payload: { path: location.pathname } });
+```
+
+## 2. Identify logged-in users
+
+After login/signup, call `hlIdentify` with the user's email. This links every prior
+anonymous event from that browser to the lead's record (matched by email).
+
+```ts
+hlIdentify({ email: user.email, name: user.name });
+```
+
+<Note>
+Call this once after authentication with the **actual** logged-in user's email. On
+houseloop.ai it fires automatically via `HlPixelIdentify` after NextAuth hydrates.
+</Note>
+
+## 3. Track property views
+
+Fired automatically on every listing detail page (`HlPropertyTrack`). To fire manually:
+
+```ts
+hlTrack("property_view", {
+  mls_number: "12345",
+  property: {
+    street: "123 Main St", city: "Olathe", state: "KS", zip: "66061",
+    price: 765000, beds: 4, baths: 4, sqft: 2920,
+    propertyType: "Single Family Residence", photo: "https://…",
+  },
+});
+```
+
+The CRM derives a **repeat-view count** per lead + home (the "viewed N×" badge in the feed).
+
+## 4. Event catalog
+
+| Event | Fires when | Canonical event (CRM) |
+| --- | --- | --- |
+| `page_view` | Any page / route change (auto, `HlPixelInit`) | — (counter) |
+| `property_view` | Listing detail page (auto, `HlPropertyTrack`) | `property_viewed` |
+| `like_home` | Signed-in visitor **likes** a listing (login-gated) | `property_liked` |
+| `save_home` / `unsave_home` | Signed-in visitor **saves / unsaves** a listing (login-gated) | `property_saved` |
+| `share_home` | Signed-in visitor **shares** a listing (login-gated; last-second gate) | `property_shared` |
+| `search` | A filter search runs (city / price / beds …) or an address autocomplete pick | — |
+| `ai_search` | AI Smart Home Search is run | — |
+| `saved_search` | Visitor saves a search | `saved_search` |
+| `tour_request` | Visitor requests a tour (carries email → identifies the lead) | `tour_requested` |
+| `contact_request` | Visitor submits **Contact an agent** | `contact_requested` |
+| `identify` | After login / signup — links prior anonymous events to the lead by email | — (stitch) |
+
+New event types are just new strings passed to `hlTrack` — no schema change required.
+
+<Note>
+**Lead-creation / registration events** (`general_registration`, `liked_home_registration`,
+`saved_home_registration`, `shared_home_registration`, …) are fired **server-side** by the auth
+`complete-profile` route — they are lead events, not pixel events. Share is now fully wired (login-gated,
+fires `share_home → property_shared`, and registers via `shared_home_registration` — see below).
+</Note>
+
+## Social engagement — view · like · save · share
+
+The three social actions have deliberately different gates (Zach LOCKED 2026-07-01):
+
+- **View a home** — open to everyone, no login. Fires `property_view` → `property_viewed`, and the CRM
+  derives the "viewed N×" repeat-view badge per lead + home.
+- **Like / Save** — **login required.** Tapping the heart / bookmark while signed out pops the
+  *"…create your free account"* gate; the intent is stashed and **replays after registration**. Once the
+  visitor has an account, the reaction **and** the pixel fire the moment they're authenticated — **a phone
+  is NOT required** (decoupled 2026-07-01). Before that decouple, a phoneless signed-in like was
+  re-prompted for a phone and the pixel never fired, so likes/saves landed **0 all-time**; the gate is now
+  login only. `like_home → property_liked`, `save_home → property_saved` on the lead.
+- **Share** — **login required**, with a **last-second gate** (Zach LOCKED 2026-07-01): the "Share this home"
+  modal opens for everyone; the gate fires at the moment of **send**. The **Email** option captures a recipient →
+  after the visitor registers, the **New Lead — Shared Home** workflow emails that recipient the branded home.
+  A completed share fires `share_home → property_shared` on the lead; a logged-out share registers via
+  `shared_home_registration`. Copy Link / Text / Facebook / X / WhatsApp are the visitor's own channels (also
+  login-gated). The Share modal reuses the same pill header as the Like/Save gate (no hand-rolled header).
+
+## 5. View the activity
+
+- **CRM lead detail → Homes tab:** the lead's property events (viewed / saved / liked) — each card
+  shows photo, price, address, beds/baths, timestamp, a repeat-view badge, and a **View Property
+  Details** link.
+- **CRM lead detail → Requests tab:** high-intent actions (tour requests, saved searches).
+- **CRM lead detail → Website tab → Saved Searches:** the SearchCard, where the pixel meets the email —
+  see the Email vs Website rows below.
+- **Settings → Website → Pixel Tracking:** live event counts + recent activity across all visitors.
+
+## Channel attribution — the pixel vs the email (the SearchCard rows)
+
+The lead-detail SearchCard (Website tab → Saved Searches) shows an **Email** row and a **Website** row.
+This confuses people because the *website* never sends anything — the **email is the only sender**. The two
+rows are **channels of engagement**, read from two different tables:
+
+| Row · metric | Source table | Means |
+|---|---|---|
+| **Email** · Sent / Opened / Clicked | `hl_email_send_log` + `hl_email_event` (Resend webhooks) | the saved-search email's send + the lead's opens/clicks IN the email |
+| **Website** · Sent | `SavedSearch.lastAlertSentAt` (the alert fired) | a pipeline check — should equal the Email Sent moment |
+| **Website** · Opened / Clicked | `hl_pixel_event` (first-party pixel) | the lead opening the search / clicking a home **on the site** |
+
+**The `ref=email` split (Zach 2026-07-10):** when the lead clicks a house *from the email*, that link is a
+magic-wrapped URL whose destination carries **`?ref=email`** (stamped by the CRM `wrapMagicLinks`). The pixel
+records `event_payload.ref = 'email'`, and the Website query **excludes** `ref = 'email'` — so an email click
+counts under **Email**, never double-counting as **Website** activity. Site-originated visits carry
+`ref=saved_search` (or none) and count under **Website**. This is why the two rows can legitimately differ.
+
+<Note>
+**Time zones:** every time on the lead detail renders in the **lead's** timezone (`hl_leads.timezone`, derived
+from their phone area code), not the business zone. The pixel/email tables are `TIMESTAMPTZ` (absolute instants);
+the website `SavedSearch` columns are naive-UTC and are parsed as UTC by the CRM's `qWeb` pool. See
+[Saved Search Alerts](/guides/saved-search-alerts) Dev Log 2026-07-10.
+</Note>
+
+<Note>
+All behavioral data stays in your HouseLoop database (`hl_pixel_event`). The pixel does
+not send anything to any third-party tracking service.
+</Note>
+
+## Analytics dashboard & bot classification
+
+**Settings → Website → Analytics** (`GET /api/pixel/analytics?days=`) turns the raw
+events into a SureSend-style dashboard: six human metric tiles (Page Views, Unique
+Visitors, Identified Leads, Form Submissions, Property Views, Active Sessions), each
+driving a full-width time-series, plus Top Pages.
+
+<Warning>
+**Bots are split out, not counted as visitors.** Raw pixel events count every crawler
+hit — early on, "1,002 unique visitors" was actually **991 Googlebot/GoogleOther + 11
+humans**. At ingest (`/api/pixel/track`) each visitor's user-agent is classified
+(`hl_pixel_visitor.is_bot` / `bot_name`). The dashboard's **human metrics exclude bots**;
+a dedicated **SEO Crawlers** tab reports crawl volume, by-crawler (Googlebot, GoogleOther,
+GPTBot, ClaudeBot, …) and top crawled pages as an SEO-health signal.
+</Warning>
+
+Property-scoped events also carry the **street address** (built from the pixel's
+`street`/`city`/`state`), so the CRM **Run Log → Website Activity** lane reads
+`Viewed · 12315 W 183rd Terrace, Overland Park, KS` rather than a bare MLS number.
+
+## Reference (houseloop.ai)
+
+- `apps/houseloop-web/lib/pixel/hl-pixel.ts` — the pixel client (`hlTrack` / `hlIdentify`)
+- `apps/houseloop-crm/lib/pixel/bot-classify.ts` — user-agent → bot bucket (migration `0048`)
+- `apps/houseloop-crm/app/api/pixel/analytics` — analytics + crawler breakdown
+- `components/pixel/HlPixelInit` · `HlPixelIdentify` · `HlPropertyTrack` — auto-fire components
+- `apps/houseloop-crm/app/api/pixel/track` — ingest → `hl_pixel_event`
+- `apps/houseloop-crm/components/leads/detail/PixelFeedStream.tsx` — the lead-detail feed

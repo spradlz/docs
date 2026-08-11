@@ -1,0 +1,440 @@
+---
+title: "AI Voice"
+description: "THE one AI Voice doc — Myli answers the phone. CURRENT runtime (2026-07-21) = OPENAI REALTIME speech-to-speech (gpt-realtime-2.1, voice marin; MYLI_ENGINE=openai) on PIPECAT CLOUD (apps/myli-voice-agent/pipecat_bot.py), wired to Twilio via the CRM voice route (phone_provider.pipecat_cloud_agent), with the CONVERSATION DIRECTOR guard layer (turn-completion + post-tool watchdog) and every prompt segment in the registry (/ai/prompting — base + triage + 4 playbooks, no hidden segments). Gemini Live is RETIRED (unfixable Google-side latency, receipts in HISTORY + the latency-verdict memory); the Deepgram→Haiku→Cartesia cascade remains the MYLI_ENGINE=cascade fallback. Testing = the AI Voice Test Cockpit (text roleplay + judged gauntlet) then scripted smoke calls."
+---
+
+{/* legacy-banner */}
+<Warning>
+  **LEGACY — UNVERIFIED.** This page predates the Master QA build and has NOT been verified
+  against the product. The canonical docs are being rewritten lane-by-lane as each lane goes
+  green — check the lane's tab first.
+</Warning>
+
+<Info>
+**Running-document law (Zach 2026-07-17).** The UPDATE LOG below is newest-first; every change stamps an
+entry AND re-edits the body to current truth — no stacked "superseded STATE" blocks (git history holds the
+past). Everything under **HISTORY** at the bottom is quarantined dead eras, not current.
+</Info>
+
+## Update log
+
+- **2026-07-21 (reconciliation)** — **The body catches up to the OpenAI era.** The audit found the
+  frontmatter + this log current but §01–§06 still teaching Gemini Live, one engine stale. Rewritten to
+  code truth, verified line-by-line against `pipecat_bot.py`, `.env.pcc`, and the CRM routes: **§01** =
+  the OpenAI Realtime stack (`gpt-realtime-2.1`, marin, `OPENAI_API_KEY`), the exact `Settings` shape (no
+  `thinking` field — that was a Gemini knob), the `MYLI_OPENAI_TURN=semantic_medium` turn-taking knob, and
+  the no-`LLMRunFrame` greeting handoff. **§03** = THE CONVERSATION DIRECTOR (architecture): `MyliTurnGuard`
+  turn-completion guard + post-tool watchdog + `wait_for_user` + playbook HOT-SWAP — the old "all playbooks
+  inlined" Note struck as **DEPRECATED/CHANGED** (inlining was the Gemini design; the swap decision landed
+  with the OpenAI move 2026-07-19/20). **§04** = the full persona payload + the registry triage slot
+  (mig 0431) + the **FOUR-layer** answer gate (the mig 0432 all-AI failsafe was missing). **§05** = the
+  openai secret set + THE CP-TRAP as a numbered deploy step + Krisp VIVA. **§06** = current state
+  (gauntlet 11/11 pass^3, latency measured, awaiting Zach's ear test). **Two FALSE Warnings deleted:**
+  "transcript capture is a known follow-up" — the transcript IS captured (context-message build + the
+  canned-greeting line restored, `pipecat_bot.py:806-821`); and "S2S cost metering is NOT wired" — it IS
+  (engine-aware blended pricing + `logAiCost({category:'ai_voice'})` in the wrap-up route). The entire
+  Gemini Live era (model/Leda/preset law/audio-gate law/Mia framing) moved to HISTORY under its own
+  tombstone. Charter re-locked: this doc = the voice HARDWARE, PLUMBING, and ARCHITECTURE; prompt
+  content/doctrine → [AI Programming](/guides/ai-programming); testing mechanics → [Test Harness](/guides/test-harness).
+- **2026-07-21 (overnight)** — **THE MYLI OS BUILD: the Conversation Director ships.** Zach-approved
+  master plan (research: 6 agents over 2 rounds + ChatGPT architecture review; archive in
+  `.claude/plans/serene-wishing-hamster.md` + `guides/ai-programming`). Shipped tonight, all deployed
+  (bot `6aae6826`): **(1) No hidden prompts** — the hardcoded TRIAGE addendum moved to the registry
+  (slot `myli_voice_triage`, CRM mig 0431); the persona endpoint returns it merged (`triage` field,
+  draft-aware via `?prompt_source=draft`); the cockpit rail shows base + triage + playbook cards.
+  **(2) Turn-taking** — `MYLI_OPENAI_TURN=semantic_low` enables OpenAI SemanticTurnDetection (the
+  documented fix for callers trailing off "um..."); `wait_for_user` no-op tool added so she can hold a
+  turn instead of blurting. *(Bumped to `semantic_medium` in the live secret set.)* **(3) THE TURN GUARD
+  (`MyliTurnGuard` in pipecat_bot.py)** — the announce-then-silence killer, in code: any intake turn that
+  ends without a question gets a steering system message + a forced continuation (the officially
+  documented response.create recipe); plus a post-tool watchdog (~2.5s) for the stranded-silent-turn bug
+  class; director telemetry (`guard_fires`/`watchdog_fires`) rides the wrap-up payload. **(4) Prompts
+  rebuilt v3.1** (registry, versioned): base = mission-not-checklist + ONE-BREATH RULE (every turn ends
+  with exactly one question) + goodbye-before-end_call order + caller-ID-is-theirs; seller = the 5-stage
+  FUNNEL restored (home → story → situation → person-in-3-single-ask-turns → GAME-PLAN CLOSE naming Ana +
+  free listing consultation + property visit); buyer funnel added; wrong-number handling tightened.
+  **(5) The gauntlet is the gate** — 11 scenarios × k=3 in the Test Cockpit (text mode, judged by Claude
+  with grounding calibration; spoken-flow turn merging so judges see what callers hear). Round-1 receipts
+  drove the v3.1 fixes; iterating to green before the phone smoke calls + Zach's morning ear test.
+  ⚠ Deploy trap fixed + memorialized: `pcc-build/bot.py` is a manual COPY — always `cp` before
+  `pipecat cloud deploy` or you ship the stale bot.
+- **2026-07-19 → 07-20 (the engine swap era, backfilled)** — **Gemini Live FIRED for latency; OpenAI
+  Realtime hired.** Gemini Live native-audio TTFB measured 0.8–12.8s per turn on our real calls —
+  community-documented unfixable (all tiers; Vertex PT sells throughput, not TTFB). Swapped
+  `MYLI_ENGINE=openai`: **gpt-realtime-2.1, voice marin** — sub-second turns verified (p50 0.5–1.1s).
+  Canned-greeting handoff is instruction-based on OpenAI (no audio gate; an `LLMRunFrame` at connect
+  would double-greet — Gemini-only law stays quarantined below). Dynamic playbook hot-swap via
+  `session.update` on `set_caller_type` (OpenAI's own "dynamic conversation flow" pattern). Wrap-up
+  cost made engine-aware (blended ~$0.10/audio-min metered). Prompts moved into the PROMPT REGISTRY
+  (`/ai/prompting`, version history). The AI VOICE TEST COCKPIT shipped (Test Cockpit tab 2): scenario
+  library + judged gauntlet (sim callers, cross-family Claude judge, pass^k) + chat-with-the-brain
+  roleplay + phone smoke test + the always-on prompt rail.
+- **2026-07-18 (PM-3)** — **⚠ THE AUDIO-GATE LAW + instant greeting FIXED + automated test harness.** Two
+  live calls went DEAF after the canned greeting shipped: `GeminiLiveLLMService` **drops all caller audio**
+  until `_ready_for_realtime_input` flips true, which happens ONLY when a context frame reaches the LLM —
+  i.e. on a queued `LLMRunFrame` (verified in library source `gemini_live/llm.py:813, 1523-1529, 1607-1611`;
+  the official `pipecat-examples/gemini-live-starters/phone-bot` starter queues `LLMRunFrame` at connect for
+  this reason). **The law: any canned audio at call start MUST be paired with an empty-context
+  `LLMRunFrame()`** (with `inference_on_context_initialization=False` it opens the gate WITHOUT a model
+  turn). Also: never seed a pre-spoken assistant turn into the context (dangling `turn_complete=False`
+  wedges Gemini turn-taking). Fixed + **live-verified by the new automated harness
+  `tools/myli-voice/test-call.mjs`** — Lee originates a scripted Twilio caller, records dual-channel, and
+  asserts greeting + responses + transcript (receipt: greeting at 0.029s, city beat, digit-perfect address
+  read-back). Wrap-up also hardened: a caller that can't mint (own-number/test) now lands the transcript
+  leadless instead of 500ing. *(The audio-gate law is GEMINI-ONLY — quarantined in HISTORY since the swap.)*
+- **2026-07-18 (PM-2)** — **Gauntlet PASSED + tuning pass.** Zach's test call: *"god tier, night and day."* Same
+  session shipped his findings: `end_call` hang-up tool (she ends the call like a person now), seller city
+  follow-up + digit-exact read-back + the Ana-Spradling callback line, the Zach-approved `# WHAT YOU KNOW`
+  knowledge base (from the listing presentation), **always-warm `min_agents=1`** (30 s cold pickup autopsied:
+  7 s ringback + ~16 s container boot + 6 s first TTFB), and the ringback trimmed 7 s→2 s.
+- **2026-07-18 (PM)** — **The wire is IN.** The CRM voice route now streams myli-mode calls to the deployed
+  Pipecat Cloud agent: new `hl_settings.phone_provider.pipecat_cloud_agent` config (env `PIPECAT_CLOUD_AGENT`
+  overrides; prod = `myli-voice.spradling-group`) → `<Stream url="wss://api.pipecat.daily.co/ws/twilio">` with
+  the `_pipecatCloudServiceHost` parameter (§06). Fallback chain: cloud agent → ngrok `pipecat_ws_host` →
+  LiveKit SIP → voicemail. Commit `b45e401fd4`, deploy verified SUCCESS + Inngest re-synced. Next: the
+  913-937-9359 gauntlet call, then transcript + `ai_voice` cost polish.
+- **2026-07-18** — **The speech-to-speech pivot + a real host.** Ripped out the 3-hop cascade
+  (Deepgram STT → Claude Haiku → Cartesia TTS) and put Myli on **Gemini Live native-audio speech-to-speech**
+  — ONE model, audio in → audio out (`gemini-2.5-flash-native-audio-preview-09-2025`, voice **Leda**,
+  `thinking_budget=0`) behind a `MYLI_ENGINE=s2s` flag in `pipecat_bot.py`. Zach A/B'd it: *"night and day"*
+  better — no metallic TTS, no serial-hop lag. **Diagnosed the real latency killer:** the compounding delay
+  (1→3→14 s) was never the model — it was the free-ngrok tunnel on a laptop (network backpressure). Fix =
+  **deployed to Pipecat Cloud** (agent `myli-voice`, org `spradling-group`, agent-2x, us-west, cold-start).
+  Re-architected the prompt into a **lean triage base + 4 specialized buckets** (seller/buyer/past_client/other)
+  in `hl_settings.myli_voice_buckets` (migrations 0419 + 0420), selected mid-call by a `set_caller_type` tool.
+  **The one thing left:** wire Twilio → the deployed agent (§06) — *done later same day, see the PM entry.*
+  The cascade is retired to the fallback flag. *(Gemini itself fired 2026-07-19 — see HISTORY.)*
+- **2026-07-17 (PM)** — Operation One Provider, voice edition: cascade brain OpenAI `gpt-4o-mini` → Claude
+  Haiku 4.5, mouth ElevenLabs → Cartesia Sonic-3; built the Pipecat runtime; wired `ai_voice` cost. *(All
+  superseded 2026-07-18 by the S2S pivot — the cascade this shipped is now the `MYLI_ENGINE=cascade` fallback.)*
+- **2026-07-17 (AM)** — Corrected the brain lie (documented as Claude, code was `gpt-4o-mini`); found the
+  deploy truth: the Pipecat bot was never hosted; last real call was July 11.
+- **2026-07-15** — LiveKit+Gemini native S2S abandoned (crashed on 8 kHz phone audio) → cascade built. *(The
+  crash was a fixed µ-law/16 kHz plumbing bug, NOT a model failure — Pipecat's `TwilioFrameSerializer` now
+  handles the resample; that's why S2S works today. See HISTORY.)*
+- **2026-07-11** — Retell era (built, then reverted).
+
+<Note>
+**The single doc for the agent that answers — hardware, plumbing, architecture.** The telephony half —
+which numbers exist, porting, forwarding, routing groups, A2P — lives in
+[Phone Numbers, Call Routing & Number Porting](/guides/phone-numbers-and-call-routing). Person-to-person
+call *records* live in [Calls & Comms](/guides/comms-calls). **What the prompts SAY** (base persona, triage,
+the 4 playbooks, versioning, prompt doctrine) lives in [AI Programming](/guides/ai-programming) + the
+registry at `/ai/prompting`. **How she's tested** (the Test Cockpit, the judged gauntlet, smoke calls)
+lives in [Test Harness](/guides/test-harness). This page is **Myli, the voice agent** — the machine.
+</Note>
+
+# ═══ 01 · THE STACK (one model, audio in → audio out) ═══
+
+Myli is built on **Pipecat** (Daily.co) — the voice framework that solves the hard audio problems (barge-in,
+turn-taking, VAD, low-latency streaming, the Twilio transport) as defaults. We bring only the logic: her
+prompt and the CRM seam. The engine is **OpenAI Realtime speech-to-speech** — ONE model
+(`gpt-realtime-2.1`, voice **marin**) that takes the caller's audio and speaks back directly. No STT step,
+no separate TTS step, no serial-hop lag: p50 **1.3–2.2s voice-to-voice** measured on our Twilio architecture
+(model TTFB 0.53s), where Gemini Live took 0.8–12.8s (HISTORY).
+
+**The engine flag is load-bearing.** The code default is `cascade` (`pipecat_bot.py:87`) — the LIVE engine
+is selected by **`MYLI_ENGINE=openai` in the deployed secret set** (`.env.pcc`). Three engines exist in the
+one bot file: `openai` (**LIVE**) · `s2s` (Gemini Live — retired, HISTORY) · `cascade`
+(Deepgram→Haiku→Cartesia — the outage fallback).
+
+| Layer | Choice | Billed by | Notes |
+|---|---|---|---|
+| **Transport** | Twilio Media Streams → `<Connect><Stream>` | per-minute | Live G.711 µ-law audio over WebSocket; `TwilioFrameSerializer` handles the µ-law↔PCM resample (the bug that killed the 2026-07-15 attempt). |
+| **The model (S2S)** | **OpenAI Realtime** `gpt-realtime-2.1`, voice **marin** (`pipecat_bot.py:92-93`) | audio tokens (blended ~$0.10/audio-min, §04) | Audio→audio in one model. `OPENAI_API_KEY` (the funded bossloop-infra account). |
+| **Seam** | CRM `persona` (in) + `wrapup` (out) | — | Prompt segments in at call start; the one write out at hangup (§04). |
+
+**The Settings shape** (`pipecat_bot.py:649-656`) — model + instruction + session properties, nothing else
+(there is NO `thinking` field on this engine; that was a Gemini knob):
+
+```python
+OpenAIRealtimeLLMService.Settings(
+    model=MYLI_OPENAI_MODEL,              # gpt-realtime-2.1
+    system_instruction=s2s_instruction,   # base + greeting note + TRIAGE block (lean start — §03)
+    session_properties=SessionProperties(
+        audio=AudioConfiguration(output=AudioOutput(voice=MYLI_OPENAI_VOICE)),  # marin
+        tools=s2s_tools,                  # set_caller_type · end_call · wait_for_user
+        turn_detection=...,               # only when MYLI_OPENAI_TURN opts in (below)
+    ),
+)
+```
+
+**Turn-taking — the `MYLI_OPENAI_TURN` knob** (`pipecat_bot.py:100, 639-647`). LIVE value =
+**`semantic_medium`** → `SemanticTurnDetection(eagerness="medium")` — the classifier that waits when the
+caller's words sound unfinished (the documented fix for jumping in on "um..." trail-offs). The full menu:
+`semantic_low` / `semantic_medium` (semantic detection at that eagerness) · `server_900` (server VAD with
+`silence_duration_ms=900`, the A/B fallback arm) · unset = OpenAI's server-VAD default. The requested config
+is logged at session start — verify `session.updated` in the logs before judging behavior.
+
+**The instant greeting — canned, and NO run frame.** A pre-recorded greeting in Myli's exact live voice
+(`greeting-openai.wav`, marin, generated once via `gpt-4o-mini-tts`; per-engine file pick at
+`pipecat_bot.py:145-147`) plays the instant the WebSocket connects — zero model in the loop, ~400ms of
+leading silence absorbing the Twilio media-leg start race (`pipecat_bot.py:770-794`). On OpenAI **no
+`LLMRunFrame` is queued** (`:781`) — there is no audio gate to open, and a run frame at connect would
+trigger a SECOND model greeting racing the canned one (the live-caught opening collision). The context
+starts EMPTY; an instruction block tells the model its opener was already spoken, and the wrap-up restores
+the greeting line into the transcript (§04). *(The Gemini audio-gate law — canned audio MUST pair with
+`LLMRunFrame()` — was Gemini-ONLY; preserved in HISTORY.)*
+
+**The runtime files** (`apps/myli-voice-agent/`): `pipecat_bot.py` (the ONE bot — all three engine
+branches) · `requirements-pcc.txt` · `Dockerfile.pcc` (`FROM dailyco/pipecat-base`) · `pcc-deploy.toml`
+(host config) · `pcc-build/` (the deploy context — **manually copied into; see THE CP-TRAP, §05**) ·
+`greeting-openai.wav` / `greeting.wav` (per-engine canned greetings). Every model/voice value is
+env-overridable (`MYLI_ENGINE`, `MYLI_OPENAI_MODEL`, `MYLI_OPENAI_VOICE`, `MYLI_OPENAI_TURN`) so we retune
+without a code change.
+
+# ═══ 02 · THE LINES SHE COVERS ═══
+
+Myli is the **AI Receptionist**. The number a caller dials **is** the intent — each line feeds one CRM inbox:
+
+| Bucket | Number | Feeds inbox | `answer_mode` today | Myli's job |
+|---|---|---|---|---|
+| **Test line** | 913-937-9359 | — | `myli` (armed) | The gauntlet line — where we prove her before going live. |
+| **Past Agents** | 913-675-9877 | Past Agents | `forward` | ⬅️ **first to flip** — reactivation: name the departed agent, take a callback. |
+| **Company** | 913-320-0906 | Company | `forward` | Speed-to-lead: buyer/seller triage, capture + route. |
+| **Sign Call** | 913-354-8600 | Company | `forward` | High-intent: "which property are you standing at?" |
+| **Ana's line** | 913-954-7123 | Ana | `forward` | Ana's past clients — always AI: "I'll have Ana call you right back." |
+
+Each line stays on cell-forward until Myli passes the gauntlet **and** Zach signs off — then it flips to
+`answer_mode='myli'` one at a time. Cell-forward is the instant rollback. The four production buckets are parked
+per the [routing untangle](/guides/phone-numbers-and-call-routing).
+
+# ═══ 03 · THE CONVERSATION DIRECTOR (the code guard layer) ═══
+
+<Note>
+This section is ARCHITECTURE — the code layer that makes the prompts hold on a live phone line. What the
+prompts actually SAY (base v3.1, the triage block, the seller/buyer/past_client/other playbooks, the
+ONE-BREATH RULE, versioning) is [AI Programming](/guides/ai-programming) + the registry at `/ai/prompting`.
+</Note>
+
+**Lean start → playbook HOT-SWAP.** The OpenAI session starts LEAN: `system_instruction` = the base persona
++ the greeting note + THE TRIAGE BLOCK only — **no playbooks inlined** (`pipecat_bot.py:553-580`). The
+moment the model identifies the caller it fires the `set_caller_type` tool, and the bot hot-swaps the
+session instructions to **base + the ONE matching playbook** via `LLMUpdateSettingsFrame` — a mid-call
+`session.update`, OpenAI's own "dynamic conversation flow" pattern (`pipecat_bot.py:684-693`). The
+playbooks come from `hl_settings.myli_voice_buckets` (migs 0419 + 0420) through the persona endpoint (§04),
+so editing one never touches the bot.
+
+<Warning>
+**DEPRECATED/CHANGED (2026-07-19/20, the OpenAI swap).** The old rule here — *"base + all four bucket
+playbooks are inlined into the single `system_instruction` at call start; native-audio can't hot-swap the
+system prompt mid-turn, and `set_caller_type` just records the label"* — was the **Gemini design** and is
+the **OPPOSITE of live behavior**. Gemini Live cannot `session.update`; OpenAI Realtime can, and the
+hot-swap decision replaced inlining when the engine swapped. Inlining survives only on the retired
+`s2s` branch (HISTORY).
+</Warning>
+
+**`MyliTurnGuard`** (`pipecat_bot.py:371-471`) — a Pipecat observer on the pipeline task; the
+announce-then-silence killer, in code. Live-caught by Zach and reproduced in the cockpit even on the
+one-breath prompt: prompts lower the flinch rate, **only code eliminates it**. OpenAI engine only; every
+handler is guarded so the director can never crash a call.
+
+- **The turn-completion guard.** Watches `BotStoppedSpeakingFrame`; if a spoken turn in the
+  `triage`/`intake` state ends **without a "?"** in the last assistant text, it appends a steering system
+  message ("continue the same breath — say ONLY the question") and forces ONE continuation via
+  `LLMMessagesAppendFrame` + `LLMRunFrame` — the officially documented `response.create` correct-and-regenerate
+  recipe (`:417-432`). One guard shot per bot turn; **hard cap 4 total fires per call**, and never after
+  `end_call` (`:418`).
+- **The post-tool watchdog** (`:434-446`). Tool results answered with `run_llm=False` (`set_caller_type`,
+  `wait_for_user`) can strand a silent turn — a documented Realtime bug class. ~2.5s after such a result,
+  if nothing has been spoken, the same steer fires (`arm_watchdog()` is called right after the playbook
+  hot-swap, `:700`).
+- **`wait_for_user`** (`:508-522`) — a NO-OP hold-the-turn tool, **OpenAI engine only**: the model calls it
+  instead of speaking when the latest audio needs no spoken response (silence, background noise, hold
+  music, a caller mid-thought "um..."). No "I'm here" / "take your time" filler — she just waits.
+- **The state ladder + telemetry.** `triage → intake (set_caller_type) → ended (end_call)`. The wrap-up
+  payload carries `director: {state, guard_fires, watchdog_fires}` (`pipecat_bot.py:833-838`) — every call
+  reports how often the code had to save a turn, so guard-fire rates are a tunable metric, not folklore.
+
+The other two tools ride alongside: **`set_caller_type`** (records the caller bucket + triggers the
+hot-swap + flips the guard to `intake`) and **`end_call`** (she speaks one natural goodbye, then after a
+~2.5s grace the bot completes the CALL via the Twilio REST API — ending the whole call, not just the
+stream, so the TwiML can't fall through to voicemail; `pipecat_bot.py:495-534`).
+
+# ═══ 04 · THE CRM SEAM (two endpoints) ═══
+
+The bot talks to the CRM at exactly two seams:
+
+| Route | Method | One line |
+|---|---|---|
+| `/api/phone/myli/persona` | GET | Everything the session needs: prompt segments, memory, capabilities. |
+| `/api/phone/myli/wrapup` | POST | **THE ONE WRITE SEAM** — every post-call CRM effect. |
+
+**The persona payload** (`apps/houseloop-crm/app/api/phone/myli/persona/route.ts:208-224`) returns
+`{ persona, ground_truth, triage, buckets, known_lead, voice_enabled, tools_enabled, voice_config, agent }`:
+
+- **`persona`** — the ground-truth block (live clock + caller-ID digits) + the LEAN role base + phone voice
+  rules, merge tokens resolved.
+- **`triage`** — THE TRIAGE BLOCK from the registry slot **`myli_voice_triage`** (mig 0431 — the
+  no-hidden-prompts law: every segment the bot speaks from is visible + editable in the cockpit rail;
+  `route.ts:201-206`). The bot appends it to the base at call start; a hardcoded copy in the bot is only
+  the unreachable-CRM fallback.
+- **`buckets`** — the 4 playbooks from `hl_settings.myli_voice_buckets`, tokens merged. **Draft-aware:**
+  `?prompt_source=draft` overlays the cockpit drafts on both triage + buckets through the exact same
+  composition path (`route.ts:182-192`) — the Test Cockpit chats against drafts; live calls never send the param.
+- **Warm calls** — when the caller dialed the agent's OWN line AND the matched lead is assigned to her
+  (both gates, `route.ts:66-106`), the persona injects the canonical memory composer `composeMyliMemory`
+  (`lib/ai/myli-memory.ts`) + the `## WHO'S CALLING — YOU KNOW THEM` block (`route.ts:112-129`). The
+  company/test line is ALWAYS the cold receptionist — no name-recognition for strangers.
+- **`voice_enabled` / `tools_enabled` / `voice_config`** — the master capability read + per-tool gates +
+  the callback-line policy, so the worker never hardcodes behavior.
+
+**The answer gate — FOUR layers, ALL must pass** (the voice webhook,
+`app/api/phone/webhooks/voice/route.ts:294-339`):
+
+1. Org master `hl_settings('ai_conversations').voice_enabled` — **fail-closed** (`:309-314`).
+2. **THE ALL-AI FAILSAFE** `aiMasterEnabled()` (mig 0432) — the one master switch off silences voice too;
+   everything off, period (`:315-316`).
+3. Per-line `hl_phone_numbers.answer_mode = 'myli'` — the ANSWERED BY select.
+4. Role capability `voice_inbound` on the phone hat (`answers_calls` role) — AND-ed, never overwriting the
+   org verdict (`:322-337`).
+
+**The wrap-up receipts (one POST, every effect)** (`app/api/phone/myli/wrapup/route.ts`): spam → silent
+flag (no lead, no ping) · find-or-**create** the lead (door law: source `phone_call`, assignment/stage from
+the source defaults, never hardcoded; a caller that can't mint lands the transcript leadless instead of
+500ing) · Myli joins the care team · `hl_calls` gets **the full transcript** — built by the bot from the
+context messages with the canned-greeting line restored (`pipecat_bot.py:806-821`) — plus an **AI summary**
+generated in the route with the same summarizer the recording path uses (`route.ts:55-69`), role label,
+callback window · a callback task on the assigned agent · `logActivity` `call_logged` (the All-feed row) ·
+`notifyLeadEvent` → the assigned agent · the **director telemetry** from §03 rides the same payload.
+
+**Cost is engine-aware and WIRED** (`route.ts:80-100`): for `gpt-realtime` the route bills the
+research-backed blended rate **~$0.10/audio-min** — raw token math over-bills ~25–30× because OpenAI
+auto-caches the repeated context prefix at ~1/80th rate, a split our metrics can't see (live-caught: a 62s
+call priced $2.85 raw); the raw token counts still ride in `data.usage` for future calibration against the
+OpenAI dashboard. Add Twilio ~$0.0125/min + the Pipecat Cloud host ~$0.02/min → one
+`logAiCost({category:'ai_voice'})` row per call (`:229-233`, leadless calls too) + `stampActivityTokens` on
+the catalog row. The cascade fallback keeps its 3-vendor math (Deepgram + Haiku tokens + Cartesia chars).
+
+# ═══ 05 · THE HOST — PIPECAT CLOUD ═══
+
+The bot runs on **Pipecat Cloud** (Daily's managed host for Pipecat agents) — the fix for the laptop-tunnel
+era, where free-ngrok backpressure grew time-to-first-byte every turn (1→3→14 s). On a real host, latency
+is flat.
+
+| Field | Value |
+|---|---|
+| **Org / workspace** | `spradling-group` (login = GitHub OAuth, `zachspradling@spradlingrealtygroup.com`) |
+| **Agent** | `myli-voice` |
+| **Profile** | `agent-2x` (1 vCPU / 2 GB dedicated — real-time audio needs non-throttled CPU) |
+| **Region** | `us-west` (revisit `us-east` for Twilio latency later) |
+| **Scaling** | **ALWAYS-WARM** (`min_agents=1`, `pcc-deploy.toml:9-11`, ~$43/mo — Zach approved 2026-07-18 after the gauntlet call measured a 30s cold pickup: 7s ringback + ~16s container boot + 6s first-turn TTFB). Ringback trimmed 7s→2s the same pass. |
+| **Secret set** | `myli-voice-secrets` from `.env.pcc`: **`MYLI_ENGINE=openai`** (load-bearing — the code default is `cascade`) · **`OPENAI_API_KEY`** · **`MYLI_OPENAI_TURN=semantic_medium`** · `HL_CRM_BASE_URL` · `HL_INTERNAL_SECRET` · `MYLI_VOICE_SECRET` · `TWILIO_*` · legacy `GEMINI_API_KEY` (unused since the swap; feeds only the retired `s2s` branch) |
+| **Audio filter** | **Krisp VIVA** voice isolation — scrubs noise + non-primary speakers from caller audio BEFORE VAD/the model hear it (the wife-in-the-background failure). Preinstalled ONLY in the Pipecat Cloud base image + requires the `--krisp-viva-audio-filter tel` deploy flag; the import is guarded, absence just means unfiltered (`pipecat_bot.py:854-861`). |
+| **Status** | Deployed + wired to Twilio (§06); gauntlet-certified, awaiting the ear test. |
+
+**The deploy pipeline** (config in `pcc-deploy.toml`; from `apps/myli-voice-agent/` with `PIPECAT_TOKEN`
+in env, using the venv CLI):
+
+1. **⚠ THE CP-TRAP — copy the bot FIRST, every deploy.** `pcc-build/bot.py` is a **manual copy** of
+   `pipecat_bot.py` (the base image imports `bot(runner_args)` from `bot.py`), and the deploy builds
+   `pcc-build/` — skip the copy and you **silently ship the stale bot** while the CLI reports success
+   (live-caught 2026-07-21):
+   ```bash
+   cp pipecat_bot.py pcc-build/bot.py
+   ```
+2. Deploy:
+   ```bash
+   .venv-pipecat/bin/pipecat cloud deploy --build-dir pcc-build --dockerfile Dockerfile.pcc \
+     --krisp-viva-audio-filter tel --force --yes
+   ```
+3. Secrets (only when `.env.pcc` changed — needs a PTY, run under `script -q /dev/null …`):
+   ```bash
+   .venv-pipecat/bin/pipecat cloud secrets set myli-voice-secrets --file .env.pcc --skip
+   ```
+
+- The build context is the **minimal `pcc-build/`** dir (bot.py + Dockerfile + requirements-pcc.txt + the
+  greeting wavs). The full app dir is 686 MB (the venv) — over Pipecat Cloud's build-context cap, so it
+  must NOT be the context.
+
+**Cost.** Always-warm host ≈ $43/mo idle. Per active minute ≈ gpt-realtime blended ~$0.10 + Twilio
+~$0.0125 + the agent-2x host ~$0.02 → rough all-in ≈ **$0.13–0.14/min** of talk time, metered per-call
+into `/ai-cost` by the wrap-up (§04).
+
+# ═══ 06 · GO-LIVE — gauntlet certified; the ear test is the gate ═══
+
+**The Twilio → Pipecat Cloud wire SHIPPED 2026-07-18** (commit `b45e401fd4`, CRM deploy verified SUCCESS).
+The CRM voice route (`app/api/phone/webhooks/voice/route.ts`) reads `hl_settings.phone_provider.pipecat_cloud_agent`
+(env `PIPECAT_CLOUD_AGENT` overrides; set to `myli-voice.spradling-group` in prod) and, when present, emits:
+
+```xml
+<Connect>
+  <Stream url="wss://api.pipecat.daily.co/ws/twilio">
+    <Parameter name="_pipecatCloudServiceHost" value="myli-voice.spradling-group"/>
+  </Stream>
+</Connect>
+```
+
+(us-west = the bare `api.pipecat.daily.co`; other regions prefix the host.) **Fallback chain preserved:**
+cloud agent → ngrok `pipecat_ws_host` → LiveKit SIP → `<Record>` voicemail. Instant rollback = clear
+`pipecat_cloud_agent` from the config (no deploy needed).
+
+**Where we are (2026-07-21):**
+
+- [x] Engine = **OpenAI Realtime** (`gpt-realtime-2.1`, voice **marin**) deployed on Pipecat Cloud, always-warm.
+- [x] The Conversation Director shipped (§03) — turn guard + watchdog + `wait_for_user` + telemetry, bot `6aae6826`.
+- [x] Prompts v3.1 live in the registry (base + triage + 4 playbooks — no hidden segments; content → [AI Programming](/guides/ai-programming)).
+- [x] `end_call` hang-up tool · Krisp VIVA tel filter · `min_agents=1` always-warm · canned marin greeting.
+- [x] **Gauntlet CERTIFIED: 11/11 scenarios at pass^3** in the Test Cockpit (mechanics → [Test Harness](/guides/test-harness)).
+- [x] **Latency measured: p50 1.3–2.2s voice-to-voice** (model TTFB 0.53s) — vs Gemini's 0.8–12.8s.
+- [ ] **Zach ear test on 913-937-9359** — the human sign-off gate.
+- [ ] Then flip the four production lines to `answer_mode='myli'` **one at a time** (§02). Cell-forward =
+  per-line rollback; clearing `pipecat_cloud_agent` = whole-engine rollback.
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HISTORY — DEAD ERAS (not current; git holds the rest)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+<Warning>
+**Everything below is quarantined, reverse-chronological — none of it is the current runtime** (top of page:
+OpenAI Realtime on Pipecat Cloud). Kept for receipts only.
+</Warning>
+
+- **THE GEMINI LIVE ERA (2026-07-18 → 07-19) — FIRED for latency.** Myli's first S2S engine:
+  `GeminiLiveLLMService`, model `gemini-2.5-flash-native-audio` (`preview-09-2025`, later the `-latest`
+  alias), voice **Leda**, `thinking_budget=0` — the architecture UWM's "Mia" runs (Google Vertex / Gemini
+  Live), validated against that blueprint + the official Pipecat `gemini-live-starters/phone-bot` preset.
+  Its laws, all **Gemini-ONLY**, preserved here:
+  - **The 4-field preset law:** exactly `model` + `voice` + `system_instruction` + `thinking` in Settings.
+    Every VAD/turn override we tried (END low, START low, `silence_duration_ms=1100`) measured WORSE on
+    real calls (5–15s gaps / near-mute); the v1alpha affective-dialog / proactive-audio knobs were removed
+    (latency for no win). Gemini's own VAD (LOW/LOW ~800 ms) owned turn-taking.
+  - **⚠ THE AUDIO-GATE LAW:** `GeminiLiveLLMService` **drops all caller audio** until
+    `_ready_for_realtime_input` flips true, which happens ONLY when a context frame reaches the LLM — so
+    any canned audio at call start MUST be paired with an empty-context `LLMRunFrame()`
+    (`inference_on_context_initialization=False` opens the gate without a model turn; verified in library
+    source `gemini_live/llm.py:813, 1523-1529, 1607-1611` after two deaf live calls). **On OpenAI this law
+    INVERTS** — no gate exists, and that same `LLMRunFrame` at connect double-greets (§01).
+  - **Inlined playbooks:** Gemini can't `session.update` mid-call, so base + ALL four bucket playbooks were
+    inlined into the one `system_instruction` and `set_caller_type` only recorded the label — the design
+    the OpenAI hot-swap replaced (§03). Also: never seed a pre-spoken assistant turn into the context
+    (dangling `turn_complete=False` wedged turn-taking, 47s of silence live-caught); a module-load pre-warm
+    thread exercised the Gemini path at worker boot (~1.6s turn-1 vs ~10s stone-cold).
+  - **Why fired:** TTFB measured **0.8–12.8s per turn** on our real calls (0.85→3.5→7.8→9.8s swings inside
+    Google, receipts in the session logs) — community-documented **unfixable** across all tiers; Vertex
+    Provisioned Throughput sells throughput, not a TTFB SLA (memory: `project_myli_voice_latency_verdict`).
+    **DECISION: the OpenAI Realtime swap, 2026-07-19/20** — sub-second on the identical Twilio architecture.
+    The code survives behind `MYLI_ENGINE=s2s`; `GEMINI_API_KEY` idles in the secret set.
+- **The Pipecat CASCADE (2026-07-16 → 2026-07-18, RETIRED to the fallback flag).** Deepgram STT (`nova-2-phonecall`)
+  → Claude Haiku 4.5 → Cartesia Sonic-3 (voice *Skylar*). It worked, but it was **laggy** (~1.5 s floor from three
+  serial network hops) and **metallic** (Cartesia TTS at 8 kHz). Replaced 2026-07-18 by S2S. **The code still
+  lives** behind `MYLI_ENGINE=cascade` (the `else` branch in `pipecat_bot.py`) as a fallback if the S2S model
+  has an outage — it is NOT the runtime. Its 3-vendor cost wire (`MyliUsageObserver` → `logAiCost`) survives
+  as the cascade arm of the now engine-aware cost path (§04). An even earlier cascade used an OpenAI
+  `gpt-4o-mini` brain + ElevenLabs TTS; that brain died when the OpenAI account hit $0 on 2026-07-16.
+- **LiveKit + Gemini native S2S (2026-07-15, crashed — but the crash was a fixable bug, not a model failure).**
+  `agent.py` — LiveKit Agents + Gemini `gemini-2.5-flash-native-audio-latest` (voice Leda), on LiveKit Cloud
+  (agent `CA_PCXvBdEGhXgZ`, project `houseloop`). It threw Gemini WebSocket close codes `1007`/`1011` on real
+  8 kHz phone audio — which at the time we read as *"raw speech-to-speech is banned on telephony."* **That was
+  wrong.** The real cause was a µ-law↔16 kHz/24 kHz sample-rate mismatch in the audio plumbing; Pipecat's
+  `TwilioFrameSerializer` resamples it correctly, which is exactly why S2S works today on Pipecat. The LiveKit
+  zombie may still be deployed with a `GEMINI_API_KEY` — tear-down candidate. The `deploy-livekit.sh` /
+  `livekit.toml` / old `Dockerfile` in `apps/myli-voice-agent/` target this dead era.
+- **Retell AI (2026-07-11, reverted).** Myli briefly ran on Retell (agent `agent_e4122038…`, 11labs-Grace voice,
+  ~580–620 ms). Zach: *"retell was a shit show."* The `/api/phone/myli/retell-*` routes and the
+  `phone_provider.livekit_sip_domain` key (`sip.retellai.com`) are dead leftovers — deletion candidates.
+
+**Config surfaces (unchanged across eras):** the AI Voice master toggle (`/ai-follow-up` →
+`hl_settings('ai_conversations').voice_enabled`, fail-closed) · the **ANSWERED BY** per-line select
+(`/settings/phone-numbers` → `answer_mode`) · the **Calls & Voice** capability tree (My Team role editor →
+`voice_inbound`) · the persona layers (role editor + per-agent override) · the `/ai/voice` equipment page.

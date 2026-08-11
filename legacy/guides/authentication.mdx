@@ -1,0 +1,115 @@
+---
+title: "Authentication"
+description: "How the HouseLoop CRM and website APIs authenticate — two DIFFERENT models."
+---
+
+{/* legacy-banner */}
+<Warning>
+  **LEGACY — UNVERIFIED.** This page predates the Master QA build and has NOT been verified
+  against the product. The canonical docs are being rewritten lane-by-lane as each lane goes
+  green — check the lane's tab first.
+</Warning>
+
+<Warning>**Two apps, two auth models (clarified Fable 5 audit 2026-07-06).** Everything below the
+"Session Cookie" heading describes the **CRM** (`crm.houseloop.ai`) — a login cookie + the
+`x-hl-internal-secret` machine gate. The **website** (`houseloop.ai`, our public home-search portal) does
+NOT use any of it: it authenticates end-users with **NextAuth** (credentials / Google / forever
+magic-token), gates user-owned surfaces per-route with `auth()`, and — as of the Fable 5 audit — adds an
+edge **rate-limiter** (`apps/houseloop-web/middleware.ts`) plus a shared **admin/internal bearer gate**
+(`apps/houseloop-web/lib/admin-auth.ts`, env `HL_ADMIN_PASSWORD` / `HL_INTERNAL_SECRET`, fail-closed, no
+hardcoded fallback). See the **Website API security** section at the bottom.</Warning>
+
+## Session Cookie (Browser / CRM Users)
+
+The CRM UI authenticates via a session cookie set by `POST /api/auth/login`.
+All browser requests include this cookie automatically.
+
+```bash
+# Log in and save the session cookie
+curl -c cookies.txt -X POST https://crm.houseloop.ai/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@houseloop.ai", "password": "yourpassword"}'
+
+# Use it in subsequent requests
+curl -b cookies.txt https://crm.houseloop.ai/api/leads
+```
+
+## Google OAuth (SSO)
+
+Users can also log in via Google. Redirect to `GET /api/auth/google` and the
+callback at `GET /api/auth/google/callback` sets the session cookie.
+
+## Machine Auth — `x-hl-internal-secret` (Myli, AI agents, automation)
+
+**Anything a human can do in the CRM, an AI or backend job can do too.** Trusted
+server-to-server callers — Myli, the scheduled-action executor, internal jobs,
+and AI agents — authenticate by sending the `x-hl-internal-secret` header instead
+of a browser session cookie. It opens **every** endpoint a logged-in human can hit.
+
+```bash
+# The secret lives in the credential vault as HL_INTERNAL_SECRET (server-only,
+# never exposed to a browser). Read it from .env / the vault, then:
+curl https://crm.houseloop.ai/api/leads \
+  -H "x-hl-internal-secret: $HL_INTERNAL_SECRET"
+
+# Writes work identically — e.g. recolor an appointment type:
+curl -X PATCH https://crm.houseloop.ai/api/appointment-types/$ID \
+  -H "x-hl-internal-secret: $HL_INTERNAL_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"color": "#3B82F6"}'
+```
+
+The middleware (`middleware.ts`) checks `req.headers['x-hl-internal-secret']`
+against the `HL_INTERNAL_SECRET` env var. If it matches, the session-cookie
+redirect is bypassed and the request proceeds. This is the canonical path for
+agents — do **not** look for an `Authorization: Bearer` scheme; the CRM does not
+use one.
+
+<Warning>
+`HL_INTERNAL_SECRET` is a master key — one header opens write access to every
+endpoint. Keep it server-side only. Never ship it to a browser or commit it.
+</Warning>
+
+## Errors
+
+All 401 responses follow this format:
+
+```json
+{ "ok": false, "error": "unauthorized" }
+```
+
+---
+
+## Website API security (`houseloop.ai`) — the threat model
+
+The public portal is **open-by-design** for read/search (a real-estate site must be crawlable), with a
+smaller gated set. This section is the security contract; it is CI-checkable against the route list.
+
+### The gates
+| Tier | Mechanism | Routes |
+|---|---|---|
+| PUBLIC | none (by design) | search, map, listing detail, geo/schools, blog, health |
+| SESSION | NextAuth `auth()` per-route (401 on miss) | saved-searches CRUD, home claim, owner HVR (claim-gated 403), saves/reactions/comments POST, user activity |
+| INTERNAL | `x-hl-internal-secret` (`lib/admin-auth.ts`, fail-closed) | `saved-searches/alert` (email SEND), `admin/saved-searches/preview` |
+| ADMIN | `Authorization: Bearer $HL_ADMIN_PASSWORD` (env-only, fail-closed) | `admin/waitlist`, `admin/market-data` |
+| WEBHOOK | signature verify | Resend (svix `svix-signature`), Repliers (`x-hook-secret` shared secret) |
+| SIGNED | Inngest SDK signing key | `/api/inngest` |
+
+### The Fable 5 remediations (2026-07-06)
+- **No hardcoded credentials.** `admin/waitlist` no longer ships `spradling2026`; both admin routes use
+  `lib/admin-auth.ts` reading `HL_ADMIN_PASSWORD` with **no fallback** → unset = 401. Secret rotated in Railway.
+- **`saved-searches/alert` email SEND requires `x-hl-internal-secret`** (403 without it). `skipSend:true`
+  (compute-only, no email — the CRM's context fetch) stays open. In-process Inngest senders are unaffected.
+- **Webhooks verify signatures.** Resend uses svix HMAC (401 on tamper); Repliers checks a shared
+  `REPLIERS_WEBHOOK_SECRET` (403 on mismatch) — both fail *when the secret is configured* so a deploy never
+  breaks the pipeline; set the secret in Railway to enforce.
+- **Per-IP rate limiting** at the edge (`middleware.ts`) on the LLM-cost (`search/nlp`, `search/classify`),
+  Google-billed (`places-*`, `street-view`), email-send, admin, and auth routes → 429 on burst. Public
+  read/search stays unthrottled.
+
+### Accepted risk (Zach directive, re-affirmed)
+The **forever magic-token** (`lib/auth/magic-token.ts`): HMAC-signed email, no expiry, single-use, or
+revocation; the `magic-token` provider find-or-creates the user. This is the explicit "convenience over
+security — no money/card/sensitive data" tradeoff. Its ONLY guardrail is `MAGIC_LINK_SECRET` staying
+secret; if it leaks, any email can be forged into a login. Documented, not a bug — but the single largest
+structural risk, so rotate `MAGIC_LINK_SECRET` if it is ever exposed.

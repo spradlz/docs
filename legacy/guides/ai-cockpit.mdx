@@ -1,0 +1,124 @@
+---
+title: "AI Cockpit"
+description: "The ONE control room for HouseLoop's AI (/ai): the six service JOB toggles, the Team pulse, the AI team's duty cards, and the live activity table with per-row cost. There is no 'AI Overview' — this is it."
+---
+
+{/* legacy-banner */}
+<Warning>
+  **LEGACY — UNVERIFIED.** This page predates the Master QA build and has NOT been verified
+  against the product. The canonical docs are being rewritten lane-by-lane as each lane goes
+  green — check the lane's tab first.
+</Warning>
+
+<Info>
+**"Is it on, what's it doing, what's it costing me?"** — the Cockpit answers all three on one page.
+UI spec: `apps/houseloop-crm/docs/wireframes/ai-section-v1-LOCKED.html` screen ② (**v15**, Zach-locked
+2026-07-13). The old `/ai-follow-up` route 301s here.
+</Info>
+
+## The model (locked 2026-07-13): services are JOBS, equipment is configured once
+
+**Agents are the workers · services are the JOBS they hold · voice, inboxes, numbers, and the pond pool are
+the EQUIPMENT.** The six jobs: **Receptionist · Inside Sales · AI Clones · Database Manager · Transaction
+Coordinator · Content Manager.** The one-question law decides where every configuration lives: *will more
+than one job ever touch this thing?* **Yes** → it's equipment with its own config page (Voice · Inboxes ·
+Numbers). **No** → the config lives on the job's page (pond rules → Inside Sales · audit rules → Database
+Manager · writing → Content Manager).
+
+<Update label="2026-07-22 ~12:40Z" description="The All-AI master is now a CASCADE + snapshot/restore; duty pill reads it; the send gate">
+  - **The "All AI" master is now a TRUE CASCADE with snapshot/restore (Adam, Zach-locked).** OFF no longer
+    just flips two flags — it **snapshots** the current state of every child (the clone master, the nurture
+    engine, conversations, EVERY per-agent clone toggle, EVERY per-lead `ai_responder` mic) into
+    `hl_settings.ai_master_snapshot`, then **cascades them all off**. ON **restores the snapshot verbatim** (a
+    lead you'd turned OFF stays OFF) — OR, via a **choice modal** on re-enable, **turns the clone ON for every
+    owned lead**. Fully reversible (snapshot-backed). Code: `lib/ai/ai-cascade.ts` +
+    `POST/GET /api/settings/ai-switches`; modal in `app/(crm)/ai/page.tsx`. This supersedes the old destructive
+    "OFF kills enabled + voice_enabled together" behavior (mig 0432 replaced the bulk-write with the gate; the
+    cascade now makes the child STATE match what the gate enforces, so the cockpit toggles never lie).
+  - **The AI-team duty pill reads the master.** A card's Status was HARDCODED green "Working"; it now reads the
+    master — **"Working"** when All AI is on, **"Off duty"** when off (`AgentDutyCard`, `masterOn` prop).
+  - **THE SEND GATE (`canAiActOnLead`, `lib/ai/can-act.ts`).** Every AI send/write path is now gated by the
+    Assignment Law + the mic + the master: an AI actor may act on a lead ONLY if it is the actor ASSIGNED to
+    that lead, its mic (`ai_responder`) isn't `none`, and the master is on. Verified live end-to-end (a clone
+    text and a Myli text fired to the test lead only with the master on, correctly attributed). Deep dive:
+    [Closed Loop Follow-Up](/guides/closed-loop-follow-up) + [Comms Refactor](/comms/comms-refactor).
+</Update>
+
+<Update label="2026-07-22 ~19:15Z" description="The cascade now applies AT MINT too — a new lead's stored AI state can't lie">
+  - **The master cascade now applies AT MINT, not just at runtime (`lib/ai/mint-ai-state.ts`, Zach-locked).**
+    THE BUG: a lead was minted with its clone STATE armed (`ai_mode_enabled=true`, `ai_responder='clone'`)
+    straight from the routing rule's `clone_default_on`, **without consulting the masters** — Kenneth Hunt (FUB
+    50544) pulled in showing the clone ON in the cockpit while `ai_master` was OFF. The runtime gate held (0
+    sends), but the STORED STATE lied. Now both mint paths — the FUB import (`import-fub-lead.ts`) and native /
+    website intake (`process-intake.ts`) — resolve `ai_mode_enabled` + `ai_responder` through
+    **`resolveMintAiState`**, which cascades the masters OVER the routing rule: if **`ai_master`** is off →
+    nothing arms; if **`ai_clones`** is off → a clone responder degrades to `none`; if **`ai_conversations`**
+    (ISA) is off → a Myli/ISA responder degrades to `none`. A parent-off lead mints
+    **`ai_mode_enabled=false` + `ai_responder='none'` regardless of `clone_default_on`.**
+  - **Presence stays, acting is gated.** `assigned_ai_agent_id` (Myli as context owner) is untouched — a lead is
+    still Myli-assigned, just silent. **Assignment ≠ voice.** The mint state now AGREES with the runtime
+    `canAiActOnLead` gate — one truth (reuses `aiMasterEnabled()`, fail-open like the runtime read). Verified
+    against live settings (master OFF → clone seat mints OFF; masters ON → clone arms normally, no regression).
+</Update>
+
+<Update label="2026-07-22 ~10:40Z" description="Section reorder + Team Pulse KPI rewire + actor attribution">
+  - **Block order changed** (Zach): **Your AI team on duty** now sits ABOVE **Team pulse**, which sits above
+    **Live AI Activity**. Pulse timeframe defaults to **7 days** (Today read too sparse).
+  - **Team Pulse KPIs fixed** (`/api/team/pulse` ai-team): **Facts** count the real per-actor rows (reconcile
+    `/api/ai-follow-up/stats`); **AI spend** is priced PER ACTOR at that agent's `MODEL_PRICING` (matches
+    `/api/ai-follow-up/spend`); **Income contributed = AI-ATTRIBUTION credit** — the closed GCI (from the
+    canonical closing truth `sisu_transactions.gci`) of any deal where an AI **set the appointment** that led
+    to the close. It is ISOLATED to the AI cockpit — it never rolls into company/human totals; the human keeps
+    the same GCI once on their dashboard (**no double count**). It reads $0 until an AI-set appointment closes.
+  - **Live AI Activity actor labels:** every AI row now shows a **robot-head icon + name**; a clone renders
+    **"Name (clone)"** (a clone shares the human's id, so it must be marked). Shared `aiActorLabel` helper.
+  - **Actor attribution:** all AI actions (facts, dossier/context, appointments, comms) stamp the **real
+    acting actor** via `resolveActorStamp(leadId)` — never a generic "AI"/"first ai_agent". `actor_kind`
+    (human|clone|myli) separates clone-work from the human even though they share an id. **Myli is the default
+    context owner on every lead** (`default_ai_agent_user_id = Myli` on all lead-source routing rules +
+    backfilled) — **present, silent** (her mic/`ai_responder` stays off; presence ≠ voice). See
+    [Lead Activity Log](/guides/lead-detail#activity-architecture-one-store-one-writer-one-catalog-one-reader) for the write-side contract.
+</Update>
+
+## The four blocks (top to bottom)
+
+1. **Your AI services** — the six job boxes, one line, **these ARE the master switches** (no separate
+   masters row). Each box: icon / full name (never abbreviated, never wrapped) / centered toggle / prose /
+   Configure. Real wires only: **Inside Sales** = `hl_settings.ai_conversations.enabled` (the follow-up
+   engine, fail-open) · **Receptionist** = `voice_enabled` (fail-closed) · **AI Clones** =
+   `ai_clones.enabled` (clone master, fail-open) · **Nurture Engine** = `ai_closed_loop.enabled` (fail-closed).
+   DBM/TC/CM show disabled toggles with honest copy until their flags exist — no orphan flags, ever. The page
+   header carries the ONE global **All AI** master — a **TRUE CASCADE with snapshot/restore** (2026-07-22): OFF
+   **snapshots** then turns off every child (clone master · nurture · conversations · every per-agent clone
+   toggle · every per-lead `ai_responder` mic); ON **restores the snapshot verbatim**, or via a **choice modal**
+   turns the clone ON for every owned lead. Snapshot-backed + reversible (`lib/ai/ai-cascade.ts`). This replaced
+   the old destructive "OFF kills enabled + voice_enabled together" bulk-write — see the ~12:40Z note above.
+2. **Your AI team — on duty** — one BUSINESS CARD per AI agent, atomic single-value rows so nothing wraps:
+   Status · Duties (icons from REAL seats — inbox manager count + the calls channel, never hardcoded) ·
+   Leads · Inboxes · Actions today · Appts 7d · Spend month, plus the Add Agent ghost. Data:
+   `/api/ai-follow-up/agent-cards`.
+3. **Team pulse** — THE PULSE DECK (`components/team/PulseDeck.tsx`): the ten-card member instrument at
+   AI-team scope — Total leads · Phone calls · Texts · Emails · Tasks · Homes searched · Facts captured
+   [Notes · Dossiers] · Appointments set · **Income contributed** (AI-attribution closed GCI, see the
+   2026-07-22 note above) · **Spend** [Conversation · Extraction] (per-actor MODEL_PRICING). Pills INSIDE
+   each hero, 2×5 grid, Today/**7d**(default)/MTD/YTD, month-vs-cap capline below. Data:
+   `/api/team/pulse?scope=ai-team`. The SAME deck renders on every member page at one-person scope (humans
+   get the 8-card 2×4 without Facts/Spend). EXTENSION LAW: each future service ships its win-card into the deck.
+4. **Live AI Activity** — the compact table **When · Agent · Action · Lead · Result · Cost** under a
+   `MenuTable` header (agent tabs · lens filters). The **Agent** cell shows a robot-head icon + the real actor
+   name (clones marked "(clone)"). Cost = the row's stamped tokens priced at the actor's model rate, computed
+   by `/api/ai-follow-up/feed`. The table streams the recent tail; the full [Run Log](/guides/run-log) stays
+   the forensic timeline.
+
+## What died here (the locked IA)
+
+- **"AI Overview" no longer exists** — the Cockpit replaced it; the full agent management surface is AI Agents (C2).
+- **The separate Masters/Spend/Services/Performance sections died** (v15) — masters live ON the service
+  boxes, spend rides the pulse, services ARE the toggle strip.
+- **AI Cost** (restored 2026-07-16) **and AI Run Log** (restored 2026-07-22) are nav entries again. The AI
+  section's **AI Run Log** is the run-log MIRROR filtered to the AI lane (`/run-log?view=ai`); the FULL Run
+  Log (all crons/ingest/jobs) lives under **Integrations & API** next to Background Jobs — matching the docs
+  nav. See [Run Log](/guides/run-log).
+- The AI nav group reads: **AI Cockpit · AI Agents · AI Cost · AI Run Log · Test Cockpit · [AI Services] the
+  six jobs · [Equipment] AI Voice · AI Toolbox · [Library] AI Context Blocks · AI Prompting** — with the
+  run-log health dot riding the Cockpit item.

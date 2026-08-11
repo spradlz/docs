@@ -1,0 +1,178 @@
+---
+title: "⭐ Fable 5 Master Audit — Caleb"
+description: "Caleb's remediation lane: 6 subsystems, worked top to bottom with the resolve protocol (🟢 + timestamp + model + notes)."
+---
+
+{/* legacy-banner */}
+<Warning>
+  **LEGACY — UNVERIFIED.** This page predates the Master QA build and has NOT been verified
+  against the product. The canonical docs are being rewritten lane-by-lane as each lane goes
+  green — check the lane's tab first.
+</Warning>
+
+<Info>**THE REMEDIATION PROTOCOL (Zach 2026-07-06):** work ONLY from this sheet, top to bottom. For each item:
+(1) **deep-verify** the current functionality actually works — run it, click it, query it; never trust the doc or the code comment;
+(2) fix per the prescription (full detail in the repo: `.claude/reports/audit/<key>.md`);
+(3) flip the row to **🟢 RESOLVED** with the **date+time**, the **model you were running**, and **notes on what you did**.
+Many tables are near-empty — only ~15 leads exist (a few real Zillow leads + test leads); most machinery has never seen real volume.
+When a feature is spec-built-but-empty, say so explicitly and add a **visual of what the spec calls for** (screenshot or mock) so
+Zach can see intended vs actual. An unverifiable claim stays ⬜ — never green a row you didn't prove.</Info>
+
+<Warning>**👻 THE SEO GHOST (Zach saw it live):** /settings/website/seo/articles shows "articles" that are one-page aggregate market-stat updates — NO real long-form articles exist anywhere, and the article engine shows 0 runs since 6/3 (zombie per the audit). Diagnose what the spec ACTUALLY calls for (3,000-word articles?), show Zach a visual of spec-vs-reality, and prescribe revive-or-retire.</Warning>
+
+<Warning>**🧪 VISION A/B (in flight):** Haiku 4.5 vs gpt-4o scored on ~100 real listing photos — results land on this sheet. NO prod re-tagging.</Warning>
+
+> Master: [⭐ Fable 5 Master Audit (All)](/audit/fable5-all) · Full artifact: [the State of the Union](https://claude.ai/code/artifact/d5f808e0-3ab8-4fd3-a6b2-5a615d6b82a0)
+
+
+## Seller Report & SRG — YELLOW (11/18 good · 6 gaps)
+
+Full report: `.claude/reports/audit/crm-seller-report-srg.md`
+
+
+**Headline gaps found by the audit:**
+
+- Dashboard disposition badge ignores the canonical disposition column and derives from near-empty legacy flags (current_home_status='owns' = 0 rows) -&gt; ~1,908 homes render 'Unverified' though the engine calls 1,317 'Owns'
+- Four disposition vocabularies for one concept (column vs dashboard vs audit card-note vs canonical table); none of the UI surfaces read the authoritative column comprehensively
+- Sign-off/PROMOTE gate essentially unwalked: only 28 of 1,779 clients signed off, yet caleb-master calls the engine 'COMPLETE end to end'
+- Mortgage/equity permanently null (Realie lien source never wired) - honest but the 'equity' story is appreciation-only
+- SellerReportDashboard.tsx:128 comment claims disposition 'comes from the canonical child table' - code-level false
+- Disposition badge uses colored borders + inline styles + green for 'Owns' (UI doctrine: pill/dot only, green=SMS/success only)
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| crm--1 | Make the dashboard homesForClient() read hl_srg_past_client_homes.disposition instead of the dead current_home_status/we_repped_sale flags; acceptance = 'Owns' badge count ~= 1,317, 'Unverified' drops to ~5 | ⬜ | — | — |
+| crm--2 | Unify the audit card-note (card-note.mjs:76-153) on the same disposition column so all surfaces agree per home | ⬜ | — | — |
+| crm--3 | Collapse the four disposition token sets to the 2026-07-18 child vocabulary; add a VIEW/mapping for hl_srg_canonical and fix the guide | ⬜ | — | — |
+| crm--4 | Correct caleb-master.mdx 'COMPLETE end to end' to reflect 28/1,779 signed + open gates; publish via docs mirror | ⬜ | — | — |
+| crm--5 | Bring the disposition badge to brand (.hl-status-pill, no border, no green for 'Owns') | ⬜ | — | — |
+
+
+## The Two Databases — YELLOW (10/22 good · 8 gaps)
+
+Full report: `.claude/reports/audit/data-two-db-tables.md`
+
+
+**Headline gaps found by the audit:**
+
+- DOCTRINE LIE: hl_home_value (named WEB canonical value table) does not exist and has 0 code refs; real store is hl_value_history
+- 52% of CRM tables empty (111/215) and 47% of WEB (27/57) - dead families zhl_*/sim_*/recruitloop_* plus orphan scratch hl_ai_actions_dropped_20260621, hl_pastclient_gold_snapshot (0 refs)
+- Duplicate migration number 0420: 0420_myli_voice_prompt_v2.sql exists on disk but is NOT applied
+- Stale stats: sisu_transactions n_live_tup=1 vs true count 11,636 - any audit trusting pg_stat is misled
+- Doctrine table inventory incomplete + counts stale (Listing 354k-&gt;368,918, hl_srg_mls_deals 1,954-&gt;2,042); whole live families (SRG intermediates, hl_tc_*, hl_geo_*, run-log) undocumented
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| data-1 | Fix hl_home_value doctrine lie in HOUSELOOP_DATA_DOCTRINE.md - replace with hl_value_history/hl_valueloop/hl_market_index (the tables that exist and are read) | ⬜ | — | — |
+| data-2 | Refresh doctrine canonical counts and add missing live table families (SRG reconciliation, TC, SEO/geo, pixel/run-log) tagged canonical vs intermediate vs scratch | ⬜ | — | — |
+| data-3 | Retire orphan scratch/backup tables (hl_ai_actions_dropped_20260621, hl_pastclient_gold_snapshot, ListingHistory_deprecated, _seo_cron_test) via reversible migration with Zach's typed RULE #0 approval | ⬜ | — | — |
+| data-4 | Renumber duplicate 0420_myli_voice_prompt_v2 migration, apply it, add a lint rejecting shared numeric prefixes | ⬜ | — | — |
+| data-5 | Inventory-and-classify the 111 empty CRM + 27 empty WEB tables into keep/drop/investigate ledger; never auto-drop (RULE #0) | ⬜ | — | — |
+
+
+## Home Value Engine — YELLOW (18/22 good · 5 gaps)
+
+Full report: `.claude/reports/audit/web-value-engine.md`
+
+
+**Headline gaps found by the audit:**
+
+- 40 sold homes render NO value at all (hlEstimate AND closePrice both null) vs docs' claimed ~29 - 'no flat home' law not fully met
+- 27 sold homes carry a stale flat stored hlEstimate (= closePrice); live web render is correct but CRM seller-report/exports read the stale column
+- value-history-persist only re-persists the 1,949 past-client homes, so non-past-client stored hlEstimate values drift forever
+- Fresh-sale override (sold &lt;=15mo beats a present Zestimate) is in code but MISSING from the guide's fork table
+- Guide conflates hl_value_history.source (backseed·current, +1 orphan zhvi_appreciation) with Listing.hlEstimateSource (zestimate·zhvi·algo)
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| web--1 | Invoke sold-data-reconcile until the 40 valueless sold homes each mint a value (acceptance: the flat-count query returns 0) | ⬜ | — | — |
+| web--2 | Refresh the 27 stale flat stored hlEstimate values via value-history/persist.run &#123;hlids&#125;, or broaden the persist worklist beyond past-client homes | ⬜ | — | — |
+| web--3 | Add the fresh-sale override branch to the value guide's fork table (get.ts:192-213) | ⬜ | — | — |
+| web--4 | Update the stale '~29' genuinely-flat count in houseloop-home-value.mdx:126 to the live number | ⬜ | — | — |
+| web--5 | Clarify the two 'source' columns in the guide and normalize the 1 orphan zhvi_appreciation row | ⬜ | — | — |
+
+
+## Website Search — YELLOW (20/24 good · 6 gaps)
+
+Full report: `.claude/reports/audit/web-search.md`
+
+
+**Headline gaps found by the audit:**
+
+- 3 Details facet sections (Floor Plan, Dining Area, Architectural Style) render EMPTY to users - seeded [] until F3 (detail-facets-db.ts:82)
+- architecturalStyle DB column is misnamed: holds property-type values, not arch style; propertyType column duplicates it (both 11517/11517)
+- popular-counts route is dead code AND makes 4 direct Repliers calls - ONE ENGINE violation, zero consumers
+- city-counts keeps a 2nd hand-mirrored feature-&gt;column map (drift risk) - CRM-only consumer
+- Stale docstrings: nlp/classify routes still say gpt-4o-mini primary (now Haiku); count/price-histogram say 'live Repliers' (actually DB)
+- Manifest comment (line 127) wrongly says architecturalStyle has no column
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| web--1 | Hide the 3 empty Details facet sections (Floor Plan/Dining Area/Architectural Style) until F3 - skip any facet field with an empty values array | ⬜ | — | — |
+| web--2 | Delete dead Repliers-direct popular-counts route (or rewire onto /api/listings/count) to close the ONE-ENGINE gap | ⬜ | — | — |
+| web--3 | Fix stale docstrings: nlp/classify say gpt-4o-mini (now Haiku 4.5 primary); count/price-histogram say 'live Repliers' (actually searchFromDb DB) | ⬜ | — | — |
+| web--4 | Resolve architecturalStyle naming collision + duplicate propertyType column; give real F3 arch-style its own distinct array column | ⬜ | — | — |
+| web--5 | Collapse city-counts' parallel FEATURE_WHERE map onto the shared feature-predicate layer (one source of truth) | ⬜ | — | — |
+
+
+## SEO & Content Engines — YELLOW (13/20 good · 6 gaps)
+
+Full report: `.claude/reports/audit/web-seo-content.md`
+
+
+**Headline gaps found by the audit:**
+
+- 156 neighborhood pages are live HTTP 404 from taxonomy contamination (county names as neighborhoods + wrong city-&gt;county mapping)
+- Shorts/social-video content engine is a dead skeleton: 0 Inngest runs, 2 hand-inserted rows, publishes via bash scripts (INNGEST_OR_IT_DOESNT_EXIST violation)
+- Neighborhood price cache shrank 5,329-&gt;2,866 (~46%); docs cite stale counts and it may be a HAVING-logic regression
+- Neighborhood page freshness low (2,223/5,495 within 8d) vs doc's weekly re-touch promise
+- sitemap.ts hardcodes SOLD_CHUNKS=10 with stale 338k comment against a 354k+ Listing table
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| web--1 | Fix the 156 verify_failed neighborhood 404s in build-geo-taxonomy.ts (strip county pseudo-neighborhoods, correct city-&gt;county), rebuild pages; acceptance = 0 verify_failed and 200s | ⬜ | — | — |
+| web--2 | Finish the content/shorts engine through Inngest with a real signed-off run OR mark it EXPLORE and correct content-dashboard.mdx | ⬜ | — | — |
+| web--3 | Reconcile hl_geo_neighborhood_stats count (2,866) vs docs and confirm it's inventory not a regression; refresh doc numbers | ⬜ | — | — |
+| web--4 | Derive sitemap SOLD_CHUNKS from a live distinct-sold count instead of hardcoded 10 | ⬜ | — | — |
+| web--5 | Verify the long-tail weekly re-touch bumps hl_geo_page.updated_at so freshness ~= full built count | ⬜ | — | — |
+
+
+## Team WIP Reconciliation — YELLOW (11/18 good · 7 gaps)
+
+Full report: `.claude/reports/audit/team-wip-reconciliation.md`
+
+
+**Headline gaps found by the audit:**
+
+- Benji's Guenther seller-loop is UNCOMMITTED across 6 TC files (loop-templates.ts +22 lines) — at risk of loss
+- Adam's lock LAST_UPDATED 2026-07-17 trails his Jul 18 code (first-touch/clone commits) by ~a day
+- Lee's Myli latency is self-flagged UNVERIFIED for real callers; harness can't measure turn-latency; Gemini swap-back untested
+- Adam's 8 VIBE trigger rows + AI-tools 5-vs-20 board filter documented but not wired — Zach decisions pending
+- Three untracked .env.bak-* full credential dumps sit NOT gitignored at repo root
+- benji-handoff.md self-flagged STALE (abandoned Canva path)
+
+
+**The prescriptions — flip each row when PROVEN done:**
+
+| # | Prescription | Status | Resolved (date · model) | Notes |
+|---|---|---|---|---|
+| team-1 | Commit Benji's 6 in-flight Guenther TC-loop files before session ends (seller_listing template + TC route/modal edits) | ⬜ | — | — |
+| team-2 | Run tools/myli-voice/test-call.mjs for receipts, then get Zach's voice=marin ear verdict and flip Myli go-live | ⬜ | — | — |
+| team-3 | Close Adam's AI Appointment Set + B4 Call-From box-checks with Zach; then build the last item B3 (editable number on EditSourceModal) | ⬜ | — | — |
+| team-4 | Resolve the 8 VIBE trigger rows + fix AI-tools 5-vs-20 board filter (needs Zach retire-vs-alias call) | ⬜ | — | — |
+| team-5 | Gitignore .env.bak-* and delete the 3 stale credential-dump backups; refresh the trailing lock/handoff/ai-voice.mdx files to match HEAD | ⬜ | — | — |

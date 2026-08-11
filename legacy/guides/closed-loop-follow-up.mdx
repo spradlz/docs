@@ -1,0 +1,411 @@
+---
+title: "Closed Loop Follow-Up"
+description: "How Myli's signal-driven follow-up works in HouseLoop CRM — the lead-detail reasoning chain (head) and the Workflow Engine (brain) that drives it, and THE JOURNEY CHECKLIST: every phase of the buyer & seller journey, its goal, tools, gate, ghosting recovery, and value-ladder rung."
+---
+
+{/* legacy-banner */}
+<Warning>
+  **LEGACY — UNVERIFIED.** This page predates the Master QA build and has NOT been verified
+  against the product. The canonical docs are being rewritten lane-by-lane as each lane goes
+  green — check the lane's tab first.
+</Warning>
+
+{/* ═══════════════════════════════════════════════════════════════════════════════
+    THE WORKING CHECKLIST (Zach + Adam, 2026-07-21). This is a LIVE discussion scaffold —
+    we walk it phase by phase and lock the philosophy of each. Nothing here is final until
+    we discuss it. Checkboxes = "we have discussed + locked this phase's philosophy."
+    ═══════════════════════════════════════════════════════════════════════════════ */}
+
+<Info>
+**⭐ THE LIVE JOURNEY MAP MOVED → [AI Programming](/guides/ai-programming) (Zach, 2026-07-23).** We now walk the
+buyer &amp; seller journey phase by phase — goal · tools · gate · ghosting recovery · value-add · sentiment play —
+on the **[AI Programming](/guides/ai-programming)** page (the Director's home), anchored to a living visual
+**journey map** at the top. That is where we track our discussion + lock each box. **This page** documents the
+shipped ENGINE that runs the ladder (the head, the brain, the laws) and keeps the frame below for context. One
+fact, one home: the ladder CONTENT lives on AI Programming; the MACHINERY + shipped surfaces live here.
+</Info>
+
+## ═══ THE FRAME — workflow → watching state ═══
+
+The mental model we're building to (Zach vision, 2026-07-21):
+
+1. **A workflow is the SHORT opening move**, not where the lead lives. It fires the opener (e.g. confirm the
+   tour, one question) and hands off.
+2. **No reply in ~1 hour → the lead drops into the WATCHING STATE.** The workflow gives way to a persistent,
+   time-aware watcher (the expectation clock: send touch → set `expected_reply_by` → race reply-vs-timer).
+3. **In the watching state, Myli holds — live, for every lead — three things:**
+   - **STATE** — which phase of the journey they're in (the ladder below).
+   - **SENTIMENT** — how they feel right now (warm / engaged / cold / annoyed / ghosting). A Director cognition output.
+   - **GOAL** — the one next thing she's driving toward for THAT lead in THAT phase.
+4. **Two surfaces read this:** **Wonderland** = the god-view across ALL leads (state + sentiment + goal at a
+   glance); the **full iPad view** = inside Myli's brain for ONE lead (her facts, current state + why, sentiment,
+   active goal, next planned touch). *These are the UI we build on top of the ladder.*
+
+The engine underneath: `hl_lead_convo_state` (mig 0435, DRAFT — state · mode · ledger) + the expectation clock
+(Adam's floor) + the Director cognition packet (Lee). This checklist defines the CONTENT the engine runs.
+
+## ═══ THE BUYER JOURNEY ═══
+
+The ladder Myli walks a buyer through. **Goal-frame aware** — she asks only the ONE next unfilled slot (code
+owns the ladder; the LLM owns the words). Tools are her REAL toolbox (`lib/ai/ai-action-catalog.ts`).
+
+| # | Phase | 🎯 Goal | 🧰 Tools | 🔒 Gate / Exit |
+|---|-------|---------|----------|----------------|
+| **1** | **New Lead / Tour Request** | **Set the appointment** ✅ *(Zach-locked)* | `text_lead` · `schedule_appointment` · `lookup_property` · `add_note` · `update_stage` | Exit when tour time confirmed |
+| 2 | Representation | Become their agent (are you working with anyone?) | `text_lead` · `manage_tags` · `add_note` · `update_contact` | Has-other-agent → courteous exit + tag |
+| 3 | Migrate off the portal | Get them on OUR search account (capture email) | `text_lead` · `send_email` · `update_contact` | Exit when email captured / account made |
+| 4 | Qualify | Learn motivation + timeline (before price) | `text_lead` · `add_note` · `update_contact` | Exit when motivation/timeline known |
+| 5 | **Financing + Buyer Agreement** | Lender intro **+ buyer agreement SIGNED** | `text_lead` · `send_document` (e-sign) · `send_email` | 🔒 **HARD GATE** — signed BEFORE any tour (NAR law) |
+| 6 | Behavioral Nurture | Stay top-of-mind; re-engage on portal activity | `send_home` · `search_homes` · `text_lead` · `schedule_followup` | Behavioral mode — activity-triggered |
+
+**Per-phase, we lock the philosophy of each (the discussion):**
+
+- [x] **Phase 1 — Goal locked: set the appointment.** *(Zach, 2026-07-21)* — still to discuss: tools, gate, ghosting recovery, value-add.
+- [ ] **Phase 2 — Representation** — goal · tools · gate · ghosting recovery · value-add · sentiment handling
+- [ ] **Phase 3 — Migrate off the portal** — goal · tools · gate · ghosting recovery · value-add · sentiment handling
+- [ ] **Phase 4 — Qualify** — goal · tools · gate · ghosting recovery · value-add · sentiment handling
+- [ ] **Phase 5 — Financing + Buyer Agreement (the hard gate)** — goal · tools · gate · ghosting recovery · value-add · sentiment handling
+- [ ] **Phase 6 — Behavioral Nurture** — goal · tools · gate · ghosting recovery · value-add · sentiment handling
+
+## ═══ THE SELLER JOURNEY ═══
+
+A seller lead (valuation / thinking-of-listing) walks a parallel ladder toward a **signed listing agreement**.
+Seller REQUIRED_SLOTS (`lib/ai/director/state.ts`): name · property address · timeline · reason for moving ·
+number · appointment time. *(Phases below are the proposed skeleton — we lock each in discussion.)*
+
+| # | Phase | 🎯 Goal (proposed) | 🧰 Tools | 🔒 Gate / Exit |
+|---|-------|---------|----------|----------------|
+| 1 | New Lead / Valuation Request | Set the listing appointment | `text_lead` · `schedule_appointment` · `lookup_property` · `add_note` · `update_stage` | Exit when listing appt confirmed |
+| 2 | Representation | Become their listing agent | `text_lead` · `manage_tags` · `add_note` | Already-listed → courteous exit |
+| 3 | The Valuation Hook | Deliver the home value / CMA teaser (the reason they raised a hand) | `send_email` · `lookup_property` · `send_home` | Exit when value delivered + engaged |
+| 4 | Qualify | Motivation + timeline + price expectation | `text_lead` · `add_note` · `update_contact` | Exit when motivation/timeline/price known |
+| 5 | Listing Appointment + Agreement | Pre-listing packet → listing agreement SIGNED | `text_lead` · `send_document` (e-sign) · `send_email` | 🔒 Gate — listing agreement signed |
+| 6 | Behavioral Nurture | Equity/market updates until they're ready | `send_email` · `text_lead` · `schedule_followup` | Behavioral mode — equity/market-triggered |
+
+- [ ] **Phase 1 — New Lead / Valuation** — goal · tools · gate · ghosting recovery · value-add · sentiment handling
+- [ ] **Phase 2 — Representation** — goal · tools · gate · ghosting recovery · value-add · sentiment handling
+- [ ] **Phase 3 — The Valuation Hook** — goal · tools · gate · ghosting recovery · value-add · sentiment handling
+- [ ] **Phase 4 — Qualify** — goal · tools · gate · ghosting recovery · value-add · sentiment handling
+- [ ] **Phase 5 — Listing Appointment + Agreement** — goal · tools · gate · ghosting recovery · value-add · sentiment handling
+- [ ] **Phase 6 — Behavioral Nurture** — goal · tools · gate · ghosting recovery · value-add · sentiment handling
+
+## ═══ GHOSTING RECOVERY — the re-engagement ladder ═══
+
+*(The DEFAULT state, not a branch — when a lead goes quiet in ANY phase, this is how she brings them back.)*
+We philosophize this together — the open questions, each with a **research-backed default to react to**:
+
+- [ ] **The cadence** — *default to debate:* 5–7 touches over 4–6 weeks, then drop to long-term behavioral. A proven multi-channel ladder: D1 call+text → D2 value email → D5 call → D8 video → D11 new channel → D14 breakup.
+- [ ] **The angles** — value drop · market update · pattern-interrupt · the **breakup/takeaway** · new-listing alert. Which, in what order?
+- [ ] **The breakup/takeaway text** — fires after 5+ attempts. Works on **loss aversion** (losses felt ~2× gains); "closing your file — should I stop the updates?" Reported ~3× click / 5× reply. *Do we run it? What's the voice?*
+- [ ] **Buyer ghost vs seller ghost** — recover differently? *(seller = "should I stop the market updates on your home?"; buyer = "wrapping up your search alerts unless…")*
+- [ ] **Channel escalation** — text → email → call → behavioral. When does she change channels?
+- [ ] **The hard exit** — when does a ghost become a cold/behavioral lead and stop active touches (TCPA 8am–8pm local + the never-annoying law)? *Trigger, not calendar — most ghosts recover within ~6 months when there's a behavioral REASON to reach back.*
+
+## ═══ THE VALUE LADDER — every touch adds value ═══
+
+*(The anti-"just checking in" law. Every touch delivers something worth receiving. We rank the rungs together.
+Research default: behavioral-trigger follow-up = up to **30% higher conversion** than calendar drips — a D-lead
+who views 5+ listings in a week becomes an A-lead. "Time-based keeps you present; behavioral tells you when to
+pick up the phone.")*
+
+- [ ] **Buyer value rungs** *(proposed low→high commitment)* — ① neighborhood/market data · ② new-listing alert (saved search) · ③ price-drop alert on a viewed home · ④ sold-comp / "what sold near your search" · ⑤ early/exclusive/coming-soon inventory · ⑥ lender intro + pre-approval → showing.
+- [ ] **Seller value rungs** *(proposed low→high)* — ① automated equity/valuation update · ② monthly hyper-local market report · ③ "your neighbor sold for $X" · ④ buyer-demand signal ("3 buyers want your street") · ⑤ staging / pre-list ROI tips · ⑥ refreshed CMA → listing consult.
+- [ ] **Behavioral beats time** — fire the ladder on micro-signals (2nd visit to same listing, price-drop page view, repeat valuation check) over calendar drips. Which behaviors trigger which value drop?
+- [ ] **The philosophy** — what makes a touch feel like a gift vs a nag? (the line we never cross)
+
+<Info>
+**Research feeding this checklist:** buyer-side elite-texting research (5-message gold ladder, ledger design,
+escalation triggers, TCPA-in-code) → `.claude/reports/lead-texting-prompt-research-2026-07-20.md`. Seller
+journey + ghosting recovery + value ladder (cited: speed-to-lead, CMA hook, breakup/loss-aversion, behavioral
+triggers) → `.claude/reports/seller-journey-ghosting-value-ladder-research-2026-07-21.md`.
+</Info>
+
+---
+
+<Info>
+**▶ CURRENTLY BUILDING — "Myli: Standing By" (Benji) · updated 2026-07-21, ~9:50 AM CT.**
+Turning Myli's standby from invisible code engines into a REAL canvas workflow + an honest workflow pill.
+Live dated log: [⭐ Benji Master](/benji-master). Plan: `.claude/plans/generic-forging-toucan.md`.
+**Status:** P0 ✅ mic gates inbound · P1 ✅ workflow-aware pill · P2 ✅ shipped **DARK** (the *Myli: Standing By*
+workflow + `ai_converse`/`ai_standby` nodes, mig 0434) · P3 ⛔ gated on a joint plan review with Zach — the
+ledger+ladder state-watcher (`hl_lead_convo_state`, mig 0435, DRAFT/unapplied) · P4 ⛔ retire the two code toggles LAST.
+</Info>
+
+<Info>
+**THE WORKING BUILD DOCUMENT (Zach, 2026-07-17) = the Buyer Loop artifact** — *"The Complete Buyer Loop —
+HouseLoop × Connecting-With-People"* (`claude.ai/code/artifact/97cee47b-fdb5-429b-9686-17c01c25247e`,
+internal). It carries the full 10-phase spec AND the live **build & sign-off list** we execute top to
+bottom — that page is always current on where the build stands. THIS page documents each piece as it
+SHIPS (running-doc law: update log below, body re-edited to current).
+</Info>
+
+## Update log
+
+- **2026-07-21** — **⭐ THE ONE-BRAIN DOCTRINE locked (Zach, constitutional).** Myli is ONE BRAIN across
+  voice, text, and email: one persona + one per-lead working memory + one rulebook, sitting ABOVE the
+  models — the models are swappable per-channel language engines (phone = OpenAI gpt-realtime-2.1,
+  text = Claude Sonnet; both Zach-decided 2026-07-20, text A/B parked). "One brain" ≠ "one model" —
+  this is the Intercom-Fin/Ylopo pattern every serious multi-channel AI company converged on (research
+  archive: `guides/ai-programming` §04 + the approved Myli OS plan). **The working memory already
+  exists as code**: `hl_lead_activity` (the ALL-feed) + `hl_messages` + `hl_calls` are the per-lead
+  everything-store, and `loadDossierBlock` + `loadContextBrief` (`lib/ai/lead-conversation.ts`) are the
+  roll-up — injected today into BOTH the text lane and the voice persona (warm calls). Known gap being
+  formalized: one canonical `composeMyliMemory(leadId)` composer that every channel calls identically
+  (each lane currently assembles the same blocks slightly differently); the company-line COLD-HAT law
+  stays (the front desk never name-recognizes; Myli's own line gets full memory). Voice-side runtime:
+  `guides/ai-voice`.
+- **2026-07-20** — **The status pill tells the truth + the lead mic actually silences her.** Two ships:
+  (1) the Myli-lane top-right pill is now **workflow-aware** — it reads the lead's live workflow state
+  (`active_workflow_id` → `hl_workflows.name` + the run's `current_node_id` step label, the SAME data the
+  reasoning-chain rungs render) and shows **"‹Workflow› · ‹step›"** while a workflow runs, an honest
+  **"Myli · Standing By"** when nothing is running, and **"AI paused"** when the master failsafe is off. The
+  old static **"AI watching"** label (and the hardcoded **"Monitoring nurture lead"** chip) are gone —
+  `components/ai-follow-up/MyliWatchingBadge.tsx`, updated live over the lead SSE stream. (2) The **lead-level
+  Myli mic now gates the inbound reply**: `dispatchInboundToAi` (`lib/ai/lead-conversation.ts`) reads
+  `ai_responder` right after the destination-identity block — `none` = full silence · `clone` = routed to the
+  owner's clone lane · `myli`/NULL = the watch lane. Before this, toggling Myli off on a lead did NOT stop her
+  auto-replying to an inbound text (only the masters did). **In flight** (`Myli: Standing By` plan): the standby
+  behavior itself is still the code engines below — turning it into a real canvas workflow is the next build.
+- **2026-07-17 (PM)** — **The AI Appointment Set canvas shipped + Inngest-verified** (list item 1).
+  The workflow bound to the AI's "Schedule an Appointment" tool (renamed **AI Appointment Set**) went
+  from one note to the full 7-node coordination play: partner brief → confirm 2h before → feedback ask
+  T+2h → chase T+4h (all to the showing partner) → requalify to the lead (AM tour → 4 PM same day ·
+  PM tour → 9 AM next morning) → wrap-up email. The booking itself (appointment + calendar invite +
+  stage + team alert) still fires in the tool at book time. New machinery: `schedule_followup` gained
+  appointment anchors + a showing-partner recipient; the texts step gained `recipient: showing_partner`
+  (resolved as a ROLE from the lead source's handoff config — never a hardcoded person; sends
+  `kind: notification` so it can never file into a lead thread, and drops an All-feed note). The
+  tool-layer partner text now defers to the canvas when the workflow is bound (no double brief).
+  Verified live: run completed all 7 nodes, brief delivered, all 4 beats landed at exact times, and a
+  timed beat FIRED through the sleep-until executor 250 ms after its scheduled moment (mig 0420).
+  The human-booked appointment flow is a future SEPARATE workflow on its own trigger (deferred).
+- **2026-07-17** — The artifact became THE working build document (pointer above). Shipped and live:
+  the trigger-event spine (every call/text fires + counts, mint-at-ring — proven on an organic Zillow
+  caller), SMS delivery truth (delivered/failed stamps, proven on organic sends), and the
+  `schedule_followup` workflow step (future touches at T+offset — the timed-beat primitive). Next per
+  the artifact list: the Appointment Set canvas.
+- **2026-07-14** — The live pilot era (laws locked in the persona; see below).
+
+The **Closed Loop Follow-Up** system is how HouseLoop keeps every lead alive: an AI watches
+behavior, follows up contextually, schedules future attention so nothing falls through, and shows
+the operator *exactly* what it's doing and why. It is **signal-driven with one active workflow per
+lead** — not a chatbot, drip campaign, or generic CRM automation.
+
+The single source of truth for this system is the internal GT doc
+`GT_HOUSELOOP_MYLI_CLOSED_LOOP_FOLLOWUP_v1`. This page is the developer-facing version.
+
+## The mental model
+
+| Object | What it is | Where it shows |
+|--------|-----------|----------------|
+| **Stage** | Business pipeline position (New Lead, Appointment Set, Closed…) | Left lane (lead identity) |
+| **Workflow** | What the AI is *currently doing* — one goal + cadence | The cockpit "Current Workflow" |
+| **Signal / Trigger** | A transient runtime event that wakes the AI | Cockpit "Active Triggers" |
+| **Future Trigger** | Scheduled future attention ("the floor") | "Next Actions" |
+| **Memory** | Narrative relationship intelligence | Center timeline → Memory tab |
+
+**The active workflow *is* the state.** There is no separate state machine. "Monitoring nurture
+lead" is not a mode — it is the human-readable **name of the Warm Nurture workflow** that's
+currently running. "Following up after showing" = the Showing Follow-up workflow is active. One
+active workflow per lead = one state. (This is why the UI never shows robotic "State: Watching ·
+Mode: Listening" — the running workflow already says what the AI is doing.)
+
+### The AI's context & memory — the standardized language (Zach locked 2026-07-17)
+
+What the AI knows about a lead lives in exactly four places, each with ONE canonical name. This is
+the vocabulary every prompt, note, and surface uses — no synonyms, no code-words:
+
+| Canonical name | What it is | Written by | Where it shows |
+|---|---|---|---|
+| **Context** | The assembled facts — every text/call/email/website signal distilled into what's true right now (budget, timeline, family, homes discussed) | The context builder, on every conversation | The 🧠 Context panel on the lead |
+| **Memory** | The narrative relationship story over time ("she toured in July with her sister Diane, wants a duplex") | The AI, as the relationship evolves | Center timeline → Memory tab |
+| **AI Memory Update** | The AI's journal NOTE when it needs the team (or its future self) to know its working state — plain human English, always signed | Any AI writer, as an `hl_notes` row | The Notes tab + the All feed, author pill up top |
+| **Instructions** | Team-authored guidance the AI must follow on this lead (showing instructions, seller constraints, do-not-disclose) | A human (or a coordinating AI), as a note | Notes; the AI checks them before acting |
+
+The July-pilot jargon ("SHOWING PLAY", "PLAY UPDATE", "in the pocket") is retired — those notes
+are preserved on their leads tagged **AI Clone (July pilot)**, but no prompt or writer uses that
+language anymore. A note that needs a translator is a failed note.
+
+## Head and brain
+
+The system splits cleanly into two halves:
+
+- **The HEAD (read-out)** — the lead-detail reasoning chain. It renders the AI's operating state
+  as a top-down chain of causality, so an operator can *see* the AI think:
+  `something happened → the AI noticed → it loaded a workflow → it did something → it scheduled
+  future attention → it waits`.
+- **The BRAIN (Workflow Engine)** — the native `hl_workflows` engine + Workflow Builder. It decides
+  which workflow is active, advances its steps, and emits signals.
+
+They connect through one contract so the engine drops in with **zero UI rework**.
+
+### The reasoning chain (the HEAD)
+
+Read top-down, in the exact order operations happen:
+
+| Section | Answers | Fed by |
+|---------|---------|--------|
+| **Status line** | Who/what state | `hl_workflows.name` of the lead's one active workflow + its current step. **No fabricated default** — the old fake "Warm Nurture / Monitoring nurture lead" fallback was removed; no workflow running reads honestly as **"Myli · Standing By"**. |
+| **Active Triggers** | What happened? | The signals that started/interrupted the workflow (`property_tour_requested`, `no_reply_24h`, `showing_feedback_due`…). |
+| **Current Workflow** | What system is running? | The active `hl_workflows` row (name + goal). **Always present.** |
+| **Current Action** | What is the AI doing right now? | The current step the workflow is executing (sending / waiting / scheduling…). |
+| **Next Actions** | What happens next? | The workflow chain (`hl_scheduled_actions` — "the floor") **plus** AI-owned tasks/appointments mirrored up. Human-owned items stay in Tasks & Appointments. |
+| **Recent Actions** | What already happened? | Completed steps / fired scheduled actions. |
+
+### Where the HEAD lives
+
+The reasoning chain renders on **both** parity lanes of the lead detail page (`apps/houseloop-crm`) —
+it is **not** left-lane-only. Each lane stacks the same skeleton:
+
+- **📋 Tasks & Appointments** — a **separate, always-on** section (dynamic tasks/appointments outside
+  a workflow). It is **never gated** — it shows AI-on or AI-off, on both lanes.
+- **🤖 AI Workflow** — the **gated** reasoning chain (Active Triggers → Current Workflow → Current
+  Action → Next Actions → Recent Actions). The **RIGHT lane** (`MyliLane.tsx`, Myli) shows it whenever
+  Myli is engaged; the **LEFT lane** (`components/leads/detail/LeadLane.tsx`, the agent's clone) shows
+  it when the human's **AI Mode** is on.
+
+Both lanes drive the same `AiReasoningChain` component via an `actor` param (`clone` | `myli`). See
+[Lead Detail — Parity Lanes](/guides/lead-detail-parity-lanes) for the full skeleton and the
+Next-Actions mirror rule (AI-owned tasks appear in both places; human-owned tasks stay only in Tasks
+& Appointments).
+
+<Note>
+The two AIs are separate columns on `hl_leads`: **`assigned_ai_agent_id`** (Myli — the relationship
+owner, right lane, swappable, on every lead) and **`ai_clone_id`** (the agent's clone — left lane,
+toggled by AI Mode or SLA failover). Both can be active at once. See
+[Care-Team Routing](/guides/care-team-routing).
+</Note>
+
+### The HEAD ↔ BRAIN contract
+
+The Workflow Engine connects to the cockpit through one join:
+
+```
+hl_leads.active_workflow_id → hl_workflows.id   (the lead's one active workflow)
+```
+
+The engine sets `active_workflow_id` on a signal/trigger; the cockpit reads it. The engine emits
+**signals** (lights up Active Triggers), advances **steps** (lights up Current Action), and
+schedules the next step into `hl_scheduled_actions` (the floor, which already feeds Next Actions).
+
+## Build state
+
+<CardGroup cols={2}>
+  <Card title="Live now" icon="check">
+    - Dual-pipeline stages
+    - 3-column lead layout
+    - Center timeline + Memory tab (placeholder)
+    - **Future-trigger floor** — `hl_scheduled_actions` + Inngest executor (verified in prod)
+    - **Reasoning-chain HEAD** — the cockpit read-out (renders SSOT defaults as honest placeholders)
+    - Workflows admin hub (Scheduled + Run Log)
+  </Card>
+  <Card title="Planned (the BRAIN)" icon="clock">
+    - Signals engine (transient runtime triggers)
+    - Workflow wrapper — one active workflow per lead
+    - `hl_leads.active_workflow_id` join
+    - Workflow Builder (event trigger → steps → timing)
+    - Facts-as-pills + Memory narrative engine
+  </Card>
+</CardGroup>
+
+The cockpit reads **real state only** — the fabricated "Warm Nurture / Monitoring nurture lead" placeholders
+were removed (2026-07-04/07-20). When a workflow runs, the rungs + the header pill show its real name + current
+step; when none is running they say so honestly ("No active workflow" / **"Myli · Standing By"**). The one gap
+still open: the standby *behavior* is the code engines below, not yet a real canvas workflow — that's the
+`Myli: Standing By` build. When it lands, the same `active_workflow_id → hl_workflows.id` contract lights up the
+pill with a real standby workflow name + step, zero UI rework.
+
+## THE LOCKED MODEL — the Default AI Follow-Up Workflow (Zach, 2026-07-09)
+
+This section is the current build plan for closed-loop follow-up. It extends "the active workflow *is* the
+state" to its logical end: **every lead is ALWAYS in exactly one workflow — a triggered one, or Myli's standby.**
+
+### The design
+
+1. **THE DEFAULT AI FOLLOW-UP WORKFLOW.** One real canvas workflow, auto-enrolled on any lead that has **no
+   other active workflow**. Its steps are Myli's standing orders — visible and editable in step config, never
+   buried in code:
+   - *On inbound message* → read the full lead context → update context → craft and send the reply.
+   - *On task due* → act on it.
+   - *On silence* → the floor cadence (never the last to text; nurture touch on schedule).
+   This IS "AI Follow-Up." Her operating prompt lives in the workflow's nodes (the AI Converse node from
+   `GT_HOUSELOOP_AI_MODE_IS_A_WORKFLOW`, locked Option A 2026-07-04).
+
+2. **The green dot.** The AI Follow-Up master toggle arms/disarms the default workflow globally:
+   🟢 ON = every idle lead sits in Myli's standby workflow — she watches, responds, acts.
+   ⚪ OFF = the default workflow is dormant; Myli takes **zero** autonomous action anywhere. It is the
+   autonomy kill switch ("if the AI is going rogue") — it does **NOT** gate templated workflow sends; those are
+   governed by each workflow's own Trigger Events toggle.
+
+3. **The override / resume stack.** A trigger event fires its specific workflow → that workflow **suspends**
+   the default AI Follow-Up workflow on that lead and owns it. A workflow that triggers another workflow keeps
+   the override alive down the chain. When the chain **ends**, the lead **falls back into the default AI
+   Follow-Up workflow** automatically. No lead ever dangles with nothing running.
+
+4. **Auditability.** Every default-workflow action = a run-log row + a context receipt (what she saw, which
+   context blocks, which tools, what she decided and why) — same audit law as every other Myli send.
+
+### Current state (honest)
+
+Today the default workflow **does not exist**. When a registration workflow completes, nothing is running on
+the lead. The standby behaviors live as **code engines behind two toggles, both OFF**:
+`ai_conversations.enabled` (inbound conversation — `lib/ai/lead-conversation.ts`) and `ai_closed_loop.enabled`
+(floor cadence / tasks-due / daily home — `ensure-floor.ts`, `followup-cadence.ts`, `floor-backstop.ts`).
+Those engines become the **implementation under the default workflow's nodes** when this builds — the shell
+changes from invisible code to a visible canvas; the brain is already built.
+
+### Build order (when Zach greenlights)
+
+1. The AI Converse node type (canvas-visible, prompt-carrying, run-log + context-receipt on every action).
+2. The Default AI Follow-Up workflow canvas (standing orders as steps; the engines wired underneath).
+3. Auto-enroll + the override/resume stack (`hl_leads.active_workflow_id` discipline: triggered workflow
+   suspends the default; chain end re-enrolls).
+4. The 🟢/⚪ green-dot indicator on the AI Follow-Up nav reading the master toggle.
+
+## THE LIVE PILOT ERA — what 2026-07-14 locked (Zach + Adam, live fire on real leads)
+
+On 2026-07-14 this system stopped being an architecture and got run BY HAND on four real Zillow leads
+(Shamir Pearson, Renita Ford, Cheryl Brown, Ubah Mindingall — two tours booked and partner-accepted the same
+day). Every law below was dictated by Zach mid-conversation and is now LIVE in the AI ISA role persona
+(`hl_role` 4aa8203d, persona v2 loaded + verified 2026-07-14 ~15:10 CT).
+
+### The working artifacts (the operating documents, updated live all day)
+
+| Artifact | What it is |
+|---|---|
+| **The Closed Loop — AI Buyer Playbook** (`claude.ai/code/artifact/3bf118d9…`, v7) | THE one working document: the full buyer journey end-to-end — pull-in defaults, the first-touch sequence, the FULL message simulation from the Zillow request to the booked tour, the close ladder, the Partner Brief pattern, the wrap-up email mock, the follow-up engine, the what-ifs |
+| **Connecting-With-People, shipped architecture** (`claude.ai/code/artifact/4e23cb29…`) | Verbatim copy of the in-app Myli Playbook page for side-by-side comparison — also now fully transcribed into [the framework guide](/guides/connecting-with-people) |
+| **The AI Architecture — Brain, Hands, Machinery** (`claude.ai/code/artifact/46842d84…`) | The whole system on one page: persona = brain · AI Toolbox = hands/triggers · workflows = machinery, context injection, the three trigger families, the safety stack |
+| **AI Toolbox wireframe v1** (`claude.ai/code/artifact/43f18abe…`) | Zach-dictated page spec: tool-chest of big KPI blocks — toggle, description, call count, per-tool Run Log modal (who/when/which lead) |
+| **Lead Sources wireframe v2** (`claude.ai/code/artifact/432fb7fa…`) | Trigger-Events-mimic rebuild (Lee building) — integration tabs + defaults band + compact source rows |
+
+### The laws the live fire wrote (2026-07-14) → owned by the conversation chapter
+
+These conversation laws — Answer First · the Cold-Lead Law · Earned Collaboration · the Close Ladder · the
+Stale-Lead Nudge · the Pocket (enforced ignorance) · Never Unannounced · the Tour Offer is Earned · Dig-Deep
+Gold — are LIVE in the AI ISA persona and documented ONCE, in
+[Connecting With People → the live-pilot hardening](/guides/connecting-with-people). They govern *what she
+says*. This chapter owns only *when the engine fires* — the floor + the scheduled-action stack above. One
+fact, one home.
+
+### The architecture nouns Zach named (~16:20–16:45 CT)
+
+- **THE AI TOOLBOX** — the tool catalog (`lib/agent-runtime/capabilities.ts`) becomes a first-class page
+  (tool-chest of KPI blocks), plus an **AI Tools section on Trigger Events** and an **AI Tools section on
+  Workflows** — exactly mirroring the existing anatomy.
+- **AI tools are TRIGGERS; workflows are the MACHINERY they fire.** In-conversation = tool;
+  because-of-conversation = workflow. `schedule_appointment` → the Appointment Set workflow;
+  `create_saved_search` → the Saved Search Setup workflow (quiet web registration → search → wrap-up email).
+- **The clone is a CONFIG on the human** — Lee's rewire (Phase 1 shipped, commit `037c5a3121`): clone resolved
+  from human + `hl_agent_clone_config` + per-lead `ai_mode_enabled`; the fake "(AI)" user rows retire.
+
+The build spec for all of it: [Adam — AI Toolbox & Clone Autonomy PRD](/wip/adam-ai-toolbox-prd).
+
+## Related
+
+- [Connecting With People Framework](/guides/connecting-with-people) — the conversation engine (full shipped architecture, in words)
+- [Lead Detail — Parity Lanes](/guides/lead-detail-parity-lanes) — the two-lane skeleton both lanes share
+- [Care-Team Routing](/guides/care-team-routing) — the two-AI model + SLA failover ladder
+- [AI Clone](/guides/ai-clone) — what the agent's clone can do
+- [Tour & Contact Requests](/guides/tour-and-contact-requests) — the first workflow modeled
+- [Run Log](/guides/run-log) — where every fired action and handoff is audited

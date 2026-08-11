@@ -1,0 +1,115 @@
+---
+title: "Roadmap: The CMA Tool in the CRM"
+description: "The plan to move the listing-presentation build from a Caleb conversation into a first-class HouseLoop CRM feature — Listings → CMA Tool: type an address, it makes a card, runs the full Matrix→Cloud CMA→HouseLoop-template pipeline end to end, streams its findings to the page as live HTML, and you talk to it in a chat bar to make corrections in real time. Driven by locked, mapped Camp David browsers."
+---
+
+{/* legacy-banner */}
+<Warning>
+  **LEGACY — UNVERIFIED.** This page predates the Master QA build and has NOT been verified
+  against the product. The canonical docs are being rewritten lane-by-lane as each lane goes
+  green — check the lane's tab first.
+</Warning>
+
+<Note>
+**The goal, in Zach's words.** A new **Listings** left-nav item with a **CMA Tool**. It works like creating a TC
+loop: you type an **address**, it makes a **card**, and the card runs the whole process end to end. A big **chat
+bar** lets you talk to it exactly like you talk to Caleb here — it has all the tools to do the work and fix things
+in real time. It **streams HTML of its findings to the page live**, you can **edit**, and it renders into the
+**locked gold-star template**. The whole thing is powered by **Camp David browsers, mapped step-for-step** so it
+runs identically every single time.
+</Note>
+
+## The end-state template — the GT canon (LOCKED)
+
+Every CMA renders into the exact book proven on the Kenney Hunt / 9928 W 52nd St build (the **gold-star reference**):
+
+**Cover → By the Numbers → Listing Presentation → CMA cover → Closest Comparables (section) → Additional Area
+Comparables (section) → per-comp agent analysis (lead sentence + 4–5 bullets + difference column + all photos) →
+"The Bottom Line" conclusion page (read + As-Is / After-Work range boxes) → Suggested Price Range (white write-in
+box) → Thank You.**
+
+The reference PDF + all source data/photos are locked at
+`.claude/reports/listing-presentation-work/merriam-9928-w-52nd/` and `.../deliverables/`. The build engine + the
+step-by-step recipe live in [The Reproducible Build Engine](/listing-presentation/build-engine) and
+`viktor-okoth/BUILD-HANDOFF.md`.
+
+## The autonomous pipeline (address in → book out)
+
+1. **Matrix (Camp David persistent Chrome):** log in, search by subdivision, Select All comps.
+2. **Cloud CMA handoff:** click the Matrix **Cloud CMA** button → comps push into Cloud CMA via SSO URL (`mlsnums=…`).
+3. **Cloud CMA form:** auto-fills MLS numbers → click Fetch Listings → Cloud CMA fetches and creates the report.
+4. **Export:** navigate to `/cmas/{id}/publish` → `page.pdf()` via Playwright/CDP → PDF on disk.
+5. **Extract:** `pdfimages` (all photos) + `pdftotext` (comp data) → `data.json` + `photos.json`.
+6. **Rebuild + rebrand** into the HouseLoop template with `build-cma.py` (2-section, per-comp analysis, conclusion).
+7. **Assemble** deck + By-the-Numbers + CMA in the locked order → the final PDF + live HTML.
+
+Steps 1–4 are now **fully automated** in `tools/mls-scraper/mls-cma-report.mjs` running on Camp David.
+Steps 5–7 are **proven twice** (Viktor + Merriam) and fully generalized — wrapping them as a server-callable
+module is P2.
+
+## The build plan (phased — each phase ships before the next)
+
+<Steps>
+<Step title="Phase 0 — Lock the canon ✅ DONE">
+The template + conclusion are frozen as the GT gold-star and committed: `.claude/reports/listing-presentation-work/
+GOLD-STAR.md` names the render target (the Kenney Hunt / 9928 W 52nd St 34-page book) and the exact page order. The
+env/data-driven engine + two shipped reference books (Kenney, Viktor) + reproducible sources are all in the repo.
+These docs are the step-by-step recipe.
+</Step>
+<Step title="Phase 1 — Map + lock the Matrix→Cloud CMA browser flow ✅ DONE 2026-07-24">
+`tools/mls-scraper/mls-cma-chrome-up.sh` (persistent Chrome :18812 guard, profile `/Users/lee/mls-cma-profile`) +
+`tools/mls-scraper/mls-cma-report.mjs` — fully verified end-to-end: login self-heal → subdivision comp search →
+Select All → Matrix Cloud CMA button → SSO handoff (`mlsnums` URL param pre-fills `cma[criteria]`) → Fetch Listings
+→ redirect to `/cmas/{id}` → navigate to `/cmas/{id}/publish` → `page.pdf()` → PDF on disk.
+
+**Proof (2026-07-24):** CMA ID 82095209, 7 Brookhaven comps, 41-page 7.5 MB PDF committed at
+`.claude/reports/cma-tool-p1-export-2026-07-24.pdf`. Commits `d77f01e846` + `3d93f30cbc`.
+
+Key discovery: Cloud CMA's Publish page is the full CMA report as HTML — there is no "Download PDF" button.
+`page.pdf()` via Playwright/CDP calls Chrome's native `Page.printToPDF` and works on a non-headless instance.
+</Step>
+<Step title="Phase 2 — The build module (NEXT)">
+Wrap the downstream half of the pipeline as a server-callable module:
+
+1. **Extract from Cloud CMA PDF** — `pdfimages -png cma.pdf /tmp/imgs/img` (all comp photos) +
+   `pdftotext cma.pdf -` (comp data) → parse into `data.json` + `photos.json`. Recipe in
+   `viktor-okoth/BUILD-HANDOFF.md` — read it before touching this step.
+2. **Run the build scripts** (all in `.claude/reports/listing-presentation-work/`):
+   - `build-cma.py` — renders the CMA section (2 sections + per-comp analysis + conclusion)
+   - `build-lp-v3.py` — renders Cover + By the Numbers
+   - `build-track-record.py` — renders the track record section
+3. **Assemble** in the locked page order using `pdfseparate` + `pdfunite` → final PDF.
+4. **Wrap** as `{cmaId, pdfPath, callSheet} → {htmlPath, pdfPath}` server function.
+
+**Call sheet law:** seller name + subject property details NEVER come from Cloud CMA — they come from
+a call sheet (agent-filled form). Cloud CMA is for comps only.
+</Step>
+<Step title="Phase 3 — The CMA Tool UI">
+**Listings** left-nav → **CMA Tool**. Address bar → creates a **card** (the TC-loop create pattern, reusing our
+component set — no lookalikes). The card runs the pipeline via an **Inngest event → Camp David CDP consumer**
+(the FUB DB-queue→consumer pattern; "Inngest or it doesn't exist"). A **chat bar wired to Myli** with the pipeline
+tools; the page **streams the CMA HTML live** as findings land, and it's **editable** in place. Renders the locked
+template.
+</Step>
+<Step title="Phase 4 — Full docs + canvas-is-truth verification">
+Every step documented; the whole thing reproducible address-in → book-out; verified end to end on a real listing.
+</Step>
+</Steps>
+
+## Architecture (per the constitutional rules)
+
+| Piece | What it is | Rule it honors |
+| --- | --- | --- |
+| **MLS data job** | Inngest event → Camp David CDP consumer drives Matrix + Cloud CMA on the persistent Chrome, exports the PDF, hands off to the build module | Inngest-or-it-doesn't-exist · no-headless-browsers · locked/mapped steps |
+| **Build module** | `build-cma.py` + deck/track-record builders, server-callable, env-driven, renders the gold-star template | Reproducible, data-driven |
+| **CMA Tool UI** | `Listings` → `CMA Tool`: address → card → live HTML preview → edit, built from the existing CRM component set + the TC-loop create pattern | Reuse-not-recreate · UI doctrine |
+| **The chat bar** | Myli with the pipeline tools — re-run, re-extract, re-price, edit a comp's analysis, correct in real time | The AI already lives in our stack (no MCP server) |
+
+## Honest dependencies & risks
+- **Phase 2 is the current gate.** P1 is closed — the pipeline runs fully automated. P2 (extract → build → assemble)
+  is the next hard step: pdftotext output structure varies by Cloud CMA template, so the parser needs to handle edge
+  cases. Recipe in `viktor-okoth/BUILD-HANDOFF.md`.
+- **Pricing stays judgment.** The recommended list is left blank (white write-in box) for the agent; the tool
+  surfaces the range and the read, it does not auto-price.
+- **Data honesty is structural.** Real photos only, the seller name comes from the call sheet (never the Cloud CMA),
+  thin markets are labeled thin, additional comps are context not equals.

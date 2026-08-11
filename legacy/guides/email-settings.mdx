@@ -1,0 +1,134 @@
+---
+title: "Email Settings"
+description: "How HouseLoop email routing works — the three sender identities, the rail each uses (personal Gmail vs Resend), signatures, reply-routing, and send-as aliases. Settings -> Email."
+---
+
+{/* legacy-banner */}
+<Warning>
+  **LEGACY — UNVERIFIED.** This page predates the Master QA build and has NOT been verified
+  against the product. The canonical docs are being rewritten lane-by-lane as each lane goes
+  green — check the lane's tab first.
+</Warning>
+
+Email in HouseLoop is organized by one rule: **who an email is *from* decides everything** —
+the alias it sends as, the rail it sends on, whether a signature is appended, and where replies
+go. **Settings -> Email** is the control panel, split into four tabs.
+
+## The three sender identities
+
+| Sender | Rail (how it sends) | Signature | Replies land in |
+|---|---|---|---|
+| **A human** (e.g. `zach@spradlingrealtygroup.com`) | their **Gmail** (OAuth) | their own | their Gmail |
+| **An AI agent - Myli** (`myli@houseloop.ai`) | **Resend** (not her Gmail) | hers, appended | her Gmail inbox |
+| **System / bulk** | **Resend** (`updates@` / `notifications@`) | none | system / team |
+
+The key design choice: **Myli's automated email rides Resend, never her Gmail.** Because
+`houseloop.ai` is a verified Resend domain, any address at it (`myli@`, `updates@`,
+`notifications@`) is a valid **send-as alias** through Resend with no per-address setup. So her
+welcomes and weekly alerts send *as* `myli@houseloop.ai` without ever touching her Gmail —
+there's nothing to "burn" at volume.
+
+### Send one place, receive another
+
+Outbound and inbound are decoupled by the `reply-to` header. Myli **sends** via Resend (no Gmail
+volume) but `reply-to: myli@houseloop.ai` means **replies land in her real inbox**, where inbound
+sync processes them. Send via Resend, receive via Gmail.
+
+## The four tabs
+
+| Tab | Configures |
+|---|---|
+| **Personal Inbox** | *Your own* connected Gmail + signature + send-as aliases — for manual 1:1 email you send. |
+| **Team Email** | *Every* teammate / AI agent's identity (admin / God-mode). This is where you set **Myli's** signature and connected inbox via **Configure**. |
+| **Bulk Email** | System transactional + marketing senders (`updates@`, `notifications@`) and saved-search alert delivery. |
+| **Email Compliance** | Footer, unsubscribe, and the bulk sender identity (from / reply-to). |
+
+## Email signatures — setup flow
+
+Signatures are **dual-written** to two locations. Both must be set together.
+
+### 1. Gmail native signature
+
+Set via Google Workspace Admin API (`set_signature` tool). This controls what Gmail shows
+when the agent composes manually from their inbox (webmail or mobile).
+
+```bash
+# Example: set Myli's Gmail signature
+mcp__google-workspace-admin__set_signature({
+  user_email: "myli@houseloop.ai",
+  signature: "<html signature string>"
+})
+```
+
+### 2. CRM stored signature
+
+Stored in the `hl_oauth_connections.signature` column for the agent's email. The CRM reads this
+and appends it server-side on:
+- **Automated sends** via Resend (`lib/email/resend-send.ts`)
+- **Manual sends** from the CRM composer via `/api/email/send`
+
+Update via SQL or the CRM **Settings -> Email -> Team Email -> Configure** UI.
+
+### Signature HTML rules
+
+- **Max ~10KB** (Gmail native signature limit). Host images as URLs, never inline base64.
+- **Headshot:** `<img src="https://houseloop.ai/brand/headshots/{name}.jpg">` — see [Brand Assets](/guides/brand-assets#headshots).
+- **HouseLoop logo:** `<img src="https://houseloop.ai/brand/logo-full.png">` — never recreate as CSS text.
+- **eXp logo:** `<img src="https://houseloop.ai/brand/partner/exp-realty.png">`.
+- **Outer wrapper:** `max-width: 400px` to prevent stretch in wide email clients and the CRM preview card.
+- **Two approved variants** (Spradling Group + HouseLoop Native) — specs at [Brand Assets: Email Signatures](/guides/brand-assets#email-signatures-locked-2026-06-08).
+
+### Adding a new team member's signature
+
+1. Save their headshot to `apps/houseloop-web/public/brand/headshots/{name}.jpg` and push.
+2. Choose the correct variant (Spradling Group for human agents, HouseLoop Native for AI agents).
+3. Build the HTML from the locked spec (see Brand Assets page).
+4. Set Gmail signature via `set_signature`.
+5. Set CRM signature in `hl_oauth_connections.signature` for their email.
+6. Verify: open Gmail compose, check the signature renders. Open CRM lead detail, send a test email, check the signature in the sent copy.
+
+## How automated agent email actually sends
+
+When a workflow step sends "as the assigned agent" (`sender_mode: 'assigned'`), the runtime:
+
+1. Resolves the lead's assigned agent (Myli) -> `From: Myli <myli@houseloop.ai>`.
+2. Pulls her stored signature (`hl_oauth_connections.signature`, set in **Team Email -> Configure**)
+   and **appends it** to the email body.
+3. Sets `reply-to` to her inbox.
+4. Sends via **Resend** (`sendViaResend`).
+
+So whatever you configure in **Team Email** is honored on every automated send — signed,
+reply-routed, and Gmail-safe. (Manual 1:1 email from the composer still sends via the human's
+Gmail and appends their signature server-side via `/api/email/send`.)
+
+## The deliverability guard — test email NEVER hits Resend (LAW, 2026-07-10)
+
+QA and the registration test harness send to fake `@example.com` recipients. Those bounce 100% (it's
+an RFC-reserved dead domain) and **every bounce burns our Resend sender reputation.** A "don't do that"
+convention is unenforceable, so it's a **hard gate in code at every send chokepoint** — unbypassable:
+
+- `isUndeliverableAddress(to)` blocks reserved/test domains (`example.com/.org/.net`, `.test`, `.invalid`,
+  `localhost`) — real lookalikes like `examplerealty.com` pass. Guards live in
+  `lib/email/deliverability-guard.ts` (CRM **and** website).
+- Wired into **every** Resend path: CRM `sendViaResend`, website `waitlist` confirm, website
+  `saved-search alerts`. A new send path MUST call the guard first.
+- A blocked send is **visible, not silent:** it returns `not delivered: blocked test/undeliverable
+  address`, and the CRM path writes a **`blocked` event to `hl_email_event`** — so the Email analytics
+  shows **"blocked (never sent)"** instead of a fake "bounced."
+
+<Note>
+**Reading the Email analytics:** the bounce/open/delivered/**blocked** counts come from
+`hl_email_event` (Resend webhook events), **not** `hl_email_send_log` (that's the manual composer's
+agent→lead sends). A pile of `*-registration-*@example.com` "bounces" = QA test noise, now caught by
+the guard as `blocked`.
+</Note>
+
+## Reference
+
+- `apps/houseloop-crm/lib/email/resend-send.ts` — Resend sender (`from`, `reply_to`) + the deliverability gate
+- `apps/houseloop-crm/lib/email/deliverability-guard.ts` · `apps/houseloop-web/lib/email/deliverability-guard.ts` — the hard test-address block (`isUndeliverableAddress`)
+- `apps/houseloop-crm/lib/workflows/execute-step.ts` — `emailIdentityFor` (from + reply-to + signature)
+- `apps/houseloop-crm/lib/agent-runtime/resolve-send-identity.ts` — who a send goes out as
+- Settings -> Email -> **Team Email -> Configure** — per-agent identity + signature
+- [Brand Assets: Email Signatures](/guides/brand-assets#email-signatures-locked-2026-06-08) — the two approved signature variants
+- [Email Templates](/guides/email-templates) · [Team Communications](/guides/team-communications)

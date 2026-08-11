@@ -1,0 +1,176 @@
+---
+title: "Email Templates"
+description: "How HouseLoop's email template system works — production HTML templates, the preview system, merge fields, folder pills, and the campaign integration."
+---
+
+{/* legacy-banner */}
+<Warning>
+  **LEGACY — UNVERIFIED.** This page predates the Master QA build and has NOT been verified
+  against the product. The canonical docs are being rewritten lane-by-lane as each lane goes
+  green — check the lane's tab first.
+</Warning>
+
+HouseLoop uses an AI-assisted email template system. Templates are full production HTML
+with inline styles and merge field placeholders — the exact HTML that gets sent to leads
+via Resend. They're stored in the CRM database and previewed in an iframe that renders
+them exactly as they'd appear in a real inbox.
+
+## How templates are created
+
+Templates are **not** composed in a WYSIWYG editor. The workflow is:
+
+1. **Describe** — tell the AI agent (Lee) what email you want in plain English.
+2. **Generate** — Lee builds the full production HTML (logo, listing cards, CTA button, unsubscribe footer).
+3. **Save** — the HTML is saved to `hl_templates` in the CRM database.
+4. **Preview** — open the template in the CRM, click "Preview Email" to see it rendered in an iframe.
+5. **Iterate** — request changes, Lee updates the HTML, preview again.
+6. **Lock in** — when approved, the template becomes the single source of truth for that email type.
+
+## Template anatomy
+
+Every HouseLoop email follows a consistent 6-section structure:
+
+| Section | Description |
+| --- | --- |
+| **Logo header** | White background, HouseLoop logo PNG — **absolute** URL `https://houseloop.ai/brand/logo-full.png` |
+| **Body content** | Template-specific (greeting, listing cards, market data, etc.) |
+| **CTA button** | Brand blue (`#2D6DFF`) button linking to the relevant page |
+| **Manage link** | "Manage your preferences at houseloop.ai/updates" |
+| **Promo band** | Dark navy band: "Never miss your HouseLoop alerts" |
+| **Footer** | Unsubscribe link + Privacy Policy (CAN-SPAM required) |
+
+<Warning>
+The logo `<img src>` **must be an absolute URL**. A relative `/houseloop-logo.png` renders as a
+broken image in email clients (and in the preview iframe) because there's no `houseloop.ai` base
+to resolve against. Use `https://houseloop.ai/brand/logo-full.png`.
+</Warning>
+
+## Canonical email shells — agent-facing vs. lead-facing
+
+Every HouseLoop email is wrapped in ONE canonical branded shell: HouseLoop logo header
+(`logo-full.png`) → white card → HouseLoop lockup → footer. There are **two expressions of the
+same shell, split by audience** — same look, different footer:
+
+| Audience | Shell | Where it lives | Footer |
+| --- | --- | --- | --- |
+| **Lead-facing** — listing alerts, saved searches, seller updates (sent *to the lead*) | `marketing_base` template | `hl_templates` (DB) — full branded HTML per template | `{{company.footer}}` with CAN-SPAM unsubscribe |
+| **Agent-facing** — New Lead alert, AI Follow-Up, website digest, system alerts (sent *to the team*) | `notificationShell()` | `lib/email/notification-shell.ts` (code) | canonical brand footer, no unsubscribe (internal) |
+
+**How agent notifications get the shell:** `lib/notifications/dispatch.ts` wraps every team/system
+notification email in `notificationShell()` at send time. A notification template body is therefore
+just the **inner** message (heading + card + CTA) — the shell owns the logo header + lockup + footer,
+so no notification email is ever hand-rolled. `client_message` templates (tour/contact acks sent to
+leads) are already full standalone emails and are **not** re-wrapped.
+
+<Warning>
+**REUSE_NOT_RECREATE — never hand-roll a `<div>` email.** Lead-facing email → build on the
+`marketing_base` structure; agent notification → `notificationShell()`. The two shells are visually
+identical and must stay in sync (or be unified). A hand-rolled notification email with no logo/footer
+is a bug.
+</Warning>
+
+## Merge fields
+
+Templates use `{{namespace.field}}` placeholders that get resolved with real data at send
+time. The canonical registry is `apps/houseloop-crm/lib/merge-fields.ts` (preview) +
+`lib/email/template-merge.ts` (send). A template body is real copy with merge fields **embedded** —
+the body is never itself a single token.
+
+| Group | Fields |
+| --- | --- |
+| **CONTACT** | `first_name`, `last_name`, `full_name`, `email`, `phone`, `crm_url` |
+| **LISTING** | `address`, `url` (home link), `price`, `beds`, `baths`, `sqft` |
+| **AGENT** | `full_name`, `email`, `phone` |
+| **MARKET** | `area_name`, `avg_price` |
+| **SEARCH** | `name`, `match_count`, `url` |
+| **REQUEST** | `address`, `date`, `time`, `message`, `type`, `url`, `photo`, `price`, `beds`, `baths` |
+| **NOTIFY** | `title` (computed team-alert headline, e.g. "Jordan liked 123 Main St"), `body`, `source` (lead source) — injected at fire time by `dispatch.ts` |
+
+`{{contact.crm_url}}` is the per-lead deep link into the CRM — used by team-alert "View lead"
+buttons. Custom fields from `hl_custom_fields` automatically join via `{{contact.<key>}}`.
+
+Dynamic blocks like `{{listing_cards}}` are resolved at send time by the specific
+automation function — they're template-specific, not in the merge field registry.
+
+## Preview system
+
+The CRM template editor at `/settings/email-templates/[id]` has a **"Preview Email"**
+button that opens the `EmailPreviewModal`:
+
+- **Preview** — full HTML rendered in an iframe, exactly as it looks in an inbox
+- **HTML** — raw source code view
+- **Desktop** — 600px viewport width
+- **Mobile** — 375px viewport width
+
+The preview resolves merge fields with sample data (Jordan Avery, Overland Park, $425K)
+and shows which merge fields are used in the template.
+
+For full HTML templates (`body_source = 'html'`), the editor shows a read-only code
+textarea. Editing happens through the AI agent, not the WYSIWYG.
+
+Notification templates are also reachable from **Settings → Notifications** — the View (eye) on
+any row opens a modal that previews + inline-edits the template and deep-links here to the full
+editor. See [Notifications](/guides/notifications).
+
+## Template list page (folders + columns)
+
+The list at `/settings/email-templates` (and `/settings/text-templates`) has:
+
+- **Folder filter pills** — tokenized, counted, single-select category pills (same look as the Run
+  Log filters): `All N` + one pill per category, each its own color. SSOT for label+color is
+  `lib/templates/categories.ts`; the pill row is `components/settings/templates/TemplateCategoryFilter.tsx`.
+- **Columns:** `TYPE` (the category pill, first column) · `TEMPLATE` (name + subject) · `CREATED`
+  · `VIEW` (eye → preview) · `ACTIONS`. The raw template `key` is not shown (not human-readable).
+
+## Campaign integration
+
+The campaign composer at `/settings/email-campaigns` includes a **"Use Template"** button
+that lists all available templates. Selecting one pre-fills the campaign's subject line
+and email body.
+
+## Database schema
+
+Templates live in `hl_templates` (Railway houseloop-crm database):
+
+| Column | Type | Purpose |
+| --- | --- | --- |
+| `id` | uuid | Primary key |
+| `kind` | text | `'email'` or `'text'` (SMS) |
+| `name` | text | Display name |
+| `key` | text | Immutable slug for code references |
+| `category` | text | Grouping (listing_alert, team_alert, system_alert, welcome, …) |
+| `subject` | text | Subject line with merge fields (email only) |
+| `body` | text | Full production HTML (email) / message text (SMS) |
+| `body_source` | text | `'template'` / `'html'` / `'manual'` |
+| `visibility` | text | `'system'`, `'team'`, `'private'` |
+
+## Notification templates
+
+Beyond marketing templates, `hl_templates` also holds the **notification** templates — the
+team/system alert emails + SMS and the client-facing acks — seeded by migrations `0085`/`0086`
+(+ `0278`/`0279` for the P2/rich rebuild) and mapped per event in
+`lib/notifications/template-registry.ts`. Categories: `team_alert`, `system_alert`, `welcome`,
+`listing_alert`, `tour_request`, `contact_request`. The team/system alert **email body is the inner
+message only** — `dispatch.ts` wraps it in `notificationShell()` (logo header + lockup + footer) at
+send, so notification templates never carry brand chrome themselves. Full detail in
+[Notifications](/guides/notifications).
+
+## Logo
+
+Emails use the canonical HouseLoop logo at **`https://houseloop.ai/brand/logo-full.png`** (the
+brand-assets SSOT). Always reference it as an absolute URL in template HTML — see the warning
+above. See [Brand Assets](/guides/brand-assets).
+
+## Reference
+
+| File | Purpose |
+| --- | --- |
+| `apps/houseloop-crm/app/(crm)/settings/email-templates/` | Template list + editor pages |
+| `apps/houseloop-crm/components/shared/EmailPreviewModal.tsx` | Preview modal (iframe) |
+| `apps/houseloop-crm/lib/merge-fields.ts` | Canonical merge field registry (preview) |
+| `apps/houseloop-crm/lib/email/template-merge.ts` | Send-time merge scope + applyMerge |
+| `apps/houseloop-crm/lib/email/notification-shell.ts` | Canonical agent-facing branded shell (logo + lockup + footer) |
+| `apps/houseloop-crm/lib/notifications/dispatch.ts` | Wraps team/system notification emails in the shell at send |
+| `apps/houseloop-crm/lib/templates/categories.ts` | Category label + token-color SSOT |
+| `apps/houseloop-crm/app/api/email/templates/` | CRUD API for templates |
+| `GT/GT - ACTIVE/GT_HOUSELOOP_EMAIL_TEMPLATE_SYSTEM.md` | Ground truth document |

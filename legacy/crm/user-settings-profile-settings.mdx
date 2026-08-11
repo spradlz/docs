@@ -1,0 +1,198 @@
+---
+title: "Profile Settings"
+description: "Profile Settings (My Profile / Account) in the HouseLoop CRM — /settings/profile resolves the signed-in user and opens their row in the shared member editor, where identity, access, connections, roles, and AI clone are edited."
+---
+
+{/* legacy-banner */}
+<Warning>
+  **LEGACY — UNVERIFIED.** This page predates the Master QA build and has NOT been verified
+  against the product. The canonical docs are being rewritten lane-by-lane as each lane goes
+  green — check the lane's tab first.
+</Warning>
+
+**In the app:** CRM sidebar → **User Settings** → **Profile Settings** — [`/settings/profile`](https://crm.houseloop.ai/settings/profile)
+
+<Info>There is no standalone profile form. `/settings/profile` immediately resolves the signed-in user and redirects to that user's row in the shared member editor at `/settings/team/agents/[id]` — the same page used to edit any teammate. "My Profile" / "Account" and "edit a member" are one editor, self or others. The old dedicated profile form has been retired.</Info>
+
+## What it does
+
+`/settings/profile` is **not a standalone form** — it is a thin redirect. On load it calls `GET /api/profile` to find the signed-in user's id, then `router.replace`s to that user's row in the shared member editor at **`/settings/team/agents/{id}`**. If the id can't be resolved it falls back to `/settings/team`. While resolving it shows an "Opening your profile…" placeholder.
+
+The member editor is one scrollable page with a filter bar — `All · Permissions · Profile · Connections · Roles` — plus an `AI Clone` tab for human members. Edits auto-save (debounced ~600ms after the last change) and a **Save** button forces an immediate save.
+
+## What you configure
+
+The identity fields live in the member editor's **Profile** section:
+
+| Field | Editable | Notes |
+|-------|----------|-------|
+| Name | Yes | `full_name`. Re-issues the session cookie so the sidebar name updates immediately. |
+| Email | No | Read-only sign-in identity, managed via Google. |
+| Phone | Yes | `phone`. |
+| Time zone | Yes | `timezone` (Eastern / Central / Mountain / Pacific). |
+
+The surrounding editor also exposes (subject to permissions), documented in full with the Team / member editor:
+
+- **Contact Cards** — the member's **vCard** (savable contact) and **Digital Business Card** (branded image). See below.
+- **Permissions** — Access level (Owner / Admin / Member) and member Type (Human / AI Agent). Only admins can change another member's access, and you cannot change your **own** access.
+- **Connections** — Email, Calendar, Phone, and iMessage channel connections. The Email connection is the
+  Gmail integration — **[documented in full below](#connections--the-gmail-integration)**, including what it
+  does and does not sync today.
+- **Roles** — job roles for humans; AI-kind roles with per-role persona/tool/doc overrides for AI agents.
+- **AI Clone** — human members only: assign and configure the AI clone that sends as you (your phone, email, calendar).
+
+## Contact Cards (vCard + Digital Business Card)
+
+Each human member (and Myli, the standalone AI agent) has **two** shareable cards, edited in two sections of the member editor. Both are **data-driven** — every field lives in `hl_users.data`, nothing is hardcoded — and both are **public** so a text message can attach them (Twilio MMS / iMessage fetch them unauthenticated, the same mechanism Follow Up Boss uses).
+
+<Info>These are two different things. The **vCard** is a real savable contact (`.vcf`) — the recipient taps it and gets the native "Add Contact" screen. The **Digital Business Card** is a branded **image** (`.png`) you text as a picture — no save button. Per-human **AI clones** never get cards; standalone agents (Myli) do.</Info>
+
+### vCard
+
+The savable contact. Editable fields: **Name** (`full_name`), **Title** (`data.title`), **Mobile** (`data.card_phone` — a dropdown of the member's own assigned lines: Twilio dialer / iMessage / cell), **Email** (`data.card_email` — a dropdown of known addresses or a custom one), **Homepage** (`data.card_homepage`, default `houseloop.ai`), and **Notes** (`data.card_note`, default `Spradling Group powered by HouseLoop`).
+
+The section shows a live preview of what the card looks like when sent — the **collapsed** suggestion row and the **expanded** iOS contact card — plus a Copy-link and Download-`.vcf` control.
+
+Card construction rules (learned on real devices):
+
+- The **header is name + photo only** — no `ORG`, no company mash-up. iOS combines title + company into the line above the name and it reads cluttered, so the brand lives in **Notes** instead. If **both** title and company are blank, iOS shows "Unknown" there, so a title (e.g. "Realtor") is what fills that slot.
+- The **headshot is embedded as base64** inside the `.vcf`. iOS refuses to fetch a remote `PHOTO;VALUE=URI`, so a linked photo shows initials — the bytes must be inline.
+- Served as `text/vcard` at **`/api/team/vcard/[id]`** (public). A shareable web version lives at **`/c/[id]`** (a clean contact page with a "Save to Contacts" button).
+
+### Digital Business Card
+
+A branded card **image** you text as a picture. Editable fields: **Name**, **Title**, **Mobile**, **Email** (same data as the vCard — an edit syncs both). Rendered server-side (Satori / `next/og`) as a PNG at **`/api/team/card-image/[id]`** (public). The preview in the editor **is** that exact PNG shown large, so it always matches what gets sent.
+
+### Sending them
+
+The lead text composer gets two separate controls — **Send vCard** and **Send Business Card** — that attach the respective artifact (SMS via Twilio `MediaUrl`, iMessage via a BlueBubbles attachment). The picker list comes from **`/api/team/cards`**.
+
+<Tip>A member's headshot lives in the website app at `houseloop.ai/brand/headshots/<name>.jpg` and must be `https` or the card falls back to initials. `tools/houseloop-cards/enhance-headshot.mjs` (Gemini "nano-banana") can face-restore/upscale a rough photo into a clean headshot while preserving the person's identity.</Tip>
+
+## Data source
+
+- **Route page:** `apps/houseloop-crm/app/(crm)/settings/profile/page.tsx` — client component, `GET /api/profile` → redirect.
+- **`/api/profile`** (`GET` / `PATCH`) — `apps/houseloop-crm/app/api/profile/route.ts`. Reads/writes the current user's row in **`hl_users`**: `id`, `full_name`, `email`, `role`, `phone`, `timezone`, `avatar_url`, and `data->>'notification_email'`. `PATCH` updates `full_name`, `phone`, `timezone`, and `data.notification_email`, then re-issues the session cookie. (The redirect page itself only calls `GET`; edits made in the member editor go through `PATCH /api/team/users/{id}`.)
+- **`/api/team/users/[id]`** — the member editor's primary load/save. Joins **`hl_users`** with role assignments (**`hl_member_role`**) and connection state: **`hl_oauth_connections`**, **`hl_dialer_assignments`**, **`hl_imessage_assignments`**, **`hl_calendar_connections`**. Editor at `apps/houseloop-crm/app/(crm)/settings/team/agents/[id]/page.tsx`.
+- **`/api/team/roles`** — the role catalog (human and AI-kind roles).
+- **`/api/me`** — the viewer's identity + access level, used to gate the Access dropdown.
+- **`/api/team/users/[id]/roles/[roleId]`** (`PATCH`) — persists per-role overrides (persona/tools/docs/workflow_ids) on **`hl_member_role`**.
+
+**Contact Cards:**
+
+- **`/api/team/vcard/[id]`** (`GET`, public) — serves the savable `.vcf` (`text/vcard`), headshot embedded as base64. Built by `apps/houseloop-crm/lib/vcard.ts` (`buildVcard` / `vcardForUser`).
+- **`/api/team/card-image/[id]`** (`GET`, public) — the Digital Business Card PNG (Satori / `next/og`), `apps/houseloop-crm/app/api/team/card-image/[id]/route.tsx`.
+- **`/api/team/card/[id]`** (`GET`) — the card's display fields as JSON (drives the in-editor previews).
+- **`/api/team/cards`** (`GET`) — the card-able roster (humans + Myli; clones excluded) for the composer picker.
+- **`/c/[id]`** — the public web contact page (headshot + "Save to Contacts"). Renderers: `components/team/ContactCardPreview.tsx` and `components/team/VcardSentPreview.tsx`.
+- The editable card fields are stored on `hl_users.data`: `title`, `card_phone`, `card_email`, `card_note`, `card_homepage`. `PATCH /api/team/users/{id}` accepts each. All three public routes are allowlisted in `middleware.ts`.
+
+No Inngest functions are involved; all writes are synchronous CRM API calls.
+
+## How it fits
+
+Profile Settings is the User Settings entry point into HouseLoop's single member model: every teammate — human or AI agent — is one row edited through one page, and "your profile" is just your own row in it. Because your profile is your own member record, the same editor governs access levels, comms connections, and AI-clone configuration, keeping signing-in identity (name/phone/time zone, Google-managed email), permissions, and channels in one place rather than a separate account screen.
+
+## Connections — the Gmail integration
+
+**In the app:** the member editor → **Connections** → **Email**. This is HouseLoop's "connected email" —
+the equivalent of Follow Up Boss's Connected Email, and **the only path that will ever hold real email
+content.** (FUB masks most email bodies; a FUB-side privacy setting renders as `[CONTENT HIDDEN]` and the
+scraper **cannot** recover it. Waiting on FUB for email content waits forever.)
+
+### What "connected" actually means
+
+Connecting a mailbox stores a Google OAuth row in **`hl_oauth_connections`** (`provider='google'`,
+`is_active=true`) with the tokens and the `gmail.readonly` scope. Three capabilities hang off it:
+
+| Capability | How it works |
+|---|---|
+| **Sending as you** | A 1:1 composer email goes out through **your real Gmail** (`sendViaGmail`), so it sits in your Sent folder and threads normally. |
+| **Receiving (realtime)** | Gmail has no webhook. We use `users.watch()` → GCP Pub/Sub → push to `/api/email/webhook`. **Watches expire after 7 days**, so an Inngest cron re-arms them daily — that keep-alive is mandated by Gmail, it is *not* polling. |
+| **Sync Now (manual)** | `POST /api/email/sync-now` sweeps the last 30 days of the mailbox and attaches every email to its lead. |
+
+**Multi-account:** every connected mailbox gets its own watch and its **own** history cursor
+(`watch_history_id` / `watch_expiry` on its row) — no shared cursor, no cross-account bleed. Live today:
+`zach@`, `ana@`, `myli@houseloop.ai`.
+
+<Tip>
+**"Connected" only proves a token exists.** To prove mail is actually flowing:
+```sql
+SELECT account_email, is_active, watch_expiry, (watch_expiry > now()) AS watch_live
+  FROM hl_oauth_connections WHERE provider='google' AND recruiter_id IS NULL;
+```
+`watch_live = false` means inbound mail is **not** arriving, however green the screen looks.
+</Tip>
+
+### ⭐ THE MATCHING LAW (Zach, 2026-07-30)
+
+> *"We should be matching email address only, not parsing any body. If any email in my inbox contains the
+> lead's email and has my email on it — in the To, the From, the Cc or the Bcc — that should be pulled in."*
+
+**Matching is header addresses only.** From · To · Cc · Bcc. The body is fetched for **storage and display**
+— so the email is readable and its attachment reachable — and is **never** scanned to decide whose lead an
+email is. Conflating the two is how a quoted signature in a forwarded thread attaches mail to the wrong person.
+
+*"Has my email on it"* is satisfied structurally: we only read **our own** connected mailboxes, so every
+message we see is already one we are on.
+
+**Bcc caveat — SMTP, not our code:** a Bcc recipient is stripped from the copy every other recipient
+receives, so on inbound mail that header is usually absent. It earns its keep on mail **we** send, where our
+own Bcc header survives in the Sent copy.
+
+**Collaborators share ONE email, not one each.** Ana, Trish and Zach all being on a thread is normal and
+correct. Deduping on the RFC `Message-ID` means it stores as **one row on the lead**, so everyone with access
+sees the same thread, body and attachment. *Seeing* it and being *notified* are different: storage is shared;
+who gets pinged is governed by the lead's care team and notification scope.
+
+### Sync Now — the manual backfill
+
+The Email channel now has a **Sync Now** button (the Calendar channel had one; Gmail did not, so a lapsed
+watch — or a fix shipped *after* mail arrived — was unrecoverable).
+
+- **Endpoint:** `POST /api/email/sync-now { accountEmail?, days? }` (default 30 days; omit `accountEmail`
+  to sweep every connected mailbox).
+- **Per-lead variant:** `POST /api/email/inbound-sync { lead_id }` — queries `from:lead OR to:lead`.
+- **Idempotent:** safe to re-run. It **repairs** an incomplete row (missing lead link, body, or attachments)
+  and can never duplicate one.
+- **It reports what CHANGED, not what it attempted** — `matched` / `stored` / `healed` / `errors`. A run that
+  scanned 90 messages and stored nothing is not a success; that distinction is the whole point.
+
+<Warning>
+**⚠️ THE GAP THAT WAS HERE — FOUND AND FIXED 2026-07-30.** Capture always worked; **attribution and content
+did not.** The worked example:
+
+```
+From:    jnelson@fountainmortgage.com
+To:      Trish.redenbaugh@gmail.com, zach@houseloop.ai,
+         bradleybengel@gmail.com, Ana@houseloop.ai
+Subject: Bradley Bengel Pre-Approval Letter
+```
+
+The watch **caught it** — then filed it with `lead_id` NULL, no body, no attachment, **twice**. Five defects,
+all fixed in `lib/email/gmail-realtime.ts`, `/api/email/inbound-sync` **and** `/api/email/sync-now`:
+
+| # | Was | Now |
+|---|---|---|
+| 1 | Matched the **sender only** — the lead had to *be* the sender | Matches the lead as **any participant** (From/To/Cc/Bcc). Bradley was the **third recipient**. |
+| 2 | `addr()` parsed **one** address | `addrs()` parses the full comma list, splitting outside quotes/angle brackets so `"Bengel, Bradley" <b@x.com>` survives. |
+| 3 | **`Cc` never requested** | Cc **and** Bcc parsed. |
+| 4 | `format=metadata` — headers only; `body_text` **always empty** | `format=full`; the MIME tree is walked for text, HTML and attachments. |
+| 5 | **No attachment storage at all** | `attachments` jsonb holds filename/type/size/`attachmentId` — fetched on demand, **never** blobbed into Postgres. |
+
+Plus the duplicate: deduped on **RFC `Message-ID`** (identical in every recipient's copy) instead of Gmail's
+`gmail_message_id` (different per mailbox, so it could never collapse the two).
+
+**Verified live** — after the fix, one row on Bradley Bengel: `matched_on = to_or_cc`, 824-char body, and
+**`BENGEL PRE-APPROVAL LETTER CONVENTIONAL.pdf` (456 KB)** attached. Re-syncing from `ana@` correctly added
+nothing.
+</Warning>
+
+<Note>
+**The bug behind the bug, worth remembering.** After the fix the sync still reported `matched: 3, stored: 0` —
+success-shaped, and wrong. The insert was throwing `could not determine data type of parameter $2` (a repair
+query passed 12 parameters but referenced only 8; Postgres cannot type a parameter a query never uses) and a
+bare `catch {}` was eating it. **The catch now names every failure and returns it in `errors[]`.** A message
+we failed to store is an outage for that message — it has to say so, or "stored: 0" reads as "nothing new."
+</Note>
+
