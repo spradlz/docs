@@ -1,0 +1,518 @@
+---
+title: "📥 The Inbox Rebuild — FUB Replication Spec"
+description: "FUB's inbox/phone config walked screen-by-screen + the FUB→HouseLoop replication map and ordered rebuild plan"
+---
+
+# FUB INBOX + PHONE CONFIGURATION — THE REPLICATION SPEC
+
+**Walked live** 2026-08-11 in the real logged-in Follow Up Boss Chrome on Camp David (CDP :9222,
+account `spradlinggroup.followupboss.com`, seat Zach Spradling / Owner).
+**Read-only walk:** every screen was opened, every menu expanded, every modal cancelled. **Nothing was
+saved, changed, or sent.** The one unavoidable side effect is noted at the bottom.
+
+**Where the dev doc goes when this ships** (`DOCS_SECTION_DISCIPLINE` — name the section first): the
+CRM left-nav leaf **Inbox** already owns a page (`docs-site/legacy/guides/inboxes`) and call behavior
+owns `legacy/comms/calls`. The rebuild is documented by EDITING those two, not by adding a sibling.
+This file is a walk receipt, not a dev doc.
+
+**Why this doc exists** — Zach, 8/11, verbatim: *"walk the DOM on the FUB camp david walkthrough and
+document what they did and lets just replicate that."* This is the SHAPE of FUB's inbox/phone
+configuration, screen by screen, so HouseLoop's inbox rebuild can copy the structure that works. Per
+the LABEL LAW (`UI_DESIGN_DOCTRINE`) we copy the shape of a competitor surface, **never its
+vocabulary** — the replication map at the bottom names every place we deliberately use our own word.
+
+---
+
+## 0. THE MODEL, IN ONE PARAGRAPH
+
+FUB has exactly **one first-class object: the inbox.** A phone number is not a thing that has
+behavior — it is a *door* that must be assigned to exactly one owner, and **all behavior lives on the
+owner.** An owner is one of three kinds: the **Company Number** (account-level), a **Shared Inbox**
+(FUB's internal name for what the UI calls a Team Inbox — the code leaks it in
+`?sharedInboxId=1`), or a **User** (whose personal inbox is implicit and always exists). A number in
+no owner's hands sits in the **Parking Lot**, where it can neither make nor receive calls. Configuring
+"the phone system" therefore means configuring inboxes, and the Phone Numbers page is only a
+directory + an assignment tool.
+
+Two things sit deliberately ABOVE the inbox, at account level, because they are legal/company facts
+rather than routing choices: **office hours** and **call recording + disclosure**. The inbox only
+decides what to do *outside* those hours — it never defines them.
+
+---
+
+## 1. ROUTE MAP (every URL walked)
+
+| Route | Screen |
+|---|---|
+| `/2/admin/overview` | Admin hub — card grid, groups: Lead Flow / Communication / Account / Integrations / Data |
+| `/2/phone-numbers` | **Phone Number Management** — ports + parking lot + team inboxes + team members |
+| `/2/inbox-new/settings` | **Manage Inboxes** — the inbox list (breadcrumb `All Team Inboxes > Manage`) |
+| `/2/inbox-new/settings/<id>` | **Update** a team inbox (the main configuration screen) |
+| `/2/inbox-new/settings/new` | **Create** a team inbox (same form, reduced) |
+| `/2/inbox-new/<id>` | The inbox's message view — `<id>` `0` = personal ("My Inbox"), `1` = Company, `3` = Past Agents |
+| `/2/inbox-new/<id>/assigned` · `/drafts` · `/sent` · `/closed` | The inbox's folders (`drafts` exists on the PERSONAL inbox only) |
+| `/2/inbox-new/<id>/inbox/<conversationId>` | A single conversation, three-pane |
+| `/2/company-settings` | Company Settings — **office hours live here**, plus virtual phone, recording, block list |
+| `/2/company-settings/blocks/` | Block list |
+| `/2/settings` | **My Settings** — the personal inbox's equivalent of the team-inbox config |
+| `/2/teams` | Team roster — per-user Role / Phone / Connected Email / Record Calls / Pause Leads |
+| `/settings/betaConnectGoogle?sharedInboxId=<id>` | Google OAuth, **scoped to one inbox** |
+| `/settings/connectMicrosoftFub2?sharedInboxId=<id>` | Microsoft 365 OAuth, scoped to one inbox |
+
+`/2/inbox-new/settings/0` (a personal inbox) **hard-errors** — personal inboxes are not configured
+here. That asymmetry is deliberate and is repeated in §6.
+
+---
+
+## 2. SCREEN — Phone Number Management (`/2/phone-numbers`)
+
+Shot: `shots/02-phone-numbers.png` · Zach's reference: `fub-6-25-25.png`
+
+Page title "Phone Number Management" with a **View Business Registration** button top-right (A2P/10DLC
+compliance, gated separately at `/2/company-settings/phone-registration`). Four stacked sections:
+
+### 2.1 Number Ports
+Blurb: *"Once your number is ported into Follow Up Boss, it will stop working with your old
+provider."* + **New Port Request** button. Empty state renders as a full-width notice: *"You currently
+have no active porting requests…"*. No table when empty — the empty state replaces it.
+
+### 2.2 Number Parking Lot
+Blurb, verbatim and load-bearing: *"These numbers will not be able to make or receive calls until
+assigned to a user or inbox. Once a number is released, you will no longer have access to it."*
+
+Segmented control **Parked | Released** switches the table. Columns: `Phone Number` (with a
+help-circle icon) · `Date Parked` · `Status` · `Actions`.
+
+- `Status` is a lifecycle, not a flag: **`Parked`** or **`Releasing in 2 days`** (a countdown — release
+  is scheduled, reversible until it lands, then the number is gone for good).
+- `Actions` differs BY status: a `Parked` row gets a single **→ arrow** (assign it); a `Releasing` row
+  gets the **⋯ menu** instead. The affordance encodes the state.
+- 7 numbers parked at walk time.
+
+**The arrow opens the "Move Number" dialog** (shot `shots/04-move-number-dialog.png`) — this is the
+single most important screen in the walk, because its picker IS the ownership taxonomy:
+
+> *"Please select the inbox or user you would like to move **(913) 355-6785** to:"*
+> A searchable dropdown (`Search…` box) grouped into three headings:
+> - **Company** → `Company Number`
+> - **Shared Inboxes** → `Company`, `Past Agents`
+> - **Users** → `Zach Spradling`
+>
+> Buttons: `Cancel` · `Move Number`.
+
+So: **one number → exactly one owner, and the owner is a company/inbox/user union.** There is no
+many-to-many, and no number without an owner except in the parking lot.
+
+### 2.3 Team Inboxes
+Header with a **Manage Inboxes** button (→ `/2/inbox-new/settings`). Columns: `Name` · `Phone Number` ·
+`Actions`. **One row per NUMBER, not per inbox** — the `Name` cell reads `Inbox (Label)`, e.g.
+`Past Agents (Melanie Clark)`, `Company (Default Buyer's Agent # - OLD)`. 40+ rows across only **two**
+inboxes. This is the single most misread thing on the page: *"Past Agents (Melanie Clark)" is not an
+inbox.* It is the Past Agents inbox holding a number labelled "Melanie Clark".
+
+Per-row `⋯` menu — six actions (read verbatim from the opened menu's accessibility tree; the element
+screenshot of the floating menu came back empty, so the label list below is the record):
+
+| Action | Meaning |
+|---|---|
+| **Change Number** | swap this line for a different available number, keeping the assignment |
+| **Swap Number** | exchange the assignment with another owned number |
+| **Move Number** | re-assign to a different inbox/user (same dialog as §2.2) |
+| **Set as Inbound-Only** | the number receives but is never used as an outbound caller ID |
+| **Remove Number** | send it back to the Parking Lot |
+| **Edit Label** | rename the label — the parenthetical in `Inbox (Label)` |
+
+### 2.4 Team Members
+Columns: `Name` (avatar + email) · `Phone Number` · `Actions`. Each user's personal line. Zach Spradling
+→ (913) 490-2988. This section is why a user is a peer of an inbox in the Move picker.
+
+---
+
+## 3. SCREEN — Manage Inboxes (`/2/inbox-new/settings`)
+
+Shot: `shots/05-manage-inboxes.png`
+
+Breadcrumb `All Team Inboxes > Manage`. Top-right: `ⓘ How it works` · **New Team Inbox** (link →
+`/settings/new`) · **Add Number** (button).
+
+Columns: `Name` (a link) · `Phone Numbers` · `Connected Email` · `Team` · `Action` (a pencil).
+
+- `Phone Numbers` renders the **full** list inline, one `(number) (label)` per line — the Past Agents
+  row is 37 lines tall. No truncation, no "+N more". The row grows.
+- `Connected Email` was **empty for both inboxes** — email is optional per inbox.
+- `Team` renders member **avatars** only (ZS on both).
+- Only **two** team inboxes exist: `Company` and `Past Agents`.
+
+---
+
+## 4. SCREEN — Update a team inbox (`/2/inbox-new/settings/<id>`) — THE MAIN ONE
+
+Shot: `shots/06-inbox-update-company.png` · Zach's reference: `fub-6-26-42.png`
+
+Breadcrumb `All Team Inboxes > Manage > Update` (the first crumb goes to the inbox's *messages*, not
+the list — `/2/inbox-new/1`). One card, three labelled bands (`CALL SETTINGS`, `EMAIL`), a
+label-left / control-right two-column grid throughout, and a sticky footer `Cancel` · `Save`.
+**Nothing autosaves.**
+
+### 4.1 Identity
+| Field | Behavior |
+|---|---|
+| **Inbox name** | free-text input. The only naming control. |
+| **Phone numbers** `(Manage)` | read-only list of `(number) (label)`, bolded; `(Manage)` → `/2/phone-numbers`. Below it a **`+ Add Number`** link. |
+
+**`+ Add Number` opens a modal** (shot `shots/07-add-number-click.png`) titled **"Add phone number to
+Company"** — it names the target inbox in the title:
+- *"Enter your area code or starting six digits"* → text input (pre-filled `913`) + **Find available
+  numbers** button. Hint: *"Currently we support phone numbers in US and Canada"*.
+- *"Select a phone number"* → radio list of provisionable numbers as `+19133953505 - Olathe, KS`
+  (E.164 + city/state; some rows only resolve to `- US`).
+- **Label** `(Optional)` → text input, placeholder "Add label".
+- `Cancel` · `Add Number` (**disabled until a number is selected**).
+
+That modal is the proof that **the label is a property of the number's assignment**, set at the moment
+of assignment, and that provisioning is search-by-area-code → pick from live inventory.
+
+### 4.2 CALL SETTINGS — the routing table (the heart of it)
+
+A 4-column grid: **`Team Member` · `Ring Desktop` · `Ring Mobile` · `Press 1 to Answer`**, one row per
+routing target, with **`+ Add Team Member or Phone`** beneath it.
+
+A row is one of two kinds, and the kind changes which cells are even *available*:
+
+| Row kind | Ring Desktop | Ring Mobile | Press 1 to Answer |
+|---|---|---|---|
+| **A raw phone** — e.g. `(913) 675-9877`, generic avatar | **red ✗** — impossible, there's no app | checkbox (checked in prod) | checkbox (unchecked) |
+| **A user** — e.g. `Zach Spradling`, initials avatar | checkbox | checkbox | **cell is empty** — not applicable |
+
+The semantics: **all checked targets ring simultaneously**, and the first to answer takes the call.
+`Press 1 to Answer` exists only for raw phones and is the anti-voicemail guard — without it, the
+callee's own carrier voicemail can answer the call and swallow the lead; requiring a keypress proves a
+human picked up. That it is *absent* for users is the tell that FUB models "a user" as an app session
+it controls, and "a phone" as a dumb endpoint it does not.
+
+**`+ Add Team Member or Phone`** (shot `shots/08-add-team-member-or-phone.png`) opens a popover with
+ONE control: a combobox placeheld *"Search team members or enter a phone number"*, listing the team
+members not already in the table (Ana Spradling, Ben Froeschl). **One ➕, two paths** — pick a known
+person or type an arbitrary number. This is exactly the pattern our own editable-row law already
+mandates (`EditablePickerRow`), which makes it cheap to replicate.
+
+### 4.3 CALL SETTINGS — the rest
+
+| Control | Type | Behavior |
+|---|---|---|
+| **Voicemail** | link **`Record new voicemail`** | per-inbox greeting. On the CREATE screen this is replaced by the text *"Please save this team inbox before recording a voicemail"* — the inbox must exist first. |
+| **Do not disturb** | checkbox | *"If enabled, no team members will be called."* A master kill-switch for the whole routing table; calls fall straight through to the fallbacks. |
+| **If outside office hours** `(Edit)` | radio | `Go to inbox voicemail` (default) \| `Forward to number`. `(Edit)` links OUT to `/2/company-settings` — **the hours themselves are not editable here**. |
+| **If there's no answer** | radio | `Go to inbox voicemail` (default) \| `Forward to number` |
+
+Selecting **`Forward to number`** reveals a **`+ Add Number`** link under the radio (shot
+`shots/09-forward-to-number.png`) — the forward target is chosen, not typed inline. Both fallbacks are
+independent and can differ.
+
+The full call decision, as the screen states it: *DND on?* → voicemail. *Outside office hours?* → the
+outside-hours choice. Otherwise ring every checked target at once; *nobody answered?* → the no-answer
+choice.
+
+### 4.4 EMAIL
+**Connect Email** → a **Sign in with Google** button (→ `/settings/betaConnectGoogle?sharedInboxId=1`)
+`or` **Microsoft 365** (→ `/settings/connectMicrosoftFub2?sharedInboxId=1`). Blurb: *"We will use your
+email account to send, receive and manage email directly in Follow Up Boss, sync email history with
+your leads and report on lead source performance."*
+
+**The mailbox is bound to the INBOX, not the user** — `sharedInboxId` in both OAuth URLs. A shared
+inbox can own a real mailbox. On CREATE this band reads *"You will be able to connect an email address
+to this team inbox after it is created."*
+
+### 4.5 Create vs Update parity
+Shot: `shots/15-new-team-inbox.png`. Breadcrumb `… > Create`. Identical form MINUS: no Phone numbers
+section at all, voicemail deferred, email deferred. Routing table renders its empty state: *"No team
+members selected. Add one or more using the button below."* Defaults: DND off, both fallbacks = `Go to
+inbox voicemail`. **Everything that needs an id is deferred to after the first save** — a create is
+just a name + routing.
+
+---
+
+## 5. SCREEN — Company Settings (`/2/company-settings`) — what is ABOVE the inbox
+
+Shot: `shots/11-office-hours.png`
+
+Reached from the inbox screen's `If outside office hours (Edit)`. Sections: company identity (name,
+industry, franchise, address, **Time zone** = Central) → `VIRTUAL PHONE` → `OFFICE HOURS` → `SUBDOMAIN`
+→ `BUSINESS INSIGHTS` → `BLOCK LIST`. One `Save`.
+
+### 5.1 VIRTUAL PHONE
+| Control | Value / behavior |
+|---|---|
+| **Phone** ✎ **Manage Settings** | links to **`/2/inbox-new/settings/1`** — i.e. "the company's phone settings" ARE the Company inbox. The two concepts are the same row in the DB. |
+| **Fallback number** | `(407) 403-8088` — the account-level last resort |
+| **Spam label calling protection** | a registered caller-ID brand + `(Change)` |
+| **Call Recording** | toggle, ON — *"Enable call recording for team members"* |
+| **Legal Disclosure** | toggle, OFF — *"Automatically play call recording disclosure for all calls"* + **Preview call disclosure** ▶ + a blue legal notice about two-party consent |
+
+### 5.2 OFFICE HOURS — account-wide, not per inbox
+Shot: `shots/12-office-hours-days.png`. Label: *"Specify the days and times your team can receive
+incoming calls to your team inboxes."* A repeatable row: **[day scope ▾] [start ▾] [end ▾] ✗** plus
+**`+ Add office hours`**.
+
+Day scope options: **Everyday · Weekdays · Weekends · Monday · Tuesday · Wednesday · …** (a scope, not
+a single day — one row can cover the whole week). Live value: `Everyday 12:00 am – 11:00 pm`.
+
+**This is one schedule for the whole account.** Every inbox shares it; an inbox only picks what happens
+outside it. Any per-inbox hours would be a HouseLoop addition, not a replication.
+
+---
+
+## 6. SCREEN — the PERSONAL inbox's equivalent (`/2/settings`, "My Settings")
+
+Shot: `shots/14-my-settings.png`
+
+Personal inboxes have **no** entry in Manage Inboxes and `/2/inbox-new/settings/0` errors outright.
+Their configuration lives in the user's own settings, and the controls are the **single-person
+degenerate case of the team routing table**:
+
+| Band | Controls |
+|---|---|
+| identity | Name · Phone · Time Zone · Portrait · Login Email (verified, Reset password) |
+| `VCARD` | Phones / Emails / Addresses + **Edit Card Details** |
+| `EMAIL` | Connected Email (`…@spradlingrealtygroup.com (google)`) + Disconnect · **Share your emails** · **Share your calendar** · Signature (preview + Edit) |
+| `MLS PROFILE VERIFICATION` | memberships by MLS Agent ID + Add a profile |
+| `ZILLOW` | connected Zillow profile card + Disconnect |
+| `NOTIFICATIONS` | **Manage Notification Settings** · Receive daily hot sheet emails |
+| `MY NUMBER` | **Personal Number** `(913) 490-2988` + `Change number` · Mute Sound Effects · **Make a test call** |
+| `INCOMING CALLS` | radio: **`Ring desktop then forward to [number ▾]`** (sequential) \| **`Ring (407) 403-8088 and desktop app at the same time`** (simultaneous) · **Mobile Ring Time** `15 seconds` · **Voicemail → Record voicemail** |
+| `OUTGOING CALLS` | **Outbound Number** `[(913) 490-2988 (Zach Spradling)]` · **Calling Method** `[Always use mobile phone]` · ☑ *"Require keypress before calling lead via mobile phone (recommended)"* |
+| other | User Merge Field · `Save` |
+
+**The equivalences worth stealing:** the team table's simultaneous ring == the personal *"ring X and
+desktop at the same time"* radio; the team table's **Press 1 to Answer** == the personal **"Require
+keypress"** checkbox. Same mechanism, two presentations, because one has N targets and the other has
+one. **Mobile Ring Time** is a knob the team screen does not expose at all.
+
+---
+
+## 7. SCREEN — the messages inbox (`/2/inbox-new/…`) — team vs personal
+
+Shot: `shots/10-inbox-surface.png` · Zach's reference: `fub-6-22-57.png`
+
+Three panes plus a contextual fourth.
+
+**Left rail — one section per inbox, each with its own folder tree:**
+
+| Inbox | id | Folders |
+|---|---|---|
+| **My Inbox** (355) | 0 | Inbox · Assigned · **Drafts** · Sent · Closed |
+| **Company** (1253) | 1 | Inbox · Assigned · Sent · Closed |
+| **Past Agents** (401) | 3 | Inbox · Assigned · Sent · Closed |
+
+Unread counts per inbox in the heading. **`Drafts` exists on the personal inbox only** — a draft
+belongs to a person, not a team. A `⚙ Manage` link pins the bottom of the rail.
+
+**Middle — the conversation list:** a `Select conversations` link (bulk mode), an **All | Unread**
+segmented toggle, a **Filter ▾** dropdown, then a count header (*"1187 Unread Messages"*). Filter
+options are by CHANNEL: **All types · Emails · Texts · Calls · Zillow Messages**. Each row =
+counterparty (name, or a bare phone when unmatched) + a message-count badge + a channel icon
+(💬 text · 📞 missed call · ▶ voicemail with duration) + a one-line preview + a date.
+
+**Right — the conversation:** header shows the counterparty, a green call button, a channel selector,
+a **Close** button and a `⋮` overflow. Body renders the events (e.g. `Missed Call · Jun 23, 4:49 pm`).
+Footer is a **note composer** — *"Write a note or @mention someone"* + `Create Note` (⌘+Enter). Note
+the default composer action in a shared inbox is an internal note, not a reply.
+
+**Far right — the triage panel:** for an unmatched number the pane is **"Add person"** with the number
+echoed, First Name / Last Name / Email and an `Add person` button, `or update an existing person` with
+a search box. **An inbox conversation is not yet a lead** — a shared inbox is a holding area where
+unknown inbound waits to be identified, and identifying it is a two-path choice (create new · attach to
+existing).
+
+**`Close` is the shared-inbox verb for done** (hence the `Closed` folder) — it is a triage state on the
+conversation, distinct from `Assigned` (routed to a person).
+
+---
+
+## 8. SCREEN — Team (`/2/teams`)
+
+Shot: `shots/13-team-page.png`. Columns: `Name` (+ email) · `Role` (Owner/Admin/Agent) · `Phone` ·
+`Connected Email` · `Connected MLS` · `Last Seen` (per-platform: `Web: …` / `iOS: …`) · **`Can Export`**
+· **`Record Calls`** · **`Pause Leads`** · `Actions` (Edit/Delete; the Owner has no Delete). 3 members.
+The three per-user toggles are permissions, not routing — but `Record Calls` is the per-user override of
+the account-level recording switch in §5.1.
+
+---
+
+## 9. REPLICATION MAP — FUB screen → the HouseLoop surface it becomes
+
+Our estate today — surfaces (shots `L2d-04-phone-numbers.png`, `L2d-05-settings-inboxes.png`):
+**Inboxes** (`INBOX 8`, grouped `PERSONAL — ONE PER TEAM MEMBER, CREATED AUTOMATICALLY` and
+`SHARED — FRONT DOORS YOU CREATE`; columns `INBOX · DOORS INSIDE · MANAGER · RING RULE · STATUS`) and
+**Numbers** (`Number Ports` + `Our Numbers`: `NUMBER · STATUS · FRIENDLY NAME · SOURCE · FEEDS INBOX ·
+ROUTING · PROVIDER`).
+
+Our estate today — schema (read from the migrations, not from the UI):
+
+| Table | Where | What it holds |
+|---|---|---|
+| **`hl_inboxes`** | `db/migrations/0390_inboxes.sql` | `name` · `kind` (`personal`\|`shared`) · `owner_user_id` · **`manager_kind`** (`human`\|`ai`) · `manager_user_id` · **`ai_channels`** jsonb `{calls,texts,email}` · `spam_mode` · `prompt_layer` · **`ring_chain`** jsonb · `is_active`. Unique: one personal inbox per user; unique shared name. |
+| **`hl_inbox_email_doors`** | same | `inbox_id` · `address` (unique) · `label` — an email door lives in exactly one inbox |
+| **`hl_phone_numbers`** | `0269` + alters | `number` · `e164` · **`label`** · `category` · `platform`/provider · `forwards_to` · `assigned_user_id` · `creates_event` · `workflow_id` · `lead_source_id` · `is_active` · **`inbox_id`** (0390) · ~~`answer_mode`~~ ~~`routing_group_id`~~ (deprecated in place) |
+| **`hl_number_ports`** | `0362` | `e164` · `label` · `porting_from` · `status` (7-state enum) · `next_step` |
+| **`hl_routing_groups`** | `0362` — **DEPRECATED by 0390** | `ring_targets` jsonb `[{kind: person\|phone\|myli, label, number, ring_mobile, ring_desktop}]` · **`no_answer`** (`voicemail`\|`forward`) · `no_answer_forward_to` |
+| **`hl_dialer_assignments`** | `0016` + `0023`/`0064`/`0073` | per user (UNIQUE `user_id` — one number per user): `phone_number` · `messaging_service_sid` · **`call_forwarding`** · **`call_routing`** (`ring_both`\|`ring_desktop_first`\|`forward_to_mobile`\|`desktop_only`) · `nickname` · `is_default` (one TRUE per account) · `is_voice_default` · `is_text_default` · `webhooks_configured` |
+| **`hl_inbox_subscribers`** | `0409` | per-inbox notify subscriptions (`email`/`sms` bools) — ⚠ **this is NOT a membership/ACL table** |
+
+⚠ **There is no `hl_inbox_members` table and no membership model at all.** FUB's Update screen has a
+`Team` column and a member-scoped routing table; the closest thing we have is whoever appears in
+`ring_targets`. "Who belongs to this inbox" is currently unanswerable — see the gap table.
+⚠ **Voicemail has no table either** — it is `hl_calls.outcome='voicemail'` plus a Twilio recording URL.
+
+Surfaces: `(crm)/inbox/page.tsx` (the list) · `components/inbox/InboxDetail.tsx` (one inbox: doors,
+manager, a 3-step ring chain, behavior, then THE STREAM — one merged `WHEN · CHANNEL · WHO · WHAT
+HAPPENED` table) · `components/inbox/InboxCallRoutingModal.tsx` (the ring editor) ·
+`(crm)/settings/phone-numbers/page.tsx` · `(crm)/settings/phone/page.tsx` · `phone-provider`.
+`(crm)/settings/inboxes/page.tsx` is a pure redirect to `/inbox`.
+
+### ⚠ THE HAZARD TO FIX FIRST — ring config lives in TWO stores
+
+`hl_inboxes.ring_chain` (0390) and `hl_routing_groups.ring_targets` (0362) both describe "who rings."
+**The one the runtime actually obeys is the OLD one:** `InboxCallRoutingModal.tsx` writes
+`hl_routing_groups` and stamps `hl_phone_numbers.routing_group_id`, and the live webhook reads it at
+`app/api/phone/webhooks/voice/route.ts:135` (with `no_answer` at `:118-119` and `dial-status/route.ts:13`),
+while `InboxDetail.tsx` *displays* `ring_chain`. 0390 declared `hl_routing_groups` "DEPRECATED in
+place… until the C3 code cutover ships" — **that cutover never shipped.** So `ring_chain` is largely
+display while `ring_targets` is behavior: **the screen and the phone can disagree, and the phone wins.**
+
+A third deprecated-but-live signal rides along: `hl_phone_numbers.answer_mode` (0382), also marked
+superseded by 0390 and **also still honored**. Three signals, one question.
+
+This is exactly the disease `ONE_ANSWER_TABLE` names: one fact, two homes, and the surface reading the
+one that isn't the answer. **Collapse these into one store before adding a single new control** —
+otherwise every gap closed below gets built twice and the two copies drift.
+
+A second instance of the same disease: a number's owner is recorded in **three** places —
+`hl_phone_numbers.inbox_id` (0390), `hl_phone_numbers.assigned_user_id` (0269), and
+`hl_dialer_assignments.user_id` (0016, UNIQUE per user). FUB has exactly one. That single-owner rule is
+the thing most worth replicating.
+
+**And the design question the two stores disagree on:** FUB rings every checked target
+**simultaneously**; our `ring_chain` is **ordered/sequential**. Zach picks; the schema follows.
+
+**Our vocabulary is already better and stays.** A number is a **door**; an inbox has a **manager**
+(which may be an AI); the number's name is the **friendly name** (one field, one truth, pushed to
+Twilio). We do not adopt "Team Inbox" (ours is **shared inbox**), "Shared Inbox" as a hidden internal
+name, or "Move Number" as a menu item — ours is **which inbox does this door feed**.
+
+| FUB screen / control | HouseLoop surface | Status |
+|---|---|---|
+| `/2/phone-numbers` → Team Inboxes + Team Members tables | **Numbers → Our Numbers** (`FEEDS INBOX` column) | **have** — ours is better: one row per number with an explicit inbox picker, rather than a name mashed as `Inbox (Label)` |
+| Number Ports + New Port Request | **Numbers → Number Ports** = `hl_number_ports` | **have** — ours is richer (7-state `status` + `next_step`) |
+| Number **Parking Lot**, `Parked`/`Released` tabs, `Releasing in 2 days` | — | **GAP 1** — no park/release lifecycle, no scheduled-release countdown. We surface `5 unrouted` as a warning, which is the same *fact* with no *state* behind it (`inbox_id IS NULL` ≠ parked) |
+| Row `⋯` → **Move Number** / Edit Label / Change / Swap | `hl_phone_numbers.inbox_id` picker + `label` | **have** — one number → one inbox is already our unique constraint, same as FUB's one-owner rule |
+| Row `⋯` → **Set as Inbound-Only** | — | **GAP 2** — no column; today any number can be an outbound caller ID |
+| Row `⋯` → **Remove Number** (returns it to the lot) | — | folds into GAP 1 |
+| **Move Number** dialog (Company / Shared Inboxes / Users) | our inbox picker | **have, and simpler** — because our personal inboxes are rows in `hl_inboxes`, "user" and "inbox" are not two kinds of destination; FUB needs the three-group union only because its personal inboxes aren't real records |
+| `/2/inbox-new/settings` Manage Inboxes | **Inboxes** (`/settings/inboxes`) | **have** — plus the PERSONAL/SHARED grouping and a `MANAGER` column FUB has no concept of |
+| Inbox name | `hl_inboxes.name` | **have** |
+| `+ Add Number` modal (area-code search → pick from live inventory → optional label) | — | **GAP 3** — no in-app provisioning; numbers arrive by port or FUB sync |
+| Manage Inboxes **`Team`** column (member avatars) — i.e. inbox MEMBERSHIP | **no membership table exists.** `hl_inbox_subscribers` (0409) is notify subscriptions, not an ACL; there is no `hl_inbox_members` | **GAP 0 — structural, and a prerequisite.** "Who belongs to this inbox" is currently only inferable from `ring_targets`, which conflates *membership* with *who rings on a call*. FUB keeps them separate (you can be on the team and unchecked for ringing). Decide this before the routing UI, because the routing table's rows are drawn FROM the member list |
+| Routing table, row per **member** | `InboxCallRoutingModal.tsx` → `hl_routing_groups.ring_targets` (`person`\|`phone`\|`myli`) | **have** — same target union, plus an AI target FUB cannot express |
+| …per-target **Ring Desktop / Ring Mobile** | schema + API carry both flags (`0362:15-16`, `api/routing-groups/route.ts:14-15`) | **PARTIAL — schema yes, product no.** The only writer hardcodes mobile: `InboxCallRoutingModal.tsx:5-11` comments *"NO 'desktop' anywhere"* and always writes `ring_mobile:true, ring_desktop:false`. Closing this is wiring a UI to fields that already exist |
+| …**Press 1 to Answer** | `app/api/phone/webhooks/screen/route.ts` (`<Gather numDigits="1">`), consumed at `dial-status/route.ts:44` | **have — but GLOBAL.** It is "press ANY key", always on, with no per-inbox or per-member switch. **GAP 4 = making it configurable**, not building it |
+| …**simultaneous** vs **sequential** ring | two stores disagree (see hazard above) | **DECISION NEEDED** |
+| `+ Add Team Member or Phone` (one ➕, two paths) | `EditablePickerRow` (`components/ui/EditablePickerRow.tsx`) | **reuse, don't recreate** — `UI_DESIGN_DOCTRINE` names this the canonical picker row |
+| **Record new voicemail** per inbox | one hardcoded global greeting: `lib/phone/twiml.ts:11` `VM_RECORD_TWIML` ("You've reached the Spradling Group…"). **Voicemail has no table** — it is `hl_calls.outcome='voicemail'` + a Twilio recording URL | **GAP 5** — no greeting column on `hl_inboxes`; the ring chain's step 3 is a static pill (`InboxDetail.tsx:274`). Per-inbox greetings need somewhere to live *and* a recording flow |
+| **Do not disturb** | — | **GAP 6** — nothing in schema, `app/` or `lib/`. `hl_blocked_numbers` is inbound spam blocking, not DND |
+| **If outside office hours** → voicemail \| forward | `lib/business-hours.ts` + `api/settings/business-hours` + a settings page **exist** — but are read only by `lib/scheduledActions.ts:87` and `lib/workflows/runtime.ts:216`, with **zero references in `app/api/phone/**`** | **GAP 7 — a WIRING gap, not a missing object.** We have office hours; the phone simply never asks |
+| **If there's no answer** → voicemail \| forward | `hl_routing_groups.no_answer` + `no_answer_forward_to`, executed at `webhooks/voice/route.ts:118-119` + `dial-status/route.ts:13`, edited in `InboxCallRoutingModal.tsx:92` | **have and live** |
+| Office hours as day-scope rows (Everyday/Weekdays/Weekends/single day) | our business-hours object | **verify shape** — confirm it expresses a repeatable day-scope + range before building the phone fallback |
+| Call Recording + Legal Disclosure (account) · `Record Calls` (per user) | — | **GAP 8** — absent. Two-party-consent disclosure is legal exposure, not a nicety |
+| Spam label calling protection (account-level) | `hl_inboxes.spam_mode` | **have, better placed** — ours is per-inbox |
+| **Connect Email** per inbox (Google / M365, `?sharedInboxId=`) | `hl_inbox_email_doors` holds **addresses only — no credentials, no OAuth, no sync**. Gmail OAuth accepts `?inbox_id=` but writes to a *different* table, `hl_sending_inboxes` (the outbound warm-up pool) — `api/email/auth/connect/route.ts:26-27` | **GAP 9, and a third two-homes case.** FUB genuinely beats us here: one OAuth, bound to the inbox, doing send+receive+sync. **M365: not supported at all** (Gmail scopes only) |
+| `/2/settings` personal: **Incoming Calls** radio · forward target | `hl_dialer_assignments.call_routing` (`ring_both`\|`ring_desktop_first`\|`forward_to_mobile`\|`desktop_only`) + `call_forwarding`, validated at `api/phone/settings/route.ts:61` | **have** — FUB's personal radio, already modelled |
+| …**Mobile Ring Time** | — | minor gap |
+| …**Outbound Number** / Calling Method | `hl_dialer_assignments.phone_number` · `is_default` | **partial** |
+| ⚠ personal vs shared routing in **separate models** (`hl_dialer_assignments` vs the inbox stores) | — | **GAP 10 — architectural.** FUB has this same split and it is *why* its personal inbox has no settings screen (§6). `ONE_ANSWER_TABLE`: personal-vs-shared is a **column, not a table**. Do not replicate the split |
+| Inbox message view: **folders** `Inbox/Assigned/Sent/Closed` (+`Drafts`), a conversation list, and a per-conversation pane | `InboxDetail.tsx` renders **one merged stream table** (`WHEN · CHANNEL · WHO · WHAT HAPPENED`) — no folders, no tabs, no conversation pane | **GAP 11 — the largest UX delta.** Ours is a log; FUB's is a workqueue. Triage states (`Assigned`, `Closed`) have nowhere to live |
+| Conversation-list **Filter** by channel | the stream has a CHANNEL column but no filter | **GAP 12** — cheap |
+| **Add person / update an existing person** triage panel for unmatched inbound | — | **GAP 13 — load-bearing for Bedrock.** Unmatched inbound must land somewhere reviewable, not silently become a lead. Same rule as the staging layer's review queue: never a generic catch-all |
+| `Close` a conversation | — | folds into GAP 11 |
+| Number **provisioning** (`+ Add Number` modal) | `api/phone/numbers/search` + `provision` exist | **have (API)** — GAP 3 is only the UI |
+| Number **release** | **no Twilio release/deprovision endpoint exists** | confirms GAP 1 — we can un-assign (`DELETE /api/phone/dialers/[id]`) but never give a number back |
+
+### What WE have that FUB does not
+1. **A door can be an email OR a phone.** FUB bolts a mailbox onto an inbox through OAuth; ours is one
+   uniform door list, so "who owns this address" and "who owns this number" are one question.
+2. **An inbox manager can be an AI.** `Myli · all channels` is a manager in the same column a human
+   occupies — FUB has no slot for a non-human answerer, which is why its whole routing model is
+   "which humans ring."
+3. **Provider + source on every number** (`Twilio`, `SOURCE`, `Sync from Follow Up Boss`) — we model
+   where a line came from; FUB assumes it owns everything.
+4. **The activity log.** Every message/call lands in `hl_activity_log` through one writer with a signed
+   actor — FUB's inbox is a mail client, ours is a projection of the ledger (`BEDROCK_LAW` layer 5).
+5. **Personal inboxes are first-class rows** (`hl_inboxes.kind='personal'`, one per user enforced by a
+   partial unique index) in the same table as shared ones, so they can be listed, audited and
+   configured. FUB's personal inbox is implicit and has no configuration screen at all (§6).
+6. **A number carries its meaning**: `creates_event`, `workflow_id`, `lead_source_id` — calling a
+   specific line can fire a specific playbook and attribute a specific source. FUB's number knows only
+   which inbox it rings.
+7. **Port pipeline as real state** — `hl_number_ports` has a 7-state status plus a human `next_step`;
+   FUB shows a request or an empty box.
+8. **A per-inbox AI prompt layer** (`hl_inboxes.prompt_layer`) — steers the AI for *that inbox's*
+   callers, under the agent's persona.
+9. **AI voicemail triage** — cold/unknown voicemails don't blast the admin
+   (`webhooks/recording/route.ts:118-123`).
+10. **Per-inbox notification subscriptions with channel choice** (`hl_inbox_subscribers`, email/sms,
+    independent of lead assignment) — solves the visibility problem FUB's blunt all-leads toggle can't.
+11. **Caller-based forwarding rules with priority** (`hl_phone_forward_rules`) and an inbound
+    **blocklist at the webhook door** (`hl_blocked_numbers`) that drops before lead mint while still
+    recording the raw inbound for audit.
+12. **Anti-number-leak call screening** — `answerOnBridge` plus the screen whisper means the caller
+    never lands in an agent's personal cell voicemail. FUB forwards raw.
+
+Full detail with file:line pointers: `.claude/reports/inbox-rebuild-spec/houseloop-inbox-estate-map.md`.
+
+### The one structural lesson to copy
+**Behavior belongs to the inbox; the number is only a door.** FUB never lets you configure a phone
+number — you configure the thing it points at. Our Numbers page already says this out loud (*"All
+behavior lives on the inbox"*), so the rebuild is: put the routing/voicemail/DND/fallback block on the
+inbox detail screen, and leave Numbers as a pure directory. Do not scatter call behavior across both.
+
+### What this implies for the rebuild, in order
+0. **Decide inbox membership** (GAP 0) — it is the prerequisite for the routing table, the `Team`
+   column, and any per-seat notification rule. Membership and "who rings" are two facts, not one.
+1. **Collapse the ring stores into one** (`ring_chain` vs `ring_targets` vs `answer_mode`) and settle
+   simultaneous-vs-sequential in the same pass. Nothing else should be built on top of a fact with
+   three homes, and the store the runtime obeys is currently one of the two marked deprecated.
+2. **Collapse the three number→owner paths into one** (`inbox_id` · `assigned_user_id` ·
+   `hl_dialer_assignments.user_id`). FUB's single-owner rule is the shape to copy.
+3. **Wire what already exists** before adding anything: surface the `ring_desktop` flag the schema
+   already carries, make the global press-any-key screen configurable, and let the phone webhooks read
+   `lib/business-hours.ts`. Three of the biggest-looking gaps are wiring, not building.
+4. **Then add the genuinely missing call-behavior columns to the inbox**: DND and a per-inbox voicemail
+   greeting. Both belong on `hl_inboxes` — behavior lives on the inbox.
+5. **Unify personal and shared routing** into one model before building either screen (GAP 10) — a
+   personal inbox is N=1, not a second system.
+6. **Give the inbox a workqueue** (GAP 11 + 13): triage states and an unmatched-inbound panel. This is
+   the largest UX delta and the one Bedrock actually depends on.
+7. **Last:** per-inbox email OAuth (GAP 9), compliance switches (GAP 8), number lifecycle (GAP 1/2/3).
+
+### The one thing NOT to copy
+FUB names a number's assignment by string-concatenating `Inbox (Label)` and then shows that string as
+the row's `Name` in a table headed "Team Inboxes" — which reads as 40 inboxes when there are two. Keep
+our two explicit columns (`FRIENDLY NAME`, `FEEDS INBOX`). Same information, no lie.
+
+---
+
+## 10. WALK INTEGRITY
+
+Read-only was maintained: the Move Number dialog was cancelled, the Add Number modal was closed via its
+X, the Add Team Member popover was dismissed, the office-hours day dropdown was opened and escaped
+without selecting, and the inbox Update form (where a `Forward to number` radio was toggled to reveal
+its hidden control) was exited via **Cancel**, discarding the change. No `Save` was ever pressed and
+nothing was sent.
+
+**One unavoidable side effect, disclosed:** clicking `Cancel` on the Update form redirects to
+`/2/inbox-new/1`, which auto-selected the first conversation in the Company inbox
+(`/inbox/179284`, a missed call from (913) 354-2410). That view may have marked that one conversation
+read. No other conversation was opened.
+
+**Screenshots:** working shots in the session scratch dir
+(`…/scratchpad/shots/`); keepers copied to `.claude/reports/inbox-rebuild-spec/shots/`.
