@@ -1,0 +1,171 @@
+---
+title: "The Test Town — QA Personas & Endpoints"
+description: "The persistent QA cast: personas, inboxes, phone lines, and what each proves."
+---
+
+# 🏘 THE TEST TOWN — the persistent QA cast
+
+**Board item 71 · seeded 8/11 · this page is LIVING — re-promoted whenever the roster changes.**
+
+The walks do not test against Zach's real book. They test against a **town**: a permanent cast of
+personas who have REAL inboxes and REAL phone lines, so "the email went out" is proven by *reading the
+email*, not by reading a database row.
+
+> Zach, 8/11 depth charter: *"a full cast of test personas with REAL communication endpoints — test
+> agent (own inbox, receives the real Gmail calendar invite), test showing partner (own inbox + own
+> Twilio line), test lender, test TC, test connected people, and multiple Twilio numbers so GROUP
+> TEXTING is provable."*
+
+**Seed / re-seed:** `node tools/qa/test-town.mjs` (idempotent — a second run creates nothing).
+**Inspect without writing:** `node tools/qa/test-town.mjs --dry`
+
+---
+
+## The cast
+
+Every persona is a **real lead** created through the **real product endpoints** — never a bare SQL
+insert. Quincy came through `POST /api/leads`; everyone else came through the connected-people door
+(`POST /api/leads/:id/connected-people`), which is the same door a human uses when they click
+"Add connected person".
+
+| Persona | Role | Email | Phone | Lead ID | What it proves |
+|---|---|---|---|---|---|
+| **Quincy Towne** | anchor test lead | qa-probe+quincy@houseloop.ai | +1 913-733-3704 | `cd269966-ecb7-4b5b-aeea-2ed5acf3e58b` | the lead spine — creation card, stage moves, texts, calls, tasks, appointments |
+| **Quinn Towne** | spouse / co-buyer | qa-probe+quinn@houseloop.ai | +1 913-937-9359 | `293c2383-93ff-45fc-9b2a-23db6f558b70` | household behavior + **group texting** (the Conner + Jasmeet class) — two real distinct lines |
+| **QA Lender** | lender (counterparty) | qa-probe+lender@houseloop.ai | — | `0c5afdbe-fbee-4d4b-be48-f9f9303ea4ed` | connected-counterparty **email routing** — the pre-approval class (board #73) |
+| **QA TC** | transaction coordinator | qa-probe+tc@houseloop.ai | — | `d907738f-0d46-47fc-9a10-0f01eeca0e39` | TC loop participation + document-status events carrying the document NAME |
+| **QA Showing Partner** | showing partner | qa-probe+showing@houseloop.ai | — | `1c6db4b9-957a-48ad-a409-a0c5869ebad7` | showing-partner assignment + appointment invites reaching a non-lead participant |
+
+### The connections (all anchored on Quincy)
+
+| Connection ID | Type | Connected person |
+|---|---|---|
+| `60f229dc-4556-4134-8973-d88bf8626007` | Spouse | Quinn Towne |
+| `96ef4806-4435-4c07-ba79-cff985984428` | Lender | QA Lender |
+| `1110464d-16d6-4ebb-a64c-0f4e11c6e013` | Transaction Coordinator | QA TC |
+| `ec90fe3a-3705-4504-94ee-5c598e9ce8fa` | Showing Partner | QA Showing Partner |
+
+Links are **symmetric** — `linkLeads` writes A to B and B to A in one statement, so all four reverse
+rows exist and each counterparty's own card shows Quincy.
+
+---
+
+## The inboxes
+
+Two real Google Workspace mailboxes, IMAP on, passwords in root `.env`.
+
+| Mailbox | Env keys | Used for |
+|---|---|---|
+| **qa-probe@houseloop.ai** | `QA_PROBE_EMAIL` / `QA_PROBE_PASSWORD` | every persona above, via plus-addressing |
+| **qa-agent@houseloop.ai** | `QA_AGENT_EMAIL` / `QA_AGENT_PASSWORD` | the test AGENT seat — receives the real Gmail calendar invite |
+
+**Plus-addressing is the whole trick.** `qa-probe+lender@` and `qa-probe+tc@` are distinct addresses
+to the CRM and to Gmail's filters, but they all deliver to the ONE `qa-probe` mailbox. A walker reads
+five personas' mail with one IMAP login and zero extra Workspace seats.
+
+---
+
+## The phone lines — verified 8/11 against the live Twilio API
+
+Read-only `GET /IncomingPhoneNumbers` on the `TWILIO_ZACH_ACCOUNT_SID` account. **Nothing was changed.**
+
+| Number | Twilio friendly name | `sms_url` | `voice_url` | In `hl_phone_numbers`? | Verdict |
+|---|---|---|---|---|---|
+| **+1 913-365-2648** | HouseLoop Brand (Public) | `crm.houseloop.ai/api/phone/webhooks/sms` | *(none)* | **YES — category `brand`, active, SIP trunk `TK34ecfd…` attached** | ⛔ **DO NOT USE** |
+| **+1 913-937-9359** | MYLI GAUNTLET TEST LINE | `crm.houseloop.ai/api/phone/webhooks/sms` | `crm.houseloop.ai/api/phone/webhooks/voice` | YES — category `test`, `answer_mode='myli'` | ✅ safe · **calls are answered by Myli** |
+| **+1 913-733-3704** | Available | `crm.houseloop.ai/api/phone/webhooks/sms` | *(none)* | YES — label "Available", **NULL category** | ✅ safe · claimed as Quincy's line |
+
+### ⛔ +1 913-365-2648 is the live public brand line — and `.env` points the test kit at it
+
+`.env` carries `TWILIO_TEST_LEAD_NUMBER=+19133652648`, and `tools/houseloop-crm/twilio-sim.mjs` +
+`twilio-lead-sim.mjs` both **default to it** as "the Lee-provisioned test-lead line". It is not one.
+It is the public brand number: `hl_phone_numbers` files it under category `brand`, it is active, and
+Twilio has a **SIP trunk** bound to it that neither of the other two has.
+
+Any harness that "texts the test lead" on that default is texting the number HouseLoop publishes.
+It is excluded from the Test Town on purpose. **Fixing the stale env var and the two sim defaults is a
+one-line change each, and it is Zach's call, not mine** — flagged, not touched.
+
+### The reassignment plan (proposed — no Twilio config was changed)
+
+| Number | Today | Proposed | Change needed |
+|---|---|---|---|
+| +1 913-733-3704 | "Available", unlabelled row | **Quincy Towne's line** (`TEST_LEAD`) | rename in Twilio + set `hl_phone_numbers.label`/`category` to `test`. Webhooks already correct — leave them. |
+| +1 913-937-9359 | MYLI GAUNTLET TEST LINE | **Quinn Towne's line** (second lead line, group-text partner) | none required. Note `answer_mode='myli'`: a voice call to Quinn is answered by the AI, so voice walks use Quincy's line. |
+| +1 913-365-2648 | HouseLoop Brand (Public) | **stays the brand line** | repoint `TWILIO_TEST_LEAD_NUMBER` and the two sim defaults off it. |
+| *(a fourth number)* | — | **QA Showing Partner's line** | needs a purchase. The charter asks for a showing partner with its own line; the estate has no spare. |
+
+---
+
+## ⚠ The own-line ceiling — what these lines CANNOT prove
+
+Measured 8/11, not assumed: **all three candidate numbers are rows in `hl_phone_numbers`**, so
+`isOwnLine()` (`lib/phone/own-number.ts`) returns TRUE for every one of them. That guard exists for a
+good reason — our own notification line once tripped three "a stranger texted you" alerts on Zach's
+phone — but it puts a ceiling on the town.
+
+Tracing `app/api/phone/webhooks/sms/route.ts` with `fromIsOurs = true`:
+
+**Still works** (these are not behind the guard) — `findLeadByPhone` resolves the sender to the
+persona, so an inbound text threads onto the persona's lead, `logMessage` writes the canonical
+`hl_messages` row, the SSE broker pushes it live, and the **lead-owner notification fires**. The
+lifeline lane is fully walkable.
+
+**Suppressed** — three things sit behind `if (!fromIsOurs)` and cannot be walked with these lines:
+
+1. **inbox-subscriber pings** on an inbound text (`notifyInboxSubscribers`),
+2. **auto-mint on an unknown sender** (`mintPhoneLead` — fail-closed by design),
+3. the **lead-less trigger event** and the owner-aware stranger alert (`fireInboxTrigger`,
+   `notifyInboundOwnerAware`).
+
+**To close it,** the town needs one line that is deliberately NOT in `hl_phone_numbers` — either a
+fresh purchase left unregistered, or the "Available" row (label "Available", NULL category — it reads
+like a placeholder someone left behind, not a configured line) deleted so +1 913-733-3704 looks like
+an outsider. That is a Zach decision; both options are one row.
+
+---
+
+## The rules
+
+1. **Personas are PARKED, always.** Every one sits on the `Incoming` disposition (`behavior='hide'`).
+   The leads working view keeps only `behavior='none'` (`lib/leads-query.ts:658`), so a persona can
+   never surface in Zach's list. Measured after seeding: **0 of 5 visible in the working view.**
+2. **Never the DNC disposition.** The activity harness parks its probe on DNC (highest-position hide).
+   The town takes the LOWEST-position hide instead, because a persona whose entire job is receiving
+   texts and emails must not carry a label that will one day be read as an instruction.
+3. **Never text or email a real person from a QA flow.** Every endpoint in this town is ours. If a
+   walk needs a recipient the town does not have, add the persona here first — do not borrow a real lead.
+4. **Plus-addressing all lands in `qa-probe`.** Adding a persona means adding a `qa-probe+NAME@` row
+   to `TOWN` in `tools/qa/test-town.mjs`; no mailbox provisioning is required.
+5. **Seeding never fires a workflow.** The seeder posts `fireWorkflow: false`. The town is where we
+   fire things deliberately; being born is not one of them.
+6. **The seeder never re-parks a persona that is already parked** — a re-PATCH would log a
+   `lead_dispositioned` activity on every run and bury the town's real history under seeding noise.
+
+---
+
+## Findings from the seeding walk (reported, not fixed)
+
+**The actor standard passes.** All 10 activity rows the seeding produced carry a NAMED actor
+(`by_name = 'Zach Spradling'`, `by_kind = 'user'`, `actor_type = 'human'`). **Zero "An agent…" cards.**
+
+Three things are worth someone's attention:
+
+1. **Four of five personas have no creation card.** A lead born through the connected-people door gets
+   `connected_person_added` logged on the ANCHOR's feed and **nothing at all on its own**. Quincy has a
+   `lead_created` row; Quinn, QA Lender, QA TC and QA Showing Partner each have exactly one activity —
+   their disposition park. Four real leads exist with no record of their own birth. Under
+   ALL_FEED_IS_EVERYTHING that is an incomplete build, and it applies to every spouse and counterparty
+   a human has ever added by hand, not just to the town.
+2. **`connected_person_added` does not stamp `source`.** It writes NULL where `lead_created` and
+   `lead_dispositioned` both write `'crm'`.
+3. **The connection-type vocabulary does not exist.** `lib/leads/relationships.ts` documents a table
+   `hl_connected_people_type` (mig 0638) holding spouse · partner · family · business_partner · friend ·
+   llc · trust · relocation · estate · other — **that table is not in the CRM database.**
+   `hl_connected_people.connection_type` is free `text` with no FK and a `'household'` default, and the
+   Add-Connected-Person modal offers a free-text box plus seven chips: Spouse, Wife, Husband, Sister,
+   Brother, Daughter, Son. **All seven are family.** A lender, a TC, or a showing partner has no
+   first-class type — so the town's counterparties carry the free-text labels `Lender`,
+   `Transaction Coordinator`, `Showing Partner`. No enum value was invented, because there is no enum.
+   Whether service professionals belong in the same vocabulary as a spouse is a design question
+   (item #74's territory), not something to settle in a seeding script.
