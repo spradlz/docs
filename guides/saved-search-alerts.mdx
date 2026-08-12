@@ -49,14 +49,26 @@ reading them, because two of them will silently eat a client's homes:
 1. **The digest workflow reads "paused" in the UI and keeps sending.** `sys_saved_search_digest` is the only
    `is_locked` workflow; the runner treats locked as always-active regardless of `status`, so the toggle is
    a lie to whoever flips it. 81 sends since 8/03 while showing paused.
-2. **The web alert ignores the send result and still moves the watermark** — it returns `sent:true` and
-   stamps `lastAlertSentAt=now()` even when the provider errored, so those listings are marked "already
-   sent" and **the lead never receives those homes at all.** A silent permanent loss that reads as a clean run.
+2. **The web alert ignores the send result and still moves the watermark.** `logic.ts:231-247` mines the
+   Resend result only for an id and never checks `emailResult.error` — the SDK returns `{data, error}`
+   rather than throwing, so a rejected send yields `emailId = undefined` and the very next statement runs
+   unconditionally: `UPDATE "SavedSearch" SET "lastAlertSentAt" = now(), …`. Those listings drop below the
+   next `firstSeenAt` floor and **the lead never receives those homes at all** — a silent permanent loss
+   that reads as a clean run.
+   ⚠ **And `sent: true` does not mean an email left.** `logic.ts:281` returns
+   `{ ok: true, sent: true, … }` **unconditionally — including on the `skipSend` path**, where by design
+   nothing is emailed. It means "we reached the end of the function." Any caller trusting that field is
+   wrong on the failure path *and* on the entire compute-only path.
 3. **The web alert's unsubscribe link is a hardcoded prod 404**, is login-gated even if it existed, and never
    reaches the CRM suppression table — while the correct signed opt-out already exists and is simply not used.
-4. **A second hand-rolled email brand** lives in the web tree (different logo, drops Spradling Group + eXp,
-   hardcoded hex). `REUSE_NOT_RECREATE` — the CRM workflow is already the live sender; retiring the web
-   file kills defects 2, 3 and 4 in one move.
+4. **A second hand-rolled email brand** lives in the web tree — `lib/email/saved-search-alert.ts`, 318 lines
+   of inline-styled HTML sent from `HouseLoop <updates@houseloop.ai>` via its own Resend call, entirely
+   separate from the CRM workflow's branded email. `REUSE_NOT_RECREATE` — the CRM workflow is already the
+   live sender; retiring the web file kills defects 2, 3 and 4 in one move.
+5. **A dead event token is still being written.** `saved_search_agent` and `saved_search_system` were
+   **hard-deleted** (`0486_delete_the_inactive_32.sql:59`) — not merely deactivated — yet
+   `apps/houseloop-web/app/api/saved-searches/route.ts:100` still pushes `action: "saved_search_agent"` at
+   a token with no row behind it.
 
 ### Login: the binding problem is BUILT, and there are now two doors
 
@@ -266,7 +278,7 @@ Honest fix = alert-by-TEXT, which is now item 17.
 | 12 | Registration auto-seed unblocked (was failing silently) | `346f059fd7` |
 | 13-16 | Compose banner + hand-back · verify (editable) · server-side save · real composer | `9d8740b4c8`, `618c4e5928`, `b7b59efdfc` |
 | — | Short links + ONE saved-search AI button | `4895b9667c` |
-| 17-18 | `search_alert_sent` (mig 0473) · Alerts column fixed · Website Activity read-only | `6a428e87ad`, `59a7f8c5a5` |
+| 17-18 | `search_alert_sent` (mig 0473 — since renamed **`saved_search_alert_sent`**, migs 0491/0566) · Alerts column fixed · Website Activity read-only | `6a428e87ad`, `59a7f8c5a5` |
 
 ### 🔒 Laws locked — do not re-litigate
 
@@ -334,6 +346,14 @@ Only **2** website accounts exist in production (one a test account), so this fa
 which is why the impersonation door was the only one left. `seedStarterSavedSearch`
 (`lib/lead-intake/process-intake.ts:68`) carries the identical bail. **The impersonation bug is the symptom;
 this check is the disease.**
+
+<Note>
+✅ **FIXED — this section describes a bottleneck that no longer exists (verified 8/12).**
+`createSavedSearchForLead` **no longer bails**: it mints the website user via `findOrCreateWebUserForLead`
+(`apps/houseloop-crm/lib/leads/create-saved-search.ts:101-110`), and `seedStarterSavedSearch` got the same
+treatment (`lib/lead-intake/process-intake.ts:80-82`, and it lives at `:72` — not the lead-intake route as
+cited further down). The account wall came down; the starvation story below is history, not current state.
+</Note>
 
 ### The production numbers (live, 2026-07-27)
 
