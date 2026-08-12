@@ -3,47 +3,70 @@ title: "Activity Catalog"
 description: "THE inventory of every single thing that can happen in the CRM — one row per activity, ordered by integration. A toggle promotes an activity into a Trigger Event; a trigger's category runs a Playbook. This is the layer above Trigger Events, and the reason the two vocabularies drifted."
 ---
 
-{/* legacy-banner */}
-<Warning>
-  **LEGACY — UNVERIFIED.** This page predates the Master QA build and has NOT been verified
-  against the product. The canonical docs are being rewritten lane-by-lane as each lane goes
-  green — check the lane's tab first.
-</Warning>
+<Info>
+**VERIFIED CURRENT 2026-08-12.** This page was walked out of the Legacy (unverified) tab because
+**Bedrock Phase 6 is actively built against it** — a doc the team is building from cannot wear a
+"not verified" banner. The summary below was re-checked against the live `hl_activity_catalog` table
+and the code that reads it. **Everything under "The history" is the dated record of how we got here
+and is NOT re-verified** — where history and this summary disagree, the summary wins.
+</Info>
 
-🕐 **Updated 2026-08-08 · Adam** — **THE ACTIVITY HARNESS: a catalog kind that never fires can no longer
+## 📌 Summary — what is true today
+
+The activity catalog (`hl_activity_catalog`) is THE spine: one row per thing that can happen in the CRM.
+**Live count 2026-08-12: 189 kinds, 55 emitted**, across seven sections — System 55 · Website 41 · Work 40 ·
+Comms 24 · Transactions 24 · Homes 3 · Content 2. (The 7/29 sitting froze *six* sections and called one of
+them "Deals"; the machine word won — it is `Transactions` — and `Homes` was added after. The table is the
+truth, always: `SELECT section, count(*) FROM hl_activity_catalog GROUP BY 1`.)
+
+Every kind must prove **five lenses agree** — render sentence · native writer · FUB-import map · notification ·
+automation trigger — and every activity carries exactly **one ACTOR** (`kind {user·lead·system}` ×
+`type {human·ai_agent·ai·job}`, cost on the row; signed canon 2026-08-07). A toggle promotes a kind into a
+Trigger Event; a trigger's category runs a Playbook. The catalog is the layer above Trigger Events and the
+join key across every surface — the Lead Detail cards, the notifications, the automation triggers, and the
+Follow Up Boss import all derive from it.
+
+### The catalog PAINTS the cards — and the hand-kept map is gone
+
+`hl_activity_catalog` carries the render contract per kind (`color` · `icon` · `sentence` · `card_layout`).
+**`lib/leads/activity-badges.ts` was DELETED** — it was a hand-written map of ~72 kinds while the catalog
+carried 188, so three quarters of the vocabulary had no line in it and rendered as an empty grey circle,
+on rows whose database record already named a section, a meaning and a sentence. The current wiring:
+
+| Piece | File |
+|---|---|
+| The ONE reader — every "what colour / what glyph / what sentence / is it a request" question | `apps/houseloop-crm/lib/activity/catalog.ts` |
+| The projection of the table (189 rows) | `lib/activity/catalog.generated.ts` |
+| Glyph name → React component (fails the build if a row names a glyph nobody imported) | `lib/activity/catalog-icons.generated.ts` |
+| The generator | `npx tsx apps/houseloop-crm/scripts/generate-activity-catalog.mjs` |
+
+**Never hand-edit the generated files.** A card's colour, glyph and who-did-what sentence change by editing
+the CATALOG row and regenerating — never by touching UI. The card's *shape* (the stacked task card, the
+branded hero cards, the color grammar) is signed separately in
+**[The Activity Card Catalog](/command-center/activity-card-catalog)**, which is the Phase 6 work in flight.
+
+## 🔗 The board
+
+**This doc is the past tense; the board is the present tense.** This doc's ONE board is
+**[Activity Catalog Master Audit](https://crm.houseloop.ai/boards/activity-catalog-master-audit)** — the live
+reconciliation where the five-lens matrix and the open fixes are worked. (It used to be linked here as a
+claude.ai artifact; per Bedrock A3 an artifact is account-locked scratch, so the CRM board is the door.)
+Everything else this doc links is a **reference**, not a second board.
+
+**In the app:** Settings → **Activity Catalog** (`app/(crm)/settings/activity-catalog/`) — sits directly
+above Trigger Events, with a per-kind detail page.
+
+## The history
+
+Everything below is the dated, append-only record of how the catalog was built — kept because it explains
+*why* each law exists. It is history, not a status board.
+
+🕐 **2026-08-08 · Adam** — **THE ACTIVITY HARNESS: a catalog kind that never fires can no longer
 ship.** Every kind in the registry must have a proof that FIRES the real write-path and ASSERTS the runlog
 row (actor · type · id · from→to); a new kind with no green proof BLOCKS the push (cage 9, shrink-only floor,
 186 grandfathered → 0). See **[Rule 0c](#0c-it-is-impossible-to-ship-a-kind-that-never-fires-the-activity-harness-zach-2026-08-08)**.
 Prior (Lee): FUB signals converter wins + every kind maps to a card (mig 0712); the catalog drives card
 rendering (color/sentence/layout, migs 0709/0710); the ONE task card + "Created By" capture.
-
-## 📌 Summary — what is true today
-
-The activity catalog (`hl_activity_catalog`) is THE spine: one row per thing that can happen — **187 kinds, 55
-emitted**. Every kind must prove **five lenses agree** — render sentence · native writer · FUB-import map ·
-notification · automation trigger — and every activity carries exactly **one ACTOR** (`kind {user·lead·system}`
-× `type {human·ai_agent·ai·job}`, cost on the row; signed canon 2026-08-07, reverses #578). A toggle promotes a
-kind into a Trigger Event; a trigger's category runs a Playbook. The catalog is the layer above Trigger Events
-and the join key across every surface — the Lead Detail cards, the notifications, the automation triggers, and
-the Follow Up Boss import all derive from it.
-
-**The catalog also PAINTS the cards (2026-08-08).** `hl_activity_catalog` carries the render contract per kind —
-`color` · `sentence` · `card_layout` — projected into `lib/leads/activity-badges.generated.ts` (regenerate with
-`scripts/generate-activity-badges.mjs`; **never hand-edit `activity-badges.ts` — it is overwritten**). So a card's
-color and its who-did-what sentence change by editing the CATALOG, not the UI. The FUB-style color scheme (messages
-blue · emails light-blue · calls/opens/shared/signed green · **AI/Myli purple** · saved red · viewed grey ·
-everything else grey) and the "a property" (not "a home") wording both live there (migs 0709/0710). The rendered
-card contract itself — the ONE task card, the source pill on the tile, the 3 shapes — is specced in the
-**Lead Activity Card Catalog PRD** (a reference below).
-
-## 🔗 The board
-
-**This doc is the past tense; the board is the present tense.** This doc's ONE board is
-**[THE ACTIVITY CATALOG — MASTER AUDIT](https://claude.ai/code/artifact/ac8e921b-f4ba-4aed-bd05-674345a102fd)** —
-the live reconciliation (6 items · 1 active · 5 to do), where the five-lens matrix and the open fixes are worked.
-Everything else this doc links is a **reference**, not a second board.
-
-**In the app:** Settings → **Activity Catalog** (new — sits directly above Trigger Events)
 
 <Check>
 **✍️ SCHEMA-LOCK SIGNED — Zach, 2026-07-29, after a 16-round live sitting.** The catalog vocabulary is now
@@ -881,8 +904,15 @@ PRD `GT/GT - ACTIVE/GT_HOUSELOOP_LEAD_ACTIVITY_CARD_CATALOG_PRD.md`.
   HouseLoop.ai). Appointment date tile is always blue (green only on the outcome pill); the call card dropped its
   redundant VIA pill; softer radius on the picture tiles.
 - **Found:** the colors + sentences were never hand-values — they live in `hl_activity_catalog` and project through
-  `activity-badges.generated.ts`, so a hand-edit in `activity-badges.ts` is silently overwritten. Change a color or
-  a sentence = update the CATALOG + regenerate, never the `.ts`.
+  a generated file, so a hand-edit in the projection is silently overwritten. Change a color or a sentence =
+  update the CATALOG + regenerate, never the `.ts`.
+  <Note>⚠ **Superseded 8/12 — the file names in this block are historical.** `activity-badges.ts` /
+  `activity-badges.generated.ts` no longer exist. The projection is now `lib/activity/catalog.generated.ts` +
+  `catalog-icons.generated.ts`, read by `lib/activity/catalog.ts`, regenerated with
+  `scripts/generate-activity-catalog.mjs`. The RULE is unchanged: edit the catalog row, regenerate, never the
+  `.ts`. Also note the color grammar above is superseded by the signed one in
+  [The Activity Card Catalog](/command-center/activity-card-catalog) — saved RED · shared GREEN · liked BLUE ·
+  rest of website BLUE · system GREY, and AI/Myli is brand blue, never purple.</Note>
 - **Still open** (card-catalog board): name-on-property-rows · insights-mis-filed-as-notes · `{{toLabel}}` tokens ·
   payload sublines · email specificity · headline sizing · email/deal full cards in All · em dash · address format ·
   price reliability · saved-search cards · address search · starred events. **Verdict:** shipped + cage green; the
