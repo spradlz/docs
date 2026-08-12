@@ -58,6 +58,25 @@ reading them, because two of them will silently eat a client's homes:
    hardcoded hex). `REUSE_NOT_RECREATE` — the CRM workflow is already the live sender; retiring the web
    file kills defects 2, 3 and 4 in one move.
 
+### Login: the binding problem is BUILT, and there are now two doors
+
+The doc below calls the magic-link binding fix *"solved on paper"* and gates sending on it shipping.
+**It shipped.** Read the sections below with that in mind:
+
+- **Magic link is now one-time and burned server-side.** Redemption happens only inside the NextAuth
+  `magic-token` provider's `authorize()`; `GET /api/auth/magic/preflight` is a read-only status oracle
+  (`valid | used | expired | invalid`) so the landing page can route to silent login, the identity-conflict
+  interstitial, or a friendly expired page — without redeeming. A forwarded or bookmarked URL is dead, which
+  was the precondition this doc set before anything could be mailed.
+- **A second door shipped 2026-08-12: phone-code (SMS one-time-code) login.** `POST /api/auth/phone/start`
+  → `/verify` (`lib/auth/phone-otp.ts`, `phone-ticket.ts`). Only the SHA-256 **hash** of the 6-digit code is
+  stored, 10-minute expiry, 5-attempt cap, consumed exactly once, 30-second per-phone resend cooldown,
+  `crypto.randomInt`. **Phone is a contact point, not an identity** — the CRM owns the `hl_leads`
+  disambiguation and the website User is resolved/minted only after a code checks out.
+
+So where this doc says a lead can only own a search with a website account, note the account can now be
+established by a code to their phone — no email, no password, no forwarded-link risk.
+
 **Also unchanged since this doc was written:** nobody has yet watched a real listing alert land in a real
 inbox with Zach's sign-off (item 19 below). That remains the gate.
 
@@ -266,8 +285,11 @@ Honest fix = alert-by-TEXT, which is now item 17.
 - `hl_trigger_events` is THE list; 6 FKs enforce every reference; `logActivity({kind})` is typed to it so
   **an invented kind does not compile**; `npm run test:event-kinds` fails on drift.
 - **Adding a kind = add the ROW, then `npm run gen:event-kinds`. That is the only door.**
-- **Naming law: `object_verbPast`** — `search_saved`, `search_alert_sent`. Never `property_`.
-- **Ping Lee before touching `activity-badges.ts` or `hl_trigger_events`** — he rebuilt both.
+- **Naming law: `object_verbPast`** — never `property_`. ⚠ The example keys here are STALE: the live
+  catalog key is **`saved_search_created`** (`lib/activity/catalog.generated.ts:147`), not `search_saved`.
+- **Ping Lee before touching the render catalog or `hl_trigger_events`** — he rebuilt both. ⚠ `activity-badges.ts`
+  no longer exists; the ONE reader is now `apps/houseloop-crm/lib/activity/catalog.ts`, fed from
+  `hl_activity_catalog` (see [Activity Catalog](/guides/activity-catalog)).
 
 **THE WEBSITE DOESN'T SAVE** (Zach 2026-07-27): *"The website doesn't save the search. The CRM saves the
 search. The website is just the surface you save it ON."* The website has no write path at all — which is
@@ -794,9 +816,9 @@ All live in `apps/houseloop-web/lib/inngest/functions/saved-search-alert.ts` and
 | --- | --- | --- |
 | `saved-search-on-create` | event `houseloop/saved-search.created` | **NO-OP.** The *New Lead — Saved Search* door workflow owns the on-create email. |
 | `saved-search-instant-check` | **event `houseloop/idx.event`** (a new/changed listing) | `alertFrequency = 'instant'` — fires the hour a matching home hits our feed |
-| `saved-search-daily-alert` | cron `0 13 * * *` (8am CT daily) | `alertFrequency = 'daily'` |
-| `saved-search-weekly-alert` | cron `0 13 * * 1` (Mon 8am CT) | `alertFrequency = 'weekly'` |
-| `saved-search-monthly-alert` | cron `0 13 1 * *` (1st, 8am CT) | `alertFrequency = 'monthly'` |
+| `saved-search-daily-alert` | cron `TZ=America/Chicago 0 8 * * *` (8am CT daily) | `alertFrequency = 'daily'` |
+| `saved-search-weekly-alert` | cron `TZ=America/Chicago 0 8 * * 1` (Mon 8am CT) | `alertFrequency = 'weekly'` |
+| `saved-search-monthly-alert` | cron `TZ=America/Chicago 0 8 1 * *` (1st, 8am CT) | `alertFrequency = 'monthly'` |
 
 <Warning>
 `saved-search-instant-check` is **event-driven, not a cron.** It runs on every
@@ -810,8 +832,25 @@ watermark, so arrivals between checks are never missed and never double-sent.
 ### The digest gate
 
 Every cron + the instant check first calls `digestGateActive()`, which reads the CRM's
-`/api/workflows/digest-gate`. If the **Saved Search Listing Alerts** workflow is paused in Lead
-Flow, every alert path here goes quiet. The gate **fails open** (treats unreachable as active).
+`/api/workflows/digest-gate`. The gate **fails open** (treats unreachable as active).
+
+<Warning>
+🛑 **CORRECTED 2026-08-12 — PAUSING THIS WORKFLOW DOES NOT STOP ALERTS.** This section used to say that
+pausing **Saved Search Listing Alerts** in Lead Flow makes every alert path go quiet. **That is wrong, and
+acting on it means believing you have stopped emails to real clients when you have not.**
+
+`sys_saved_search_digest` is **locked infrastructure** (mig `0347_workflow_infrastructure_lock.sql`:
+`is_locked=true` means "NOT user-toggleable and always active"). The gate reads:
+
+`app/api/workflows/digest-gate/route.ts:29` → `active: wf?.is_locked === true || wf?.status === 'active'`
+
+So `is_locked` short-circuits `status` entirely. You can PATCH the workflow to `paused`, the row will
+reload reading "paused", and **the digests keep going out** — measured at 81 sends since 8/03 while the UI
+showed paused. To actually stop them today you must disable the crons or the gate, not the toggle. The
+control itself is an open P0 in the
+[Enterprise QA Findings Ledger](/command-center/enterprise-qa-findings) — it is either "locked means the
+control is disabled and can never read paused", or "status gates everyone"; today it is neither.
+</Warning>
 
 ## How a saved search is created
 
