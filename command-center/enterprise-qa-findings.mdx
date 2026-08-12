@@ -1,0 +1,308 @@
+---
+title: "🔬 Enterprise QA — Consolidated Findings Ledger"
+description: "The master triage list for the audit → fix → optimize program: 8 audits, P0/P1/P2 severities, and the tiered master fix order."
+---
+
+# ENTERPRISE QA — CONSOLIDATED FINDINGS LEDGER (8/12)
+
+The master triage list for the full-site audit → fix → optimize program (Zach's directive 8/12:
+"audit, fix and optimize… don't patch, structurally fix"). Each audit agent appends here; Lee triages
+into fix order. Fixes are STRUCTURAL (one-door, reuse canonical, root cause) — never a patch.
+
+Severity: **P0** = broken / silent-fail / safety · **P1** = works but wrong · **P2** = polish/consistency.
+
+---
+
+## AUDIT 1 — INBOX / TASKS / CALENDAR / NOTIFICATIONS  (returned 8/12, verified via grep + prod DB)
+
+### P0-1 · Inbox "mark as read" is a dead path — unread count can only ever grow
+- **Where:** the `'read'` action exists (`app/api/inbox/triage/route.ts` → `lib/inboxes/triage.ts:markConversationRead` → writes `hl_inbox_conversation_read`) but **nothing in the UI ever calls it**. Grep finds `'read'`/`markConversationRead` only in those two files. `app/(crm)/inbox/page.tsx` + `components/inbox/ConversationList.tsx` only ever call `action:'assign'` and `action:'status'`.
+- **Proof:** `hl_inbox_conversation_read` has **0 rows** in prod.
+- **User sees:** opening a conversation never clears its blue unread dot; the per-scope pill counts + header "N unread" only grow, never shrink. The inbox is permanently "unread."
+- **Structural fix:** fire `POST /api/inbox/triage {action:'read'}` when a conversation row is opened — mirror the existing lead-notifications bell pattern (`app/api/notifications/read-all/route.ts`). One door, already exists; just wire the caller.
+
+### P1-1 · Bulk task actions bypass the one-door (no activity log, no clone-cancel) — SAFETY
+- **Where:** `app/api/tasks/bulk/route.ts` writes straight to `hl_tasks` (`UPDATE/DELETE … WHERE id IN (…)`) with **no `logActivity`** and **no `cancelCloneTaskActions`** — both of which the single-task path (`app/api/tasks/[id]/route.ts`) treats as mandatory.
+- **User sees / risk:** (1) bulk complete/delete never appears in the lead's Activity Log / All feed (violates ALL_FEED_IS_EVERYTHING); (2) **an AI-clone scheduled fire for a bulk-dismissed task stays queued — the clone could text a lead about a task the human just dismissed** (same class as the Faduma clone-unauthorized-send incident).
+- **Structural fix:** route bulk actions through the same service functions the single-task path uses (loop or shared helper) — not a second raw-SQL door. Textbook BEDROCK one-door violation.
+
+### P1-2 · Silent empty-vs-failed conflation (2 places)
+- `components/tasks/TasksPage.tsx` `loadTasks()` — `if (res.ok) setTasks(...)` with no else; a failed fetch looks identical to "no tasks."
+- `components/tasks/TaskModal.tsx` — `/api/options` fetch has no `.catch`/`res.ok`; on failure the "Assign To" search silently has zero users forever.
+- **Structural fix:** explicit error state, copy the good pattern already in `components/calendar/CalendarPage.tsx` `loadEvents` (distinguishes non-2xx/non-JSON from a true empty array, surfaces `fetchError`).
+
+### P2-1 · Third private copy of task-status vocabulary
+- `components/calendar/EventDetailModal.tsx` has a local `TASK_STATUSES = [open, in_progress, completed]` — missing `cancelled`, uses legacy `open` not canonical `pending`. Canonical is `components/tasks/taskMeta.tsx` (`TASK_STATUSES`/`TaskStatusSelect`, already exported + used by TaskModal).
+- **User sees:** a task opened from the Calendar can't be set to Cancelled — unreachable from that surface only.
+- **Structural fix:** replace the local `<select>` + arrays with the shared `TaskStatusSelect`/`TaskTypeSelect` (REUSE_NOT_RECREATE).
+
+### P2-2 · Hand-rolled lookalike UI (functionally wired, off-doctrine)
+- `app/(crm)/inbox/review/page.tsx` — raw `hl-input` + hand-rolled search-result button list instead of `EditablePickerRow` (the canonical search-existing→attach pattern).
+- `app/(crm)/notifications/page.tsx` — raw `<div>` row list inside `MenuTable` instead of `HlDataTable`/`SettingsTable`.
+- `CalendarPage`/`TasksPage` filter menus hand-roll dropdown chrome instead of reusing `HlMenu`/`HlDropdownItem` (which the same file uses elsewhere).
+
+### Minor / hygiene
+- `hl_tasks.status` can receive raw `'done'` from TaskModal's "mark complete immediately" (POST inserts unnormalized); aliased so nothing breaks, but normalize at the POST route like PATCH already does.
+- `/inbox/[id]`, `/my`, `/company`, `/past-agents` are deliberate redirect stubs (8/12 rebuild) — not findings. `/conversations` is an honest ComingSoon stub.
+
+### Needs a LIVE browser walk (Lee to sequence — verify from prod, guard for shared-Chrome tab theft)
+1. `/inbox` → open unread conversation → confirm dot/count does NOT clear (confirms P0-1 live).
+2. `/inbox` → assign to teammate → confirm `hl_inbox_conversation.assigned_user_id` updates + pill renders.
+3. `/tasks` → bulk-delete rows → lead's All feed shows no `task_deleted` row (confirms P1-1 live).
+4. `/calendar` → open task event → Status dropdown missing Cancelled (confirms P2-1 live).
+5. `/inbox/review` for a real unmatched number → Create + Attach both land on `/leads/[id]` (mintPhoneLead has a 409 branch worth confirming).
+
+---
+---
+
+## AUDIT 2 — OUTBOUND TEXT / SMS GOVERNANCE  (returned 8/12, file:line + grep verified)
+
+### S1 · P0 · The AI-send authorization SEVER is bypassed on the PRIMARY lead channel
+- `lib/ai/authorized-send.ts` convicts only when `actorRole==='ai_agent'` or actorUserId resolves AI. The three AI iMessage sends — `lib/ai/lead-conversation.ts:1044`, `lib/workflows/execute-step.ts:271`, `lib/coordination/mediation.ts:39` — pass NEITHER, so `looksAi=false → ALLOW`. The Twilio FALLBACK right below each DOES pass `ai_agent` and is correctly refused — so the law fires only on the dead emergency path and waves through the main road. Since BlueBubbles is the primary lead text channel, **essentially every AI text to a real lead skips the sever.** 4th instance of this exact bug.
+- **Fix (structural):** make `SendBbArgs.actorRole` REQUIRED; pass actorRole/actorUserId/intentId into `sendIMessageRaw` on all three paths; run the sever inside the wire function, one door.
+
+### S2 · P0 · `/api/bb/send` is a second, ungoverned door
+- `app/api/bb/send/route.ts:142` POSTs BlueBubbles directly — no `authorizeWireSend`, no leak-guard, no dedupe. Reachable w/ internal secret; scheduled iMessages route through it. Also `sendHandle` defaults to an EMAIL (`myli@houseloop.ai`) written as `sender` while the text physically leaves from +19132081633 → identity resolves wrong.
+- **Fix:** route it through `sendIMessageRaw` (the one door); never a raw fetch.
+
+### S3 · P0 · Lead-facing sends fail silently AND are recorded as done
+- `lib/leads/handoff.ts:175` (+ `:61,:139,:144`, `mediation.ts:39`): `await sendSmsRaw(...).catch(()=>{})` — but `sendSmsRaw` returns `{ok:false}` as a VALUE, never throws, so `.catch` never engages and the result is discarded. A Twilio outage / missing token → no text, no `hl_messages` row, no error — then `logHandoff` records the handoff COMPLETE. **The lead is told (in CRM) Myli introduced their new agent; their phone never rang; nothing knows.**
+- **Fix:** check the returned `{ok}`; on failure do NOT log the step complete — surface it.
+
+### S5 · P0 · No opt-out. We can text someone who replied STOP (TCPA exposure)
+- Grep: ZERO `opt_out`/`dnc`/`do_not_text`/STOP-keyword handling anywhere on the outbound path. `lib/phone/blocklist.ts` is consulted only at the INBOUND webhook, never before a send. Twilio handles STOP at the carrier — but leads are texted over BlueBubbles, where there is NO carrier opt-out. A lead who says STOP keeps getting iMessages from 1633 indefinitely. Email has suppression machinery; text has none.
+- **Fix:** a suppression check inside the wire functions (`twilioSend`/`sendIMessageRaw`), keyed on digits10, before the wire + a STOP-keyword capture on inbound.
+
+### S6 · P1 · Unresolved merge token reaches a lead as a BLANK hole
+- `lib/merge/engine.ts:89` send-mode renders an unknown token as `''` (its own header cites the shipped "You're all set for  on !" incident). `applyMergeVerbose`/`unresolvedScopeTokens` exist to block/annotate but have ZERO callers. Preview shows `⚠missing:` so review looks clean while the send is broken.
+- **Fix:** the send path uses the verbose form and blocks/annotates on unresolved tokens.
+
+### S7-S12 · P1/P2 · double-log dropping AI attribution + duplicate green-SMS cards (S4); `APP_URL` unset → scheduled texts POST to localhost:3020 (S7); BB handle used as Twilio From (S8); GSM-7/em-dash scrub on only one path → 3× segment cost (S9); dedupe on 1 of 6 send paths (S10); BB password unencoded in query string (S11). All file:line'd in the report.
+
+---
+
+## AUDIT 3 — SENT EMAIL + MESSAGE FORENSICS (prod DB, SELECT-only)
+
+### E1 · P1 · Blank-name substitution ships to inboxes ("Hey  — Myli", "Welcome to HouseLoop, ")
+- The merge engine substitutes an EMPTY STRING for a missing first name → evades every `{{`-token check but the copy is broken. 7 sends 8/11 (observed instances were qa-probe@ test addresses, but the defect is real for any nameless lead). Digest subject "430 new homes for your search, " has the trailing comma too.
+- **Fix:** same root as S6 — greeting falls back ("Hi there,") when the name token is empty; block-on-unresolved.
+
+### E2 · P1 · Two Myli registration email templates have NO brand shell — and NO unsubscribe
+- `new_reg_saved_home_email` (×4), `new_reg_shared_home_email` (×1): raw `<p>` fragments, no `<html>`, no lockup, no footer, **no unsubscribe** (CAN-SPAM). `shared_home_brand_email` has footer but no lockup; legacy `esign` key (15 sends) has neither.
+- **Fix:** every consumer email renders through the ONE branded shell + footer (canonical shell). Retire legacy `esign` key.
+
+### E3 · P2 · Un-decoded HTML entities in plain-text bodies (`&mdash;`, `&#39;`) — 103 rows last 90d, hourly
+### E4 · P1 · `hl_messages.sender` NULL on 100% of outbound email (319/319, ongoing) — FROM only in metadata->>'inbox_used'; one 8/12 row has neither
+### E5 · P2 · Phone identity not normalized — `+19132861761` vs `9132861761` split as two senders; recipients 336 bare-10 vs 68 E.164; one literal `'913 563 0765'`
+### E6 · P2 · `hl_messages.status` mixes 5 vocabularies (sent/accepted/delivered/logged/Contacted/No Answer); no error-text column (failures store bare code 21614 in jsonb)
+- CLEAN (verified): ZERO `{{` leaks, zero undefined/null/NaN/localhost in any sent email or message, all time. The only 2 email failures ever = "noreply@houseloop.ai is not connected" (8/6). `[CONTENT HIDDEN]` rows are all fub_import mirror (known).
+
+---
+
+## AUDIT 4 — PLAYBOOKS / WORKFLOWS / TRIGGERS  (verdict: unusually SOLID)
+- **No P0.** Every route exists, every write hits the right table (correct qWeb/q cross-DB split), real row counts prove usage, no fake-success catches on write paths.
+- **W1 · P1 · needs ZACH RULING — canvas-is-truth:** 3 executor side-effects fire with no visible canvas step: `runtime.ts:774,845` standby hand-off after EVERY completion · `:257-260` e-sign nudge queued on any `document_sent` · `:202-213` global business-hours clamp delaying every lead send. All deliberate/commented, but that's the exact shape WORKFLOW_CANVAS_IS_TRUTH bans. **DECISION: draw them as always-present trailing nodes, OR Zach re-signs them as declared exceptions in the law.**
+- **W2 · P2:** `schedule_followup` runs in execute-step but is missing from `RUNNABLE_STEP_TYPES` → grayed out in the builder though the runtime executes it. Add the one key.
+- **W3 · P2:** stale "Phase 6 stub" doc comment on WorkflowsShell (Active is actually real).
+
+---
+
+## MASTER FIX ORDER (Lee's triage — structural fixes, sequenced to avoid tree collision with card_port)
+
+**TIER 0 — SAFETY / LEGAL (do first, coherent cluster = "outbound text one-door"):**
+- S5 opt-out/STOP suppression (TCPA) · S1 sever required on all AI paths · S2 kill the second BB door · S3 fail-loud on lead sends · S6/E1 block-on-unresolved-merge. → ONE fixer, one mandate: the outbound-text governance door.
+
+**TIER 1 — LEAD-FACING QUALITY:**
+- E2 brand shell on the 2 Myli reg templates + retire legacy esign · E3 HTML-entity decode · E4 email sender column · S9 em-dash/GSM scrub on all paths.
+
+**TIER 2 — CRM CORRECTNESS:**
+- P1-1 bulk-task one-door (clone safety) · P0-1 inbox read wiring · P1-2 error states · S4 double-log/dup-card · S7 APP_URL.
+
+**TIER 3 — HYGIENE/POLISH:** E5 phone normalize · E6 status vocab · W2/W3 · all P2 lookalikes (fold into card_port UI sweep).
+
+**NEEDS ZACH RULING:** W1 (canvas hidden effects — draw or re-sign).
+
+---
+
+## AUDIT 5 — SETTINGS CLUSTER (6 parallel sub-audits, all settings surfaces)
+
+### SET-P0 · "Ring humans, in order" writes a column the call runtime never reads
+- `components/inbox/InboxDetail.tsx:257-273` PATCHes `hl_inboxes.ring_chain`, but the inbound-call handler `app/api/phone/webhooks/voice/route.ts:132-159` reads ONLY `hl_routing_groups.ring_targets` (via `hl_phone_numbers.routing_group_id`) — never `ring_chain`. Live: 0/8 inboxes have ring_chain set; 43/54 numbers route via routing_group. **A user sets a ring order here, believes they configured who gets called — nothing happens at the carrier.** Second unread door for one fact (ONE_ANSWER_TABLE).
+- **Fix:** delete this editor or repoint it to write `hl_routing_groups` (the door the runtime actually reads).
+
+### SET-P1 · Missing admin gate — anyone can edit/delete field + stage DEFINITIONS
+- `app/api/custom-fields/[id]/route.ts` (PATCH+DELETE) and `app/api/stages/[id]/route.ts` (PATCH+DELETE) never call `requireAdmin()`, though the collection POSTs do. Any authenticated non-admin can rewrite/delete custom-field + pipeline-stage definitions. **Fix:** add `requireAdmin()` to the [id] routes.
+
+### SET-P1 · Fake control leaks a dev string to users
+- `app/(crm)/settings/email/page.tsx:881` "Add Address" runs `prompt()` then `alert('…update the code.')` — no persistence, hardcoded array. **Fix:** wire to a real table+route or relabel as fixed system addresses. (Sibling "Sync" is a relabeled no-op GET — P2.)
+
+### SET-P1 · Custom Fields delete swallows failure
+- `components/settings/custom-fields/CustomFieldsManager.tsx:39` `.catch(()=>null)` + unconditional reload → a 500 shows no error. **Fix:** surface the error (the good pattern already exists on team/agents).
+
+### SET-P2 · No way to delete a lead source from the UI at all
+- `LeadSourceDeleteModal.tsx` is complete + correctly wired but imported nowhere; no ⋮ opens it. **Fix:** wire the delete affordance onto the source's ⋮ menu.
+
+### SET-P2 · Widespread silent-fail toggles/reorders (no res.ok check)
+- Stages/Tags/Dispositions/Appointment-Types/Appointment-Outcomes/Relationships/Lead-Sources toggle+reorder handlers + `OutcomeRulesEditor.reconcileOutcomeRules` (partial-save on mid-sequence 500). Same root as P1-2 — one shared "guarded write" helper that surfaces errors.
+- **SET-P2 misc:** raw-hex green `#16A34A` default on new appointment outcome (brand-law violation) · stale settings catch-all META map (unbuilt slug renders plausible "coming soon" not 404) · "Forms/Websites" sidebar → permanent stub · orphaned dead code (TagActionsMenu, TemplateModal, LeadSourcesPage).
+- CLEAN: notifications settings (all 11 routes exist, scope-save reverts on failure), team/profile/business-profile (real writes, visible error strips), dispositions/relationships/appt-types (real, populated).
+
+### MASTER FIX ORDER — additions
+- **TIER 0 (safety/legal):** + SET-P0 ring_chain unread door (a user thinks calls are routed; they aren't).
+- **TIER 1 (security):** + SET-P1 admin gates on custom-fields/[id] + stages/[id].
+- **TIER 2 (correctness):** + SET-P1 fake "Add Address" · custom-fields delete error · the shared silent-fail-write helper (covers P1-2 + all SET-P2 toggles) · SET-P2 lead-source delete affordance.
+
+---
+
+## AUDIT 6 — TC / DEALS / SELLER REPORT
+
+### TC-P0 · Two Loop-Status config editors have SWAPPED API bases — one corrupts, one 404s
+- `tc/configure/transaction-status/page.tsx:20` points at `/api/tc/transaction-statuses` (hard-wired to `hl_tc_working_status`) → Add/reorder/toggle/Delete write the WRONG table using a text key as a uuid id → cast error / orphan rows. `tc/configure/status/page.tsx:16` points at `/api/tc/working-statuses` which **does not exist** → 404s outright. The correct `hl_tc_transaction_status` CRUD lives at `/api/tc/loop-statuses`, linked by nothing.
+- **Fix:** swap the two `API_BASE` constants (transaction-status→`/api/tc/loop-statuses`; status→`/api/tc/transaction-statuses`), align page titles to sidebar labels.
+
+### TC-P1 · Forms generate contracts invisible from their loop
+- `app/api/tc/contract/fill/route.ts:58-67` never sets `deal_id`/`loop_id`; loop doc_count reads `WHERE deal_id = t.id`. All 31 `hl_signed_document` rows have `deal_id IS NULL` → every filled contract is unreachable from the Loop card. **Fix:** accept + stamp loopId/dealId on fill (or require picking a loop).
+
+### TC-P1 · Forms "Lead" field is a raw-UUID textbox (no lookup)
+- `components/tc/ContractFormsPage.tsx:116` renders a plain `SearchInput` (no fetch/dropdown) — coordinator must hand-type a lead UUID. **Fix:** reuse the working `ClientPicker` (`TransactionsTable.tsx`) — REUSE_NOT_RECREATE.
+
+### TC-P1 · Email Queue can never have data — nothing writes `hl_tc_email`
+- Grep: zero `INSERT INTO hl_tc_email`. Live nav item shows an empty table forever. **Fix:** wire a real writer (TC send/share/reminder → log) or pull the nav item.
+
+### TC-P1 · Seller Report "Delete" is a dead danger control
+- `SellerReportDashboard.tsx:239` `onDelete={()=>{}}` — a red Delete that does nothing, no toast/confirm/error. **Fix:** wire a real delete/archive on `hl_srg_past_clients` or remove the affordance.
+
+### TC-P2 · Seller Report "Configure" = same handler as "View report" (mislabel); "Commission Docs" live-looking but a "Phase 6" placeholder w/ no soon-badge.
+
+### TC · NEEDS ZACH RULING (architectural) — the THIRD database
+- The whole Commission section (transactions/cdas/exp-grid/settings) reads/writes `HL_TXN_DATABASE_URL` (`hl_txn` schema) — a THIRD Postgres DB, violating the "HouseLoop = EXACTLY 2 databases" constitutional law. It's a known in-flight migration (commission-push 8/6 → `hl_transaction_commission`, already run ≥once, matching 1,962/3,924 rows) but the UI was never repointed. **DECISION: finish repointing the Commission UI to the CRM tables + retire `hl_txn`, OR explicitly except this migration in the doctrine until it closes.**
+
+### MASTER FIX ORDER — additions
+- **TIER 1:** + TC-P0 swapped Loop-Status API bases (data corruption).
+- **TIER 2:** + TC-P1 contract deal_id stamp · Forms ClientPicker · Seller-Report delete · Email-Queue writer-or-pull.
+- **NEEDS ZACH RULING:** + the third-database / Commission-UI-repoint decision (alongside W1 canvas).
+
+---
+
+## AUDIT 7 — NOTIFICATIONS END-TO-END  (verdict: PARTIAL — 5 P0s. Engine sound; gates leaky. Full: .claude/reports/enterprise-qa/notifications.md)
+SOLID: `hl_notification` has ONE insert writer (`create.ts:447`); bell real (trigger→SSE, count matches DB); SMS delivery real (265/7d); every suppression logs a run-log row; the 8/6 outage mechanism is disarmed.
+
+### NOTIF-P0-1 · The "one weld" is TWO doors → duplicate notifications (LIVE, 93 dup rows/14d)
+- Weld `log-activity.ts:420` writes `entity_type='hl_calls'`; voice webhook `webhooks/voice/route.ts:553`→`inbox-subscribers.ts:85` writes `entity_type='call'`. Forever-dedup (`create.ts:323`) keys on that caller-chosen string → sees two signals for one call. **Fix:** mint entity_type/entity_id from the activity log's `(source_table, source_id)` at one helper; the 4 phone/email webhooks call `logActivity`; `notifyInboxSubscribers` becomes recipient-selection, not a fire point (router.ts:135 was already retired this way; this door was missed).
+
+### NOTIF-P0-2 · "Actor always excluded" has NEVER fired (0 rows all-time)
+- `create.ts:247` reads `actorUserId`; no live caller sets it; the two that compute it pass to a RETIRED no-op (`lead-events.ts:52`); the only firing path has no actor param. Muted today only by the freeze — **when the freeze lifts, agents get texted about their own clicks.** Fix: thread the actor the weld already computes (`log-activity.ts:344`); make `actorUserId` REQUIRED on CreateNotificationArgs.
+
+### NOTIF-P0-3 · `is_backfill` never reaches its gate
+- `create.ts:263` reads it; nobody sets it. Only `isFresh` (15min) protects, and ONLY on the weld — the ~14 direct createNotification callers have none. Fix: derive freshness at the choke point from `occurredAt`, don't trust a caller flag.
+
+### NOTIF-P0-4 · One seat receives everything; no other seat is proven
+- 30d: Zach 1,675 · Ana 104 (last 8/6) · Trish 0 ever. `rule_off` never fired (0 all-time) — the per-seat suppression path is entirely unexercised. Fix: the un-mute gate must require "proved on a NON-OWNER seat" (needs Ana's-seat live walk).
+
+### NOTIF-P0-5 · Dead-letter pager = 29/29 FALSE alarms + pollutes comms SSOT (LIVE)
+- All 29 pages/7d are `harness_probe_muted` — `dispatch.ts:686` mutes the probe, `:812` then classifies the mute as a drop and texts Zach "⚠ NOTIFICATION DIED" anyway. Also sends via `sendSmsRaw` → writes an `hl_messages` row (the exact pollution `:727` was rewritten to kill). Fix: invert to an explicit SYSTEM_FAULT allowlist.
+
+### NOTIF-P1s
+- **⚠ LIVE JUNK IN THE LIFELINE:** `email_received` joined LIFELINE_CLASSES 8/12 11:44 (commit f6d4b252eb) with NO lead-stitch filter → Anthropic receipts, verification mail, realtor.com marketing, and HouseLoop's OWN digest now SMS the owner. Defeats the freeze lifeline. **Fix: gate to lead-stitched inbound only.**
+- `hl_notification_rule.lead_scope` written+seeded on all 84 rows, **no reader anywhere** → D4 is 3 axes of 4; scope falls to `hl_users.notif_scope` (second home — ONE_ANSWER violation). Fix: wire the reader, retire the second home.
+- UUID-in-title guard covers `args.actor` but not `by.byName` (live row titled with a lead's uuid 8/11).
+- `delivery_failed` + `port_updated` are notify=true with a class NOT in `hl_notify_classes` (FK-enforced) → job-failure alerts structurally unannounceable.
+- ~20 live sites still call the retired no-op notifiers.
+
+### MASTER FIX ORDER — additions
+- **TIER 0 (live harm):** + NOTIF email_received lead-stitch filter (junk in your lifeline NOW) · NOTIF-P0-5 pager false-alarms (texting you "DIED" wrongly NOW) · NOTIF-P0-1 duplicate notifications NOW.
+- **TIER 1:** + NOTIF-P0-2 actor-exclude threaded+required · P0-3 freshness at choke point · lead_scope reader (kill 2nd home) · delivery_failed/port_updated class registration.
+- **TIER 2:** + NOTIF-P0-4 seat-proof (Ana walk) · UUID-title guard · retire ~20 no-op notifier callsites.
+
+---
+
+## ⭐ ZACH'S RULINGS — 8/12 PM (walking the audit). These are DECISIONS, they outrank the findings.
+
+### 🚨 THE AI-SAFETY MANDATE (Zach's #1 fear — "the AI can go crazy… randomly texting people")
+The trigger: the e-sign chase text **texted a real lead at ~midnight, 3 hrs after Zach's own text** — an AI/automation send that fired with no visible gate, while a harness was supposedly restricting all AI sends. Zach's law, verbatim intent:
+1. **AN AI MASTER SWITCH** — one switch that kills ANY AI communication. When off, no AI-role send reaches the wire, period.
+2. **EVERY AI SAFETY TOGGLE MUST ACTUALLY WORK** — AI twin on/off, clone on/off, Myli off, "turn off all AI." Today several are suspected cosmetic. A toggle that says "off" must GATE the send at the wire, not just the UI.
+3. **AI CAN ONLY DO WHAT'S PROGRAMMED THROUGH A VISIBLE GATE** — everything goes through a playbook / a visible canvas step. No AI send that isn't drawn/authorized. (Zach is promoting workflows→playbooks to redo them; until then, current workflows: every behavior on the canvas.)
+4. **AUDIT ALL PATHS FROM THE AI COCKPIT** where AI is toggled on/off — map them, prove each one actually gates. → ai_safety_audit launched.
+Enforcement point = the send sever (comms_safety's work) + the master switch layered on it.
+
+### WORKFLOW CANVAS RULINGS (resolves W1)
+- **E-SIGN CHASE TEXT → KILLED** (not just made visible). It did harm (midnight lead text). Kill the auto-fire (`runtime.ts:257-260` dispatchTrigger on `document_sent`). → assigned to comms_safety NOW.
+- **BUSINESS-HOURS DELAY on sends → must be VISIBLE on the canvas** (drawn as a real step, not a global clamp).
+- **STANDBY HANDOFF after every workflow → must be VISIBLE on the canvas** (drawn, not a hidden trailing effect).
+
+### MYLI EMAIL — CLARIFICATION (revises finding E2)
+- **Myli emails SHOULD be UNBRANDED** — she is a human-like sender from Gmail; NO HouseLoop brand shell on Myli mail. That was CORRECT, not a bug.
+- BUT **add a small unsubscribe** even on Myli's Gmail-style emails.
+- The BRAND SHELL requirement stays for the HouseLoop-SYSTEM emails (digests, registration-from-HouseLoop, e-sign). Split the rule: system-branded = full shell; Myli/human = unbranded + small unsubscribe.
+
+### DEAD-CONTROL RULINGS
+- **Inbox "ring humans in order"** — Zach thought this was killed. There is ONE working ring-order config (Call Routing → hl_routing_groups). Kill the dead duplicate editor (or repoint it to the working table). One door.
+- **Seller Report "Delete"** — Zach doesn't know what it is → remove the dead red control (or wire archive; default remove).
+- **Bulk Email "Add Address"** — remove/relabel the fake dev-message control.
+
+### TC LOOP — "that whole freaking TC loop thing's a shitshow and needs to be gone through"
+Full dedicated pass (swapped status APIs, orphaned contracts, email-queue-with-no-writer, forms lead-picker, all of it). QUEUED as its own stream.
+
+### THIRD DATABASE — RULING: allow until migration closes, but FINISH the migration
+- Officially EXCEPT hl_txn in the 2-DB doctrine as a documented TEMPORARY exception until the migration closes.
+- FINISH = (1) confirm/complete the commission-push (hl_txn → hl_transaction_commission/_split, already run ≥1×); (2) REPOINT the Commission UI pages (transactions/[id], cdas, exp-grid, settings) to READ the CRM-side tables, not hl_txn directly; (3) verify parity; (4) stop writing hl_txn + eventually DROP it (RULE#0 typed approval). QUEUED as its own stream.
+
+### ADMIN GATES — CONFIRMED: custom-fields/[id] + stages/[id] PATCH/DELETE → admin-only.
+### CONFIRMED FIXES: blank-name greeting fallback · em-dash/HTML-entity scrub (Zach: "horrible").
+
+---
+---
+
+## AUDIT 8 — CONSUMER EMAIL RENDER + SEND PATHS  (verdict: PARTIAL — 4 P0. Full: `.claude/reports/enterprise-qa/consumer-comms.md`)
+
+Complements Audit 2 (text governance) + Audit 3 (sent-row forensics) — **no overlap with S1-S12 / E1-E6**.
+Email architecture is genuinely good (one door `sendEmail()`, one merge engine, one shell, one footer,
+fail-closed deliverability guard, signed unsubscribe). All four P0s are **last-mile**.
+⚠ **Blast radius:** ~414 sent rows all-time; the top consumer template went to **3 addresses (Zach + 2
+`qa-probe+`)**. **0 of 414 sent rows contain `{{`.** These are **armed, not fired** — unlike the text P0s.
+
+### EM-P0-1 · Raw template syntax `{{#…}}` will ship in 2 ACTIVE consumer emails
+- `execute-step.ts:667-668` uses `applyMerge()` — token substitution ONLY. It never calls `applySections()` or `renderBlocks()`; only `composeTemplate()` (`template-merge.ts:203`) does. Engine regex `/\{\{\s*([\w.]+)\s*\}\}/g` (`merge/engine.ts:57`) — `#`/`/` aren't `\w`, so section markers pass through **verbatim**.
+- **4 templates carry them; 2 are in ACTIVE workflows:** `seller_get_started_brand_email` (HL: New Lead - Seller Get Started) · `home_value_report_brand_email` (HL: New Lead - Seller Get Report). (`property_inquiry_`/`rental_inquiry_brand_email` armed in inactive workflows.)
+- **Proven** by running the engine's exact regex on the live row: *"Thanks for reaching out about selling`{{#request.address}}` 1420 W 74th St, Prairie Village KS`{{/request.address}}` — one of our HouseLoop agents…"*. A **seller** gets their own address wrapped in template code in our first sentence to them. 0 sends so far → breaks on the **first real seller lead**.
+- **Fix (structural):** `composeTemplate()` at all 4 straggler call sites — `execute-step.ts:659-660` + `:667-668`, `app/api/email/send-template/route.ts:137-138`, `app/api/email/campaigns/[id]/send/route.ts:172-173`. (`dispatch.ts:659`, `website-activity-digest.ts:172` already correct.) **Then the ratchet:** `lib/qa/copy-quality.ts` has no rule for un-expanded template syntax — add `/\{\{[#\/]|\{\{block:/`.
+
+### EM-P0-2 · The unsubscribe link in the website saved-search alert is a prod 404
+- `apps/houseloop-web/app/api/saved-searches/alert/logic.ts:216` hardcodes `https://houseloop.ai/settings/saved-searches`, rendered under the word "Unsubscribe". **Verified prod: `404`.** No `app/settings/` route exists in the web tree; no redirect covers it.
+- Three defects in one link: it 404s · even if it existed it's a **login-gated page** (CAN-SPAM requires no-login opt-out) · it **never reaches `hl_email_unsubscribes`**, so CRM suppression can't learn it. The correct signed opt-out already exists (`lib/email/unsubscribe.ts:22`) and is simply not used.
+- **Blast radius:** all crons + on-create now pass `skipSend:true`; only the internal `POST /api/saved-searches/alert` still sends this HTML. **Loaded gun, not firing.**
+
+### EM-P0-3 · "Saved Search Listing Alerts" reads PAUSED in the UI and sent 11 emails today
+- `runtime.ts:529` `if (wf.status !== 'active' && !wf.is_locked)` — `sys_saved_search_digest` is the **only** `is_locked` row, `status='paused'`, **81 sends since 8/03, 11 today**. `app/api/workflows/route.ts:54` renders `status` raw and the toggle is lock-blind (`RegistrationDoorsTable.tsx:49`) — it PATCHes `status`, the row reloads reading "paused", the runner ignores it.
+- **The contradiction is inside one file:** `digest-gate/route.ts` header promises *"pausing … genuinely stops the digests"*; twelve lines later its code says *"a locked workflow is ALWAYS active regardless of the status column"*.
+- Same disease as `feedback_fub_notify_toggles_must_be_real`. All 81 went to Zach + probes → **control failure real, consumer harm not yet**.
+- **Fix:** either `is_locked` = cannot be paused (disable the control, `status` can never read paused), or `status` gates everyone and `is_locked` only blocks deletion — which `workflows/[id]/route.ts:176` already does independently. Today it's neither.
+
+### EM-P0-4 · Myli's emails ask for a reply at a mailbox the CRM has never ingested
+- `execute-step.ts:337` — the system-From branch returns **no `replyTo`**. Sends go from `Myli at HouseLoop <updates@houseloop.ai>`. Connected mailboxes are **ana@ / myli@ / zach@ only**; `hl_inbound_emails` = 3,028 rows, **0** addressed to `updates@`.
+- The copy explicitly promises a human: `new_reg_saved_search_email` — *"**P.S. Real person on this end - just reply if you ever have a question.**"*; `new_reg_myli_email` — *"just reply or text me."* The reply vanishes; the lead concludes we ignored them.
+- Exactly the failure `esign-email.ts:168-171` already warns about in prose.
+- **Fix:** `replyTo` → a connected, ingested mailbox (`myli@` is both) + assert at the door that the effective reply address is in `hl_oauth_connections WHERE is_active`.
+
+### EM-P1s
+- **Web alert ignores Resend's `error`** (`logic.ts:231-245`) — returns `sent:true` AND stamps `lastAlertSentAt=now()`. The **watermark moves**, so those listings are "already sent" and the lead **never gets those homes at all** — silent permanent loss that reads as a clean run.
+- **Web alert consults no `isSuppressed()`** and sets no `List-Unsubscribe` headers (the CRM brand path does, `execute-step.ts:711-713`). It also carries a **duplicated** copy of the deliverability guard.
+- **A second hand-rolled email brand** — `apps/houseloop-web/lib/email/saved-search-alert.ts` (318 lines): different logo (HouseLoop-only, **drops Spradling Group + eXp**), hand-written footer, hardcoded hex incl. green pills. REUSE_NOT_RECREATE → retire it; the CRM workflow is already the live sender.
+- **"1 new homes for your search" — 63 real sends.** `runtime.ts:170` hardcodes the plural; `lib/plural.ts` exists and is unused. Also echoes the name unnormalized (`zach`).
+- **6 subjects truncate mid-sentence on a blank token** — `saved_search_digest_email` → `—`; `new_reg_seller_email` → `We got your request to list`; `tour_confirmation` → `We've got your tour request —`; also `home_value_report`, `tour_request_received`, `contact_response_email`. `{{contact.salutation}}` got a `'there'` fallback 8/11 (`template-merge.ts:87`); `request.address`/`search.name`/`valuation.*` never did.
+- **HVR monthly (real past clients) bypasses the one door** — `hvr-monthly-send.ts:124` calls `sendEmailRaw()` direct, skipping `sendEmail()`'s guard/auth layer; `} catch { failed++; }` at `:136` swallows the exception; `from: notifications@houseloop.ai` is another unconnected mailbox.
+- **Empty `{{agent.signature}}`** on the two shell-less Myli templates (extends E2) — body ends `…<p>P.S. …</p><br/><br/>` with dangling `<br/>`s, breaking the stated "every lead email is signed" law (`execute-step.ts:325-328`).
+
+### EM-P2s
+`isSuppressed()` fails **OPEN** (`unsubscribe.ts:79`) — a DB hiccup mails an unsubscribed person · unsubscribe HMAC falls back to the **repo-visible literal** `'hl-unsub-fallback'` (`:17`) → forgeable · **57 `[CONTENT HIDDEN]` rows marked `status='sent'`** (all `fub_import`) render on lead cards as an email whose subject reads `[CONTENT HIDDEN]` (content unrecoverable by design; the *status* is fixable) · `inbox-routing.ts:22-28` defines 5 `@mail.houseloop.ai` inboxes **no live path uses** (dead config) · legacy `esign` From drift (12 `zach@` / 3 `ana@`; the 2 failures are the documented, now-fixed `noreply@ not connected` incident).
+
+### ⚠ TWO NON-FINDINGS (so nobody chases them)
+1. **The 2 garbled 8/12 production texts are HUMAN typos, not a product defect.** I checked authorship before reporting: `"I a local agent connected with Zillow"` → `actor_role='human'` (Zach typing); `"a couple mintues"` → `transport='fub'`, system-mirrored. Both to **real consumer numbers today**, but **no system fix applies.** (They do evidence the GSM-7 gap — both carry curly apostrophes U+2019 → silently UCS-2.)
+2. **The raw-merge-token class is CLEAN in production** — 0 of 414 sent email rows and 0 of 1,592 outbound `hl_messages` rows contain `{{`, `undefined`, `null`, `NaN`, `localhost`, or `⚠missing:`. The engine's send-mode policy is doing its job. Also clean: every `{{block:…}}` key the code requests has a live active row; no `localhost`/`http://` in any of the 57 active email templates; both logo URLs `200`.
+
+### MASTER FIX ORDER — additions
+- **TIER 0 (live harm):** + **EM-P0-3** — the pause switch is lying to a human RIGHT NOW on the top consumer email (one-line gate change).
+- **TIER 1:** + **EM-P0-1** `composeTemplate()` at 4 call sites + the `{{#`/`{{block:` lint (must land **before the first real seller lead**) · **EM-P0-4** `replyTo` → connected mailbox.
+- **TIER 2:** + **EM-P0-2 & the three web-alert P1s as ONE move** — retire `apps/houseloop-web/lib/email/saved-search-alert.ts` + its sender; that single deletion kills the 404, the second brand, the unchecked Resend result, and the missing suppression check together.
+- **TIER 3:** + pluralization · subject-token fallbacks · HVR onto the door · the P2 hygiene set.
