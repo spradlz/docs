@@ -3,14 +3,47 @@ title: "Saved Search Alerts"
 description: "How HouseLoop's saved search alert engine works — the compute-on-web / send-via-CRM-workflow architecture, the firstSeenAt feed-arrival model, the system/client/agent origin taxonomy, agent-on-behalf creation, Inngest triggers, and the Saved Searches surface."
 ---
 
-{/* legacy-banner */}
-<Warning>
-  **LEGACY — UNVERIFIED.** This page predates the Master QA build and has NOT been verified
-  against the product. The canonical docs are being rewritten lane-by-lane as each lane goes
-  green — check the lane's tab first.
-</Warning>
+<Info>
+**VERIFIED CURRENT 2026-08-12.** Walked out of the Legacy (unverified) tab because the
+**[Client Search Workspace](/command-center/client-search-workspace)** is being built against it — a doc
+the team builds from cannot wear a "not verified" banner. The state block directly below was re-checked
+against the live databases and the 8/12 enterprise-QA audit. **Everything from "📌 Summary" down is the
+earlier write-up and is NOT re-verified** — where it disagrees with the state block, the state block wins.
+</Info>
 
-> **Last updated 2026-08-04 16:19 by caleb** · [How we work](/how-to/dev-doc-discipline)
+> **Last updated 2026-08-04 16:19 by caleb** · re-verified 2026-08-12 · [How we work](/how-to/dev-doc-discipline)
+
+## ⚡ State of play — verified 2026-08-12
+
+**The signed CRM object is still NOT built.** `hl_saved_search` **does not exist** in the CRM database
+(checked 8/12: `relation "hl_saved_search" does not exist`). The 8/7 ruling below is still the TARGET, not
+the shipped model — read it as the destination. What exists today:
+
+| What | Where | Live |
+|---|---|---|
+| The FUB/Zillow scrape mirror | `fub.saved_searches` | **6,477 rows** (8/12) |
+| The signed CRM object | `hl_saved_search` | **not migrated** |
+| The digest sender | CRM workflow `sys_saved_search_digest` | sending |
+| A second, web-side alert sender | `apps/houseloop-web/lib/email/saved-search-alert.ts` | slated for retirement |
+
+**Four defects on this surface are open and file:line-verified** — full detail, with the fix order, in the
+[Enterprise QA Findings Ledger](/command-center/enterprise-qa-findings). Do not build on this path without
+reading them, because two of them will silently eat a client's homes:
+
+1. **The digest workflow reads "paused" in the UI and keeps sending.** `sys_saved_search_digest` is the only
+   `is_locked` workflow; the runner treats locked as always-active regardless of `status`, so the toggle is
+   a lie to whoever flips it. 81 sends since 8/03 while showing paused.
+2. **The web alert ignores the send result and still moves the watermark** — it returns `sent:true` and
+   stamps `lastAlertSentAt=now()` even when the provider errored, so those listings are marked "already
+   sent" and **the lead never receives those homes at all.** A silent permanent loss that reads as a clean run.
+3. **The web alert's unsubscribe link is a hardcoded prod 404**, is login-gated even if it existed, and never
+   reaches the CRM suppression table — while the correct signed opt-out already exists and is simply not used.
+4. **A second hand-rolled email brand** lives in the web tree (different logo, drops Spradling Group + eXp,
+   hardcoded hex). `REUSE_NOT_RECREATE` — the CRM workflow is already the live sender; retiring the web
+   file kills defects 2, 3 and 4 in one move.
+
+**Also unchanged since this doc was written:** nobody has yet watched a real listing alert land in a real
+inbox with Zach's sign-off (item 19 below). That remains the gate.
 
 <Info>
 🔒 **Follows the [Schema Lock](/schema-lock/overview).** The architecture law lives there; this guide references it.
