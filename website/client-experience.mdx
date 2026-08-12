@@ -18,9 +18,78 @@ here — no copies, no siblings.
 > link — a 6-digit SMS code, verified once, on a 90-day device session). v1 deliberately OMITS the
 > not-yet pieces (the Myli-ask bar, What's-My-Home-Worth, payment / pre-approval) — those return per
 > the vision above. The agent works it from the CRM iPad **Search** tab (a full Search Dashboard modal
-> that opens over the client card) and a far-right **Client Dashboard** tab that mirrors the client's
-> own screen. Proven end-to-end on prod 8/12 (real SMS code → session → dashboard). Locked wireframe:
-> `docs/wireframes/saved-search-redesign-2026-08-12.html`; E2E receipts: `.claude/reports/home-search-e2e/`.
+> that opens over the client card) and a far-right **Client Dashboard** tab that renders **the client's
+> own component** — see the next section. Proven end-to-end on prod 8/12 (real SMS code → session →
+> dashboard). Locked wireframe: `docs/wireframes/saved-search-redesign-2026-08-12.html`; E2E receipts:
+> `.claude/reports/home-search-e2e/`.
+
+## The agent's mirror — ONE component, two apps (2026-08-12)
+
+**The CRM's `Client Dashboard` button renders the same React component the client sees at
+`houseloop.ai/my-houseloop`.** Not a port of it, not a lookalike — the component itself
+(`HomeSearchDashboard`), which is pure and props-first, fed the CRM's data by
+`apps/houseloop-crm/lib/dashboard/to-client-dashboard-props.ts` from `GET /api/leads/[id]/dashboard`
+plus the lead's saved searches. It embeds with `showTopBar={false}` (the modal already carries the
+chrome) and `linkTarget="_blank"` (an agent clicking a home never loses the CRM page).
+
+Until 8/12 that button rendered a **placeholder**: a vertical stack with no rails, an agent card
+hard-coded to "The Spradling Group", and `Message` / `Call` buttons that were `disabled`. The agent's
+"what the client sees" mirror showed a screen no client has ever seen. The swap was the code's own
+`TODO(shared-render)`, unanswered from the day the web build landed.
+
+### Why the CRM carries a GENERATED copy, and why you must never edit it
+
+The two apps **build in disjoint Docker contexts** — each `Dockerfile` does `COPY . .` from its own
+app directory, so neither image contains the other app's source **or** `packages/`. They are also on
+different Next majors (CRM 15.5.x, web 16.2.x) with separate `node_modules`. A cross-app import
+compiles fine under `next dev` and then **breaks the Railway image**.
+
+So the component is authored **once**, on the website, and mirrored into the CRM's build context by a
+script:
+
+```bash
+node tools/shared-ui/sync-client-dashboard.mjs           # regenerate the CRM copy
+node tools/shared-ui/sync-client-dashboard.mjs --check   # exit 1 if it has drifted
+```
+
+`--check` runs in the pre-commit hook (CHECK 8) whenever either side is staged, so a stale copy
+**blocks the commit**. The generated files carry a `⚠ GENERATED FILE — DO NOT EDIT` banner naming
+their source. **Edit `apps/houseloop-web/components/dashboard/HomeSearchDashboard.tsx`, then run the
+script** — editing the CRM copy fails the gate. The team agent card lives on the shared component as
+`TEAM_AGENT` for the same reason: one definition, so the mirror can never name a different agent than
+the client's card does.
+
+This is an interim mechanism for a deploy-topology problem. The real fix — one workspace package plus
+a repo-root build context for both images — is written up for Lee and Zach in
+`.claude/reports/project-audit/cross-app-shared-ui-infra.md` and is **queued, not built**.
+
+### What the mirror can and cannot know
+
+The client's live screen is fed by the **WEB** database (`ListingView` / `SavedListing` /
+`TourRequest` / `SavedSearch`); the CRM mirror is fed by the **activity log**, and the CRM never
+reaches across (the two-database law). Same render, the CRM's record of the same behaviour. Two
+fields have no CRM source and render **blank rather than guessed**: a tour's private note, and a
+future scheduled tour (the log records that a tour was *requested*, not when it is booked, so every
+toured card reads past-tense).
+
+### The defect this uncovered — every home viewed ON THE SITE was being dropped
+
+`GET /api/leads/[id]/dashboard` read the address as `meta->'property'->>'address'`. But the
+**website-pixel writer** — the exact behaviour this dashboard exists to show — spells it in parts
+(`street` · `city` · `state` · `zip`) and has **no `address` key at all**. Every pixel-sourced home
+resolved to `NULL` and was filtered out. Measured on one lead: **18 of 18 views dropped**, the rail
+rendering "no homes yet" while the photos and prices sat in the tape.
+
+The read now composes the line from the parts (guarded on `street`, so a row with only a city can
+never become an "address"), taking property-row address coverage to **22,461 of 24,652**. A second
+fix in the same pass: one rooftop arriving under two address spellings rendered twice — the adapter
+now collapses on the canonical slug and adds the view counts up.
+
+<Info>
+**Both were found by walking the surface in a real browser, not by reading the code.** The endpoint
+was reviewed as "solid" in the audit that scoped this work — and on the code it was. The empty rail
+only appears when you open it on a lead whose homes came from the pixel.
+</Info>
 
 ## The one experience — how it fits together
 
