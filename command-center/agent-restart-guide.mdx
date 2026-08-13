@@ -1,0 +1,152 @@
+---
+title: "Agent Command Center & Restart Guide"
+description: "The one page for starting, restarting, and re-pointing the agent team — Lee, Adam, Benji, Caleb — from a real URL, plus the manual fallback if everything is down."
+---
+
+🕐 **Last updated 2026-08-13 10:20 CT by caleb**
+
+## 📌 Summary
+
+The agent team runs as four Claude Code sessions in tmux on Camp Zach (Zach's Mac). They are
+controlled from the **BossLoop Command Center**, a web panel served FROM that Mac and reachable
+from anywhere through a Cloudflare tunnel:
+
+<Card title="🎛 BossLoop Command Center" href="https://command.houseloop.ai">
+  **https://command.houseloop.ai** — password `spradling2026` (session lasts 30 days).
+  On the Mac itself the same page is http://localhost:5180.
+</Card>
+
+The panel shows live status for **Lee · Adam · Benji · Caleb** and gives buttons for
+start / restart / stop / kill, a per-agent **model dropdown**, a **Switch account** flow
+(zach@houseloop.ai ↔ alex@spradlingrealtygroup.com), **Restart all**, and this guide rendered
+in its Operating Manual tab. Both the panel and the tunnel auto-start when the Mac reboots
+(macOS LaunchAgents), so after a power-off the whole recovery is: open the URL, press Start
+on each agent.
+
+**Board: none — this is an operations runbook.** The live surface it documents IS the panel.
+Source of truth for the manual: `tools/command-center/OPERATING_MANUAL.md` (rendered live in
+the panel's Operating Manual tab).
+
+## The buttons (what each one actually does)
+
+| Button | What happens on the Mac |
+|---|---|
+| ▶ Start | Creates the agent's tmux session if missing, opens an iTerm window, launches `claude` with that agent's saved model, and auto-sends the "you are lee" wake-up line ~12s later |
+| ⟳ Restart | Sends `/exit` to the running session, waits, relaunches the same way |
+| ■ Stop | Sends `/exit` (falls back to Ctrl+C if frozen); the tmux session stays alive |
+| ✕ Kill | Kills the tmux session entirely — for hard freezes |
+| ⌨ Terminal | Opens an iTerm window attached to that agent's tmux session |
+| Model dropdown | Saves the choice to `tools/restart-protocol/agent-model-config.json`; applies on next start/restart |
+| Switch account | Runs `claude auth logout; claude auth login` in a helper tmux session and opens the browser sign-in. Auth is **machine-wide** — one login covers all four agents; restart them afterwards so they adopt it |
+| ⟳ Restart all | Stops and relaunches all four agents in sequence (~1–2 min) |
+
+## If the computer shut off (cold start)
+
+1. Power the Mac on. The Command Center and the tunnel come back by themselves.
+2. Open https://command.houseloop.ai (or localhost:5180 at the desk).
+3. Press **▶ Start** on each agent (or ⟳ Restart all). iTerm windows open automatically.
+
+Manual fallback if the panel itself is dead — one iTerm tab per agent:
+
+```bash
+tmux new-session -s lee
+cd /Users/zachspradling/Code/BossLoop-Gold && claude --model claude-fable-5 --dangerously-skip-permissions
+```
+
+Then type the wake-up line into Claude:
+
+```
+You are Lee. Read .claude/personas/lee.md and .claude/SOUL_LOCK.md FIRST.
+```
+
+Repeat for adam, benji, caleb — same commands, swap the name. And restart the panel itself with:
+
+```bash
+bash /Users/zachspradling/Code/BossLoop-Gold/tools/command-center/start.sh
+```
+
+## Switching accounts (the correction to the old guide)
+
+The Claude login is **machine-wide, not per-pane** — you never log in four times. Running agents
+keep their old token until restarted, which is why it can LOOK per-session.
+
+1. Hit **Switch account** in the panel (or in any terminal: `claude auth logout` then
+   `claude auth login` — note it is `claude auth login`; a bare `claude login` is not a command).
+2. Pick the account in the browser. Verify with `claude auth status`.
+3. Hit **⟳ Restart all agents** so everyone adopts the new account.
+
+## Switching models
+
+Pick the model on the agent's card → **⟳ Restart**. The choice persists for every future launch.
+Current flags for manual launches:
+
+```
+Fable 5      claude-fable-5     (the daily driver)
+Opus 5       claude-opus-5
+Sonnet 5     claude-sonnet-5
+Sonnet 4.6   claude-sonnet-4-6
+Haiku 4.5    claude-haiku-4-5-20251001
+```
+
+Inside a live session, `/model` switches without a restart.
+
+## tmux cheat sheet (manual fallback)
+
+```
+List all sessions          tmux ls
+Attach to a session        tmux attach -t lee
+Detach (keep it running)   Ctrl+B then D
+Kill a frozen process      Ctrl+C
+Kill one session           tmux kill-session -t lee
+Kill ALL sessions          tmux kill-server        (nukes every agent — last resort)
+```
+
+## Troubleshooting the URL
+
+**Public URL dead but localhost:5180 works → the TUNNEL is down, not the panel:**
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.bossloop.tunnel.plist
+launchctl load ~/Library/LaunchAgents/com.bossloop.tunnel.plist
+tail -20 /tmp/bossloop-tunnel.log
+```
+
+**Both dead → restart the panel** (`bash tools/command-center/start.sh`), then the tunnel.
+
+## Where things live
+
+```
+Panel server               tools/command-center/server.mjs        (port 5180, binds 127.0.0.1)
+Operating manual (source)  tools/command-center/OPERATING_MANUAL.md
+Model config (per agent)   tools/restart-protocol/agent-model-config.json
+Login password             BOSSLOOP_CC_PASSWORD in the repo .env
+Panel auto-start           ~/Library/LaunchAgents/com.bossloop.command-center.plist
+Tunnel auto-start          ~/Library/LaunchAgents/com.bossloop.tunnel.plist
+Tunnel run token           ~/.bossloop-tunnel-token
+Cloudflare tunnel          "camp-zach-command" (1f1623d5…) → command.houseloop.ai CNAME
+Logs                       /tmp/bossloop-command-center.log · /tmp/bossloop-tunnel.log
+```
+
+## 📋 Run log
+
+### 2026-08-13 · caleb
+
+**Built and shipped the whole surface.** Local panel (`tools/command-center/`, port 5180) with
+live tmux status, start/restart/stop/kill, model dropdowns persisted to the existing
+`agent-model-config.json`, account display + switch flow, and the operating manual tab. Exposed
+it at **https://command.houseloop.ai** via a new Cloudflare tunnel (`camp-zach-command`) with a
+password login (30-day session, rate-limited) — password set by Zach. Both processes installed
+as LaunchAgents so they survive reboots. **Found:** (1) Claude auth is machine-wide — the old
+per-pane logout/login guide did 4x the necessary work; (2) the account reads instantly from
+`~/.claude.json` where the CLI's own `auth status` stalls under launchd (no keychain);
+(3) Camp Zach was already exposing the OLD 5173 dashboard publicly via a Tailscale Funnel
+(`camp-zach.taila5bfe9.ts.net`) — flagged to Zach for retirement, not touched. **Verdict:**
+pass — login + status verified end-to-end through the public URL.
+
+## 📎 Reference
+
+- The panel's live manual tab: https://command.houseloop.ai (Operating Manual)
+- Source manual: `tools/command-center/OPERATING_MANUAL.md`
+- Proven tmux launch patterns this reuses: `tools/mcp/agent-lifecycle-server.mjs`
+- Retirement candidates flagged 8/13: the Tailscale Funnel exposing :5173, and the old
+  realloop.co dashboard (Zach + Lee decision, not yet actioned)
