@@ -1,0 +1,121 @@
+---
+title: "Client Dashboard Program — Handoff (account swap 2026-08-13)"
+description: "The cohesive client-experience build + the saved-search/lists schema signing. Everything the next session needs — sources in the repo, not artifacts."
+---
+
+# Client Dashboard Program — Handoff
+
+Written for an engineer **account swap** mid-build. Artifacts (claude.ai) are NOT viewable on
+restart — so every design below points at its **source HTML file in the repo**, which stays readable.
+Read those files, not the artifact URLs.
+
+## THE GOAL (Zach, verbatim intent)
+
+ONE **cohesive** client experience that **looks like the houseloop.ai website** — "it can't feel like,
+when you go to the dashboard, a completely different software." The **locked seller home-value view is the
+anchor**; its navy value modules are **HIGHLIGHTS on the light website page**, not a separate dark app.
+**Buyer and Seller are two lenses of the same website-native experience.** Keep every function.
+
+## THE FOUR CLIENT SURFACES → their SOURCE FILES (read these)
+
+| Surface | Source file (readable) | Hosted / artifact | State |
+|---|---|---|---|
+| **Site menu / nav** | `apps/houseloop-web/components/site/Header.tsx` + `apps/houseloop-web/app/globals.css` | the real site | the design GROUND — pull its tokens/fonts/cards |
+| **BUYER = "Welcome back, Timothy"** | `apps/houseloop-crm/boards/your-houseloop-dashboard.html` | `crm.houseloop.ai/boards/your-houseloop-dashboard` | ✅ the correct buyer: search rails, saved searches, favorites, toured, shortlist, Myli ask-bar |
+| **SELLER = home-value detail (LOCKED anchor)** | `apps/houseloop-crm/boards/home-value-report-ui.html` (the ".cb Combine") | artifact `b5e8830c`; design study `87543e5b` | ✅ locked 8/11: value band (Low/Est/High), history graph + scrubber, story, Myli dock |
+| **Search workspace (SIGNED 8/13)** | `docs/wireframes/saved-search-dashboard-LOCKED-2026-08-13.html` (v10) | artifact `ba95c7d7` | ✅ Zach said "locked" — being ported to React (task #15) |
+| **Client-experience (menu + buyer/seller toggle)** | `docs/wireframes/client-experience.html` | artifact `16a791ee` | ⚠ IN PROGRESS — see below |
+
+## WHERE THE COHESIVE ARTIFACT IS (task #48, workspace_polish)
+
+`docs/wireframes/client-experience.html` → artifact `16a791ee`. It currently has the **correct** two
+dashboards (buyer = Welcome-back-Timothy, seller = locked home-value) bolted under the real site menu with
+a Buyer⇄Seller toggle. **BUT it is NOT yet the cohesive design** — the buyer is still dark-themed (its
+board's own style). **NEXT SESSION:** finish the cohesive pass — ground the whole thing in the real
+houseloop.ai website design (`apps/houseloop-web` globals.css/fonts/cards), make the buyer light + website-
+native, keep the seller's navy value modules as **highlights** only, unify nav + the Myli dock across both
+lenses. Do the user dashboard as the next session's focus (Zach's call).
+
+## THE SEARCH-WORKSPACE REACT BUILD (task #15, workspace_build)
+
+Verbatim React port of the SIGNED v10 wireframe into `components/leads/detail/SearchDashboardModal.tsx`
+(mounted via `CenterLane.tsx:64/616/664`). Split: **Slice A = search mode** (real data, building now),
+**Slice B = list mode** (waits on the schema below). Rulings already given (D1–D5): D1 extend `IpadModal`
+with additive `chrome:'bare'`; D2 the website filter panels via the generated-copy sync
+`tools/shared-ui/sync-client-dashboard.mjs` (NEVER cross-app import — disjoint Docker); D3 add
+`SectionBand` `size="eyebrow"+flush`; D4 generalize `EditableContactRow` with additive `onSave?` + `tone?`
+(guardrails: additive-only, `no-raw-inline-editor` green app-wide + red on a plant, tsc green all
+importers); D5 build Slice A now, Lists rail HONEST-EMPTY, schema is a separate lane. Send routes to the
+TWO existing intents (`SavedSearchSendModal` for custom-picked; the `sys_saved_search_digest` workflow for
+all/since/today) — no new send door, no touching `deliver()`.
+
+## ⭐ THE SAVED-SEARCH / LISTS SCHEMA — Bedrock signing (Zach ENGAGED + RULED)
+
+Proposal: `.claude/reports/schema-lists-proposal.md` (schema_lists, 475 lines). **Zach's mandate:
+"the schema has to be correct… no vibe coding… no patching… doing it the correct way and migrating what
+needs to be done correctly."** Hold that bar.
+
+**ZACH'S RULINGS (this session):**
+- The **CRM saved search is the SINGLE source of truth** — one saved-search database. (Answers proposal Q2:
+  the CRM object SUPERSEDES the web `SavedSearch`; the web keeps at most a read since matching runs where
+  `Listing` lives.)
+- **DELETE the old editorial web table** (not rename — supersedes proposal Q1's rename recommendation).
+
+**VERIFIED FACTS (queried the CORRECT centerbeam web DB `HL_WEB_DATABASE_URL`, 2026-08-13):**
+- Editorial `hl_saved_search` (Prisma `HouseloopSavedSearch`, `schema.prisma:987`, `@@map hl_saved_search`):
+  **EXISTS on centerbeam · 0 rows · 0 FK dependents · 0 app-code references** (grep excluded node_modules).
+  It's a dead admin "featured/curated search" config (`slug·label·criteria·notes`, e.g. "$750k+ Single
+  Family in Overland Park") for the site's "Inspiration for your next move" nav — **NOT** user saved
+  searches. **Safe to drop** (Zach-authorized; RULE#0 satisfied — named table, web DB, 0 rows/deps/uses).
+  The drop MUST also remove the dead Prisma model (`schema.prisma:987–1000`) in the same change.
+- Real user saved searches = `"SavedSearch"` (**10 rows**, centerbeam) → these migrate to the CRM.
+
+**THE CORRECT PLAN (schema_lists ready to execute post-signature, in its lane):**
+1. Write the 3 `tools/schema/target-verdicts.json` entries (§4.1 drafted) — the framework gate
+   (`migration-lint.mjs`) rejects any CREATE TABLE with no verdict, so the migration won't compile without
+   them. This IS the signing act — do it deliberately.
+2. CRM `hl_saved_search` (person-keyed): **use the SHIPPED actor canon** `by_kind·by_user_id·by_lead_id·
+   by_system_id·by_name` + `actor_type` + the two CHECKs — **NEVER the 8/7 `actor_*` spelling** (that mints
+   a 7th actor generation — the Bedrock disease). Add `legacy_web_id` (5 orphaned `hl_email_send_log.
+   saved_search_id` cuids) + `search_url` (load-bearing querystring). **NO opens/clicks/views columns** —
+   those already live in `hl_email_send_log` (which has `saved_search_id`); the left-rail stats are a QUERY.
+3. CRM `hl_home_list` + `hl_home_list_item`: `lead_id`→`hl_leads` CASCADE, `hlid text` (no FK, cross-DB,
+   the hl_home_claim pattern), `sort_order`. **Watermark = `sent_at` ON THE ITEM** ("only what I added since
+   last sent" = `sent_at IS NULL`), NOT a `sentHomes[]` array. Catalog has zero list vocabulary — the
+   `home_list_*` kinds are a SEPARATE vocabulary event after the tables land.
+4. Migration drafted as **0748** (0747 is max applied), additive, GRAIN lines, twin-check clean.
+5. Migrate the 10 web `"SavedSearch"` → CRM (registered **Inngest** backfill with receipts — schema_lists
+   owns it; INNGEST_OR_IT_DOESN'T_EXIST).
+6. DROP the editorial `hl_saved_search` on centerbeam + remove the dead Prisma model.
+7. Repoint the workspace + saved-search reads to the CRM table.
+
+Nothing applied yet — draft only, zero DB writes, no `.lock` touched.
+
+## OTHER LIVE LANES
+
+- **catalog_promote (#47 DONE):** the Activity Card Catalog is promoted + renders + on the Command Center
+  (old dup `card-catalog` slug retired via `promote.mjs --retire`). ⚠ Follow-up: the board is 188 kinds,
+  the live catalog is 189 — `ai_searched` (Website · home_card) needs a hand-authored CONTENT row in
+  `content.mjs` then rebuild + re-promote (catalog/card_port lane).
+- **⛔ THE BATCH DEPLOY — the #1 pending thing:** the branch is **~499 commits ahead of origin/houseloop-app**;
+  NOTHING from the overnight enterprise-QA + open-projects work is live in prod — including the **AI
+  containment gate** (built, tested, NOT enforcing on prod — the old `ai_master=false` mute is holding),
+  the commission road, the pour-door fix, and the owner dashboard. A push ships ALL of it. Needs Zach's
+  go + a 30-sec owner-lens pixel sign-off. The card catalog + everything goes live in that same push.
+
+## THE ARTIFACT URLS (for reference; not readable on restart — read the source files above)
+
+- Search workspace (SIGNED): `claude.ai/code/artifact/ba95c7d7-6786-45ae-b767-763545f5d745`
+- Owner/seller home-value: `claude.ai/code/artifact/b5e8830c-06df-42a9-94e1-3519bf02ca08`
+- Client-experience (menu + toggle, in progress): `claude.ai/code/artifact/16a791ee-434d-4233-96d8-5a8a23b50bd0`
+- Homeowner design study (4 directions + Combine): `claude.ai/code/artifact/87543e5b-a716-45f5-a720-e7e68526d3e8`
+
+## FIRST MOVES NEXT SESSION
+
+1. Read this page + `.claude/state/lee-handoff.md` + `.claude/reports/schema-lists-proposal.md`.
+2. Continue the **user dashboard cohesive pass** (Zach's next focus) — website-grounded, dark modules as
+   highlights, buyer+seller two lenses. Source: `docs/wireframes/client-experience.html` + the four surface
+   files above + `apps/houseloop-web` for the real site design.
+3. The schema is Zach-ruled (single source of truth + delete the editorial table) — execute it correctly
+   per the plan above when picking it up; schema_lists is ready in its lane.
+4. Surface the **batch deploy** decision to Zach.
