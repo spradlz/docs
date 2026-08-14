@@ -1,0 +1,67 @@
+---
+title: "Feed-cursor (feed-cursor LANE HANDOFF (2026-08-15))"
+description: "Work-in-progress dossier — Feed-cursor. feed-cursor LANE HANDOFF (2026-08-15)."
+---
+
+<Info>Live dossier — auto-generated from `.claude/state/wip/feed-cursor.md` on every push. **Progress: checklist pending.**</Info>
+
+**Owner:** Feed-cursor
+
+## Checklist
+
+### MISSION — task #62 (P0, from allfeed-101's last act; ledger 126 in the fix-round-1 run)
+The before-cursor silently lost rows at every page-boundary timestamp tie.
+
+### STATUS: FIXED, RED-FIRST PROVEN, WALKED ON A LEAD WITH REAL TIES. Nothing open.
+
+### The defect
+`ORDER BY occurred_at DESC` alone is not a total order, and the paging predicate was a strict
+`occurred_at < before`. A page ending on a shared instant asked for everything strictly older than
+it, so every tied sibling was skipped by that request AND by every request after it. No stall, no
+error: hasMore went false on schedule and the feed looked whole. 126 rows across 11 of the 12
+deepest leads; ties cluster on second-granularity FUB-import timestamps.
+
+### The fix (in the order the law requires — a cursor over an unstable order points at nothing)
+- **`lib/activity/feed-cursor.ts` (new)** — the order and the predicate declared ONCE, as each
+  other's mirror, plus the JS mirrors the test drives. The route imports the SQL builders instead
+  of retyping them beside the query.
+- **`app/api/leads/[id]/activity/route.ts`** — `ORDER BY (occurred_at DESC, id DESC)`; the
+  DISTINCT ON representative gains `a.id DESC` (an identical request must dedup identically);
+  accepts `beforeId`; returns `nextBeforeId`.
+  ⭐ **The cursor moved OUTSIDE the dedup.** Inside, it could filter away the primary lead's copy of
+  a household event and promote the twin — one event returning as a second card on a later page.
+  Cost measured, not assumed: 2218 → 2260 ms/page.
+- **`lib/activity/compose-feed.ts`** — `nextPage()` returns `beforeId`; both halves come off ONE
+  source (reader cursor, else the screen's tail) and never one from each.
+- **`CenterLane.tsx`** — sends the pair; `mergeDesc` sorts in the same total order; each row
+  carries **`data-activity-id`** so the screen half of the completeness equation is countable at all.
+
+### PROOF
+- `npm run test:feed-cursor` — 21/21. Walks the protocol to exhaustion over a fixture whose tie
+  straddles the page-40 boundary. Planting the old predicate goes RED on exactly the tied rows
+  (`lost 4: row-0038..41`); restored, green. `npm run test:all-feed` 37/37 still green.
+- **Live route walk, lead `4a48643c` (Timothy R Wilkinson, 989 rows, 237 on shared timestamps).**
+  Both protocols against the SAME live route (it keeps the legacy strict-`<` when no `beforeId`
+  arrives, so this is one diff, one instant): **legacy 946/989 — 43 lost**, every one a
+  `property_viewed`/`property_saved` on a FUB-import instant, matching the finding lane's number
+  exactly; **composite 989/989, 0 lost, 0 duplicates.**
+- **Browser walk (own headed Chrome, own profile — the shared MCP browser carries other lanes'
+  tabs).** Scrolled to exhaustion: **988 cards in the DOM, SET-EQUAL to `composeFeed(full).rendered`**
+  (988 = 989 − 1 signed `duplicate_capture` drop). 24 of 26 activity requests carried the composite
+  cursor. Shot: `.claude/reports/feed-cursor/shots/wilkinson-feed-bottom.png`.
+- tsc 0 (whole app) · door-zero 742 · kind-literal 874 · platform-zero 406 · notify-key-cage — all
+  held · 0 new eslint errors (60 pre-existing warnings in CenterLane, none mine).
+
+### PROVENANCE (flagging, not rewriting)
+The auto-save hook raced the commit: every source file landed inside `[lee] Auto-save` commits
+before mine. Verified BY CONTENT — `git diff HEAD` is clean for all six files. My commit
+`4ddbdfef94` carries the screenshot and the full write-up of the change.
+
+### WHAT I DID NOT DO
+- No writes to any real lead. Every walk was GETs plus scrolling.
+- The `?limit=2000` cap the finding lane flagged still applies to the two leads reporting 1999/2000
+  rows: their loss counts were a lower bound within the fetched window. The FIX is not
+  limit-dependent — it is a predicate — but if someone wants the true totals for those two leads,
+  that measurement is still unmade.
+- The notes-tab `StarWrap` now stamps a NOTE id into `data-activity-id` (that stream's row identity,
+  not an activity-log id). Harmless for the All feed, worth knowing before someone counts that tab.
