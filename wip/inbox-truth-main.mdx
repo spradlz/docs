@@ -1,6 +1,6 @@
 ---
-title: "Inbox-truth (inbox-truth LANE — LEDGER 111 (2026-08-14))"
-description: "Work-in-progress dossier — Inbox-truth. inbox-truth LANE — LEDGER 111 (2026-08-14)."
+title: "Inbox-truth (inbox-truth LANE — LEDGER 111 · SEAT MODEL SLICE 1 (2026-08-14))"
+description: "Work-in-progress dossier — Inbox-truth. inbox-truth LANE — LEDGER 111 · SEAT MODEL SLICE 1 (2026-08-14)."
 ---
 
 <Info>Live dossier — auto-generated from `.claude/state/wip/inbox-truth.md` on every push. **Progress: checklist pending.**</Info>
@@ -9,102 +9,111 @@ description: "Work-in-progress dossier — Inbox-truth. inbox-truth LANE — LED
 
 ## Checklist
 
-### STATE: BLOCKED ON LEE, twice. Nothing uncommitted; every file I touched is clean in the tree.
-1. **The `fromMatch` shape** (ruling 1) — I stopped rather than build it; as worded it regresses a signed fix. See below.
-2. **The `target-verdicts.json` entry for `hl_comm_seat`** — the framework gate refuses CREATE TABLE without one; the file is Lee-owned.
+### STATE: seats are WRITTEN but not yet READ. Next = the remaining 3 ingest paths, then the read-path repoint.
+Lane tree clean. Nothing uncommitted. All work verified in HEAD **by content** (see the hook-race note).
 
 ### THE ROOT CAUSE (dated, proven)
-Conner Kelley's lead carried NO resolvable email until Zach hand-edited it at **2026-08-14 17:24:49Z**
-(`hl_activity_log` lead_edited, meta `{"field":"contact","email":"connerck@outlook.com"}`).
-Every mis-filed row is BEFORE that stamp; everything after is correct.
-`leadIdForAny`/`leadIdsForAll` (lib/email/gmail-realtime.ts:104,136) walk from→to→cc and take the
-first address that RESOLVES — an unresolvable sender inherits a co-recipient's identity.
+Conner Kelley's lead carried NO resolvable email until Zach hand-edited it at
+**2026-08-14 17:24:49Z** (`hl_activity_log` lead_edited, meta `{"field":"contact","email":"connerck@outlook.com"}`).
+Every mis-file is BEFORE that stamp; everything after is correct. `leadIdForAny`/`leadIdsForAll` walk
+from→to→cc and take the first address that RESOLVES — so an unresolvable sender inherited a
+co-recipient's identity. **A fall-through to a different human is identity fabrication.**
 
 ### CENSUS — CLOSED (tables queried directly; NEVER the 300-capped endpoint)
-Gmail truth: thread `1a000c676dc9254d` = 11 messages (7 out, 4 in), all carrying BOTH parties on To+Cc.
-**Capture 11/11 — nothing lost at ingest.** All defects are attribution + surfacing.
+Gmail truth: thread `1a000c676dc9254d` = 11 messages (7 out, 4 in), ALL carrying both parties on To+Cc.
+**Capture 11/11 — nothing lost at ingest.** Every defect was attribution + surfacing.
 ⭐ **258/266 outbound email rows in `hl_messages` had a NULL sender (97%); 91/99 last 30d. Inbound 0/2,910.**
-Still open: Conner has no seat on the 15:07 inbound; the 17:11 row's `lead_id` was re-pointed by a
-20:23:36 backfill while `matched_on` stayed 'cc' (base column and join disagree on provenance).
 
-### SHIPPED — all in HEAD. ⚠ The per-file auto-save hook committed all four before my own `git commit`
-### could land (first attempt died on `cannot lock ref 'HEAD'`), so they carry generic tags, not `[inbox-truth]`.
-- **d1d7c2b409** gmail-realtime.ts — the missing `logMessage` fold on realtime **INBOUND**. Notify now
-  implies an inbox row. Idempotent on `(channel, external_id)` = the Gmail id. (Bundled by the hook with
-  another lane's HANDOFF.md.)
-- **4316de7c4c** log-email-send.ts — `sender: a.from ?? null`.
-- **4a26864a7a** sync-now/route.ts — `sender: outbound ? acct.account_email : fromEmail`.
-- **bc7918720c** dispatch.ts — the self-heal hoisted ABOVE the actor block (:834 now precedes :838).
-GATES on this content: tsc 0 · test:email-singleness 13/13 · test:notification-copy green · migration-lint 4/4 ·
-eslint warnings unchanged, all pre-existing on untouched lines.
+### SHIPPED (all in HEAD; slice 1 rode the train — f842d4b712 is on origin)
+| what | where |
+|---|---|
+| realtime INBOUND `logMessage` fold (notify implies an inbox row) | d1d7c2b409 |
+| `sender` stamped on both outbound fold writers (defect A) | 4316de7c4c · 4a26864a7a |
+| dispatch.ts self-heal hoisted above the actor block | bc7918720c |
+| **mig 0772 `hl_comm_seat` + schema re-lock (212 tables)** | **f842d4b712** (wears r2-cards' message) |
+| `fromMatch` — the FROM seat is the actor; no AI dispatch on null | da933b4e14 · ba7d34243d · 17999247fa |
+| **`lib/comms/seats.ts` — THE seat writer + realtime inbound wiring** | 1917bb5a12 · a3de4e869a · 0f98491680 |
 
-### ⚠⚠ TWO CORRECTIONS TO MY OWN WORK — read before trusting the above
-1. **THE HOIST DOES NOT CLOSE ITS HAZARD. Do not tick ruling 2.** `resolveInboundEmail` (dispatch.ts:79)
-   reads the FUB mirror and returns `{subject, snippet}` — no from address — and `fub.emails` has **no
-   sender column at all** (verified live: id·person_id·user_id·user_name·subject·body·is_incoming·status·
-   action_plan_id·fub_created·synced_at·content_status). So `enrich.email.from` is still absent and the
-   actor still falls back to the lead. It also only fires for leads with a `fub_person_id`. The ordering is
-   correct and harmless — keep it — but the closure is the seat model (the from-seat carries the address).
-2. **RULING 1 AS WORDED DELETES 7 REAL FILINGS.** "Unresolvable sender → NULL" is exactly item 73's signed
-   Kelley/Kaur LENDER case (John Nelson, not a lead, never resolvable, writes about both buyers). Measured:
-   `hl_inbound_email_leads` = 21 rows — 14 from · 3 cc · 2 manual · 1 to · 1 to_or_cc → **7 ride a
-   non-sender rung.** The real defect is narrower: **`matches[0]` is used as BOTH the filing key AND the
-   actor.** Filing fan-out is CORRECT (leave item 73 alone); the ACTOR must come from the FROM address
-   alone and be NULL for a stranger.
-   ⚠ **SHARPEST EDGE, unruled:** `dispatchInboundToAi({ leadId })` (gmail-realtime ~:670) gets that same
-   `matches[0]` — an unresolvable sender points **the AI at a co-recipient's lead**. Same value gates the
-   mint gate, which is why an unknown sender cc'd beside a known lead can never be minted. NOT TOUCHED
-   (AI_CONTAINMENT-adjacent).
-   PROPOSED: add `fromMatch` (FROM-address resolution only) beside `matches`; `matches` keeps filing,
-   `fromMatch` drives actor + AI dispatch + mint gate. Test the 15:07 shape: filing still reaches the cc'd
-   lead AND actor/AI resolve to NULL.
-   ON "the review-queue path": **no destination exists.** The only quarantine tables are `hl_srg_*`, FROZEN
-   by ONE_ANSWER_TABLE. Proposal: the review queue IS the seat table — `external` seats with
-   `resolved_by='unresolved'`. No second table.
+**PROOFS:** `test:seat-writer` 16/16 · `test:from-seat` 11/11 (red-first against the REAL pre-fix blob
+d1d7c2b409) · `test:email-singleness` 13/13 · `test:notification-copy` green · migration-lint 4/4 ·
+tsc 0 throughout. The 6 DDL constraint proofs ran against the LIVE table inside BEGIN/ROLLBACK with
+0-row residue verified.
 
-### ALREADY FIXED BY OTHER LANES — VERIFIED, DO NOT REBUILD
-LEDGER 76 (actor by address, dispatch.ts:818) · ledger 74 (the `{{notify.source}}` "from Manual entry"
-phrase — the live `hl_notify_classes` row is clean) · LEDGER 81 (the parallel-loop race behind the
-18:08/19:15 doubles; committed 20:17Z, AFTER both).
+### ⚠ THE HOOK RACE — FIVE OCCURRENCES TONIGHT, READ THIS BEFORE TRUSTING COMMIT MESSAGES
+The per-file auto-save committed my work before every one of my own `git commit` calls, twice sweeping
+it into OTHER LANES' commits (mig 0772 rode `[r2-cards] Retire the two stale stage_changed icon
+answers`). One attempt died on `cannot lock ref 'HEAD'` mid-commit. **Verify by CONTENT, never by
+commit message.** Lee logged it; the desk owns a structural fix later (candidate: lanes claim a commit
+window, or the hook tags sweeps with the EDITOR lane name). Do not rewrite history to fix attribution.
+⚠ Also: a commit message containing a quoted email pair broke shell quoting and half-staged. Use
+`git commit -F <file>` for any message with quotes.
 
-### THE SEAT DDL — `.claude/reports/inbox-truth/PROPOSED_0772_hl_comm_seat.sql`
-Parked OUTSIDE `db/migrations/` on purpose. Next free number 0772.
-- **The fact is `hl_messages`** — both email estates are already sentenced `fold_into:hl_messages`.
-- **THREE proto-seat tables**, not two: Caleb's `hl_message_thread_participant`, the e-sign per-recipient
-  rows, and **`hl_inbound_email_leads`** (canonical, Lee 8/11 — already a fact-scoped seat table).
-  Proposed both re-verdict to `fold_into:hl_comm_seat`.
-- `scope` discriminator ('fact' | 'thread'); per-seat transport columns; `visibility='private'` for BCC.
-- Proven in a scratch schema inside BEGIN…ROLLBACK, 0 residue: one-from-seat enforced · two to-seats
-  allowed · case-insensitive replay refused · lead-kind-without-lead_id refused · dual-anchor refused.
+### ⚠ TWO THINGS LABELLED HONESTLY — do not read either as done
+1. **The dispatch.ts self-heal hoist does NOT close its hazard.** `resolveInboundEmail` reads the FUB
+   mirror, and `fub.emails` has **no sender column at all** (verified live), so `enrich.email.from`
+   stays absent and the actor still falls back to the lead for a caller that passes no enrich. The
+   ordering is correct and harmless — keep it — but the closure is the seat read-path. *A half-fix
+   labelled half beats a tick.*
+2. **Seats are WRITTEN, not READ.** Only the realtime INBOUND path writes them. The realtime SENT
+   branch and both pollers (inbound-sync, sync-now) do NOT. The read path still reads the old columns.
+   The RENDER half of the bcc law is explicitly unproven — the test prints that caveat to stdout.
 
-### HANDED OFF — stream-rows.ts is r2-cards', not mine (I never opened it)
-Their measurement beats mine and should be treated as canonical: 5 comma-string rows in `hl_messages`,
-all email — **2 phantoms (mine) and 3 INVISIBLE ENTIRELY** (`6de2bdf5` NULL sender · `92a7dd9a` a lender ·
-`6cc42888` RealScout). The 3 are the worse defect and my census missed them: the SQL predicate at
-stream-rows.ts:105 uses exact `LOWER(recipient) = ANY(doors)`, which a joined string can never satisfy.
-They stay open for the seat read-path. Note: the 2 phantoms are REAL 2-recipient sends, so the right
-answer is 2 counterparties, not 1 cleaned string.
+### ⚠ ONE RESOLVER GAP — FLAGGED TO LEE, NOT PATCHED
+`resolveRecipientActor` matches leads on `lower(email)` ONLY; it does not check `data->'alt_emails'`,
+which `leadIdsForEmail` does. A lead reachable only by an alt address resolves `unresolved` in seats
+while the old filing path finds them — **seats would be WEAKER than what they replace** for that
+population. The fix belongs INSIDE the one resolver (shared with the e-sign estate = cross-lane); a
+second lookup here would be the exact disease the ONE resolver exists to cure.
 
-### CLOSED — Heather Banwart is NOT a second fall-through (disqualified by date)
-Her cards are **2025-01-22 → 2025-07-17**; the "Myli over Jessica Coggins' words" pair is 2025-07-17,
-thirteen months before LEDGER 76. Every `email_sent` row in the log with `by_name='Myli'` is 2025
-(73 rows, ZERO since 2025-07) — the mechanism is dead, not merely old. Each has a twin row at the same
-timestamp naming the real human with `source` NULL. Left over: those 73 legacy rows still render wrongly
-if scrolled to (a backfill question), and her `email_received` rows carry no actor at all.
-⚠ I initially misread these as 2026 because I printed `MM-DD` without a year — my own
+### RULINGS SETTLED AT LEE'S DESK (don't re-litigate)
+- **Filing vs actor:** `matches` drives FILING (item 73 untouched — 7 of 21 join rows ride a
+  non-sender rung, incl. the signed Kelley/Kaur LENDER case). `fromMatch` drives ACTOR, NULL for a stranger.
+- **AI dispatch:** fromMatch null ⇒ **no dispatch at all**, and the refusal is a ROW — the seat writer
+  records the sender as `external`/`resolved_by='unresolved'`, so refusals are queryable. The
+  `console.warn` is an operational convenience, NOT the record.
+- **The mint gate does NOT widen.** John-Nelson-the-lender is also an unknown sender cc'd beside known
+  leads — resolvability is not mint-worthiness. Mint-from-review is a HUMAN action on the queue.
+- **Review queue = the seat table** (`resolved_by='unresolved'`, `idx_comm_seat_unresolved`). No new table.
+- **The fact is `hl_messages`** — both email estates are sentenced `fold_into:hl_messages`.
+- **Three proto-seat tables fold in**, not two: `hl_inbound_email_leads` (its `matched_on` rungs become
+  `resolved_by`) + `hl_message_thread_participant`. Verdicts committed at 7a16b97840.
+
+### NEXT — Lee's confirmed §4 order
+1. capture-time seats on the **remaining 3 ingest paths** (SENT branch + inbound-sync + sync-now)
+2. `logActivity` per lead-seat, idempotent on (fact, lead)
+3. **read-path repoint** — retire r2-cards-2's interim IN the same commit so it never outlives its
+   successor. This is what actually retires the phantom counterparty, the name inheritance and the
+   300-cap together. *Recommend this BEFORE the backfills — until something reads seats, none of it is
+   visible to Zach.*
+4. backfills through writers with idempotent keys: the 15:07-Conner attach · the two Jasmeet-only sends ·
+   the 17:11 `matched_on` provenance repair · the **258 NULL-sender rows** (⚠ this will turn
+   r2-cards-2's deliberate absence-assertion on `6de2bdf5` RED — by design; delete it then)
+5. the **BCC harness proof** — a `visibility='private'` seat must NEVER render on another participant's
+   surface, red-proven.
+
+### FROM r2-cards-2 (stream-rows is THEIRS; their measurement outranks my census where they disagree)
+Shipped `5cbc252331`: 105 → 107 conversations; the Fountain Mortgage email to Trish + Zach is reachable.
+Their three learnings, all of which bite the seat read-path too:
+- **Reachable ≠ in the window** — their assertion first failed because the row sits 1,478 messages back
+  and the reader caps at 500. Read DEEP or chase a predicate bug that isn't there. (Third lane to hit
+  this: also allfeed-101's stalled paginator and m10-delta's 39-of-370.)
+- The list must split in the WHERE **and** the row shaping together, or the reader disagrees with itself.
+- Shape: zero angle brackets / zero quoted display names in 5,921 rows, but mixed case is real.
+  `addrs()` already parses the `Name <a@b>` form, so the seat path has one home for it.
+
+### CLOSED
+Heather Banwart = **not** a second fall-through. Her cards are 2025-01→2025-07; every `by_name='Myli'`
+`email_sent` row in the log is 2025 (73 rows, zero since 2025-07) — dead mechanism. Legacy rows fold
+with the backfill. ⚠ I misread these as 2026 because I printed `MM-DD` without a year — my own
 [[feedback_dates_always_iso_with_years]], broken while applying
 [[feedback_date_the_failure_before_naming_the_owner]]. Caught before it reached a conclusion.
 
-### NEXT (all gated on Lee)
-`fromMatch` → 0772 migrates → seat writers at capture on all 3 ingest paths (ONE resolver, `resolved_by`
-recorded) → `logActivity` per lead-seat → repoint inbox/feed/notification onto seats (retires the
-comma-predicate + name-inheritance + the 300-cap together) → backfill (15:07-Conner attach, the two
-Jasmeet-only sends, the 17:11 provenance repair, and the 258 NULL-sender rows) through writers with
-idempotent keys → the BCC harness proof → gauntlet.
-
 ### RAILS HELD
-Real-lead production data: read-only against Gmail and prod, no sends, no destructive SQL, no raw UPDATEs.
-Receipts: `.claude/reports/inbox-truth/` (screenshot · gmail-census JSON + reader · the DDL proposal).
-⚠ Note for my successor: I used `git stash` once on a single file to compare lint counts. It round-tripped
-clean, but [[feedback_never_git_stash_in_the_shared_tree]] says don't — use a second checkout or just
-count warnings by line instead.
+Real-lead production data: read-only against Gmail and prod; no sends; no destructive SQL; no raw
+UPDATEs on history. The seat test writes real rows against SYNTHETIC fact ids and deletes exactly
+those (table verified back to 0). Receipts: `.claude/reports/inbox-truth/` (Zach's screenshot ·
+gmail-census JSON + the reader script).
+⚠ Successor note: I used `git stash` once on a single file to compare lint counts. It round-tripped
+clean, but [[feedback_never_git_stash_in_the_shared_tree]] says don't — count warnings by line instead.
+⚠ `node tools/schema/model-lock.mjs` ALONE leaves the census stale (reports 211 and looks like success);
+only `tools/schema/schema-lock.mjs` regenerates it.

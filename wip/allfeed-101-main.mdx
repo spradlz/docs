@@ -1,6 +1,6 @@
 ---
-title: "Allfeed-101 (allfeed-101 LANE HANDOFF — LEE-WRITTEN BACKSTOP (2026-08-14 ~21:50Z, pre-account-switch))"
-description: "Work-in-progress dossier — Allfeed-101. allfeed-101 LANE HANDOFF — LEE-WRITTEN BACKSTOP (2026-08-14 ~21:50Z, pre-account-switch)."
+title: "Allfeed-101 (allfeed-101 LANE HANDOFF (updated 2026-08-14 ~22:35Z))"
+description: "Work-in-progress dossier — Allfeed-101. allfeed-101 LANE HANDOFF (updated 2026-08-14 ~22:35Z)."
 ---
 
 <Info>Live dossier — auto-generated from `.claude/state/wip/allfeed-101.md` on every push. **Progress: checklist pending.**</Info>
@@ -9,33 +9,44 @@ description: "Work-in-progress dossier — Allfeed-101. allfeed-101 LANE HANDOFF
 
 ## Checklist
 
-# (If allfeed-101 wrote its own version, that one wins — this is the desk's map of the lane.)
-
-### MISSION — LEDGER 101 (scope lock: session-scope-allfeed-101.lock — READ IT, it survives)
+### MISSION — LEDGER 101 (scope lock: session-scope-allfeed-101.lock)
 The lead-detail "All" tab renders EVERY row the activity API returns (ALL_FEED_IS_EVERYTHING).
-MEASURED BREACH: /api/leads/&lt;conner-TEST&gt;/activity returns 104 rows; the DOM renders 58 cards;
-document_sent missing at every scroll position.
 
-Deliverables per the lock:
-1. The drop census — which rows drop and WHY, grouped by MECHANISM.
-2. Classification: DELIBERATE (signed rule, cited) vs DEFECT.
-3. Fix the DEFECT class — every entitled row renders as SOME card (catalog card_layout drives it;
-   an unrouted kind falls back to the compact ActivityCard, NEVER to nothing).
-4. THE COMPLETENESS EQUATION as a TEST: rendered cards + documented deliberate drops = API rows.
+### STATUS: THE DEFECT CLASS IS FIXED AND PROVEN. Deliverables 1-4 complete.
 
-### SCOPE BOUNDARY (coordinate via Lee's desk)
-IN: components/leads/detail/CenterLane.tsx (All-feed COMPOSITION only) + app/api/leads/[id]/activity/
-route.ts + the new completeness test + .claude/reports/allfeed-101/**.
-OUT: ActivityHeroCard.tsx + lib/activity/render-activity.ts (card INTERNALS — r2-cards owns, ledger 103).
+### What the previous shift shipped (commit 7d3fe7355c, 18:09 EDT)
+`lib/activity/compose-feed.ts` + `compose-feed.test.ts` — the COMPOSITION door: one place a row may
+fail to render, every removal named with a mechanism, and the completeness equation as a test.
+CenterLane calls `composeFeed`/`laneCounts`. That work is good and stands.
 
-### STATE AT SWITCH
-- Lane was STILL WORKING; last known edits (progress tracker): route.ts, CenterLane.tsx,
-  EmailsStream.tsx around 21:11-21:13Z. Census results NOT yet reported to the desk.
-- Auto-save commits carry the edits: `git log --oneline -15 -- apps/houseloop-crm/components/leads/detail/ apps/houseloop-crm/app/api/leads/`
+### What this shift found and fixed — THE FETCH LAYER
+The composition equation was VACUOUS: it only accounts for rows the screen was HANDED.
+- The reader applies two filters AFTER the SQL `LIMIT` (message collapse, birth-window twin fold).
+- So `?limit=40` returned **39**, and the screen inferred "short page = nothing older" and stopped.
+- **Measured on Conner-TEST: 39 of 362 rows reachable at ANY scroll position (89% invisible).**
+  Every `document_sent` row was in the unreachable 323 — that is why it was "missing everywhere".
 
-### NEXT SHIFT
-1. Read the scope lock + this file + .claude/reports/allfeed-101/ (any census artifacts).
-2. Diff the lane's commits to see how far the fix got; re-run the 104-vs-58 measurement on
-   Conner-TEST (lead 90818711-0955-4655-b875-26a652e6d635) to get the CURRENT number.
-3. Finish the census → classify → fix → the completeness test. A row that drops must be a CITED
-   deliberate rule or it's a defect. document_sent missing is the known smoking gun to chase first.
+FIX (route is the authority, screen no longer guesses):
+- `app/api/leads/[id]/activity/route.ts` — returns `hasMore` (from the RAW pre-filter row count) and
+  `nextBefore` (the oldest row READ, so the cursor can never stall on a filtered tail).
+- `lib/activity/compose-feed.ts` — `nextPage()`, the one paging decision, tested.
+- `CenterLane.tsx` — both fetch sites route through `nextPage`; cursor adopted on FIRST load only
+  (the SSE refresh re-fetches page 1 and would otherwise rewind the cursor forever).
+
+### VERIFIED (effect, not code)
+- Reader walk: 10 pages, **362/362** rows reached, terminates clean.
+- Census (live, composeFeed over all 362): **345 rendered + 17 deliberate drops = 362 ✅ BALANCED**
+  (16 `duplicate_capture`, 1 `system_signing_ceremony` — both signed + cited).
+- Browser walk on Conner-TEST: 10 activity requests, and **all 7 "sent a document for signature"
+  cards render in the DOM**. Shot: `.claude/reports/allfeed-101/shots/`.
+- Test goes RED on the planted defect, reproducing the exact production numbers
+  (`fetched=39 of 362 over 1 pages`). 37/37 green restored.
+- tsc 0 (whole app) · kind-literal floor 874 held · door-zero 742 held · 0 new eslint warnings.
+
+### OPEN / NEXT
+- **Latent, NOT the cause here:** the `before` cursor is a strict `occurred_at <`. Zero ties measured
+  on Conner-TEST (362 distinct timestamps), so it did not fire — but a page boundary cutting through
+  tied timestamps would skip rows. Needs a tiebreaker (occurred_at, id) to be structurally safe.
+- **`byKind` disagrees with the feed** on this lead (byKind sms_sent=18 vs 12 rows; claims a
+  `saved_search_created` the feed has none of). It is a separate SQL query from the feed union —
+  the count-lie class. Belongs to whoever owns the KPI/pill lane (see task #59).

@@ -1,0 +1,63 @@
+---
+title: "G14-transport (g14-transport — LANE HELD WARM (2026-08-14, desk-gated))"
+description: "Work-in-progress dossier — G14-transport. g14-transport — LANE HELD WARM (2026-08-14, desk-gated)."
+---
+
+<Info>Live dossier — auto-generated from `.claude/state/wip/g14-transport.md` on every push. **Progress: checklist pending.**</Info>
+
+**Owner:** G14-transport
+
+## Checklist
+
+**STATUS: build COMPLETE + desk-ratified. The no-go test is UNRUN, blocked on handsets.
+Waiting on ONE thing: Zach designating two real non-Twilio test handsets (morning decision).**
+
+Receipt: `.claude/reports/g14-group-text/v2/RECEIPT.md`
+Spec: `.claude/reports/g14-group-text/PRD-group-transport-v2.md` · `.claude/rules/SEAT_MODEL_LAW.md`
+Ledgers 106 / 109 / 113 in `.claude/skills/qa-gauntlet/runs/myli-mvp-1-fix-round-1.md`.
+
+### WHEN THE HANDSETS LAND — RESUME HERE, SAME SESSION
+1. Point the rollout allowlist at the designated handsets (`hl_settings` key `group_sms_rollout`;
+   ABSENT row = test mode, which is the fail-closed default — do NOT flip `mode` to `live`).
+2. v2 group send → both handsets show ONE group thread.
+3. Reply from one handset → rebroadcasts natively to the other.
+4. ⭐ THE NO-GO TEST, both directions: a 1:1 from a handset to the long code while the group is
+   ACTIVE must arrive PRIVATE (plain sms webhook, only the 1:1 thread). The guard now LOGS instead
+   of bailing — grep prod logs for `[g14/no-go]`. A logged line on a private 1:1 is EXPECTED; the
+   same body ALSO landing as a group reply means the v1 double-fire is back.
+5. Per-participant delivery receipts + the A2P/pricing evidence off the message records (PRD open
+   question 1, still open — it needs a real send).
+6. Composer 10-cap walk (➕ dead at 9, copy names the carrier) — sequenced with the above.
+
+⚠ The INBOUND half needs PROD: Twilio webhooks hit `crm.houseloop.ai`. The train carrying this
+build pushed on 8/14 — verify the binding change is actually live before trusting an inbound result.
+
+### THE BLOCKER, IN ONE LINE
+Both old TEST lines (+19139379359, +19137333704) are Twilio numbers WE OWN. Twilio refuses an owned
+number as an Address-only group participant (**error 50407**) — so no group can form on them. The v1
+PAIR shape accepted them, which is why the rig worked while the design was wrong. Probes:
+`.claude/reports/g14-group-text/v2/04-bind-isolation.log`. Candidate handset already in the estate:
+913-208-1633 (Myli's iMessage line, NOT on the owned list). Second is Zach's call.
+
+### SHIPPED (tsc 0 · test:outbound 45/45 · cages green)
+- `apps/houseloop-crm/lib/phone/send-conversation.ts` — leads `MessagingBinding.Address` ONLY; our
+  line as its own participant (`Identity=agent:<userId>` + `ProjectedAddress`). **Projected
+  participant MUST be added BEFORE the leads** (leads first → 50407; not in the PRD, now an
+  amendment Caleb carries). Orphan teardown on any post-create failure. v1-thread reuse blocked by a
+  JOIN condition (agent seat with a non-null participant SID).
+- `apps/houseloop-crm/lib/phone/group-limits.ts` (new) — `MAX_GROUP_LEADS = 9`, dependency-free so
+  the wire and the `'use client'` composer share ONE constant.
+- `apps/houseloop-crm/components/leads/detail/TextComposer.tsx` — ➕ disables at 9, copy names the
+  carrier, not us.
+- `apps/houseloop-crm/app/api/phone/webhooks/sms/route.ts` — the group-proxy guard LOGS and flows on
+  instead of returning. **Desk-ratified**; standing principle: *a visible double-fire beats a silent
+  swallow.*
+
+### DELIBERATELY NOT DONE
+Seat writes — `TODO(SEAT_MODEL_LAW)` sits on the N-row write block. Awaiting the joint DDL sitting
+(this lane's fold proposal + inbox-truth slice-1). **Do NOT invent an interim seat table.**
+
+### STATE OF THE WIRE RIGHT NOW
+Fail-CLOSED and safe: no rollout row → test mode → allowlist = the two owned numbers → every group
+send refuses at the Twilio bind. Group texting is inert and loudly broken, never quietly wrong.
+Twilio account swept to 0 conversations; both v1 threads closed; no orphans; no DB residue.
