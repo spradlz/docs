@@ -1,6 +1,6 @@
 ---
-title: "Janitor (janitor LANE HANDOFF — LEE-WRITTEN BACKSTOP (2026-08-14 ~21:50Z, pre-account-switch))"
-description: "Work-in-progress dossier — Janitor. janitor LANE HANDOFF — LEE-WRITTEN BACKSTOP (2026-08-14 ~21:50Z, pre-account-switch)."
+title: "Janitor (janitor LANE HANDOFF — LEDGER 104, THE NIGHT JANITOR)"
+description: "Work-in-progress dossier — Janitor. janitor LANE HANDOFF — LEDGER 104, THE NIGHT JANITOR."
 ---
 
 <Info>Live dossier — auto-generated from `.claude/state/wip/janitor.md` on every push. **Progress: checklist pending.**</Info>
@@ -9,35 +9,76 @@ description: "Work-in-progress dossier — Janitor. janitor LANE HANDOFF — LEE
 
 ## Checklist
 
-# (If janitor wrote its own version, that one wins — this is the desk's map of the lane.)
+# Written by the janitor lane 2026-08-14 ~22:00Z (supersedes Lee's pre-account-switch backstop).
 
-### MISSION — LEDGER 104 (Zach verbatim, the order that spawned the lane)
+### MISSION (Zach verbatim)
 "a nightly audit of what actually got accomplished — not a rewalk... a dedicated cron agent whose
 only job is to be the nightly janitor... wolf of wall street style... gets it ready for the next
-morning." Replaces the Opus-era nightly document audit with a better novel solution. Two products:
-1. THE NIGHTLY SWEEP — doc/report drift cleanup (consolidate, archive, never delete).
-2. THE MORNING TRAY — what actually got accomplished yesterday (from the git record + run log +
-   Ledger of Everything deltas), ready for Zach at morning coffee.
+morning." Two products: THE NIGHTLY SWEEP (doc/report drift, consolidate + archive, NEVER delete)
+and THE MORNING TRAY (what actually got accomplished, from evidence).
 
-### HARD RAILS (restated because they are constitutional)
-- THE JANITOR NEVER DELETES. Archive only (git mv to an archive dir / status flips). A janitor
-  that deletes is how the record dies.
-- INNGEST OR IT DOESN'T EXIST: the nightly run MUST be a registered Inngest function visible in the
-  dashboard + Run Log (lib/inngest/functions/, registered in app/api/inngest/route.ts serve(),
-  categorized in lib/run-log/inngest-registry.ts). A bash cron or a launchd job does NOT count.
-- No auto-schedule before Zach signs a first supervised run (the 7-step Inngest loop).
-- DOCS_SECTION_DISCIPLINE governs any doc moves: retire = merge + git rm + redirect, never orphan.
+### ⚑ STATUS IN ONE LINE
+Both halves are BUILT, WIRED and PROVEN against the live database — **but the cloud half is NOT yet
+in the Inngest dashboard, because that needs a deploy (push), which is Lee's call.** Until that
+happens, INNGEST_OR_IT_DOESNT_EXIST says it does not exist. Do not report it as done.
 
-### STATE AT SWITCH
-- Lane was STILL DESIGNING/BUILDING when the session ended. Registration state UNKNOWN — assume
-  NOT registered until proven in the Inngest dashboard.
-- First sweep + morning tray were due "tonight" — that promise does NOT survive unless the next
-  shift confirms the Inngest function exists, is synced, and a supervised first run happened.
+### WHAT EXISTS (all committed on houseloop-app)
+| piece | path |
+|---|---|
+| the four sweeps | `tools/janitor/sweep.mjs` + `tools/janitor/lib/{ledger,trash,drift,claims,evidence,paths}.mjs` |
+| the morning tray | `tools/janitor/tray.mjs` |
+| **the heartbeat wire** | `tools/janitor/lib/heartbeat.mjs` (NEW 8/14) |
+| **the live-catalog reader** | `tools/janitor/lib/livedb.mjs` (NEW 8/14) |
+| the docs | `tools/janitor/README.md` (NEW 8/14 — two TS files cited it and it did not exist) |
+| the cloud half | `apps/houseloop-crm/lib/janitor/portable-sweep.ts` |
+| the Inngest function | `apps/houseloop-crm/lib/inngest/functions/night-janitor.ts` |
+| serve() registration | `apps/houseloop-crm/app/api/inngest/route.ts` (line ~58 + the functions array) |
+| **Run Log registry row** | `apps/houseloop-crm/lib/run-log/inngest-registry.ts` → `houseloop-crm-night-janitor` (NEW 8/14) |
 
-### NEXT SHIFT
-1. Grep for the lane's files: `git log --oneline -15 --all -- '*janitor*'` + ls
-   apps/houseloop-crm/lib/inngest/functions/ for anything new.
-2. If nothing registered: the design brief above IS the spec — build the function, register it,
-   run once via the dashboard Invoke, show Zach, THEN set the cron.
-3. The morning tray's data sources: git log since last tray, the qa-gauntlet run log new ledgers,
-   tools/master-plan/registry.json proof-bit deltas, DEPLOY_LOG.md.
+### THE SPLIT — READ `tools/janitor/README.md` BEFORE QUESTIONING IT
+`apps/houseloop-crm/Dockerfile` does `COPY . .` from the app dir, so the production image has no
+`tools/`, no `.git`, no `.claude/`, no `docs-site/`. A deployed function CANNOT run the sweeps.
+Local = the sweeps (launchd, not yet armed). Cloud = the WATCHDOG on the local half + LIVE-DB
+adjudication of doc table-claims. The one wire between them is `hl_settings.janitor_heartbeat`.
+
+### PROOF ON THE RECORD (2026-08-14, live DB, not memory)
+- Local sweep `--apply` + tray `--apply --no-notify` ran clean. Tray:
+  `.claude/reports/janitor/tray-2026-08-14.md`; record: `sweep-2026-08-14.json`.
+- Receipt commit `9e9390e07d`: 242 files, **all** under `.claude/reports`, zero foreign paths,
+  zero receipts left uncommitted.
+- Heartbeat row written (`mode: apply`, 30 unadjudicated tokens handed up).
+- Cloud half run directly against the live CRM: `stale:false · verdict:yellow · 30 tokens checked`.
+- **Watchdog RED path proven** (`staleHours:0` → `stale:true · verdict:red`) — the control can fire.
+- `tsc --noEmit` exit 0 · door-zero 742 (floor held) · kind-literal-floor 878 (floor held).
+
+### ⚑ WHAT THE FIRST REAL RUN EXPOSED (all fixed in `3f50ecf28e` — do not re-introduce)
+1. **Nothing wrote the heartbeat.** The cloud watchdog could only ever say "the local janitor has
+   never run", forever, no matter how good the night was. A watchdog on a wire nobody connected.
+2. **The lock is not an inventory of the database.** It lists BASE TABLES, so every doc citing a
+   live VIEW was called a liar — 9 objects, 33 citations. The live catalog now settles it; with no
+   live read the accusations are filed UNCONFIRMED and excluded from the total.
+3. **`total` came from display-capped arrays** — a saturated pile read as an exact 300 when the
+   truth was 325. A ceiling wearing an exact number's clothes.
+4. **`git add -- path` then a BARE `git commit` publishes the WHOLE index.** It swept two files
+   another lane had just staged into a `[janitor]` commit that mislabelled them (`9a1aa38079` —
+   left on the branch on purpose; never rewrite shared history). The pathspec must ride the COMMIT.
+5. **git porcelain quoting.** 6 screenshots containing U+202F came back octal-escaped, matched no
+   file, and an unmatched pathspec aborts the WHOLE commit — 241 receipts died with them **while
+   the sweep printed "committed 241"**. `-z` everywhere; a commit is now reported only if HEAD
+   actually advanced.
+
+### ⚑ THE TWO REMAINING STEPS (neither is the janitor's to take alone)
+1. **DEPLOY** so Inngest syncs the function → then invoke `ops/night-janitor.sweep` from the
+   dashboard → watch the run + the Run Log row. HEAD carries other lanes' commits, so the push is
+   Lee's call under DEPLOY_PROTOCOL.
+2. **ZACH SIGNS THE RUN.** Only then: add `{ cron: '0 12 * * *' }` (07:00 CT) to the function's
+   triggers AND arm the local launchd job — the two halves start together so the watchdog's first
+   read is of a heartbeat that genuinely exists. **Never schedule before the sign-off.**
+
+### HARD RAILS (constitutional, unchanged)
+- **NEVER DELETES.** Archive or commit only — both reversible, both leave the bytes on disk.
+- **NEVER MESSAGES A PERSON.** Only outbound is `tools/notify/notify.sh` (Zach's operator channel).
+  No code path to a lead, ever. (The first supervised run used `--no-notify` deliberately: an
+  unsigned first tray should not ping Zach at 10pm.)
+- RULE #0: the sweeps issue NO SQL; the single settings upsert is the only write in the system.
+- Commit BY PATHSPEC with a `[janitor]` tag — never `git add -A`, never a bare commit after adding.
