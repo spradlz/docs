@@ -1,6 +1,6 @@
 ---
-title: "Avatar-one (avatar-one LANE HANDOFF — LEE-WRITTEN BACKSTOP (2026-08-14 ~21:50Z, pre-account-switch))"
-description: "Work-in-progress dossier — Avatar-one. avatar-one LANE HANDOFF — LEE-WRITTEN BACKSTOP (2026-08-14 ~21:50Z, pre-account-switch)."
+title: "Avatar-one (avatar-one LANE HANDOFF — LEDGER 102 COMPLETE (2026-08-14, commit 259595e41c))"
+description: "Work-in-progress dossier — Avatar-one. avatar-one LANE HANDOFF — LEDGER 102 COMPLETE (2026-08-14, commit 259595e41c)."
 ---
 
 <Info>Live dossier — auto-generated from `.claude/state/wip/avatar-one.md` on every push. **Progress: checklist pending.**</Info>
@@ -9,30 +9,66 @@ description: "Work-in-progress dossier — Avatar-one. avatar-one LANE HANDOFF �
 
 ## Checklist
 
-# (If avatar-one wrote its own version, that one wins — this is the desk's map of the lane.)
-
 ### MISSION — LEDGER 102 (the ONE-AVATAR law, Zach verbatim)
-"the actor profile pictures in the ipad lane must be driven from the profile cards" + Myli's
-canonical headshot = the WHITE-BACKGROUND Pixar (the website-chat one,
-.claude/reports/homeowner-dashboard-design/myli-avatar-pixar-white.png). Edit Myli in ONE place
-(her profile) → fans out everywhere. Sent emails keep their baked originals (Zach: "i agree").
+"the actor profile pictures in the ipad lane must be driven from the profile cards" + Myli's canonical
+headshot = the WHITE-BACKGROUND Pixar (the website-chat one). Edit Myli in ONE place (her profile) →
+fans out everywhere. Sent emails keep their baked originals (Zach: "i agree").
 
-### WORK ITEMS (state as known at the desk)
-1. White-Pixar → Myli's hl_users.avatar_url row — state UNCONFIRMED at switch.
-2. Upload path in app/api/team/users/[id]/route.ts — IN FLIGHT; a coherent buffer of theirs was
-   audit-committed by Lee earlier (Lee also reworded 2 banned door-words in it: "had no way in",
-   "at the boundary instead"). Check git log for that file.
-3. iPad lane (CenterLane actor avatars) reads the PROFILE, not a static — UNCONFIRMED.
-4. Website chat/search honors Myli's profile avatar — UNCONFIRMED.
-5. Signature re-render triggers on avatar change (today it only re-bakes on name/phone) — UNCONFIRMED.
-6. https-only normalization on avatar URLs (vCard check) — UNCONFIRMED.
-7. agent.jpg quarantine — UNCONFIRMED.
+### ALL 7 ITEMS DONE — state + the evidence for each
+1. **White-Pixar → Myli's `hl_users.avatar_url`** — DONE. Was `brand/headshots/myli.jpg` (a real-photo
+   headshot, NOT a Pixar). Now `https://houseloop.ai/myli/myli-avatar@2x.png`. Set THROUGH the new
+   editor (item 2), not by hand. ⚠ See THE ONE OPEN QUESTION below.
+2. **Upload path** — DONE, both halves. The PATCH already accepted `avatar_url` (predecessor's work,
+   commit 981974a765). What did NOT exist was any UI reaching it: `components/team/ProfilePhotoRow.tsx`,
+   ONE component mounted on the human member page AND the AI agent page (new "Profile" section + jump
+   pill). Preview is `ActorAvatar` itself so it cannot disagree with the feed.
+3. **iPad lane reads the profile** — DONE (predecessor built the resolver; this shift PROVED it).
+   Walked Heather Banwart: **13 avatars resolve to the profile URL**, 0 to the retired hardcode, only
+   `system.png` + `zillow.png` static — exactly the two brand marks `ActorAvatar` documents.
+4. **Website honors her profile** — BUILT. CRM `GET /api/integrations/website/assistant-identity`
+   (+ middleware PUBLIC_PREFIXES) resolves the assistant **by shape** (active, non-clone `ai_agent` —
+   exactly 1 row today) and NEVER by the name "Myli". Website `GET /api/myli/avatar` resolves it
+   server-side, caches, 307s. `MyliAvatar` now points there; AiSearchModal's 4 raw `<img>` now use
+   `MyliAvatar` (its own doc already forbade scattering those).
+5. **Signature re-render on avatar change** — DONE. Was a REAL gap: `signature-template.ts` has claimed
+   since 6/17 that it re-renders on "name, email, headshot" and the call site only fired on `full_name`.
+   Proven: Myli's `hl_oauth_connections.signature` img updated **83ms after** the user-row write.
+6. **https-only normalization** — was ALREADY DONE by the predecessor (route.ts ~line 207, 400 on a
+   non-https value). `ProfilePhotoRow` surfaces that rejection VERBATIM.
+7. **agent.jpg quarantine** — DONE, and widened: `agent.jpg` AND the retired `/avatars/myli.png` were
+   both unreferenced in code but STILL PUBLICLY FETCHABLE. Both `git mv`'d to
+   `.claude/reports/activity-card-catalog/spec-assets/` with a README. `public/avatars/` now holds
+   only `system.png` (a brand mark, correctly static).
 
-### CONTEXT (the census, from the desk's earlier audit)
-26 avatar sources found; humans already flow via hl_users.avatar_url through sender-identity.ts and
-actor_avatar COALESCE; Myli was 3-4 unsynced statics; NO in-app avatar_url writer existed before
-this lane.
+### ⚠ THE ONE OPEN QUESTION FOR ZACH (30-second fix either way, now that the editor exists)
+Lee's handoff named `.claude/reports/homeowner-dashboard-design/myli-avatar-pixar-white.png` (8/12) as
+canonical. Zach's own words pointed at **"the one we used on the website chat, for the search with
+myli"** — and that asset is cut from `myli-v2-3.png` (8/13, the *signed v3* avatar per
+`MyliAvatar.tsx`), a DIFFERENT render: same white bg / navy blazer, but v2-3 has coppery hair and
+different framing. **I used the website-chat bytes** because that is the pointer Zach gave and it makes
+the website's "honor the profile" verifiable. If Zach wants the 8/12 portrait instead, it is now one
+URL edit on her Profile section — that cheapness is the whole point of the law.
 
-### NEXT SHIFT
-`git log --oneline -15 -- apps/houseloop-crm/app/api/team/users/` + query
-`SELECT avatar_url FROM hl_users WHERE ...myli...` to see how far item 1-2 got, then walk the list.
+### DEPLOY-ORDER NOTE (not a defect)
+`apps/houseloop-web/.env.local` sets `HOUSELOOP_CRM_BASE_URL=https://crm.houseloop.ai`, so localhost:3001
+asks PROD for the identity. Prod does not have the new CRM route yet → the site correctly falls back to
+its bundled asset (which is visually identical today). **The CRM must deploy before the website surface
+actually reads her profile.** The success branch is proven by executing the real route module against
+localhost:3020: 307 → `https://houseloop.ai/myli/myli-avatar@2x.png`.
+
+### FLAGGED, NOT MINE (for whoever owns card attribution)
+On Heather Banwart an email card is attributed to **Myli** while its body is Jessica Coggins' reply
+("Yes, let's do lunch!!... Jessica Coggins REALTOR®"). The avatar is faithfully rendering the actor the
+row names — so if that attribution is wrong, the defect is upstream in the row, not in the face.
+Shot: `avatar-104-myli-actor-card.png`.
+
+### RECEIPTS — `.claude/reports/homeowner-dashboard-design/shots/`
+`avatar-101-myli-profile-before.png` (editor renders, wrong photo) · `avatar-102-myli-profile-saved.png`
+("Saved 5:51 PM") · `avatar-103-ipad-lane-myli.png` (lane) · `avatar-104-myli-actor-card.png` (her face
++ AI star on a card) · `avatar-105-website-myli.png` ("Search with Myli" pill).
+
+### GATES
+tsc **0** both apps · door-zero / platform-zero / kind-literal floors **held** · my files lint clean
+(the `no-img-element` "rule not found" noise is an artifact of per-file eslint invocation — an untouched
+file emits 9 of them; the 9 `no-magic-numbers` in AiSearchModal are pre-existing on lines disjoint from
+my 4).
