@@ -44,9 +44,24 @@ FIX (route is the authority, screen no longer guesses):
 - tsc 0 (whole app) · kind-literal floor 874 held · door-zero 742 held · 0 new eslint warnings.
 
 ### OPEN / NEXT
-- **Latent, NOT the cause here:** the `before` cursor is a strict `occurred_at <`. Zero ties measured
-  on Conner-TEST (362 distinct timestamps), so it did not fire — but a page boundary cutting through
-  tied timestamps would skip rows. Needs a tiebreaker (occurred_at, id) to be structurally safe.
+- ⛔ **NOT LATENT — IT IS FIRING IN PRODUCTION TODAY. P0, task #62** (accepted by the desk; a fresh
+  lane is on it). You are right that it was **not the cause here** and right that Conner-TEST has
+  **zero** ties (362 distinct timestamps), so it cannot fire there — that is exactly why it needed a
+  separate hunt instead of another walk. **Measured across the 12 DEEPEST REAL leads, simulating the
+  paging protocol over each lead's own returned set: 11 of 12 lose rows, 126 rows silently lost**
+  (worst `4a48643c` 43/989 · `f62efbad` 26/1999 · `0622a6c7` 23/2000). Lost kinds are ordinary
+  history — property_viewed, property_saved, saved_search_created, note_added — and the ties cluster
+  on **second-granularity** timestamps (`…T00:00:00.000Z`), i.e. imported/bulk-written FUB rows,
+  where simultaneous writes are the norm rather than the exception.
+  ⚠ **AND IT IS A SILENT SKIP, NOT A STALL** — `rows.length` keeps growing, `hasMore` goes false, the
+  feed reaches the bottom looking complete. It is the ledger-101 disease at the fetch layer, and the
+  completeness equation is structurally blind to it (it can only count what the reader was handed —
+  your "vacuous" critique, one layer further down).
+  ⚠ **SEQUENCING (a tiebreaker alone is not enough):** `ORDER BY` today is `occurred_at DESC` with
+  **no secondary key**, so the order *among* tied rows is non-deterministic and *which* rows vanish
+  can change between loads. **Deterministic order FIRST** (`occurred_at DESC, id DESC`), composite
+  cursor `(occurred_at < $b OR (occurred_at = $b AND id < $bid))` SECOND. A cursor over an unstable
+  order points at nothing. Full spec + reproduction in task #62.
 - **`byKind` disagrees with the feed** on this lead (byKind sms_sent=18 vs 12 rows; claims a
   `saved_search_created` the feed has none of). It is a separate SQL query from the feed union —
   the count-lie class. Belongs to whoever owns the KPI/pill lane (see task #59).
