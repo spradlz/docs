@@ -1,0 +1,87 @@
+---
+title: "R2-cards-2 (r2-cards-2 — THE DUPLICATE LANE (resurrected in the account switch). Handoff 2026-08-14.)"
+description: "Work-in-progress dossier — R2-cards-2. r2-cards-2 — THE DUPLICATE LANE (resurrected in the account switch). Handoff 2026-08-14.."
+---
+
+<Info>Live dossier — auto-generated from `.claude/state/wip/r2-cards-2.md` on every push. **Progress: checklist pending.**</Info>
+
+**Owner:** R2-cards-2
+
+## Checklist
+
+⚠ **I am NOT the r2-cards lane that owns card internals.** The ORIGINAL survived the switch; per Lee's
+de-dup ruling it keeps all card-internal work (Share2 icon (b) — which it has since SHIPPED — and the
+`stage_changed` three-icon disagreement). Its handoff is `.claude/state/wip/r2-cards.md`; **do not
+merge these two files.** After ledger 103 I was given exactly ONE item: the ledger-111 stream-rows
+interim.
+
+---
+
+### 1. LEDGER 103 — CLOSED (gated by Lee; the original lane independently verified it and added the test)
+
+Full-payload cards drop the actor circle; COMPACT (44px) and INSIGHT (40px) keep theirs; ArrivalCard
+untouched. `d6d194c862` (ActivityHeroCard.tsx + cards.mjs) · `1378292d76` (board + manifest) ·
+`8aef28b63f` (receipts `ledger103-*.png`).
+
+**The re-signature number:** the regenerate diff is 30 cards losing their 36px face, zero 44px and zero
+40px faces moved, no card gaining one, and nothing else changed in 3.15 MB — which doubles as a
+reproducibility proof of the board. The original lane then rebuilt it independently and got a
+BYTE-IDENTICAL file (`sha256 5dc60271914c…`), which is stronger evidence than either of us alone.
+
+✅ **Manifest checked at handoff and it is COHERENT**: the entry's sha256 equals the served file's, and
+the detailed ledger-103 description is the one standing. (The other lane's §5 warns that a re-promote
+rewrites title/description for an unchanged hash — they caught their own churn and restored it. The
+surviving entry is the detailed one. **Rule worth keeping: if the hash has not moved, do not touch the
+receipt.**)
+
+---
+
+### 2. LEDGER 111 INTERIM — DONE (code landed via auto-save; record + receipts in `389aafbce1`)
+
+`lib/inboxes/stream-rows.ts`. All three parts carry an INTERIM comment naming the seat read-path as
+their successor.
+
+1. **The list splits BEFORE the key is derived** — one row per real counterparty; the phantom dies.
+   ⚠ **THE GATE IS THE COMMA, NOT THE COUNTERPARTY COUNT.** My first cut fanned out only when two or
+   more parties were strangers, and it left the phantom standing on the row whose list contains one of
+   OUR OWN doors ("Trish… , ana@houseloop.ai"): one stranger, still a comma, still keyed by the whole
+   string. Rows without a comma take the original path untouched — 5,915 of 5,920.
+2. **The name comes from the person AT that address** (`resolvePeople`, ONE round trip per kind, never
+   per row). No match → null → the UI shows the address. It never inherits `m.lead_id`, which is what
+   put Jasmeet's name on Conner's row.
+3. **The conversation filter matches list MEMBERSHIP, not equality.** Without this the phantom is
+   replaced by two honest-looking rows that open to an EMPTY thread — a worse lie, because it reads as
+   data loss rather than as a naming bug.
+
+### GATES
+- **`npx tsc --noEmit -p tsconfig.json` from `apps/houseloop-crm` → exit 0, zero lines.**
+  ⚠ **Bare `npx tsc --noEmit` at the REPO ROOT sweeps `apps/_quarantine` and prints 1.7 MB of errors
+  that belong to nobody's change.** Gate with the app's own tsconfig or you will either chase ghosts or
+  (worse) record a vacuous pass.
+- **`npm run test:stream-rows`** (NEW, live-DB, registered in package.json) — green, and **proven to go
+  RED** by planting the old behavior, which printed the defect verbatim:
+  `connerck@outlook.com, jasmeetkh17@gmail.com :: Jasmeet Kaur`. Restored and re-verified;
+  `git log -S"split: false"` is empty, so no commit captured the planted state.
+  ⚠ One assertion PASSED while red, because the row it names was absent — tightened to demand the row.
+  **An assertion about a row's contents that survives the row's absence is worth nothing.**
+- **Walk on :3020** (my own Chrome, own port + scratch profile): the live API returns **0 conversations
+  keyed by a list**; `connerck@outlook.com` → "Conner Kelley" (5 events), `jasmeetkh17@gmail.com` →
+  "Jasmeet Kaur" (4), `trish.redenbaugh@gmail.com` → her address, no borrowed name.
+  Receipts: `.claude/reports/myli-mvp/shots/ledger111-{conner-email-row,address-fallback-row,inbox-after}.png`.
+
+### STILL OPEN — NOT MINE, flagged to Lee and inbox-truth
+**3 of the 5 comma rows never match the door predicate at all** (`stream-rows.ts:105` uses exact
+equality; a comma list can never equal a single address), so they are INVISIBLE rather than phantom —
+including real mail addressed to us (a Fountain Mortgage email to Trish + Zach, a RealScout alert).
+Splitting fixes what the query RETURNS; it cannot fix what the query never returns. I deliberately did
+not widen the predicate under inbox-truth's census.
+
+---
+
+### 3. PROCESS NOTES
+- **inbox-truth never answered three pings.** I proceeded on the RECORD, which is the stronger evidence
+  anyway: `lib/inboxes/` was clean and last touched by `d8ba58d9dc` (08-12), and the auto-save hook
+  commits per file the instant anyone edits. I told them exactly that before starting.
+- The SQL-template hook refused a write of mine for a backtick inside a SQL comment. It was right, and
+  it is the reason :3020 stayed up.
+- UNPUSHED at handoff. Lee sequences the train; the ledger-103 board 404s in prod until it ships.
