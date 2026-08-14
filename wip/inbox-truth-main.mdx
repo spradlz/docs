@@ -108,6 +108,45 @@ with the backfill. ⚠ I misread these as 2026 because I printed `MM-DD` without
 [[feedback_dates_always_iso_with_years]], broken while applying
 [[feedback_date_the_failure_before_naming_the_owner]]. Caught before it reached a conclusion.
 
+### TASK #56 (the "wrong-name bells") — THE URGENT HALF DOES NOT EXIST. Re-scope before building.
+Escalated as P0: ceremony 53 rang THREE bells at **2026-08-14 22:24:39Z** all reading *"Conner Kelley
+signed Exclusive Buyer Agency Contract"* for three different signers.
+
+**DISQUALIFIED BY THE SAME DATING DISCIPLINE AS HEATHER.** I ran the LIVE `composeNotification`
+against tonight's exact inputs (leadId=Conner, actorName=each signer's address, real
+`tc_document_signed` class row). **Current code renders three DIFFERENT names:**
+- `jasmeetkh17@gmail.com` → "✍️ Jasmeet Kaur signed …"
+- `connerck@outlook.com` → "✍️ Conner Kelley signed …"
+- `mo.sign@exprealty.net` → "✍️ mo.sign@exprealty.net signed …" (the honest address — ledger 76's
+  "a null resolves to the address itself, never to the lead")
+The wiring is complete end to end: `app/api/esign/webhook/route.ts:439` passes `actorEmail` per signer
+→ `lib/tc/loop-engine.ts:691` maps it to `actorName` → `dispatch.ts:838` resolves it. **Both halves
+are ON ORIGIN.** LEDGER 89 committed 16:28 EDT; origin tip was 18:19 EDT (=22:19Z) and the bells fired
+22:24:39Z — five minutes later, which no Railway build finishes in. **Those bells ran on the previous
+image.**
+
+⚠ **CORRECTION TO THE BRIEF'S PREMISE** (read the RAW columns, never the derived `actor_name` —
+m10-delta's trap): the signed rows are **not** all anonymous. Tonight's three:
+`…:signed:connerck@outlook.com` → `by_name='Conner Kelley'` ✓ · `…:signed:jasmeetkh17@gmail.com` →
+`by_name='Jasmeet Kaur'` ✓ · `…:signed:mo.sign@exprealty.net` → blank ✗.
+**The webhook writer ALREADY stamps `by_name`/`by_lead_id` whenever the address resolves.** Jasmeet's
+row was correctly stamped and her bell still said Conner — which is what pointed at the build, not the
+writer.
+
+**THE ONE GENUINELY OPEN ITEM (small, NOT a P0):** `mo.sign@exprealty.net` resolves to nobody and no
+`nameHint` reaches `resolveRecipientActor` at that site, so the broker's FEED CARD is anonymous while
+his BELL honestly reads the address. A missing name, not a fabricated identity. The participant row
+carries `full_name`; passing it as the nameHint resolves him to `via:'named'`. NOT DONE — needs a
+red-first test and re-prioritising behind the read-path repoint.
+✅ **CONFIRMED BY THE DEPLOY LOG (desk, 2026-08-14) — this is now FACT, not inference.** Railway deploy
+`682eb415` build **STARTED 22:19:53Z** and was **still BUILDING at ~22:26**; SUCCESS observed later.
+The bells fired **22:24:39Z**, so the new image was definitively NOT live when they rang. Nothing to
+reopen. (I had flagged this as my one unverified link and asked for it to be checked rather than
+closed on my word — the desk had the log.)
+Also ruled: Ana's 19:51Z restored row never rang (backfill healed the record, skipped the bell) —
+historical, no backward fix, and D4 holds: **the backfill pass must NOT retro-ring bells**
+(`is_backfill` never fires).
+
 ### RAILS HELD
 Real-lead production data: read-only against Gmail and prod; no sends; no destructive SQL; no raw
 UPDATEs on history. The seat test writes real rows against SYNTHETIC fact ids and deletes exactly
@@ -117,3 +156,35 @@ gmail-census JSON + the reader script).
 clean, but [[feedback_never_git_stash_in_the_shared_tree]] says don't — count warnings by line instead.
 ⚠ `node tools/schema/model-lock.mjs` ALONE leaves the census stale (reports 211 and looks like success);
 only `tools/schema/schema-lock.mjs` regenerates it.
+
+### ⭐ #56 ROOT CAUSE FOUND (2026-08-14, after Zach identified the broker) — THE FIX IS SMALLER AND BETTER
+Zach: `mo.sign@exprealty.net` is eXp's DESIGNATED-BROKER signing address (a role mailbox); the human is
+**Chris Cribb**.
+
+**THE TELL WAS ALREADY IN MY OWN MEASUREMENT AND I WALKED PAST IT:** on ceremony 53, the
+`document_opened` row for `mo.sign@exprealty.net` carries **`by_name='Chris Cribb'`** while the
+`document_signed` row for the SAME address is **blank**. Same ceremony, same address, same webhook,
+two different answers — so the identity was never missing, only unreached on one branch.
+
+**WHY:** `app/api/esign/webhook/route.ts`
+- the **OPENED** branch (~line 117) calls **the ONE resolver**:
+  `resolveRecipientActor(rc.email, { nameHint: rc.name })` — `rc.name` is the e-sign RECIPIENT name
+  from Documenso, which carries "Chris Cribb". → resolves `via:'named'`, `by_name` stamped. ✓
+- the **SIGNED** branch (~lines 376-390) **hand-rolls its own lookup**: raw SQL `hl_users` by email,
+  then raw SQL `hl_leads` by email, then falls back to `part?.full_name` (the ceremony PARTICIPANT
+  row, which is blank for the broker). It never calls the one resolver and never sees `rc.name`. ✗
+
+**SO THE FIX IS NOT "add a nameHint" — it is "the SIGNED branch must call the ONE resolver, with the
+recipient's name as the nameHint, exactly like the OPENED branch fifteen lines above."** That single
+change:
+- fixes the broker's name (`via:'named'` → "Chris Cribb"),
+- **deletes a SECOND address→party resolver** — the exact disease the one resolver exists to cure, and
+  the same class as the two disagreeing email lookups I closed earlier tonight,
+- makes the signed path **inherit the alt-email rung** I just added (the hand-rolled SQL queries
+  `lower(email)` only, so alts are invisible to it — the divergence I closed in the resolver does NOT
+  reach this branch today).
+⚠ Do NOT add an address→name map for `mo.sign@` in the resolver. The mapping's home is the ceremony's
+own recipient/participant record (reference data the send flow writes), per Lee's ruling.
+NOT BUILT — needs a red-first test on ceremony-53's shape (broker's bell renders "Chris Cribb", not the
+raw address) and sits behind the read-path repoint. Tonight's blank `…:signed:mo.sign@exprealty.net`
+row can be name-stamped in the same backfill pass, through the writer, idempotent, NO retro-bell (D4).

@@ -69,30 +69,29 @@ Three duplications behind it: the actor→face DECISION written **4×** (three r
 
 ### 🔴 OPEN, IN EXACT ORDER
 
-### 1. THE MYLI IMAGE QUESTION IS **CONTESTED** — DO NOT TREAT IT AS SETTLED
-Two sources conflict and a human must break the tie:
-- **For the white Pixar:** `apps/houseloop-web/app/api/myli/avatar/route.ts` header quotes Zach
-  verbatim — *"myli's canonical is the WHITE BACKGROUND pixar — the one we used on the website chat,
-  for the search with myli — and we have the wrong one in the ipad lane. The website has to honor
-  myli's profile picture as well."*
-- **Against it:** the `myli_avatar` lane reports its brief was that **Zach REJECTED the current Pixar
-  as too low quality**. The live value is a **320px** asset. If that rejection is the newer word,
-  then "white Pixar in her profile row" is the OPPOSITE of his ruling.
-- **The row today:** `hl_users` Myli → `https://houseloop.ai/myli/myli-avatar@2x.png` (320×320, white-bg
-  Pixar), set 2026-08-14 21:51:40 UTC **by an unidentified actor**. `myli_avatar` supplied a credible
-  timeline denying it (all their writes 8/13 13:38 UTC, outputs are 2048px, nothing published to a URL).
-  **I did not identify who wrote it. Do not assert an author without a sha.**
-- **A fourth option exists:** `myli_avatar` generated 2048px candidates, same Pixar character, pure
-  white background, circle-crop verified: `.claude/reports/homeowner-dashboard-design/myli-v2-{1,2,3,4}.png`
-  (+ `-preview.jpg` each). If Zach's objection was RESOLUTION rather than art direction, these answer
-  it without changing who she is.
-- ⚠ **A vs C is not a dedup, it is a fork in art direction.** `brand/headshots/myli.jpg` (400px) is
-  **photorealistic and a visibly different woman**; the Pixar is a stylized 3D character. Put it to
-  Zach in exactly those terms.
+### 1. ✅ SETTLED — THE MYLI IMAGE IS DECIDED. **DO NOT RE-OPEN IT.**
+**Zach ruled live 2026-08-14 (ledger 121), verbatim: *"i chose what we have on the website and she is
+perfect so use that one."*** His earlier gripe was **render QUALITY, not the pixels/art direction** —
+which is why the "he rejected the Pixar" report and the "white Pixar is canonical" quote were never
+actually in conflict; they were about different things.
 
-**Whatever he picks, no code changes** — the plumbing is done. Someone writes one row.
+**The live row already holds exactly that asset**, and my 22:40 prod receipt verified it serving
+end-to-end. Nothing to do.
+```
+hl_users Myli → https://houseloop.ai/myli/myli-avatar@2x.png   ✅ = what Zach chose
+```
+⚠ **I previously logged this as a CONTESTED four-option pick. That was wrong and it is struck.**
+Leaving the reasoning here only so nobody rediscovers the two quotes and re-litigates: the
+photoreal `brand/headshots/myli.jpg` (a visibly different woman) and `myli_avatar`'s 2048px
+candidates are **not** live options — Zach picked the website asset. It is OFF his list.
 
-### 2. ⚠ UPDATE 22:26 UTC — DEPLOY IS GREEN. CRM HALF **PROVEN**; WEB HALF **NOT PROVABLE YET**.
+**Also settled: the 21:51:40 row write has an author.** `avatar-one-2` claims it, made **through the
+PATCH door + `ProfilePhotoRow`** — i.e. the sanctioned path, not a hand-edit. My "unidentified actor"
+note is closed. (The retraction discipline still stands: I didn't know, so I didn't name.)
+
+### 2. ✅ CLOSED 22:40 UTC — BOTH HALVES VERIFIED ON PROD. `x-avatar-source: profile`.
+*(Heading history: this read "web half NOT PROVABLE YET" until the header shipped and was measured.
+Kept as a section because the HOW — a check that could not go red — is the reusable part.)*
 Both routes went live during a poll (crm 307→**200** at 22:26:38, web 404→**307**).
 - ✅ **CRM half PROVEN on prod:** `crm.houseloop.ai/api/integrations/website/assistant-identity` →
   `{"name":"Myli","avatar_url":"https://houseloop.ai/myli/myli-avatar@2x.png"}` — straight from the row.
@@ -109,10 +108,30 @@ Both routes went live during a poll (crm 307→**200** at 22:26:38, web 404→**
 - **What is true:** all three of the route's failure paths (fetch error, `!res.ok`, non-https value)
   are now false on prod, so resolution is almost certainly succeeding. That is an ARGUMENT, not an
   observation. Do not record it as verified.
-- ⭐ **THE STRUCTURAL FIX (recommended, ~1 line):** have `/api/myli/avatar` stamp a response header
-  naming the branch — `x-avatar-source: profile | bundled`. Then the check is real forever and does
-  not depend on the two images happening to differ. Without it, this becomes verifiable only by
-  accident, the moment Zach picks a different image.
+- ✅ **FIXED AND SHIPPED — commit `2e4d5dd81b` (Lee approved).** `/api/myli/avatar` now stamps
+  **`x-avatar-source: profile | bundled`**. `resolveAvatarUrl` returns which branch it took.
+  **THE POST-DEPLOY CHECK IS THIS HEADER, NEVER THE REDIRECT TARGET:**
+  ```
+  curl -sI https://houseloop.ai/api/myli/avatar | grep x-avatar-source
+  ```
+  `bundled` on a healthy prod = the CRM identity route is unreachable and the site is serving a face
+  that may be several edits stale.
+  ⭐ **RED PROVEN before being trusted green** — `.claude/reports/one-avatar-law/redproof-x-avatar-source.mjs`
+  imports the REAL route module with the CRM at a dead port: header reads `bundled` while `location`
+  stays **byte-identical** to the healthy path (which reads `profile`). That one pair of outputs is
+  both the old check's vacuity and the new check's falsifiability.
+  ⚠ No `Vary` header, deliberately — `Vary` names REQUEST headers; varying on one we emit would be a
+  no-op dressed as a cache control. Reasoning is in the file.
+  ✅ **PROD VERIFIED 2026-08-14 22:40:23 UTC — `x-avatar-source: profile`.** Deployed 22:40:14.
+  The web half is now **OBSERVED, not argued**. Full chain confirmed in one pass:
+  ```
+  hl_users row        https://houseloop.ai/myli/myli-avatar@2x.png
+  CRM identity route  {"name":"Myli","avatar_url":"https://houseloop.ai/myli/myli-avatar@2x.png"}
+  web /api/myli/avatar  307 · location: https://houseloop.ai/myli/myli-avatar@2x.png
+                            x-avatar-source: profile      ← the falsifiable bit
+  ```
+  **NOTHING IS OWED ON THIS ITEM.** Re-run the one-line curl after any deploy; `bundled` means the
+  CRM identity route is unreachable and the site is serving a possibly-stale face.
 - The check also becomes real the instant the profile points anywhere else — which is pending on the
   contested-image decision above.
 

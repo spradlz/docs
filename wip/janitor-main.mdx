@@ -18,9 +18,19 @@ morning." Two products: THE NIGHTLY SWEEP (doc/report drift, consolidate + archi
 and THE MORNING TRAY (what actually got accomplished, from evidence).
 
 ### ⚑ STATUS IN ONE LINE
-Both halves are BUILT, WIRED and PROVEN against the live database — **but the cloud half is NOT yet
-in the Inngest dashboard, because that needs a deploy (push), which is Lee's call.** Until that
-happens, INNGEST_OR_IT_DOESNT_EXIST says it does not exist. Do not report it as done.
+**SHIPPED AND ARMED.** Zach signed the supervised run (`01M016C8449D85RDEARMYNDNGP`, verdict
+yellow) — "i sign off on whatever you need dude" — and BOTH halves were armed in the same pass.
+**ONE THING IS STILL OWED:** the cron rides the next train, and after that deploy goes green
+somebody must issue the PUT sync and CONFIRM the trigger list actually shows the cron (see the
+event-id lesson below). Until that is confirmed, the schedule is code, not a schedule.
+
+| half | schedule | armed |
+|---|---|---|
+| LOCAL sweeps | 03:00 local | ✅ `~/Library/LaunchAgents/com.bossloop.night-janitor.plist` — loaded, and PROVEN by `launchctl start` (sweep → tray → 9 receipts `e512e1a254` → heartbeat → notify, exit 0) |
+| CLOUD watchdog | 07:00 CT (`0 12 * * *`) | ⏳ in the code (`06863b045e`), NOT yet synced to Inngest — needs deploy + PUT + verify |
+
+⚠ **NEVER ARM ONE WITHOUT THE OTHER.** The watchdog reads the heartbeat the local job writes.
+Arm the watchdog alone and it reds every morning for a reason unrelated to a dirty office.
 
 ### WHAT EXISTS (all committed on houseloop-app)
 | piece | path |
@@ -67,13 +77,21 @@ adjudication of doc table-claims. The one wire between them is `hl_settings.jani
    the sweep printed "committed 241"**. `-z` everywhere; a commit is now reported only if HEAD
    actually advanced.
 
-### ⚑ THE TWO REMAINING STEPS (neither is the janitor's to take alone)
-1. **DEPLOY** so Inngest syncs the function → then invoke `ops/night-janitor.sweep` from the
-   dashboard → watch the run + the Run Log row. HEAD carries other lanes' commits, so the push is
-   Lee's call under DEPLOY_PROTOCOL.
-2. **ZACH SIGNS THE RUN.** Only then: add `{ cron: '0 12 * * *' }` (07:00 CT) to the function's
-   triggers AND arm the local launchd job — the two halves start together so the watchdog's first
-   read is of a heartbeat that genuinely exists. **Never schedule before the sign-off.**
+### ⚑ THE ONE REMAINING STEP
+**After the next deploy carries `06863b045e`: issue the PUT sync and VERIFY the cron is really
+registered.** `curl -X PUT https://crm.houseloop.ai/api/inngest` → `modified: true` means the
+function list changed. A green deploy alone does NOT register a function or its schedule.
+
+### ⭐⚠ THE LESSON THIS LANE PAID FOR — AN EVENT ID IS NOT PROOF A FUNCTION RAN
+The first dispatch after a GREEN Railway deploy was ACCEPTED by Inngest — a real event id came
+back — and **nothing ran, for two minutes, with no error anywhere.** The function had never been
+registered. I ruled out the cheap explanations first (capture-fn was alive and logging other
+functions; the code was confirmed on `origin` including the `serve()` entry), which left a
+registration gap. The PUT returned `modified: true` — proof the function list CHANGED, i.e. it was
+genuinely absent until that moment. Re-dispatch produced a run in under 5 seconds.
+**The event key accepts events for functions that do not exist and hands back a cheerful id.**
+Confirm THE RUN, never the dispatch. Memory: `feedback_an_event_id_is_not_proof_a_function_ran`.
+The desk is amending INNGEST_OR_IT_DOESNT_EXIST with the PUT-sync requirement.
 
 ### HARD RAILS (constitutional, unchanged)
 - **NEVER DELETES.** Archive or commit only — both reversible, both leave the bytes on disk.
