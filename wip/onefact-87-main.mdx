@@ -1,0 +1,110 @@
+---
+title: "Onefact-87 (onefact-87 LANE HANDOFF — CLOSED 2026-08-15 (~12:15Z))"
+description: "Work-in-progress dossier — Onefact-87. onefact-87 LANE HANDOFF — CLOSED 2026-08-15 (~12:15Z)."
+---
+
+<Info>Live dossier — auto-generated from `.claude/state/wip/onefact-87.md` on every push. **Progress: checklist pending.**</Info>
+
+**Owner:** Onefact-87
+
+## Checklist
+
+**Task #87 (P1, G14 go-live blocker): one inbound group reply wrote TWO hl_messages rows + TWO
+sms_received cards. CLOSED, accepted at the desk, on the train (`375b50a702`).**
+
+Commits: `3b525a862f` (the fix) · `e28524dcb8` (the sms_received re-proof receipt).
+Ledger 166. Scope-lock: `.claude/state/session-scope-onefact-87.lock`.
+
+---
+
+### THE ONE THING TO KNOW
+
+**The Twilio Message SID IS the identity of an inbound text — always, group or 1:1. The Conversation
+Message SID is an ATTRIBUTE of that fact, never a second identity.** Now law (desk ruling, 8/15).
+
+`/webhooks/sms` is the ONE WRITER. `/webhooks/conversations` is an ENRICHER that claims the row the
+SMS path wrote and stamps the group truth onto it + its card. It does not insert.
+
+### ⭐ WHY THE IDENTITY WAS CHOSEN, NOT DISCOVERED — DO NOT RE-LITIGATE THIS WITHOUT NEW EVIDENCE
+
+Twilio delivers a group reply TWICE (~130ms apart) under two ids and **links them nowhere**. Proven
+three ways on the live specimen (`IM605677cd…` in `CH6b63b447…`), not assumed from docs:
+
+| probe | result |
+|---|---|
+| `GET …/Messages/{IM}/ChannelMetadata` | **`{"data": null, "type": null}`** — populated for WhatsApp-class channels, EMPTY for an SMS-originated conversation message |
+| the Conversations Message resource (account- AND service-scoped, identical) | no field naming the carrier message; `delivery: null` on an inbound |
+| `GET /Messages/{MM}` | no field naming the conversation |
+
+`onDeliveryUpdated` **does** carry `ChannelMessageSid` — but it fires for OUTBOUND delivery only,
+never for an inbound reply. If someone "finds" the linkage later, re-run these three before building
+on it.
+
+**The double-delivery is structural, not an accident:** `+19132861761` carries BOTH an Address
+Configuration (`auto_creation.enabled=false`) AND its own `sms_url` → `/api/phone/webhooks/sms`; a
+matching inbound fires both. Deliberately NOT cured by Twilio config — correctness must not rest on
+provider settings. ⚠ My first probe reported "zero address configurations"; that was **my JSON
+mis-key** (`addresses` vs `address_configurations`). The config exists.
+
+### THE FILES
+
+- `apps/houseloop-crm/lib/phone/group-inbound-twin.ts` **(new)** — the shared resolver + the claim.
+  ⭐ The safety property is **`conversation_id IS NULL` living inside the UPDATE's own WHERE**: two
+  enrichers can't both win without a transaction, AND a lead sending the same body twice into a
+  group gets two rows each enriched once. Match is anchored on the conversation message's own
+  `DateCreated` (never `now()`, so a delayed webhook still finds its twin), ±10s, closest-in-time
+  first — tight on purpose so a seat-holder's PRIVATE 1:1 can never be read as their group reply.
+- `apps/houseloop-crm/lib/activity/log-activity.ts` — `stampActivityGroupFact`, the **FIFTH sanctioned
+  append-only stamp** (after tokens/photo/house/actor). Presentational meta keys only; never
+  kind/lead/title/body/occurred_at.
+- `apps/houseloop-crm/app/api/phone/webhooks/conversations/route.ts` — the enricher + the retry guard.
+- `apps/houseloop-crm/app/api/phone/webhooks/sms/route.ts` — **comments only.** It does NOT bail on a
+  seat-holder (bailing is the v1 mistake that ate private texts). Zero blast radius on 1:1 traffic.
+- `apps/houseloop-crm/scripts/group-double-fire.test.ts` **(new)** — `npm run test:group-double-fire`.
+
+### THE PROOF
+
+Drives the REAL Conversations handler with REAL Twilio-signed payloads (HMAC, live auth token).
+§0 RED (the old two-writer path: 2 rows, 2 cards) · §1 SMS-first · §2 Conversations-first as a
+**genuine race** (fixture lands 400ms into the poll) · §3 retry · §4 the private-1:1 no-go. All green.
+
+### TWO LAWS THIS LANE MINTED (both now in native memory + the ledger)
+
+1. **An idempotence belt keyed on "unclaimed" is NOT idempotent under retry.** §3 went RED against my
+   own first cut: a Twilio retry found no *unclaimed* twin (the first delivery had claimed it), fell
+   through to the safety valve, and wrote the exact second row the fix existed to prevent. An
+   "unclaimed" predicate answers *is there work to do*, never *have I already done this* — and after
+   success those give the same answer. Guard: `conversations/route.ts:61-74`.
+2. **Tests FIXTURE live writers unless the send is the thing under test.** ⚠ My first test run drove
+   the SMS side through the real `logMessage` and the **A1 lifeline delivered 3 real texts to Zach's
+   handset** (11:57:06–07Z). Target was within the permitted set; the sends were UNINTENDED, which is
+   the breach that counts. Verified exact count against the Twilio API, not logs. ⛔ Do NOT "fix" this
+   by muting `lifeline_mode` or stamping `is_backfill` — that mutates shared prod state or the
+   semantics under test.
+
+### THE REPAIR
+
+Class was **2 pairs** (Jasmeet Kaur-TEST 8/14, Zach Handset-TEST 8/15), both TEST leads → **0**.
+Each: kept the carrier row, stamped it with the group truth + `repaired_by: onefact-87` +
+`absorbed_external_id`, deleted the IM row and its card. Twin-absorption precedent #65/#74.
+(Jasmeet's `group_with` is `[]` — that row predates the stamp and I would not fabricate names.)
+
+### ⚠ THE ONE HONEST WEAKNESS — PRESERVED FOR ZACH'S EVENTUAL READ
+
+The twin match is a **content+time lookup, not a provider identity**, because Twilio offers none. It
+can never duplicate or lose a message, and its failure mode is benign (a missing group pill, logged
+loudly at `[webhooks/conversations] NO SMS TWIN`). But it is the one place in this design that is
+**inference rather than fact**, and it should be named as such rather than discovered later. If the
+seat model (SEAT_MODEL_LAW) lands group SMS on real seats, that is where this becomes fact.
+
+### OPEN / NOT MINE
+
+- G14's other two gates are untouched by this lane: **outbound group formation** (still fails — two
+  1-segment SMS, no group) and **handset-originated group** (unproven; Myli's device is a compromised
+  witness — see task #84, BlueBubbles false success).
+- The G14 scorecard row "**one reply = one row**" flips ⛔ → ✅.
+- `send-conversation.ts:319-326` still carries its `TODO(SEAT_MODEL_LAW)` for the N-row outbound
+  write model. Untouched — that fold is the seat table's joint DDL sitting, not this lane's.
+
+Nothing of mine is pending in the tree. tsc full-app 0 · all four vocab cages held · `sms_received`
+harness proof green and committed.
