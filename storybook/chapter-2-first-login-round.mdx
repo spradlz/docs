@@ -1,0 +1,151 @@
+---
+title: "Ch. 2 — The First-Login Round (real codes, real texts, twice)"
+description: "Storybook chapter: the provisioned journey walked end to end twice on prod with real OTP logins, real texts, and a real submitted tour — plus the eight defects the walk surfaced."
+---
+
+# 📖 STORYBOOK — CHAPTER 2: The First-Login Round
+
+*e2e-gauntlet lane · 2026-08-17 · Lee's desk · the round that walked Chapter 1's build*
+
+---
+
+## ① THE GOAL (Zach, 8/17, verbatim)
+
+> "Run in auto mode, do not stop. Build this entire thing, and it should be walked end to end twice
+> with a bunch of different scenarios logged in with real codes, real text."
+
+Chapter 1 provisioned the two TEST accounts and shipped the agent-side panel. This chapter is the
+other half: **does a real person, holding a real phone, actually get through the front door and find
+their home search waiting for them?** Nothing here is a fixture. Every login used a code that
+arrived as a text message on a real handset.
+
+## ② THE BUILD UNDER TEST
+
+The train deployed as `f666c3ecf0`, live on prod, carrying the one-brain seam, the tour-history rail
+and the design fixes. The fingerprint that proves you are looking at it: `GET
+/api/my/myli-state` answers 401 when signed out and returns a real state object when signed in.
+
+**The two identities** (TEST only, constitutional — the real Conner and Jasmeet are read-only and
+were never touched):
+
+| | mailbox | phone | lead |
+|---|---|---|---|
+| Conner Kelley-TEST | `test-conner@houseloop.ai` | 407-403-8088 (Zach's iPhone) | `73b95682-…` |
+| Jasmeet Kaur-TEST | `test-jasmeet@houseloop.ai` | 913-208-1633 (Myli's line) | `64fe34bb-…` |
+
+Codes were read back out of the Twilio Messages API — the same wire that delivered them — via
+`.claude/skills/qa-gauntlet/tools/read-texts.mjs`. That retrieval path was proven live BEFORE the
+first login was attempted, so a missing code could never be confused with a broken login.
+
+## ③ THE WALK
+
+### Round A — desktop, 1280
+
+**The agent side.** Signed into the CRM as `zach@houseloop.ai`, opened Conner's lead, and found the
+provision panel behind the **Client Dashboard** tab: Account ✓ Provisioned · household: Jasmeet ·
+saved search "Johnson County · 3+ bed · $350–450k" · Pre-approved — Fountain Mortgage · Welcome
+email **Sent 8/16/2026**.
+
+**The welcome email really arrived**, in the INBOX (not spam), household-aware in Zach's voice:
+
+> "Hey Conner and Jasmeet! I set you two up with your own HouseLoop dashboard — everything for your
+> home search now lives in one place… You'll both see each other's saves and notes, so nobody has to
+> forward listings back and forth."
+
+**The front door.** The email's button lands on `/login?phone=4074038088`, the phone comes
+pre-filled, one tap sends the code. The text arrived on Zach's handset in **seven seconds**:
+
+> Your HouseLoop sign-in code is 669613. It expires in 10 minutes.
+
+Typed it in, landed on the dashboard.
+
+<Frame caption="Conner's dashboard, first login of the round, desktop 1280">
+  <img src="/images/storybook/A1-conner-dashboard-landed-desktop.png" alt="Conner's HouseLoop dashboard after a real OTP login" />
+</Frame>
+
+**What was waiting.** Greeted by name, and Myli opens with a question rather than a statement —
+"Nothing new since you were last here, Conner. Want to see Hauser Street in person?" — with two
+pills under it. The tour rail carried the full history newest-first: six homes, three toured Aug 15
+and three Aug 14, every one credited to **Trish Redenbaugh**, every one with a note box. The
+pre-approval letter opened as a real file. "Homes that fit your search" sat below the fold.
+
+**Household visibility is genuinely live.** On Conner's screen the Switzer Lane card carried
+somebody else's words under a label naming her: *"Jasmeet's note — The kitchen updates are lovely
+but the living room felt too tight with that fireplace."* His own note on another card carried no
+label. The other person's words are attributed; your own are not — which is exactly right.
+
+**Second visit.** Reloading changed Myli's line (Hauser Street → Nall Avenue), so she does not
+repeat herself.
+
+**The tour, submitted for real.** Jasmeet logged in on her own code (379280, on Myli's line), took
+Myli's "Set up a tour" pill, and the real Request-a-tour sheet opened on the exact home Myli had
+named — 18069 Hauser Street, $390,000 — day and time pickers, then a confirm step already carrying
+her name, her email and her phone.
+
+<Frame caption="The Request-a-tour sheet, opened from Myli's pill, prefilled with the home she named">
+  <img src="/images/storybook/A3-jasmeet-tour-sheet.png" alt="The prefilled Request a tour sheet for 18069 Hauser Street" />
+</Frame>
+
+She submitted it. **One second later** the text hit Zach's lifeline:
+
+> 📅 Jasmeet Kaur-TEST requested a tour - 18069 Hauser Street · Aug 17 at 6:00 PM.
+
+And a real appointment row existed in the CRM database — `857680a1-a6fd-471a-84c9-f5b3e043620b`,
+status `scheduled`, created at 17:59:39Z, one second before the text.
+
+### Round B — mobile, 390 × 844
+
+Signed out, fresh context, new code (768028), same seven-second delivery. The mobile dashboard
+carried everything the desktop one did plus an upcoming-tour band, the agent card kept exactly two
+controls under the photo (Message and Call), and Myli had moved on to a different question again —
+"You saw Hauser Street yesterday, Conner. What did you think?" — because the state engine had
+noticed the tour and switched from `savedNoTour` to `touredAwaitingFeedback`.
+
+<Frame caption="The same journey at 390×844, second round, with the state engine having moved on">
+  <img src="/images/storybook/B1-conner-dashboard-mobile-390.png" alt="Conner's HouseLoop dashboard on mobile" />
+</Frame>
+
+## ④ VERIFICATION — what was checked, not assumed
+
+Every claim was verified at the layer that can actually disprove it, not at the layer that is
+convenient:
+
+- **the code** — read from the Twilio Messages API, not from a log line
+- **the email** — read out of the real Workspace mailbox, with its INBOX label, not from a send record
+- **the tour** — the appointment row read back from `hl_appointments` by id, and the text read back
+  from Twilio; the id and the SMS were cross-checked against each other
+- **the notes** — read back from `hl_home_tour_stop` with `feedback_by_lead_id` and `feedback_at`
+- **the state engine** — `fetch('/api/my/myli-state')` executed inside the page, in the same call
+  that read the DOM, so the API answer and the rendered sentence could not drift apart between reads
+
+Every measurement also asserted its own `location.href` and `innerWidth` in the same call, because
+the browser is shared with other lanes — a habit that immediately paid for itself when a new tab
+silently reset the viewport from 1280 to 1440.
+
+## ⑤ WHAT THE WALK FOUND
+
+The round is **not** a clean pass, and the honest headline is that the front door works and the
+filing underneath it does not. Eight defects were logged with reproductions; the full log is at
+`.claude/reports/e2e-gauntlet/DEFECTS.md`. The two that matter most:
+
+**Two people share one note row.** Conner wrote a note on a home at 17:50:30. Jasmeet wrote her own
+note on the same home at 17:56:58. Both writes landed on the *same* database row, so the second
+one silently destroyed the first — no warning, no merge, no history. And neither note was ever
+visible to either of them, because the row notes are written to is not the row the dashboard reads.
+
+**A signed-in client's tour filed on a different lead.** Jasmeet's tour request created its
+appointment against a duplicate lead record that happens to share her phone number, rather than the
+lead she was signed in as. Her own dashboard will never show that tour, and the agent following the
+text lands on a record with no email address.
+
+Both have the same shape underneath, and it is a shape the estate already has a law for: one real
+tour exists in the database as **two appointment rows, one per person**, instead of one fact with a
+seat for each participant. The overwrite, the invisible note and the misfiled tour all fall out of
+that duplication — which is precisely what the seat model exists to prevent.
+
+## ⑥ THE RECORD
+
+- Job card: `.claude/reports/e2e-gauntlet/JOB-CARD.md`
+- Defect log with reproductions: `.claude/reports/e2e-gauntlet/DEFECTS.md`
+- Screenshots: `.claude/reports/e2e-gauntlet/shots/`
+- Chapter 1, the build this round walked: [The Provisioned Journey](/storybook/conner-jasmeet-provisioned-journey)
