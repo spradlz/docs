@@ -1,0 +1,71 @@
+---
+title: "The FUB Pipeline — Board & Current State"
+description: "The airtight current-state map of the FUB estate: the two databases, the 28 signed signals, the four-hop chain, and the master board. Generated 2026-08-18 from the live lock."
+---
+
+> **THE BOARD (the system of record):** [crm.houseloop.ai/boards/fub-pipeline](https://crm.houseloop.ai/boards/fub-pipeline) ·
+> **THE PLAN (the PRD):** the signed overhaul plan, plain-English first ·
+> **THE DEEP MANUAL:** [master-scraper-ssot](/fub/master-scraper-ssot) — kept as the operational reference for the scraper estate, per Zach 8/18. This page is the current-state law on top of it.
+
+## The two databases — only ONE is the tape
+
+| | RAILWAY (`FUB_RAILWAY_DATABASE_URL`) | CAMP DAVID (`192.168.1.211/bossloop`) |
+|---|---|---|
+| **Role** | **THE LIVE TAPE** — the CRM's only FUB source, via the one chokepoint `lib/fub-import/fub-db.ts` | The scraper's browser host + staging hop (until the plan's slice 3 removes the hop) |
+| **Webhook-fed tables** (people, notes, emails, events, calls) | Minutes-fresh — FUB webhooks write it DIRECTLY | **Frozen 2026-07-09** (the cutover). `fub-sync` — the process that kept re-stamping freshness on the frozen copy — is retired permanently. |
+| **Scraper-fed tables** (in-app texts, home activity, insights, saved searches) | Arrives via the relay (home activity writes direct since 6/27) | Captured here FIRST by Chrome |
+| **Backups** | Nightly dump, verified byte-exact offsite, **KEEP FOREVER** (Zach 8/18) | Nightly, plus the whole-DB dump |
+
+⚠ **THE NAME TRAP:** `DATABASE_URL` means **three different databases** depending on how a process started. Operations assert `current_database()` — never the env-var name.
+
+## The 28 signed signals (Zach, 8/18: "I want to sign all 28")
+
+Source: `tools/schema/signals.lock.json` (regenerated from the live DB every schema-lock run) + the
+[signed checklist](https://github.com/spradlz/BossLoop-Gold/blob/houseloop-app/.claude/reports/bedrock/fub-signals-checklist.md).
+These are the SIGNALS (the menu). The engine holds 35 recognition rules + 8 deliberate drop rules (trash filters) beneath them — the triggers UI shows the menu, never the machinery.
+
+| Signal | canonical kind | state |
+|---|---|---|
+| Contact Requested | `contact_requested` | ✅ ON |
+| Email Received | `email_received` | ✅ ON |
+| Email Sent | `email_sent` | ✅ ON |
+| General Inquired | `general_inquired` | ✅ ON |
+| Loan Status Changed | `loan_status_changed` | ✅ ON |
+| Phone Call Made | `phone_call_made` | ✅ ON |
+| Phone Call Received | `phone_call_received` | ✅ ON |
+| Property Hidden | `property_hidden` | ✅ ON |
+| Property Inquired | `property_inquired` | ✅ ON |
+| Property Saved | `property_saved` | ✅ ON |
+| Property Shared | `property_shared` | ❌ OFF (by ruling) |
+| Property Unsaved | `property_unsaved` | ✅ ON |
+| Property Viewed | `property_viewed` | ✅ ON |
+| Registration Completed | `registration_completed` | ✅ ON |
+| Rental Inquired | `rental_inquired` | ✅ ON |
+| Saved Search Created | `saved_search_created` | ✅ ON |
+| Seller Inquired | `seller_inquired` | ✅ ON |
+| SMS Received | `sms_received` | ✅ ON |
+| SMS Sent | `sms_sent` | ✅ ON |
+| Tour Requested | `tour_requested` | ✅ ON |
+| Virtually Toured | `virtually_toured` | ✅ ON |
+| Zillow Insight — Buyer Reengaged | `zillow_insight_buyer_reengaged` | ✅ ON |
+| Zillow Insight — High Intent Buyer | `zillow_insight_high_intent_buyer` | ✅ ON |
+| Zillow Insight — High Intent Seller | `zillow_insight_high_intent_seller` | ✅ ON |
+| Zillow Insight — New Area | `zillow_insight_new_area` | ✅ ON |
+| Zillow Insight — Viewed 10x in 7 Days | `zillow_insight_viewed_10x_7d` | ✅ ON |
+| Zillow Message Received | `zillow_message_received` | ✅ ON |
+| Zillow Message Sent | `zillow_message_sent` | ✅ ON |
+
+## The four-hop chain — every signal passes all four
+
+**capture → transit → filing → notification.** A green check on any one hop says nothing about the others (the 8/18 excavation found all four broken at once, each invisibly).
+
+1. **Capture:** FUB webhooks (push, most signals) · the Chrome sweep (in-app messages — no API exists) · the activity heartbeat pointing the scraper (saved searches — their webhook died Apr 2026).
+2. **Transit:** webhook classes land on Railway directly; scraper classes relay Camp David → Railway (~minutes; slice 3 removes this hop).
+3. **Filing:** every signal becomes ONE card in `hl_activity_log` via `logActivity` — deduped on (lead, source_table, source_id), the actor stamped by the shared converter (direction-aware since 8/18: inbound names the lead, outbound never does).
+4. **Notification:** the notify weld evaluates at filing; freshness-gated so catch-up filings never ring stale bells.
+
+## Where things stand (2026-08-18)
+
+- The whole chain **production-proven end-to-end** on a real lead message (captured → relayed → filed NAMED → correctly gated).
+- 458 historical nameless cards repaired; the fleet is reboot-proof; the live tape has keep-forever backups.
+- The overhaul slices (registry-as-data, per-signal paging sentries, kill-the-hop, file-at-capture, restore drills) live on **the board** with the PRD — one item per slice, receipts required.
