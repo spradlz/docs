@@ -67,9 +67,49 @@ there was nothing new.
 ```bash
 sudo -H -u lee bash -lc 'pm2 list'
 ```
-**ONLINE (6):** `fub-backfill-a` · `fub-backfill-b` · `fub-body-recovery` · `fub-watchdog` · `fub-chrome-guard` ·
-`fub-relay`. **STOPPED ON PURPOSE (not failures):** `fub-webhook-scraper` · `fub-webhook-sink` ·
-`fub-home-refresh` · `fub-sync`.
+
+### ⭐ THE ROSTER — 2026-08-19, measured by FACT column (this supersedes every roster later in this doc)
+
+**A pm2 status field cannot testify about a process pm2 has forgotten.** The 8/16 ENOSPC killed the pm2
+*daemon* while its already-forked *children* kept writing — so every verdict here is the process's own
+FACT column, never a status field. Four of the rosters further down this page predate that day; where
+they disagree with this table, **this table is right**.
+
+| process | 8/19 | its FACT column | note |
+|---|---|---|---|
+| `fub-body-recovery` | ✅ up | drains `fub.body_recovery_queue` | the 3-min in-app sweep + hidden-body jobs |
+| `fub-relay` | ✅ up | Camp David `fub.*` → Railway `fub.*` | 30s loop, upsert-only, never deletes |
+| `fub-chrome-guard` | ✅ up | the Chrome four live roads depend on | |
+| `fub-webhook-scraper` | ✅ up | `fub.webhook_scraper_heartbeat.last_beat` **on RAILWAY** | ⭐ see the correction below |
+| `fub-home-refresh` | ✅ up | `fub.zillow_home_activity` on the Railway mirror | wrote 85s before measurement |
+| `fub-watchdog` | ⛔ down | its 60s log (its writes are untimestamped) | ⚠ **UNSAFE TO RESTART** — see below |
+| `fub-sync` | ⛔ down permanent | — | the ventilator (re-stamped a frozen mirror) |
+| `fub-backfill-a` / `-b` | ⛔ down by order | — | the one-time backfill is finished |
+| `fub-webhook-sink` | ⛔ down | — | a **second worker**, never a receiver — see below |
+
+These five are reboot-survivable: `dump.pm2` (Aug 19 05:51) carries the real running set.
+
+⭐ **`fub-webhook-scraper` IS ALIVE — and this page is where its death certificate was written.** The
+warning further down ("silently dead ~6 weeks… heartbeat last beat 2026-05-30") reads **Camp David's**
+copy of the heartbeat. That row is a **dead sentry** — abandoned in May and frozen ever since. The
+process writes its beat to **RAILWAY**, unconditionally, every 30s from the daemon loop whether or not
+there is work; measured 8/19 it was **40 seconds old**, with the pid in the row matching `ps` and
+`last_lead_name` matching the live log tail. Read the Railway row, or you will re-declare a working
+process dead.
+
+⚠ **`fub-watchdog` must STAY down, and not merely on deny-by-default.** Restarting it as written points
+a self-described page-killing probe at the one Chrome four live processes depend on, and arms a
+resurrection trigger for the backfills Zach ordered dead. The only behavior lost is the
+`partial → rehydrated` promotion sweep on `fub.rehydration_log` / `fub.people.content_status` — scraper
+bookkeeping that no card, feed, bell, or dashboard renders. A rebuilt Chrome-A relaunch guard is
+tracked as its own item; do not improvise one by restarting this.
+
+⚠ **`fub-webhook-sink` was never a receiver.** The pm2 NAME is not the process: `sink` and
+`fub-webhook-scraper` point at the *same file*, so "sink" was a **second scraper worker** (the queue
+uses `FOR UPDATE SKIP LOCKED`, so two workers was intentional). It is down and should stay down — one
+worker is sufficient at current volume — but retiring it because "FUB no longer posts to it" would be
+the right call for an entirely wrong reason, and would leave the record claiming a receiver stood
+where a duplicate worker did.
 
 ## 🚨 SIGNALS THAT LIE — verified lying, with the measurement
 
@@ -216,12 +256,12 @@ the error-log file's mtime, which the self-heal writes to) was **deleted 2026-07
   (The MCP tool was fixed 2026-07-17 to stop reporting this false DOWN.)
 - ❌ **`webhook_scraper_heartbeat`** — the retired `fub-webhook-scraper` lane; its proc is correctly STOPPED.
 
-**THE CANONICAL ROSTER (this is the truth — supersedes any "one Chrome / backfill-b retired / FUB_SINGLE_CHROME"
-prose later in this doc, which is the pre-2026-07-11 era the 2026-07-16 audit reversed):**
-- **SHOULD be ONLINE (6):** `fub-backfill-a` (Chrome A :18800) · `fub-backfill-b` (Chrome B :18802, revived
-  2026-07-11 — **TWO Chromes is correct**) · `fub-body-recovery` · `fub-watchdog` · `fub-chrome-guard` · `fub-relay`.
-- **SHOULD be STOPPED (intended — "down" here is NOT a failure):** `fub-webhook-scraper` (retired) ·
-  `fub-webhook-sink` (OOM dup) · `fub-sync` (manual) · `fub-home-refresh` (non-core).
+**THE ROSTER LIVES IN ONE PLACE: [⭐ THE ROSTER — 2026-08-19](#-the-roster--2026-08-19-measured-by-fact-column).**
+Read it there and nowhere else. The 2026-07-16-era roster that used to be restated here (six online
+including both backfills and the watchdog; `fub-webhook-scraper` and `fub-home-refresh` stopped) was
+overtaken by the 8/16 ENOSPC and by the 8/19 FACT-column re-measurement, which reversed two of its
+verdicts. Restating a roster in a second place is what let those two verdicts survive for three days
+after they stopped being true.
 
 ## THE ONE LAW (this is the whole point)
 
@@ -557,8 +597,11 @@ sees (`content_status` `hidden` → `visible`). Repo SSOT `tools/fub-scraper/`; 
 | **fub-relay** | `tools/fub-sync/fub-relay.mjs` | Camp David `fub.*` → Railway `fub.*` mirror |
 
 <Warning>
-`fub-webhook-sink` and `fub-sync` are **deliberately-stopped dead duplicates** — reading their "down" status as a
-live failure is a known trap. The live procs are `fub-backfill-a/b` + `fub-webhook-scraper` + `fub-relay` + `fub-watchdog`.
+**Which of these are actually running today is answered in ONE place —
+[⭐ THE ROSTER — 2026-08-19](#-the-roster--2026-08-19-measured-by-fact-column).** The table above
+describes what each script DOES, which is stable; it does not claim what is up. As of 8/19 the
+backfills and `fub-watchdog` are down (the watchdog **unsafe to restart**), and `fub-webhook-scraper`
+is up.
 </Warning>
 
 **Self-healing watchdog (the two Chromes):** A `:18800` (`/Users/lee/.chrome-fub-profile`) + B `:18802`
@@ -1770,28 +1813,34 @@ could sit spinning until someone ran this tool by hand. That gap is now closed.*
 
 ## Processes (pm2 on Camp David)
 
-Live reading 2026-07-09 (audit of record). **Read the heartbeat, not pm2 "online"** — pm2 status lies (see F2/F4).
+**What each process DOES — which is stable.** For what is UP, read
+[⭐ THE ROSTER — 2026-08-19](#-the-roster--2026-08-19-measured-by-fact-column); the up/down column that
+used to live here was a 2026-07-09 snapshot and two of its verdicts have since reversed.
 
-| pm2 name | script | role | live? |
-|---|---|---|---|
-| **fub-backfill-a** | `fub-parallel-scraper.mjs` | THE scraper — `FUB_WORKERS` (3) pages inside the one Chrome A `:18800`, pending-first from `fub.rehydration_log` (`FOR UPDATE SKIP LOCKED`). High restart count is the **exit-relaunch cycle** (exits clean on empty queue, pm2 relaunches), not crashes. | ✅ online |
-| **fub-watchdog** | `fub-backfill-watchdog.mjs` | self-healing (`FUB_SINGLE_CHROME=1`) — passive websocket probe, fresh-log guard, relaunches a dead Chrome A, auto-logs-in. **Watches passively; never closes/relaunches a Chrome with a live worker.** | ✅ online |
-| **fub-relay** | `tools/fub-sync/fub-relay.mjs` | Camp David `fub.*` → Railway `fub.*` mirror — 30s loop, 16-table allowlist, upsert-only, never deletes. Measured lag: ms. | ✅ online |
-| **fub-body-recovery** | `fub-body-recovery-consumer.mjs` | **Lane 2 consumer (shipped C1, 2026-07-09)** — polls `fub.body_recovery_queue` on the mirror, scrapes the one masked body, flips `content_status` + bumps `synced_at`. | ✅ online |
-| **fub-backfill-b** | `fub-parallel-scraper.mjs` | THE second scraper — Chrome B `:18802`, revived 2026-07-11 for ×2 throughput. High restart count = the designed empty-queue exit/relaunch (F6), **not** a crash loop. | ✅ online |
-| **fub-chrome-guard** | chrome guard | OOM cap on BOTH ports (`MAX_CHROME`/`MAX_TABS`); never touches the MLS/billing Chromes. | ✅ online |
-| **fub-webhook-scraper** | `fub-webhook-scraper.mjs` | the OLD "real-time" rehydrator — retired by the Lane-2 plan. **Correctly STOPPED** (verified 2026-07-30). Reading its "down" as a failure is a known trap; do not restart it. | 🛑 stopped on purpose |
-| ~~fub-webhook-sink~~ | `fub-webhook-scraper.mjs` | **deliberately stopped** — redundant duplicate, no mem cap → OOM crash-loop. Reading its "down" as a failure is a known trap. | 🛑 stopped on purpose |
-| ~~fub-sync~~ | `fub-complete-sync.mjs` | manual full sync — normally stopped | 🛑 |
+| pm2 name | script | role |
+|---|---|---|
+| **fub-backfill-a** | `fub-parallel-scraper.mjs` | THE scraper — `FUB_WORKERS` (3) pages inside the one Chrome A `:18800`, pending-first from `fub.rehydration_log` (`FOR UPDATE SKIP LOCKED`). High restart count is the **exit-relaunch cycle** (exits clean on empty queue, pm2 relaunches), not crashes. |
+| **fub-watchdog** | `fub-backfill-watchdog.mjs` | self-healing (`FUB_SINGLE_CHROME=1`) — passive websocket probe, fresh-log guard, relaunches a dead Chrome A, auto-logs-in. ⚠ **Down since 8/16 and UNSAFE to restart as written** — see the roster. |
+| **fub-relay** | `tools/fub-sync/fub-relay.mjs` | Camp David `fub.*` → Railway `fub.*` mirror — 30s loop, 16-table allowlist, upsert-only, never deletes. Measured lag: ms. |
+| **fub-body-recovery** | `fub-body-recovery-consumer.mjs` | **Lane 2 consumer (shipped C1, 2026-07-09)** — polls `fub.body_recovery_queue` on the mirror, scrapes the one masked body, flips `content_status` + bumps `synced_at`. |
+| **fub-backfill-b** | `fub-parallel-scraper.mjs` | THE second scraper — Chrome B `:18802`, revived 2026-07-11 for ×2 throughput. High restart count = the designed empty-queue exit/relaunch (F6), **not** a crash loop. |
+| **fub-chrome-guard** | chrome guard | OOM cap on BOTH ports (`MAX_CHROME`/`MAX_TABS`); never touches the MLS/billing Chromes. |
+| **fub-webhook-scraper** | `fub-webhook-scraper.mjs` | polls `fub.rehydration_queue` (`FOR UPDATE SKIP LOCKED`) and re-reads webhook-pointed person pages. ⭐ **Up and working as of 8/19** — see the correction below. |
+| ~~fub-webhook-sink~~ | `fub-webhook-scraper.mjs` | a **second worker on the same file**, not a receiver. Down; one worker suffices at current volume. |
+| ~~fub-sync~~ | `fub-complete-sync.mjs` | manual full sync — down permanently (the ventilator). |
 
 <Warning>
-**`fub-webhook-scraper` is NOT live/real-time — it has been silently dead ~6 weeks (audit F2, 2026-07-09).** pm2
-reports it "online" (18h uptime, 270 silent restarts), but its heartbeat (`fub.webhook_scraper_heartbeat`) last
-beat **2026-05-30** and its queue (`fub.rehydration_queue`) last drained **~May 9** — 49,231 rows piled up with
-nothing draining them. It looked healthy only because pm2 "online" was trusted over the heartbeat. This entire
-`rehydration_queue` path is **retired** — Lane 2 (`fub-body-recovery`) replaces it, and losing it loses nothing
-that works. Evidence: `docs-site/fub/master-scraper-ssot-audit.mdx` F2. Going forward, health checks alert on **heartbeat
-recency**, never process status.
+**⭐ CORRECTED 2026-08-19 — `fub-webhook-scraper` is ALIVE, and the paragraph this replaces is how it
+got buried.** The old text read *"silently dead ~6 weeks… heartbeat last beat 2026-05-30… 49,231 rows
+piled up."* That heartbeat is **Camp David's** copy of the row — abandoned in May and frozen ever
+since, a dead sentry. The process writes its beat to **RAILWAY**, unconditionally, every 30 seconds
+from the daemon loop whether or not there is work. Measured 8/19: the Railway row was **40 seconds
+old**, its pid matched `ps`, and its `last_lead_name` matched the live log tail.
+
+The May-era finding was true when written — the process genuinely was wedged then. What made it
+outlive its truth is that it named a heartbeat without naming **which database's** heartbeat, and the
+one it pointed at can never advance again. **Read the Railway row.** The lesson generalizes: "trust
+the heartbeat, not pm2" is only advice if you also say which copy of the heartbeat.
 </Warning>
 
 `fub-scraper-lib.mjs` is the **SSOT for all scraping logic** (imported by both the parallel + webhook scrapers).
