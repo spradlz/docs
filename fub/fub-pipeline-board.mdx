@@ -1,71 +1,115 @@
 ---
-title: "The FUB Pipeline — Board & Current State"
-description: "The airtight current-state map of the FUB estate: the two databases, the 28 signed signals, the four-hop chain, and the master board. Generated 2026-08-18 from the live lock."
+title: "The FUB Pipeline — Command Center"
+description: "The one findable page for the FUB estate: the 28-signal arrival map, the five roads, the sentry board, and the honest current state. Sources: the live hl_event_mapping table, the signals lock, and lib/health/probes.ts — updated 2026-08-19."
 ---
 
-> **THE BOARD (the system of record):** [crm.houseloop.ai/boards/fub-pipeline](https://crm.houseloop.ai/boards/fub-pipeline) ·
-> **THE PLAN (the PRD):** the signed overhaul plan, plain-English first ·
-> **THE DEEP MANUAL:** [master-scraper-ssot](/fub/master-scraper-ssot) — kept as the operational reference for the scraper estate, per Zach 8/18. This page is the current-state law on top of it.
+> **THE BOARD (system of record):** [crm.houseloop.ai/boards/fub-pipeline](https://crm.houseloop.ai/boards/fub-pipeline) ·
+> **THE BUILD ORDER:** [the master checklist](/master-plan/master-checklist) + [the skyscraper blueprint](/master-plan) ·
+> **THE DEEP MANUAL:** [master-scraper-ssot](/fub/master-scraper-ssot) (operational reference for the scraper estate — this page points, never restates) ·
+> **STAGING → IMPORT:** [the D3 PRD](/fub/staging-import-prd)
 
 ## The two databases — only ONE is the tape
 
 | | RAILWAY (`FUB_RAILWAY_DATABASE_URL`) | CAMP DAVID (`192.168.1.211/bossloop`) |
 |---|---|---|
-| **Role** | **THE LIVE TAPE** — the CRM's only FUB source, via the one chokepoint `lib/fub-import/fub-db.ts` | The scraper's browser host + staging hop (until the plan's slice 3 removes the hop) |
-| **Webhook-fed tables** (people, notes, emails, events, calls) | Minutes-fresh — FUB webhooks write it DIRECTLY | **Frozen 2026-07-09** (the cutover). `fub-sync` — the process that kept re-stamping freshness on the frozen copy — is retired permanently. |
-| **Scraper-fed tables** (in-app texts, home activity, insights, saved searches) | Arrives via the relay (home activity writes direct since 6/27) | Captured here FIRST by Chrome |
-| **Backups** | Nightly dump, verified byte-exact offsite, **KEEP FOREVER** (Zach 8/18) | Nightly, plus the whole-DB dump |
+| **Role** | **THE LIVE TAPE** — the CRM's only FUB source, via the one chokepoint `lib/fub-import/fub-db.ts` | The scraper's browser host + staging hop (until slice 3 removes the hop) |
+| **Webhook-fed tables** (people, notes, emails, events, calls) | Minutes-fresh — FUB webhooks write it DIRECTLY | **Frozen 2026-07-09** (the cutover). `fub-sync` retired permanently. |
+| **Scraper-fed tables** (in-app texts, home activity, saved searches) | Arrives via the relay (home activity writes direct since 6/27) | Captured here FIRST by Chrome |
+| **Backups** | Nightly dump, byte-exact offsite, **KEEP FOREVER** (Zach 8/18) | Nightly, plus the whole-DB dump |
 
 ⚠ **THE NAME TRAP:** `DATABASE_URL` means **three different databases** depending on how a process started. Operations assert `current_database()` — never the env-var name.
 
-## The 28 signed signals (Zach, 8/18: "I want to sign all 28")
+## The 28-signal arrival map
 
-Source: `tools/schema/signals.lock.json` (regenerated from the live DB every schema-lock run) + the
+Every signed signal, its road in, the tape table it lands on, and the catalog kind it files as.
+Rows derived 2026-08-19 from the live `hl_event_mapping` table (CRM DB) — the registry the triggers
+UI, the classifier, and the signal-set cage all read. The 28 signals are the MENU; beneath them the
+engine holds 42 active recognition rules + 8 deliberate drop rules (trash filters).
+
+### Road 1 — FUB webhooks (push, minutes-fresh) → the Railway tape
+
+| Signal | webhook (`raw_type`) | tape table | files as |
+|---|---|---|---|
+| Registration Completed | `peopleCreated` / `eventsCreated` | `fub.people` / `fub.events` | `registration_completed` |
+| Contact Requested | `eventsCreated` | `fub.events` | `contact_requested` |
+| Tour Requested | `eventsCreated` | `fub.events` | `tour_requested` |
+| Property Inquired | `eventsCreated` | `fub.events` | `property_inquired` |
+| Seller Inquired | `eventsCreated` | `fub.events` | `seller_inquired` |
+| Rental Inquired | `eventsCreated` | `fub.events` | `rental_inquired` |
+| General Inquired | `eventsCreated` | `fub.events` | `general_inquired` |
+| Loan Status Changed | `eventsCreated` (+ the ZHL-disguised variant) | `fub.events` | `loan_status_changed` |
+| Virtually Toured | `eventsCreated` (both spellings since 8/19) | `fub.events` | `virtually_toured` |
+| SMS Received / Sent | `textMessagesCreated` | `fub.text_messages` | `sms_received` / `sms_sent` |
+| Phone Call Received / Made | `callsCreated` | `fub.calls` | `phone_call_received` / `phone_call_made` |
+| Email Received / Sent (the FUB record) | `emailsCreated` | `fub.emails` | `email_received` / `email_sent` |
+
+### Road 2 — the Chrome scrape roads (no API exists) → Camp David → relay → tape
+
+| Signal | scrape road | tape table | files as |
+|---|---|---|---|
+| Zillow Message Received / Sent (in-app) | the person-page sweep (3-min tick) | `fub.text_messages` | `zillow_message_received` / `zillow_message_sent` |
+| Property Viewed / Saved / Unsaved / Hidden / Shared | the home-activity sweep | `fub.zillow_home_activity` | `property_viewed` / `property_saved` / `property_unsaved` / `property_hidden` / `property_shared` (OFF by ruling) |
+| Saved Search Created | the saved-search scrape (webhook died Apr 2026) | `fub.saved_searches` | `saved_search_created` |
+
+### Road 3 — automation-note parsing (FUB's own notes carry signals) → tape
+
+| Signal | source | tape table | files as |
+|---|---|---|---|
+| Zillow Insights (High-Intent Buyer / Seller · Viewed 10×/7d · New Area · Buyer Re-engaged) | `notesCreated` webhook, parsed by the insight rules (regex corpus-proven 3,027/3,028 on 8/19) | `fub.notes` | `zillow_insight_*` |
+| Property Viewed / Saved (note variant) | `notesCreated` behavior notes | `fub.notes` | `property_viewed` / `property_saved` |
+
+A behavior-shaped note that parses to nothing now emits a **loud review-lane error naming the note id** — the silent-skip class died 8/19.
+
+### Road 4 — the native Gmail watch (OUR mailboxes, live since 8/18)
+
+| What | mechanism | store | files as |
+|---|---|---|---|
+| Every inbound email to the 8 connected mailboxes | Gmail `watch()` → Pub/Sub → `lib/email/gmail-realtime.ts`, RFC Message-ID deduped, `synced_mailbox` stamped | `hl_inbound_emails` (CRM DB) | `email_received` on the resolved lead (stranger mail: captured, no card, no bell — by design) |
+
+Live-fire proven 8/19: capture in **5–7 seconds** across all three bundle classes
+([receipt](https://github.com/spradlz/BossLoop-Gold/blob/houseloop-app/.claude/reports/email-livefire/RECEIPT.md)).
+The 45-day outage this road ended, and its 7,789-email recovery, are on the
 [signed checklist](https://github.com/spradlz/BossLoop-Gold/blob/houseloop-app/.claude/reports/bedrock/fub-signals-checklist.md).
-These are the SIGNALS (the menu). The engine holds 35 recognition rules + 8 deliberate drop rules (trash filters) beneath them — the triggers UI shows the menu, never the machinery.
 
-| Signal | canonical kind | state |
-|---|---|---|
-| Contact Requested | `contact_requested` | ✅ ON |
-| Email Received | `email_received` | ✅ ON |
-| Email Sent | `email_sent` | ✅ ON |
-| General Inquired | `general_inquired` | ✅ ON |
-| Loan Status Changed | `loan_status_changed` | ✅ ON |
-| Phone Call Made | `phone_call_made` | ✅ ON |
-| Phone Call Received | `phone_call_received` | ✅ ON |
-| Property Hidden | `property_hidden` | ✅ ON |
-| Property Inquired | `property_inquired` | ✅ ON |
-| Property Saved | `property_saved` | ✅ ON |
-| Property Shared | `property_shared` | ❌ OFF (by ruling) |
-| Property Unsaved | `property_unsaved` | ✅ ON |
-| Property Viewed | `property_viewed` | ✅ ON |
-| Registration Completed | `registration_completed` | ✅ ON |
-| Rental Inquired | `rental_inquired` | ✅ ON |
-| Saved Search Created | `saved_search_created` | ✅ ON |
-| Seller Inquired | `seller_inquired` | ✅ ON |
-| SMS Received | `sms_received` | ✅ ON |
-| SMS Sent | `sms_sent` | ✅ ON |
-| Tour Requested | `tour_requested` | ✅ ON |
-| Virtually Toured | `virtually_toured` | ✅ ON |
-| Zillow Insight — Buyer Reengaged | `zillow_insight_buyer_reengaged` | ✅ ON |
-| Zillow Insight — High Intent Buyer | `zillow_insight_high_intent_buyer` | ✅ ON |
-| Zillow Insight — High Intent Seller | `zillow_insight_high_intent_seller` | ✅ ON |
-| Zillow Insight — New Area | `zillow_insight_new_area` | ✅ ON |
-| Zillow Insight — Viewed 10x in 7 Days | `zillow_insight_viewed_10x_7d` | ✅ ON |
-| Zillow Message Received | `zillow_message_received` | ✅ ON |
-| Zillow Message Sent | `zillow_message_sent` | ✅ ON |
+### Road 5 — RETIRED: the FUB email-body scrape arm
 
-## The four-hop chain — every signal passes all four
+Disabled **by decision 2026-06-23** (the FUB compose incident). Its queue rows refuse honestly:
+`email_recovery_disabled … body arrives via emailsCreated webhook`. Road 4 supersedes the need
+entirely. One hygiene item open: stop enqueueing jobs whose only fate is refusal.
 
-**capture → transit → filing → notification.** A green check on any one hop says nothing about the others (the 8/18 excavation found all four broken at once, each invisibly).
+## The five processes (Camp David pm2 fleet, reboot-survivable since 8/18)
 
-1. **Capture:** FUB webhooks (push, most signals) · the Chrome sweep (in-app messages — no API exists) · the activity heartbeat pointing the scraper (saved searches — their webhook died Apr 2026).
-2. **Transit:** webhook classes land on Railway directly; scraper classes relay Camp David → Railway (~minutes; slice 3 removes this hop).
-3. **Filing:** every signal becomes ONE card in `hl_activity_log` via `logActivity` — deduped on (lead, source_table, source_id), the actor stamped by the shared converter (direction-aware since 8/18: inbound names the lead, outbound never does).
-4. **Notification:** the notify weld evaluates at filing; freshness-gated so catch-up filings never ring stale bells.
+`fub-body-recovery` (drains `fub.body_recovery_queue`) · `fub-relay` (Camp David → Railway transit) ·
+`fub-chrome-guard` · `fub-webhook-scraper` (webhook-pointed person-page re-reads) · `fub-home-refresh`.
+CRM-side Inngest: `email-inbound-backfill` · the daily Gmail watch re-arm · `system-health-scan`.
+Deep operational detail: [master-scraper-ssot](/fub/master-scraper-ssot).
 
-## Where things stand (2026-08-18)
+## The sentry board (system-health-scan, every 10 minutes, pages Zach's cell on a NEW red)
 
-- The whole chain **production-proven end-to-end** on a real lead message (captured → relayed → filed NAMED → correctly gated).
-- 458 historical nameless cards repaired; the fleet is reboot-proof; the live tape has keep-forever backups.
-- The overhaul slices (registry-as-data, per-signal paging sentries, kill-the-hop, file-at-capture, restore drills) live on **the board** with the PRD — one item per slice, receipts required.
+| Sentry (probe key) | watches | FACT column | thresholds |
+|---|---|---|---|
+| `inbound_email_capture` — global | any inbound at all vs demonstrated volume | `hl_inbound_emails.received_at` | quiet &gt;24h = RED |
+| `inbound_email_capture` — per mailbox | each of the 8 boxes via `synced_mailbox` | same | 24h RED; no/sparse history = AMBER, never paged |
+| `inbound_email_capture` — the watch | Gmail watch renewal per box | `hl_oauth_connections.watch_expiry` | &lt;24h left = RED |
+| `fub_feed_freshness` — per feed | every tape feed's arrival age | per-table latest rows | per-road windows |
+| `fub_feed_freshness` — scrape roads | saved-search + home-activity capture | `scraped_at` (deliberate capture-time exception) | 6h ⚠ / 12h RED · 3h ⚠ / 6h RED |
+| `fub_feed_freshness` — the queue | body-recovery draining | `fub.body_recovery_queue` oldest-pending AGE (never depth) | stalled = RED |
+| `fub_feed_freshness` — filing lag | captured-but-never-filed on real leads | tape vs `hl_activity_log` | any = RED |
+
+First real catches, both within 24h of going live: the hung consumer loop that was holding
+Jovanna Zarco's message (8/19, paged with the runbook in the error text) and the honest
+stranger-amber design on fresh mailboxes.
+
+## Where things stand (2026-08-19, honest)
+
+**Proven, receipts linked from the checklist:**
+- The whole chain production-proven on real lead messages (Msale 8/18, Jovanna 8/19 — rescued, filed, `last_communication_at` reads the message time).
+- The email road end-to-end: 8 mailboxes connected, live-fire 3/3 in 5–7s, 45-day hole healed (7,789 recovered, idempotence-proven).
+- The four gauntlet filing reds fixed red-first + corpus-proven (FUB-24..27). The triggers menu walked on prod (FUB-7).
+- First sentry tranche live + run-proven.
+
+**Still 🔨:**
+- FUB-15 remainder: sentry thresholds live as code constants, not registry data yet.
+- Floor 4 file-at-capture (the unbounded-bell kill + the property_viewed double-arrival dedup) — in flight.
+- The zillow_inapp chain-of-custody re-verification (Zach's carve-out) + a minted `-TEST` mailbox for live lead-resolution walks.
+- Kill-the-hop (slice 3) and staging-per-D3 — on the board, unstarted.
