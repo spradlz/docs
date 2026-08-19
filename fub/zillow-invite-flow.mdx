@@ -1,0 +1,92 @@
+---
+title: "The Zillow Invite Flow"
+description: "How a Zillow 'work together' invite becomes a CRM lead — tokens, the My Agent connection, the two roads in, and the brand identity the consumer sees. Proven end-to-end 8/19/2026."
+---
+
+> **Status: LIVE and walk-proven 2026-08-19.** Every mechanic on this page was proven with real
+> accounts on that date (test consumer → invite → connection → FUB → CRM mint → bell). Receipts:
+> `.claude/reports/zillow-brand/` + the fub-signals ledger (8/19 entries).
+
+## The one-paragraph version
+
+An agent sends a lead a **Zillow "work together" invite** (a FUB email template). The lead clicks
+their link, creates or signs into a Zillow account, and Zillow connects them to our team as their
+**My Agent**. From that moment Zillow forwards their behavior to Follow Up Boss, FUB fires webhooks
+at us, and the CRM mints a lead with cards and bells. Measured end-to-end on 8/19:
+**consumer tour request → CRM card + bell in ~5 seconds.**
+
+## The invite link — per-lead bearer tokens
+
+- **Every invitee gets their own token.** The invite email's link looks like
+  `zillow.com/invitation/details?token=<uuid>` and the token differs per lead (proven with two real
+  invites side by side). In template terms it is a per-lead merge field — FUB's invite template
+  fills each lead's own link.
+- **The token is a BEARER credential: whoever clicks it, connects.** Proven by test — a link minted
+  for one lead was opened by a different account and the full chain fired normally for the clicker.
+- ⛔ **Never blast one link to many recipients.** Whether one token survives multiple acceptances is
+  UNPROVEN, and the click may consume the link intended for the original lead.
+
+## The connection mechanics
+
+- **No paid program required.** My Agent connection + behavior forwarding works without Zillow
+  Premier Agent advertising spend (the team account already has PA seats; the consumer-side
+  connection itself is free).
+- **Propagation delay is real.** After a consumer connects, FUB's "My Agent status: connected" and
+  the Zillow insights panel can lag by several minutes. Do not diagnose a broken rig inside that
+  window — wait, then re-read.
+- **"Additional email addresses" on the Zillow profile are identity-matching only.** Never add a
+  team member's own address to a consumer test account — it anchors their personal profile.
+
+## The two roads in — and why they behave differently
+
+| Road | Transport | Latency | Signals |
+|---|---|---|---|
+| **Behavior road** | Zillow → FUB → our webhooks | **~5 seconds** | tour/property inquiries, saves, views, searches — the whole behavior family |
+| **In-app message road** | Chrome scrape of the FUB UI (no webhook exists) | rotation-dependent | Zillow in-app messages, both directions |
+
+The behavior road is the proven fast path: on 8/19 a consumer tour request became a FUB Property
+Inquiry → CRM lead mint → `tour_requested` card with the full house payload → bell in ~5s, and
+Myli's context carried 5 facts from it.
+
+### ⚠ The in-app message road's 3-defect stack (found 8/19, live-proven)
+
+A test consumer's first in-app messages reached **no tape, no card, no bell**. Autopsy:
+
+1. **Enrollment gap** — in-app messages only arrive via the Chrome scrape, and a **brand-new person
+   is not in the scrape rotation**, so their messages are invisible until something else enrolls
+   them. A new lead's first message is the strongest signal in the pipeline and it goes silent.
+2. **Direction inversion** — when force-scraped, the tape stamped the LEAD's own messages as
+   outgoing (`is_incoming = false`). Task #180's disease class, proven on the inbound arm.
+3. **Refusal cascade** — the card writer refuses "outgoing" texts by design (#188), so a
+   wrong-direction row never cards and never bells even after capture.
+
+**Cure chain (top of the #159 pipeline overhaul):** mint-time enrollment (webhook mints a person →
+immediate targeted scrape) → DOM-arm direction fix → inbound files → card + bell at behavior-road
+parity. Fixes go in the road, never hand-filed rows.
+
+## The brand identity the consumer sees
+
+One string everywhere, signed casing (brands capitalized, connector lowercase — never "Powered By"):
+
+- **Headline:** `Zach and Ana - The Spradling Group powered by HouseLoop`
+- **Team name:** `The Spradling Group powered by HouseLoop` (41 chars; fits Zillow's ~49-char field)
+- **Brokerage:** Exp Realty · **Reviews:** the team account (5.0 ⭐, 484 team reviews) — the reason
+  invites run through the team profile, not a personal one (22 reviews)
+- **Photo:** the Zach & Ana duo — Zillow draws its own circle, so upload the SQUARE. Assets (see
+  the [brand assets](/legacy/guides/brand-assets) page):
+  - `houseloop.ai/brand/headshots/zach-ana-duo.png` — square, for circle-drawing platforms
+  - `houseloop.ai/brand/headshots/zach-ana-duo-ring.png` — navy-ringed 800×800
+- ⚠ **A person's likeness gets pixel tools only** (crop/resize/sharpen/masked adjustments). Never a
+  generative pass — every AI "restoration" repaints the face (7 rejected attempts on record).
+- Live profile: [zillow.com/profile/TheSpradlingGroup](https://www.zillow.com/profile/TheSpradlingGroup)
+
+## The invite email + the reactivation campaign (design, NOT live)
+
+The invite template is **personal, not branded**: agent name is a merge field, general copy, the
+lead's own `{{invite_link}}`. The planned reactivation flow — Myli coordinates, then the founder's
+clone sends the personal invite ("you've been talking with my client coordinator Myli, wanted to
+reach out personally…") — is a **spec only**. It is AI-composed outbound, so when built it passes
+the AI containment gate as a visible playbook step, killable by the comms master, under the
+per-human send budget. Templates today are copy only; sends are manual. Section prompts use
+**AI context blocks** (per-section prompts filled from the lead's real context) rather than dumb
+merge fields.
