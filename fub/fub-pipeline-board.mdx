@@ -93,12 +93,22 @@ Deep operational detail: [master-scraper-ssot](/fub/master-scraper-ssot).
 | `inbound_email_capture` — the watch | Gmail watch renewal per box | `hl_oauth_connections.watch_expiry` | &lt;24h left = RED |
 | `fub_feed_freshness` — per feed | every tape feed's arrival age | per-table latest rows | per-road windows |
 | `fub_feed_freshness` — scrape roads | saved-search + home-activity capture | `scraped_at` (deliberate capture-time exception) | 6h ⚠ / 12h RED · 3h ⚠ / 6h RED |
-| `fub_feed_freshness` — the queue | body-recovery draining | `fub.body_recovery_queue` oldest-pending AGE (never depth) | stalled = RED |
 | `fub_feed_freshness` — filing lag | captured-but-never-filed on real leads | tape vs `hl_activity_log` | any = RED |
+| `body_recovery_consumer` — live rows | is the Camp David consumer draining at all | `fub.body_recovery_queue.requested_at` (pending) / `.claimed_at` (claimed) — AGE, never depth, and never the consumer's heartbeat | sentinel 10m ⚠ / 30m RED · everything else 20m ⚠ / 45m RED · claimed 15m ⚠ / 30m RED |
+| `body_recovery_consumer` — the enqueuer | whether a quiet queue means anything | newest `fub-inapp-sweep-tick` run in `hl_run_log` | 15m ⚠ / 30m RED (silence makes the row above vacuous) |
 
 First real catches, both within 24h of going live: the hung consumer loop that was holding
-Jovanna Zarco's message (8/19, paged with the runbook in the error text) and the honest
-stranger-amber design on fresh mailboxes.
+Jovanna Zarco's message (8/19) and the honest stranger-amber design on fresh mailboxes.
+
+**What 8/19 changed (watchdog lane).** The queue check moved OUT of `fub_feed_freshness` into its own
+probe key. Three reasons, all measured that morning: (1) tickets in `hl_system_health_issue` are keyed
+on **probe_key**, and the pager only fires on a NEWLY-opened ticket — so while the 14-signal probe is
+red for any other reason a queue stall opens no ticket and pages nobody (that probe held a red FILING
+ticket 8/18 17:40→21:10, ten hours before the 07:20 queue stall); (2) the old thresholds were in
+**rounded hours**, so a 3h RED could not trip until 3.5h; (3) the predicate read `status='pending'`
+only, and a consumer that CLAIMS then wedges leaves the row `claimed` — invisible, because the reaper
+that would rescue it runs inside the process that hung. The RED text now names the runbook
+(`pm2 restart fub-body-recovery` on Camp David).
 
 ## Where things stand (2026-08-19, honest)
 
