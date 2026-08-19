@@ -421,7 +421,7 @@ prior status marked "🟢 proven end-to-end" are actually **unverified or not ma
 | In-app message → All + Website Activity | 🟢 **Shipped 2026-07-16** — its own `in_app_message` kind, hero card with the message, In-App filter pill (commit `8d829ac255`). |
 | **Existing-lead activity → feed (lock-step sync)** | 🟢 **PROVEN LIVE 2026-07-16** — full chain in ~95s on Shamir (FUB 50442): tick → queue (`person_rescrape` #3166) → consumer flips Camp David `rehydration_log` → priority claim in 10s → scrape (48 homes, 5 searches) → `/api/fub/rebackfill` → idempotent feed mint. The queue CHECK migration is committed (`tools/fub-sync/sql/person_rescrape_queue_widen.sql`) + verified on the mirror. The cron is ARMED (`*/3`, 327+ runs in the Run Log). **The hop that was dead:** the consumer's pm2 env had `DATABASE_URL` = Railway (stale first-registration env — `pm2 reload` never updates env), so the pending-flip landed on the mirror instead of Camp David; fixed by delete+start from `ecosystem.config.cjs` and verified with `pm2 env`. |
 | **A FUB event fires a trigger (`hl_trigger_fire`)** | 🟢 **DECOUPLED 2026-07-16 (mig 0414 + `recordFubTriggerFire`).** Every serviced live FUB event writes the ledger — existing-lead activity, lead-less signals (lead_id NULL + `fub_person_id`), and fub-settings workflow dispatches (which bypass `dispatchDoor`) — regardless of Creates-Lead, which now governs ONLY whether a lead is born. 50 views = 50 fires. `matched` = a workflow was actually dispatched. The FUB board's Triggered count + drill-down both read `hl_trigger_fire_live` (one spine — counts reset 2026-07-16, grow forward). |
-| Every documented trigger event actually works | 🟢 **Wired 2026-07-16** — `insight_re_engaged` (Zillow's #1: 2,791 notes) now has its notify class + feed card (`behavior_reengaged_buyer`); high-intent buyer/seller (1,437 notes) mint feed cards; `virtually_toured` notify un-suppressed (its board toggle governs) + restored to the import trigger map. **`property_shared` is EXTINCT** — zero events ever in the 400k-person mirror; FUB no longer emits shares; nothing to wire (documented, not broken). **Generic notes are notify-only BY DESIGN** — the feed is website activity only (comms policy); a human FUB note is not lead website activity. |
+| Every documented trigger event actually works | 🟢 **Wired 2026-07-16** — `insight_re_engaged` (Zillow's #1: 2,791 notes) now has its notify class + feed card (`behavior_reengaged_buyer`); high-intent buyer/seller (1,437 notes) mint feed cards; `virtually_toured` notify un-suppressed + restored to the import trigger map. ⚠ **Two claims on this row were corrected 2026-08-19 (task #196) — both were stale, both measured against the live tables:** (a) *"its board toggle governs"* is **false for an existing lead** — `hl_event_mapping.notify` is `false` on `virtually_toured` while the catalog is `true`, and the catalog is what the `logActivity` weld reads (5 bells fired in 90d with the board toggle off); see the two-road warning below. (b) **`property_shared` is NOT extinct** — `hl_activity_log` holds **1,245 `property_shared` cards from `fub.zillow_home_activity`**, spanning 2025-01-22 → 2026-08-18. What is true is narrower and still worth knowing: its *board-row* rule (`property_shared`) is `active=false`, so it never appears as a live rule; the tape rule `fub_home_shared` is the one that fires. It also rang **0 bells in 90 days despite `notify=true` in the catalog** — the same cards-without-bells shape as task #167, not yet root-caused. **Generic notes are notify-only BY DESIGN** — the feed is website activity only (comms policy); a human FUB note is not lead website activity. |
 | Typed phone lines (company/sign/past-agent/Ana) | 🟡 **Twilio build** (ported numbers → past-agent line) — NOT a FUB-router fix. |
 | Saved searches captured on re-scrape | 🟡 Depends on `scrapeSavedSearches` coverage. |
 
@@ -1121,7 +1121,32 @@ Each FUB trigger event carries **four independent switches** — none implies an
 | **Sync** | `enabled` | Do we ingest/process this FUB signal at all. Off = we don't even mirror it. |
 | **Creates Lead** | `creates_lead` | Does firing this door mint (or match) a HouseLoop lead. |
 | **Workflow** | `workflow_id` + `workflow_active` | Which workflow the door runs, and whether it runs. |
-| **Notify** | `notify` | Fire an owner-only HouseLoop notification when this door fires — **independent of Creates Lead.** |
+| **Notify** | `notify` | Fire an owner-only HouseLoop notification when this door fires **for a person who is not yet a HouseLoop lead** (the leadless ping, and the fresh mint) — **independent of Creates Lead.** ⚠ It does **not** govern a signal arriving on someone who is **already** a lead; see the note below. |
+| **Notify (Existing arm)** | `existing_notify` | The Existing-Lead arm. ⚠ **Live only on the body-recovery road** (in-app / text messages, via `routeFubNotification`). For every signal that files through `logActivity`, this column gates nothing. |
+
+<Warning>
+**THE NOTIFY COLUMN IS NOT THE WHOLE ANSWER — TWO TABLES DECIDE, ONE PER ROAD (measured 2026-08-19, task #196).**
+
+Whether a FUB signal rings depends on whether the person is already a HouseLoop lead, and a **different table
+governs each case**:
+
+| the person is… | who decides the bell | where |
+|---|---|---|
+| **not a lead yet**, or this event mints them | `hl_event_mapping.notify` — the toggle on this page | `fub-lead-import` leadless + fresh-mint branches |
+| **already a HouseLoop lead** | `hl_activity_catalog.notify` — the catalog, via the `logActivity` weld (`notifyClassForKind`) | `lib/activity/log-activity.ts` |
+
+The consequence, live today on five signals: `property_saved`, `property_viewed`, `property_shared`,
+`saved_search_created` and `virtually_toured` all read **Notify = OFF** on this settings board, and all five are
+**`notify = true` in the catalog** — so a known lead's save or view still rings. Measured over 90 days:
+**961 `property_saved` bells and 232 `property_viewed` bells** fired while the board showed those toggles off
+(most recent: 2026-08-19). The board is not lying about its own column; it is showing one road's answer to a
+two-road question. `tools/schema/signals.lock.json` now publishes **both** values per signal (the `governing`
+block) plus a `notify_divergence` chapter, and `signals-lock.mjs --check` reports any new divergence.
+
+**Turning a toggle OFF here does not silence that signal for existing leads.** To silence one everywhere, its
+catalog `notify_class` must also be cleared (`/settings/activity-catalog`). Converging the two into one answer
+table is an open desk item — see the receipt at `.claude/reports/notifytwin-196/`.
+</Warning>
 
 <Note>
 **Notify is decoupled from Creates Lead (Zach 2026-07-08).** You can turn ON a notification for a FUB trigger
