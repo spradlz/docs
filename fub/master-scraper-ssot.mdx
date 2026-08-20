@@ -488,6 +488,117 @@ only whether a lead is born. The law lives in the [Trigger Events](/guides/trigg
 
 ---
 
+## ⭐ THE MINT LAW — who is allowed to become a lead (board #241, signed by Zach 2026-08-20) 🔒
+
+**A HouseLoop lead is created from Follow Up Boss data in exactly two circumstances, and no others.**
+
+Zach, verbatim (State of the Union, 8/20):
+
+> *"the fub captain has to freaking respect the fub automation triggers for bringing a new lead in"*
+> *"its only for inbound any type of communication or registration or property tour request etc."*
+
+| # | The only two ways a FUB person becomes a lead |
+|---|---|
+| **1** | **A human named them.** The single-person "Pull in", the bulk import wizard, or the PCSOI reconciled import. An operator choosing one person IS the consent (Zach 2026-07-18), so these mint regardless of the board and regardless of age. |
+| **2** | **A fresh inbound signal arrived on a live road** whose kind maps to a `creates_lead = true` row in `hl_event_mapping` — the Trigger Events board, read LIVE at decision time. |
+
+**Everything else refuses.** A swept, replayed, backfilled or stale event never mints, and — carrying no
+dispatch stamp — never bells either.
+
+### The gate
+
+One decision, one file: `apps/houseloop-crm/lib/fub-import/mint-gate.ts` (`mintVerdict`, a pure function).
+It is a **ladder**, and the order is load-bearing — a disabled parent always wins, and the **road** is
+asked before the **age**:
+
+| order | check | refusal code |
+|---|---|---|
+| 0 | Did a human name this person? (Pull-in · wizard · PCSOI) → **MINT** | — |
+| 1 | Is the `_global` master breaker on? | `global_off` |
+| 2 | Is this a catch-up/backfill road? → a replay is not an arrival | `backfill_never_mints` |
+| 3 | Does an `hl_event_mapping` rule exist for this kind? (fail closed) | `no_rule` |
+| 4 | Is the signal's **Sync** toggle on? | `signal_disabled` |
+| 5 | Is the signal's **Creates Lead** toggle on? | `creates_lead_off` |
+| 6 | Does the signal carry a timestamp of its own? (fail closed) | `no_event_anchor` |
+| 7 | Is it inside the freshness window? | `stale` |
+
+The refusal code and its sentence land in the Inngest run output (`mintRefusal`, `mintRoad`,
+`mintAgeMinutes`), so "why did this person not become a lead?" is answerable without reading code.
+
+### The two clocks — and why the road is asked first
+
+`dispatchedAt` (when the router fired) and `eventAt` (FUB's own `created` on the record) are **different
+facts**. A replay mints a brand-new dispatch stamp for a year-old event, so the dispatch stamp may gate a
+**bell** but must never gate a **mint**. The mint gate reads `eventAt`, which the router now stamps on
+every dispatch; when it is absent the gate refuses.
+
+Two of Zach's rulings look like they collide, and the road is what reconciles them. On **7/30** he ruled
+*"what if the system is down and pulls it in 3 days later? I don't want it to silently fail… a lead must
+never be punished for our downtime."* On **8/20** he ruled that a swept or replayed event never mints. An
+event's AGE cannot tell a genuinely-late real inquiry from a replay — at three days old they are the same
+number. The ROAD can: a webhook that just fired is an arrival; a sweep re-reading the tape is a replay.
+
+### The freshness window — 72 hours, and where that number comes from
+
+`MINT_FRESHNESS_MINUTES` = **4320** (72 h), overridable by `FUB_MINT_FRESHNESS_MINUTES`. It lives in one
+place with its justification attached, because a threshold buried in a handler has cost us three times
+(#139, #177, #188). Measured live 2026-08-20 — **re-run before quoting, never from memory**:
+
+- **The live arm** (`fub.events` whose own `created` falls inside 30 days, n = 133): **131 captured within
+  one minute**, 132 within 60 minutes; p50 lag 0.04 min, p95 0.26 min. The single outlier is person
+  **50546 at 3,499.9 min (58.3 h)** — Zachary Bell, the July outage Zach's 7/30 ruling was written about.
+- **The 8/20 flood:** the *least* stale of the 14 bad mints was **45.0 days**; the worst 538.5 days.
+
+72 h is the only value that satisfies both rulings at once: 15× the worst honest lag ever measured, and
+15× smaller than the least-stale replay. The choice is pinned to the rulings, not to the gap.
+
+### Where the gate sits — all three mint paths
+
+A gate on one of three mint paths is not a gate. Every path that can `INSERT INTO hl_leads` from FUB data:
+
+| path | file | gated by |
+|---|---|---|
+| The import (webhook · rebackfill · wizard · Pull-in · voice) | `lib/inngest/functions/fub-lead-import.ts` → `lib/fub-import/import-fub-lead.ts` | `mintVerdict` on the resolved road |
+| FUB-native inbox seat, inbound **text** | `lib/inngest/functions/fub-webhook-router.ts` | the seat's `creates_lead` **and** the same freshness bound |
+| FUB-native inbox seat, inbound **call** | `lib/inngest/functions/fub-webhook-router.ts` | the seat's `creates_lead` **and** the same freshness bound |
+
+The past-client **pour** (`pastclient-pour.ts`) is a separate estate and is out of this gate's scope by
+design — it is a human-run import of named people.
+
+### What this changed, deliberately
+
+`backfill: true` used to set `adminFlow`, and the mint condition ended `&& !adminFlow` — so **the
+Creates-Lead toggle was unreachable on every backfill road.** Three roads dispatch backfill with no human
+behind them: `/api/fub/rebackfill` (the scrape road), `fub-high-intent-sweep`, and `/api/fub/import`.
+
+- **`/api/fub/rebackfill` still works exactly as documented** for a person who is already a lead —
+  re-backfilling a real lead's activity is its whole purpose and is untouched. It can no longer *create*
+  a person.
+- **`fub-high-intent-sweep` no longer mints.** A repeat-view Zillow insight now de-anonymizes people we
+  already hold and surfaces their history; it cannot conjure a lead out of browsing. Its kind does not
+  carry `creates_lead` on the board, so the board and the gate agree. If that should change, the place to
+  change it is the trigger board — never a bypass in the file.
+- `adminFlow` still names all four flavours for the notify/door/workflow **silence** gates, so Zach's 8/6
+  import-silence law is unchanged. Two questions that had shared one boolean are now separate: *may this
+  fire a bell?* (no, for all four) and *may this create a human?* (only for the human three).
+
+### The autopsy — why this law exists
+
+**2026-08-20.** A restarted sweep daemon treated the whole FUB inbox as new and enqueued **10,596** people
+into `fub.rehydration_queue`. Fourteen leads minted between 09:18 and 09:38Z off tapes whose newest event
+was 45 to 538 days old.
+
+The proof that the toggle was *bypassed* rather than consulted is in `hl_trigger_fire`: **the same people
+had been correctly refused days earlier on the webhook road** — rows `routed_by` `fub-lead-import:no-mint`
+and `:behavioral-leadless`, `created = false`, between 8/12 and 8/19 — and their 8/20 mints left **no
+trigger-fire row at all**, because a backfill suppresses the ledger. The board was right the whole time;
+a second road simply never asked it.
+
+Proofs: `npm run test:mint-gate` (35 assertions, and §1 carries the *old* predicate verbatim so the red
+is reproducible forever). Receipt: `.claude/reports/mint-gate-241/RECEIPT.md`.
+
+---
+
 ## 1. Overview & the one-source map 🔒
 
 There is **one source** (FUB, fed by Zillow). Its signals arrive over **one real-time trigger** (the native
