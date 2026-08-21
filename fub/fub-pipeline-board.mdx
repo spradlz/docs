@@ -75,6 +75,31 @@ are governed by the catalog — see chapter 6's two-answers warning.
 ### Road 1 — FUB webhooks (push, minutes-fresh) → the Railway tape
 
 {/* GEN:road:webhook START */}
+*Tape: `fub_railway` → `fub.events` · `fub.people` · `fub.emails` · `fub.calls` · `fub.notes` · `fub.text_messages` · sentry `fub_feed_freshness` · 17 live rules + 5 deliberate drops*
+
+| Rule | raw signal | files as | mints a lead? | stranger-arm bell† |
+|---|---|---|:-:|:-:|
+| Email sent | `emailsCreated` | `email_sent` | · | · |
+| FUB Person Created | `peopleCreated` | `registration_completed` | ✅ | 🔔 |
+| ZHL Pre-Approval (disguised as a message) | `eventsCreated` | `loan_status_changed` | ✅ | 🔔 |
+| Call placed | `callsCreated` | `phone_call_made` | · | · |
+| Property Inquiry | `eventsCreated` | `property_inquired` | ✅ | 🔔 |
+| Text sent | `textMessagesCreated` | `sms_sent` | · | · |
+| Tour Request | `eventsCreated` | `tour_requested` | ✅ | 🔔 |
+| Contact Request | `eventsCreated` | `contact_requested` | ✅ | 🔔 |
+| General Inquired | `eventsCreated` | `general_inquired` | ✅ | 🔔 |
+| Seller Inquiry | `eventsCreated` | `seller_inquired` | ✅ | 🔔 |
+| Registration | `eventsCreated` | `registration_completed` | ✅ | 🔔 |
+| Pre Approval | `eventsCreated` | `loan_status_changed` | ✅ | 🔔 |
+| Rental Inquiry | `eventsCreated` | `rental_inquired` | · | 🔔 |
+| Virtually Toured | `eventsCreated` | `virtually_toured` | · | · |
+| Text Messages | `textMessagesCreated` | `sms_received` | ✅ | 🔔 |
+| Phone Calls | `callsCreated` | `phone_call_received` | ✅ | 🔔 |
+| Email Received (reply) | `emailsCreated` | `email_received` | ✅ | 🔔 |
+| Property Shared ⛔ **disabled** | `eventsCreated` | `property_shared` | · | · |
+
+**Deliberate drops (trash filters):** Inbound call on a Twilio-owned line (drop) · Unmapped FUB event (drop) · General Inquiry — blank (drop) · General Inquiry — phone-call notice (drop) · General Inquiry — Zillow system message (drop)
+
 {/* GEN:road:webhook END */}
 
 **Where the webhooks point.** All 20 active FUB subscriptions post to
@@ -88,6 +113,20 @@ The person-page sweep (3-min tick) carries the in-app messages; the home-activit
 views/saves; the saved-search scrape replaced the webhook that died Apr 2026.
 
 {/* GEN:road:chrome_scrape START */}
+*Tape: `fub_railway` → `fub.zillow_home_activity` · `fub.saved_searches` · `fub.text_messages` · sentry `fub_feed_freshness` · 9 live rules*
+
+| Rule | raw signal | files as | mints a lead? | stranger-arm bell† |
+|---|---|---|:-:|:-:|
+| Home Hidden (Zillow tape) | `fub.zillow_home_activity` | `property_hidden` | · | · |
+| Home Saved (Zillow tape) | `fub.zillow_home_activity` | `property_saved` | · | · |
+| Home Save — wording variant (Zillow tape) | `fub.zillow_home_activity` | `property_saved` | · | · |
+| Home Shared (Zillow tape) | `fub.zillow_home_activity` | `property_shared` | · | · |
+| Home Unsaved (Zillow tape) | `fub.zillow_home_activity` | `property_unsaved` | · | · |
+| Home Viewed (Zillow tape) | `fub.zillow_home_activity` | `property_viewed` | · | · |
+| Saved Search (FUB mirror) | `fub.saved_searches` | `saved_search_created` | · | · |
+| In-app message sent | `textMessagesCreated` | `zillow_message_sent` | · | · |
+| In App Message | `textMessagesCreated` | `zillow_message_received` | ✅ | 🔔 |
+
 {/* GEN:road:chrome_scrape END */}
 
 ### Road 3 — automation-note parsing (FUB's own notes carry signals) → tape
@@ -95,6 +134,21 @@ views/saves; the saved-search scrape replaced the webhook that died Apr 2026.
 The insight rules parse FUB's own automation notes (regex corpus-proven 3,027/3,028 on 8/19).
 
 {/* GEN:road:note_parse START */}
+*Tape: `fub_railway` → `fub.notes` · sentry `fub_feed_freshness` · 7 live rules + 2 deliberate drops*
+
+| Rule | raw signal | files as | mints a lead? | stranger-arm bell† |
+|---|---|---|:-:|:-:|
+| Notification ⛔ **disabled** | `notesCreated` | `note_added` | · | 🔔 |
+| Property Viewed | `notesCreated` | `property_viewed` | · | · |
+| Property Saved | `notesCreated` | `property_saved` | · | · |
+| Insight High Intent Buyer | `notesCreated` | `zillow_insight_high_intent_buyer` | · | 🔔 |
+| Insight High Intent Seller | `notesCreated` | `zillow_insight_high_intent_seller` | · | 🔔 |
+| Insight: Viewed Home 10x in 7 Days | `notesCreated` | `zillow_insight_viewed_10x_7d` | · | 🔔 |
+| Insight: Looking in a New Area | `notesCreated` | `zillow_insight_new_area` | · | 🔔 |
+| Insight: Buyer Re-Engaged (searching again) | `notesCreated` | `zillow_insight_buyer_reengaged` | · | 🔔 |
+
+**Deliberate drops (trash filters):** Bare-URL note (drop) · Machine note blob (drop)
+
 {/* GEN:road:note_parse END */}
 
 A behavior-shaped note that parses to nothing now emits a **loud review-lane error naming the note id** — the silent-skip class died 8/19.
@@ -106,6 +160,10 @@ A behavior-shaped note that parses to nothing now emits a **loud review-lane err
 | Every inbound email to the 8 connected mailboxes | Gmail `watch()` → Pub/Sub → `lib/email/gmail-realtime.ts`, RFC Message-ID deduped, `synced_mailbox` stamped | `hl_inbound_emails` (CRM DB) | `email_received` on the resolved lead (stranger mail: captured, no card, no bell — by design) |
 
 {/* GEN:road:native_gmail START */}
+*Tape: `crm` → `hl_inbound_emails` · sentry `inbound_email_capture` · 0 live rules*
+
+*(No `hl_event_mapping` rows for this road — its recognition is not rule-driven; capture and filing happen in code on the resolved lead. The authored table above describes the mechanism.)*
+
 {/* GEN:road:native_gmail END */}
 
 Live-fire proven 8/19: capture in **5–7 seconds** across all three bundle classes
@@ -120,6 +178,10 @@ Disabled **by decision 2026-06-23** (the FUB compose incident). Its queue rows r
 entirely. One hygiene item open: stop enqueueing jobs whose only fate is refusal.
 
 {/* GEN:road:email_scrape START */}
+*Tape: `fub_railway` → `fub.emails` · no sentry · 0 live rules*
+
+*(No `hl_event_mapping` rows for this road — its recognition is not rule-driven; capture and filing happen in code on the resolved lead. The authored table above describes the mechanism.)*
+
 {/* GEN:road:email_scrape END */}
 
 ### Road 6 — the Zillow ML TAGS (`tag_parse`) → ⛔ ITS LIVE DOOR IS SHUT
@@ -128,6 +190,16 @@ Promoted into `hl_event_mapping` by TASK-197, so the registry governs it — but
 does not exist. Added 8/21 after the gauntlet fired this road for the first time.
 
 {/* GEN:road:tag_parse START */}
+*Tape: `fub_railway` → `fub.people` · sentry `fub_feed_freshness` · 5 live rules*
+
+| Rule | raw signal | files as | mints a lead? | stranger-arm bell† |
+|---|---|---|:-:|:-:|
+| High Intent Buyer (Zillow tag) | `fub.people.tags` | `zillow_insight_high_intent_buyer` | · | 🔔 |
+| High Intent Seller (Zillow tag) | `fub.people.tags` | `zillow_insight_high_intent_seller` | · | 🔔 |
+| Buyer Re-engaged (Zillow tag) | `fub.people.tags` | `zillow_insight_buyer_reengaged` | · | 🔔 |
+| Specific Home Interest (Zillow tag) | `fub.people.tags` | `zillow_insight_specific_property_interest` | · | 🔔 |
+| Actively Searching (Zillow Smart List tag) | `fub.people.tags` | `zillow_insight_actively_searching` | · | 🔔 |
+
 {/* GEN:road:tag_parse END */}
 
 Two of these kinds are reachable on **this road ONLY** (`zillow_insight_specific_property_interest` ·
@@ -274,10 +346,27 @@ is the exact D5 disease: a hand-kept map that drifts the day nobody re-reads it.
   `sentry_probe_key` / `thresholds`, with `hl_event_mapping.channel_key` referencing it. Migration
   `0786_hl_signal_channel.sql`, desk-signed shape, 14 columns matching the signed diet exactly.
 
-The end state (board slice 8): **this page's tables are GENERATED from those two tables**, so the
-documentation cannot disagree with the system it documents. Until that generator ships, the tables
-above are hand-derived from a live read on the date in the frontmatter — accurate the day it was
-written, which is not the same promise.
+**Board slice 8 SHIPPED (2026-08-21): this page's rule tables ARE generated from those two tables**
+by `tools/docs/build-fub-book.mjs`, spliced between explicit markers so the authored prose (the
+corrections, rulings and receipt links) is never touched. Drift is fatal both directions — a live
+road with no marker, or a marker with no live road, fails the build loudly. Chapters 3-5's facts
+live in `probes.ts` / pm2 / receipts, not in the registry, so they stay authored on purpose:
+generating them from these two tables would fabricate provenance.
+
+{/* GEN:registry-stats START */}
+| road (`hl_signal_channel`) | status | capture | host | rules | live | drops | kinds |
+|---|---|---|---|---:|---:|---:|---:|
+| `chrome_scrape` — The Chrome person-page scrape | 🟢 live | `pm2` | `camp_david` | 9 | 9 | 0 | 8 |
+| `email_scrape` — The FUB email-body scrape arm (RETIRED) | ⛔ retired | `pm2` | `camp_david` | 0 | 0 | 0 | 0 |
+| `native_gmail` — The native Gmail watch | 🟢 live | `webhook_route` | `railway_crm` | 0 | 0 | 0 | 0 |
+| `note_parse` — Automation-note parsing | 🟢 live | `webhook_route` | `railway_crm` | 10 | 9 | 2 | 8 |
+| `tag_parse` — Zillow ML tag parsing | 🟢 live | `inngest` | `railway_crm` | 5 | 5 | 0 | 5 |
+| `webhook` — FUB webhooks | 🟢 live | `webhook_route` | `railway_crm` | 23 | 22 | 5 | 16 |
+
+**Totals (live read 2026-08-21, `railway`):** 48 rules — 40 recognition rules (38 enabled) + 8 deliberate drops, resolving to **31 distinct catalog kinds** across 5 live roads. Outside every road: `_global` (All FUB Imports (master switch)).
+
+*These tables are generated by `tools/docs/build-fub-book.mjs` from the live registry — edit the registry (the triggers board / migrations), rerun the tool, never the tables. `--check` reports drift.*
+{/* GEN:registry-stats END */}
 
 ### ⚠ "Does this signal notify?" has TWO answers, in two tables (task #196, 2026-08-19)
 
