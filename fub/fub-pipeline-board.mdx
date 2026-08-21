@@ -1,6 +1,6 @@
 ---
 title: "The FUB Pipeline — the book"
-description: "Page one of the FUB estate, in reading order: why FUB exists for us, the five roads a signal takes in, the two tapes, the fleet that runs it, the sentries that watch it, the registry it reads from, and the honest open items. Sources: the live hl_event_mapping + hl_signal_channel tables, the signals lock, lib/health/probes.ts, and the 8/19 lane receipts."
+description: "Page one of the FUB estate, in reading order: why FUB exists for us, the six roads a signal takes in, the two tapes, the fleet that runs it, the sentries that watch it, the registry it reads from, and the honest open items. Sources: the live hl_event_mapping + hl_signal_channel tables, the signals lock, lib/health/probes.ts, and the 8/19 lane receipts + the 8/21 gauntlet."
 ---
 
 > **THE BOARD (system of record):** [crm.houseloop.ai/boards/fub-pipeline](https://crm.houseloop.ai/boards/fub-pipeline) ·
@@ -63,7 +63,7 @@ mirror that has to be watched. Chapters 4 and 5 are the whole answer to that cos
 
 ---
 
-## Chapter 2 — The five roads in (the 28-signal arrival map)
+## Chapter 2 — The six roads in (the 30-signal arrival map)
 
 Every signed signal, its road in, the tape table it lands on, and the catalog kind it files as. Rows
 derived 2026-08-19 from the live `hl_event_mapping` table (CRM DB) — the registry the triggers UI, the
@@ -125,6 +125,34 @@ The 45-day outage this road ended, and its 7,789-email recovery, are on the
 Disabled **by decision 2026-06-23** (the FUB compose incident). Its queue rows refuse honestly:
 `email_recovery_disabled … body arrives via emailsCreated webhook`. Road 4 supersedes the need
 entirely. One hygiene item open: stop enqueueing jobs whose only fate is refusal.
+
+### Road 6 — the Zillow ML TAGS (`tag_parse`) → ⛔ ITS LIVE DOOR IS SHUT
+
+Promoted into `hl_event_mapping` by TASK-197, so the registry governs it — but the live arrival path
+does not exist. Added 8/21 after the gauntlet fired this road for the first time.
+
+| Signal | source | tape table | files as |
+|---|---|---|---|
+| Zillow High-Intent Buyer / Seller · Buyer Re-engaged | `peopleTagsCreated` webhook | `fub.people.tags` | `zillow_insight_high_intent_buyer` / `_seller` / `_buyer_reengaged` (also reachable on Road 3) |
+| **Specific Property Interest** | same | `fub.people.tags` | `zillow_insight_specific_property_interest` — **this road ONLY** |
+| **Actively Searching** (Zillow Smart List) | same | `fub.people.tags` | `zillow_insight_actively_searching` — **this road ONLY** |
+| Loan status (Zillow Home Loans pre-approval) | same | `fub.people.tags` | `loan_status_changed` (person-scoped key; also reachable on Road 1) |
+
+⛔ **THE LIVE DOOR DROPS THIS ROAD.** The 8/21 gauntlet applied two tags through FUB's API on the
+`-TEST` fixture. FUB delivered both webhooks and the arrival record recorded them as
+`peopleTagsCreated → disposition:"dropped_unhandled"`. **Zero cards were minted.** The registry rows
+are live, enabled and `notify=true`, so the board and the triggers menu present these as governed
+signals while the real-time path discards them — the TASK-170 receiver class landing on the road
+TASK-197 had just legitimized.
+
+The road is **not dead**: 47 tag cards exist in the last 7 days, arriving by a slower import path.
+That is what hides the defect — the counts look healthy. But the two signals that live ONLY here
+cannot fire in real time at all. Cure belongs to the TASK-159 registry-as-data slice (wire
+`peopleTagsCreated` at the CRM receiver). Evidence:
+[the gauntlet receipt](https://github.com/spradlz/BossLoop-Gold/blob/houseloop-app/.claude/reports/fub-gauntlet/GAUNTLET.md) §G.
+
+⚠ These are the **29th and 30th** signals. Anything on this page still saying "28" describes the
+signed scope of the original lock, not the live surface.
 
 ---
 
