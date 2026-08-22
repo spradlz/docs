@@ -18,6 +18,69 @@ description: "THE one document for the entire Follow Up Boss pipeline: how a Zil
 seconds. Every false "the scraper is down" in this system's history came from skipping it.**
 </Warning>
 
+## ⭐ THE SOP — HOW A ZILLOW IN-APP MESSAGE ARRIVES (Zach-ordered 2026-08-22, written from a live trace)
+
+**Why this section exists, on the record:** 2026-08-22 evening, a live test in-app message reached FUB in
+seconds and never reached a card, a bell, or the Action-Needed column. Tracing it exposed that the road
+below was never written down in one place — and the desk had quarantined the relay (step 5's carrier)
+the same evening without knowing texts rode it, **even though the architecture diagram below this section
+says the relay is the only road to what the CRM reads.** The manual was right; it wasn't consulted.
+Every number below was measured on that trace, not recalled.
+
+**The eight steps.** A step without a proof column is not a step — it's a hope.
+
+| # | step | component (owner) | measured latency | proof it ran |
+|---|---|---|---|---|
+| 1 | Lead sends in-app on Zillow → FUB receives it (FUB bell fires) | Zillow → FUB (external) | seconds | FUB notification bell + the person's FUB timeline |
+| 2 | **Detection.** FUB fires **NO webhook** for in-app (confirmed live + by Zach). But FUB's API exposes recency as data: `GET /v1/people?sort=-lastInboxAppMessage` returns person + timestamp instantly. The BODY is not in the API — UI only. | the detector (polls the API on a clock) | ≤ the poll interval | the detector's own cursor + heartbeat row |
+| 3 | Detected person is **enqueued** for capture through the one queue door (`fub.rehydration_queue`, real priority) | detector → queue | < 1s | the queue row, `trigger_event` naming the detector |
+| 4 | **Capture.** The scraper claims the job, walks the person's FUB page, writes the verbatim message row into Camp David `fub.text_messages` (`message_type='zillow_inapp'`, `is_incoming=true`) | fub-webhook-scraper (claim measured **47s**; send→local-row measured **67s** on 8/22) | ~1–2 min total | the Camp David tape row |
+| 5 | **The road to the mirror.** The row travels Camp David → the Railway mirror `fub.*` — **the only copy the CRM reads** | historically fub-relay (30s cursor, upsert by pk, never touches `notified_at`) | ~30s | the Railway row, same id |
+| 6 | **Filing.** The CRM files the row through the one writer → `hl_activity_log` card on the lead | logActivity via the capture/backfill road | **5.4s** (file-at-capture, proven 8/19) | the card, correct kind + actor |
+| 7 | **Reaction.** D4 rule evaluation → bell + agent text; the mint law lights **Action Needed** (in-app inbound is one of the 9 signed triggers; inbound-only; `is_backfill` never fires) | the one notification evaluation point | seconds | `hl_notification` row + the lit column cell |
+| 8 | **Standing proof.** A canary fires the road on a schedule and asserts arrival; per-road sentries watch freshness | canary + sentries | hourly | `hl_run_log` (`fub-canary-webhook` went `injected:true, arrived:true` on its first scheduled run, 8/22 21:17Z) |
+
+**Target end-to-end: under 3 minutes, Zillow send → phone buzz.** The 5-minute law is the ceiling, not
+the goal.
+
+### 🔴 CURRENT STATE (2026-08-22 night — read before trusting any step)
+
+- **Step 2/3 — BROKEN SINCE BIRTH.** The detection component (`fub-inapp-sweep.mjs`) exists and was
+  **never scheduled** — no pm2 entry, no cron, zero automatic runs ever. No in-app message has ever
+  produced a proactive notification. This is the headline failure.
+- **Step 3 — the priority queue was fake until 8/22:** all 47,900 pending rows were stamped `high`, so
+  priority meant FIFO-from-May. Re-baselined 8/22 (backfill rows → `low`, reversal CSV in
+  `~/hl-reversals/queue-rebaseline-0822/`). Real fast lane = `fub.houseloop_lead` (102 CRM lead ids).
+- **Step 5 — CUT 8/22 20:20Z:** fub-relay quarantined during the stage-6 two-hop kill. The stage-6
+  census was taken by TABLE, not by writer-path, and missed that DOM-captured texts ride the relay.
+  Captured in-app rows since strand on Camp David (witnessed: id `1200005953`).
+- **Steps 6/7 are healthy** where a row reaches the mirror (proven on the email + webhook roads).
+- **THE RULING (Zach, 8/22 night, verbatim spirit): no more patching.** The legacy estate — the
+  47k-row queue grooming, the relay, the unscheduled sweep, the pm2 daemon zoo — is condemned. The fix
+  is the enterprise FUB-captain build (chapter: [the captain PRD](/fub/fub-captain-prd)): every signal a
+  governed road, one notification evaluation point, each road canary-proven. Until it ships, this SOP is
+  the build spec for the in-app road.
+
+### 🚚 THE CARGO MAP — what rides which road (so nobody kills a carrier blind again)
+
+Per family: where the capture writer puts it, and how it reaches the Railway mirror the CRM reads.
+**Before stopping ANY carrier, find every row of this table that names it.**
+
+| family (fub.*) | capture writer | road to the Railway mirror |
+|---|---|---|
+| `text_messages` — api-text bodies | applyApiTexts (scraper lib) | **fub-relay** (stated in the code at the seam) |
+| `text_messages` — DOM-only in-app/group | matchAndUpdateMessages | **fub-relay** |
+| `zillow_insights` | saveZillowInsights | direct per-person sync (stage-6, 8/22) |
+| `saved_searches` | saveSavedSearches | direct per-person sync (stage-6, 8/22) |
+| `zillow_home_activity` | home-activity refresh | direct per-person sync (the stage-6 precedent) |
+| `notes` | webhook road (Railway-side writer) | written on Railway directly |
+| `emails` | email capture arm | verify per-run — census by WRITER-PATH, not by table |
+| `calls` | call capture arm | verify per-run — census by WRITER-PATH, not by table |
+
+**The lesson, generalized (banked in memory the same night):** a census of "who still needs the relay"
+taken at table grain misses families with two writer paths. Census by writer-path, and read the code
+comments at the seam — the relay dependency was written at `applyApiTexts` in plain English.
+
 ## The architecture in five lines (the part everyone gets wrong)
 
 **Webhooks do NOT go to Camp David. They go to Railway. Railway then hands Camp David a job.**
