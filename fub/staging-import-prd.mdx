@@ -84,35 +84,124 @@ from: the three requirements a staged lead must satisfy, and the rules — every
 on a real lead during the 8/21–8/22 inventory run — that the staging build has to honor or it
 rebuilds the same diseases at 49k scale.
 
-## The three requirements
+## THE REQUIREMENTS — dictated by Zach, 2026-08-22
+
+**This spec is the cohort rehearsal's law: the 49k book imports through THIS or not at all.**
+R1–R4 are Zach's own words, dictated live on 2026-08-22. R5–R6 are desk requirements that compose
+with them.
+
+### R1 — COMPLETE SCHEMA, NO HOLES (Zach, verbatim, 2026-08-22)
+
+> *"the schema has to match. There cannot be holes in anything."*
+
+Every staged row lands with **every destination field either resolved or explicitly recorded as
+absent — never silently null.** A NULL that means "we could not derive this" and a NULL that means
+"this person genuinely has none" are different facts, and a column that cannot tell them apart is a
+hole. Absence is a recorded verdict with a reason, the same way a derived value is a recorded
+verdict with a basis.
+
+The acceptance test is Zach's own from 8/21 01:36Z, which is this requirement asked as a question:
+*"WHAT IS THE TABLE THAT GETS POPULATED WHEN WE PULL A LEAD INTO HOUSELOOP CRM FROM FUB… so if this
+happens again its just a simple delete lead, and restore lead and it comes back perfect."* **Trash a
+staged lead, re-import it, and it comes back identical.** If anything was derived at import time
+rather than read from staging, it will not.
+
+### R2 — EVERY MESSAGE CARRIES ITS ACTOR; DERIVATION IS LICENSED (Zach, verbatim, 2026-08-22)
+
+> *"the actor who was the agent that sent the message. That can be derived. It doesn't have to be
+> perfect. It can be derived from the tags that we find, team exit / agent name, or by reading some
+> of the messages to see who sent the message and then inferring that to the other messages."*
+
+⭐ **This licenses IMPERFECT derivation for staging attribution — on one condition: the provenance
+rides along.** Every derived rung stamps WHAT it derived from. Unstamped inference stays banned; an
+actor with no `actor_source` is a hole under R1, not an answer.
+
+**THE STAGING ACTOR LADDER** — tried in order, first hit wins, the rung recorded on the row:
+
+| rung | `actor_source` | how it decides | confidence |
+|:-:|---|---|---|
+| ① | `witnessed` | the tape names the sender (`user_name` on the row) | the tape's own claim |
+| ② | `assignment_derived` | `fub.assignment_history` — who held this person AT THE MESSAGE'S TIME | high |
+| ③ | `tag_derived` | the agent-relationship tags (any other agent's tag supersedes the Ana Spradling / Ben Freshel distribution tags; team-exit marks the departure) | medium |
+| ④ | `content_inferred` | a signed message body naming its own sender, propagated to its thread neighbours | medium-low, and it says so |
+| ⑤ | `degraded` | nothing decided it — recorded as unresolved WITH the reason | none, and never dressed up |
+
+Four things the ladder must not do:
+
+- **Never re-derive at render time.** The staged actor is the answer; surfaces read it (the actor
+  canon, one door).
+- **Rung ② is time-aware or it is wrong.** "Who is assigned NOW" attributes a 2024 message to the
+  current owner. The join is against the assignment interval containing the message's `occurred_at`.
+- **Rung ④ propagates within a THREAD, never across a person's whole history.** One signed message
+  licenses its neighbours, not every message that person ever received.
+- **The machine-note actor rule outranks all five rungs** (rung ZERO, below) — a robot note never
+  reaches the ladder to be dressed in a human name.
+
+⚠ **Rung ① is the tape's claim, not the truth.** The recipient-fabrication revert (rule 7 below) is
+the standing proof that a confident override of the tape can be pure, tested, green and wrong. Rung
+① beats rungs ②-④ because the tape is evidence and they are inference — not because it is infallible.
+
+### R3 — FULL TIMESTAMP PROVENANCE: THREE CLOCKS (Zach, verbatim, 2026-08-22)
+
+> *"there has to be a timestamp when it got filled in, when it got pulled into BossLoop, when the
+> lead got pulled in via the integration."*
+
+Every staged fact carries **three first-class clocks**, never one collapsed field:
+
+| clock | column | what it answers |
+|---|---|---|
+| **the event's own time** | `occurred_at` | when the thing actually happened, in the world |
+| **the staging fill** | `staged_at` / `filled_at` | when WE derived this row — so a re-run is visible and a stale derivation is findable |
+| **the lead's pull moment** | `lead_pulled_at` | when this person became a HouseLoop lead through the integration |
+
+The third clock is already law: **`created_at` is the HouseLoop pull date** (rule 6 below) — Renita
+Ford's 7/14 was correct and the 50-lead restamp was killed over exactly this. Keeping the three
+apart is what makes a wrong date a *fixable derivation* instead of an argument.
+
+### R4 — ALL OF IT DOCUMENTED: the mapping IS the contract (Zach, 2026-08-22)
+
+The PRD carries the **complete mapping — tape table → destination table → per-field source → the
+derivation ladder for every derived field.** The perfect-schema contract is not a promise about the
+build; it is this document. A field that is not in the mapping is not allowed to be filled.
+
+**Status, honestly: the TABLE level is below; the PER-FIELD level is the next lane's first
+deliverable and is NOT done.** Writing a field map I have not verified against the live tape would
+be the exact fabrication R1 exists to prevent.
+
+| tape (`fub.*`) | destination | per-field source | derived? |
+|---|---|---|---|
+| `fub.people` | the staged person row | identity, contact census, tags | ✅ identity (triangulation) · contact census · agent history |
+| `fub.text_messages` | messages | body, direction, timestamps | ✅ **actor** (the R2 ladder) · ⚠ **generation** (rule 2 — API wins) |
+| `fub.emails` | messages | body, direction, addresses | ✅ actor (R2 ladder) · seats |
+| `fub.calls` | calls | duration, outcome, recording | ✅ actor (R2 ladder) |
+| `fub.notes` | notes | body, author | ✅ **rung ZERO: machine-note grammar** (rule 3) before the ladder |
+| `fub.events` | the activity log | catalog kind, venue, payload | ✅ `hl_event_mapping` (already live) · venue (rule 4) |
+| `fub.assignment_history` | *(not a destination)* | — | the EVIDENCE behind actor rung ② |
+
+**The per-field map must state, for every column: its tape source, its ladder (if derived), its
+absence-verdict (R1), and its three clocks (R3).** That is the shape the next lane fills in.
+
+### R5 — The staged HISTORY reads as CATALOG CARDS, not raw tape *(desk)*
+
+Every historical event a staged lead carries is already resolved to a catalog kind with its actor,
+its venue and its sentence — it is a card before it is imported, and the import files it through
+`logActivity` rather than inventing a second writer. A staged history that still needs the render
+layer to work out what happened has not finished staging.
+
+### R6 — The item that TRIGGERED the pull is marked and timestamped *(Zach-signed, rule 1 below)*
+
+Not the import job, not "backfill": the actual co-temporal event that caused this person to become a
+lead, named honestly and carrying its own timestamp.
 
 <Warning>
-**PROVENANCE, said plainly:** these three are the DESK'S wording, not Zach's. They compress a day of
-his live rulings (each rule below carries its own source and date), and they extend the one law he
-did sign verbatim on 2026-08-17: *"we should not be deriving anything without it already derived and
-structured properly in the fub mirror… the fub mirror should be a staging table for the houseloop
-crm."* If you need Zach's exact words for a specific rule, they are in that rule's row — not here.
+**One provenance correction kept on the record.** An earlier desk brief attributed three phrases to
+Zach — *PERFECT DATABASE SCHEMA* / *JUST LIKE THE ACTIVITY CATALOG* / *MARKED AND TIMESTAMPED*. Those
+exact phrases appear nowhere on disk as his words; they were a desk paraphrase. **The requirements
+above are different** — R1–R4 are his dictation of 2026-08-22 and are quoted verbatim. The
+underlying law he signed on 2026-08-17 still governs: *"we should not be deriving anything without it
+already derived and structured properly in the fub mirror… the fub mirror should be a staging table
+for the houseloop crm."*
 </Warning>
-
-**R1 — A staged lead lands in a FINISHED SCHEMA.** Every answer the CRM needs is a typed column with
-provenance, computed before import. The import copies; it never derives, parses, guesses or reaches
-back into the tape for a derived answer. The nearest thing to a Zach quote is his 8/21 01:36Z
-question, which is really this requirement asked as a question: *"WHAT IS THE TABLE THAT GETS
-POPULATED WHEN WE PULL A LEAD INTO HOUSELOOP CRM FROM FUB AND DO WE FREEZE THAT TABLE AND TIME STAMP
-IT AS FOLLOW UP BOSS LEGACY… so if this happens again its just a simple delete lead, and restore
-lead and it comes back perfect."* **That is the acceptance test: trash a staged lead, re-import it,
-and it comes back identical.**
-
-**R2 — The staged HISTORY reads as CATALOG CARDS, not as raw tape.** Every historical event a staged
-lead carries is already resolved to a catalog kind with its actor, its venue and its sentence —
-i.e. it is a card before it is imported, and the import files it through `logActivity` rather than
-inventing a second writer. A staged history that still needs the render layer to figure out what
-happened has not finished staging.
-
-**R3 — The item that TRIGGERED the pull is marked and timestamped on the record.** Not the import
-job, not "backfill": the actual co-temporal event that caused this person to become a lead, named
-honestly and carrying its own timestamp. This is the true-trigger rule (below), and it is the one
-of the three that Zach signed word for word.
 
 ## The rules the build must honor
 
