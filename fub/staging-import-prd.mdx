@@ -635,6 +635,67 @@ the rung that beat the tags **74,286 times out of 74,286** — where the tags sa
 71,244. If R2's five-rung ladder were implemented literally, it would replace the best instrument in
 the system with one that is wrong on nine-tenths of that class.
 
+### ⭐ THE OUTBOUND-ACTOR LADDER, TIGHTENED — Zach 2026-08-22, and the reach of every rung
+
+The person-level ladder (which agent owns this lead's outbound words) is now five rungs. **All three
+evidence sources form ONE set for the "is there any real agent here?" test** — the house seat wins
+only when that whole set is empty. Precedence *within* the set is person record → chain → tags.
+
+| rung | source | fires when | people it can speak for |
+|:-:|---|---|---:|
+| ① | **witnessed** — the tape names the sender | always preferred; it is evidence, the rest is inference | (per-row) |
+| ② | **person record** — `collaborators` / `communication_agent` / `team_leaders`, **lenders excluded** | a non-house agent name is on the record | **8,498** |
+| ③ | **assignment chain** — `fub.assignment_history.to_agent` | a non-house name is in the chain. ⚠ **beats a house Broker seat** | **55** *(uniquely decisive on **2**)* |
+| ④ | **the lead's TAGS** — `Agent:` then `Team Exit -`, house names stripped FIRST | a non-house agent name is tagged | **15,759** *(uniquely decisive on **7,357**)* |
+| ⑤ | **house seat — THE FLOOR ONLY** | ②③④ are all empty of any other agent | **33,393** (67.8%) |
+
+Measured across all 49,250 people, 2026-08-22. **A real agent is reachable for 15,857 people; 33,393
+fall to the floor.**
+
+⚠ **TWO THINGS THIS MEASUREMENT CHANGES ABOUT THE RUNG ORDER, and both matter for the build:**
+
+- **The chain rung is nearly empty — and still correct.** It names a non-house agent on **55 of
+  49,250** people and is *uniquely* decisive on **2**. It earns its place as a PRECEDENCE rule (it
+  beats a house seat), not as a workhorse. Sizing it honestly now prevents someone later reading its
+  thin output as a bug.
+- ⛔ **Tags are the largest source by an order of magnitude and MUST NOT sit below the floor.**
+  They reach **15,759** people and are the *only* evidence on **7,357**. A ladder that treated tags as
+  a fallback beneath the house seat would hand **7,357 leads to Ana or Ben who have a real named agent
+  on the record.** This is precisely why Zach's refinement makes tags first-class evidence rather than
+  a last resort.
+
+**The worked example, verified on the tape — Maddison E. Mettman, `fub.people.id 13394`:**
+
+| source | what it says | verdict |
+|---|---|---|
+| `collaborators` | `Ana Spradling`, role **Broker** — a house seat, and the ONLY collaborator | ⛔ would name Ana |
+| `Agent:` tag | **`Agent: Ana Spradling`** — the house name again | ⛔ would name Ana |
+| `Team Exit -` tags | **TWO** distinct: `Lane and Noelle` **and** `Noelle Stephens` | ⛔ ambiguous → refused |
+| `fub.assignment_history` | `Lane and Noelle` → Ana, then `Lane and Noelle` → Zach | ✅ **the chain resolves her** |
+
+Her record is the exact case rung ③ exists for: the person record holds only a house seat, her
+`Agent:` tag also names the house, and her two `Team Exit -` tags disagree so the tag rung correctly
+refuses. **The chain is the only source that speaks.** ⓘ It answers with a JOINT account — "Lane and
+Noelle" names a TEAM, not one human. That is kept verbatim and marked, never split: a coarse truth
+beats a confident guess at which half.
+
+⚠ **AND `Agent:` DOES NOT OUTRANK `Team Exit -` WHEN IT NAMES THE HOUSE.** Elsewhere this map records
+that `Agent:` wins (it healed Lucy Hartman's "Ssesmambo" typo and separated Zairanett's two exit tags).
+Mettman shows the ordering only applies **after** house names are stripped — which is what
+`taggedAgentExcludingNoise()` already does, filtering the house set *before* choosing a rung.
+
+⛔ **A DEFECT THIS SURFACED: THE HOUSE-NAME SET IS DEFINED TWICE, WITH DIFFERENT MEMBERSHIP.**
+
+| file | constant | members |
+|---|---|---|
+| `lib/integrations/fub-authorship.ts` | `TAG_NOISE_NAMES` | `ben froeschl`, `ana spradling` — **2** |
+| `scripts/legacy-actor-rung2.ts` | `HOUSE` | `ana spradling`, `ben froeschl`, **`zach spradling`** — **3** |
+
+**Zach Spradling is a house seat in one and a real agent in the other.** He holds the Broker role on
+51 people and appears in Mettman's own assignment chain, so the disagreement is reachable, not
+theoretical. Under the tightened rule the set is load-bearing — it decides who falls to the floor —
+and it must have exactly one home before the person ladder ships. Filed, not fixed.
+
 ### `fub.text_messages` — 24 columns: 13 staged, 11 not
 
 | tape column | staging | destination | transform | ladder | R# |
@@ -766,16 +827,40 @@ neither is `absent_on_tape`, which is an answer, not a failure.
 
 | tape column | populated | role |
 |---|---:|---|
-| `collaborators` | 49,237 | the agent seats. **`role` distinguishes LENDERS** — the naive read put lenders John Nelson (600 leads) and Steve Parks (254) on messages agents wrote |
+| `collaborators` | 49,237 | the agent seats. **`role` distinguishes LENDERS** — the naive read put lenders John Nelson (600 leads) and Steve Parks (254) on messages agents wrote. Roles on the tape are exactly three: **Broker 40,782 · Agent 8,617 · Lender 1,342** |
 | `communication_agent` | 16,544 (81 distinct) | **the preferred rung** — the seat that actually talked to them |
 | `team_leaders` | 7,513 | |
-| `tags` | 49,232 | `Agent:` on 49,214 · `Team Exit -` on 14,043. `Agent:` outranks `Team Exit -` (it healed Lucy Hartman's "Ssesmambo" typo and separated Zairanett's two exit tags) |
+| `tags` | 49,232 | ⭐ **FIRST-CLASS AGENT EVIDENCE, not a fallback** (Zach 2026-08-22) — the largest non-house source, decisive alone on 7,357 people. `Agent:` on 49,214 · `Team Exit -` on 14,043. `Agent:` outranks `Team Exit -` **only after house names are stripped** (it healed Lucy Hartman's "Ssesmambo" typo and separated Zairanett's two exit tags; on Mettman it names the house and correctly loses) |
+| `assignment_history.to_agent` | 55 non-house | rung ③ — thin, but it beats a house seat (Mettman) |
 | `assigned_user_id` | 49,237 (35 distinct) | usable |
-| ⛔ `assigned_to` | 49,237 but **3 distinct** | **EVIDENCE ONLY, NEVER AN ANSWER.** "Zach Spradling" on 49,230 of 49,250 |
+| ⛔ `assigned_to` | 49,237 but **3 distinct** | **NOT-STAGED AS AN ACTOR SOURCE. EVIDENCE ONLY, NEVER AN ANSWER.** "Zach Spradling" on 49,230 of 49,250 — a migration artifact that identifies nobody |
 
-Derived into `agent_current` + `agent_history` + `agent_source` + `agent_verdict`. **"Broker" is the
-HOUSE seat** — Ana Spradling appears as Broker on 40,782 people — so house names lose to any real
-agent name and win only when they are all there is, which is Zach's rule verbatim.
+Derived into `agent_current` + `agent_history` + `agent_source` + `agent_verdict`, and **every one of
+those rows cites the ladder rung that produced it** (R2: a derived value with no source is a hole).
+
+#### ⭐ "ANA IS NOT A BROKER, ANA IS THE TEAM LEADER" — the label and the semantic are different
+
+Zach, 2026-08-22, verbatim: *"ana is not a broker, ana is the team leader, she sits on almost every
+lead, the only time it would be her lead only would be the past cleint list, or there is no other
+agent on the lead tag."*
+
+**The FUB role label is `Broker`. The semantic is TEAM LEADER — a seat, not an authorship claim.**
+Staging must record the semantic, because a downstream reader seeing the raw label will read
+"the broker on this deal", which is a different and load-bearing thing.
+
+⛔ **AND A NUMBER IN THE RECORD IS WRONG — corrected here, measured 2026-08-22.** The circulating
+figure is *"Ana appears as Broker on 40,782 people"* (it is in `legacy-actor-rung2.ts`'s own header).
+**40,782 is the count of the Broker ROLE, not of Ana.** The breakdown:
+
+| name | Broker seats |
+|---|---:|
+| **Ben Froeschl** | **37,966** |
+| Ana Spradling | **2,747** |
+| Zach Spradling | 51 |
+
+Ana holds 2,747, not 40,782 — she is **7%** of the house seats, and **Ben is 93%**. The *conclusion*
+is unchanged (a house seat is ubiquitous and must lose to any real agent name), but anyone reasoning
+about Ana specifically from 40,782 is reasoning from Ben's number.
 
 ### B5 — source, identity, household, relationship, compliance, trigger, readiness
 
@@ -787,6 +872,28 @@ agent name and win only when they are all there is, which is Zach's rule verbati
 - **household** — `household_edges`, one edge per relation with its source.
 - **relationship class** — `relationship_class` + `closing_evidence`. ⭐ **SISU is the spine**; dotloop
   and MLS may only enrich a row SISU already blessed (`ONE_ANSWER_TABLE`).
+
+<Warning>
+**⛔⛔ THE SRG PAST-CLIENT ESTATE IS NOT A TARGET OF THIS BUILD — Zach, 2026-08-22.**
+
+`hl_srg_past_clients` and its children are **already fully actor-resolved** (the SISU waterfall plus
+the deal seats). **No FUB-derived write may land on any `hl_srg_*` table**, and no staging job may
+treat one as a destination. FUB-derived actors land on **activity cards and staging provenance only**.
+
+**Audit of this map and the draft DDL against that rail, run 2026-08-22:** `grep` for `hl_srg` across
+the map section and `DRAFT_fub_staging_person.sql` returns **zero rows in either** — there is no such
+target to remove. The rail is written down anyway, because "we happen not to have done it" is not a
+constraint and the next lane needs the boundary stated, not inferred.
+
+⚠ **The one place the estate is legitimately touched is a READ**: `closing_evidence` cites SISU rows
+as evidence for `relationship_class`. Reading the spine to justify a verdict is not a write to the
+estate, and it is the direction `ONE_ANSWER_TABLE` requires (start FROM the spine, reach outward).
+</Warning>
+
+⭐ **A consequence of the rail, on the actor ladder:** Zach's own carve-out — *"the only time it would
+be her lead only would be the past cleint list"* — names a population that **this build does not
+touch at all.** So the house-seat floor rung never needs a past-client special case: those people are
+out of scope, not a branch.
 - **compliance** — `is_dnc`, the **named set only** (Harrisons · Burdett · Radke · Suzana Lewman),
   never derived from a tag or a stage. This is the one column that needs no verdict: `false` means
   "not on the named list", which is a known answer.
