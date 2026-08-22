@@ -75,6 +75,238 @@ idempotent through the sanctioned writers; `is_backfill` never rings a bell.
 4. **Repoint the pour** to read staging for identity/household/agent-history instead of deriving.
 5. **The ratchet:** any import that reads `fub.*` directly for a DERIVED answer goes red.
 
+---
+
+# ⭐ THE BUILD-READY SPEC — added 2026-08-22 (FUB-18 prep)
+
+Everything above is the SHAPE, signed 2026-08-17. This section is what the next lane can execute
+from: the three requirements a staged lead must satisfy, and the rules — every one of them earned
+on a real lead during the 8/21–8/22 inventory run — that the staging build has to honor or it
+rebuilds the same diseases at 49k scale.
+
+## The three requirements
+
+<Warning>
+**PROVENANCE, said plainly:** these three are the DESK'S wording, not Zach's. They compress a day of
+his live rulings (each rule below carries its own source and date), and they extend the one law he
+did sign verbatim on 2026-08-17: *"we should not be deriving anything without it already derived and
+structured properly in the fub mirror… the fub mirror should be a staging table for the houseloop
+crm."* If you need Zach's exact words for a specific rule, they are in that rule's row — not here.
+</Warning>
+
+**R1 — A staged lead lands in a FINISHED SCHEMA.** Every answer the CRM needs is a typed column with
+provenance, computed before import. The import copies; it never derives, parses, guesses or reaches
+back into the tape for a derived answer. The nearest thing to a Zach quote is his 8/21 01:36Z
+question, which is really this requirement asked as a question: *"WHAT IS THE TABLE THAT GETS
+POPULATED WHEN WE PULL A LEAD INTO HOUSELOOP CRM FROM FUB AND DO WE FREEZE THAT TABLE AND TIME STAMP
+IT AS FOLLOW UP BOSS LEGACY… so if this happens again its just a simple delete lead, and restore
+lead and it comes back perfect."* **That is the acceptance test: trash a staged lead, re-import it,
+and it comes back identical.**
+
+**R2 — The staged HISTORY reads as CATALOG CARDS, not as raw tape.** Every historical event a staged
+lead carries is already resolved to a catalog kind with its actor, its venue and its sentence —
+i.e. it is a card before it is imported, and the import files it through `logActivity` rather than
+inventing a second writer. A staged history that still needs the render layer to figure out what
+happened has not finished staging.
+
+**R3 — The item that TRIGGERED the pull is marked and timestamped on the record.** Not the import
+job, not "backfill": the actual co-temporal event that caused this person to become a lead, named
+honestly and carrying its own timestamp. This is the true-trigger rule (below), and it is the one
+of the three that Zach signed word for word.
+
+## The rules the build must honor
+
+Each rule is here because a real lead was wrong without it. **A rule with no verbatim quote is a
+desk ruling and says so** — do not upgrade it in a later retelling.
+
+### 1. THE TRUE-TRIGGER RULE — signed by Zach 2026-08-22 (verbatim)
+
+Zach, ratifying the desk's proposal in his own message (19:56Z), with James Wisner's card as the
+worked example:
+
+> *"the pull card's reason must be the TRUE co-temporal trigger — even when that trigger is a
+> machine inference — honestly labeled. So Wisner's card would read: ▎ Lead created in HouseLoop via
+> the Follow Up Boss integration ▎ Action: pulled in on a FUB automation note — "Buyer has started
+> searching again after being inactive…", June 30 — this is the correct fix."*
+
+**A machine-inference reason is SELF-INDICTING by design and is never dressed up as a human action.**
+Live in `apps/houseloop-crm/lib/leads/arrival-trigger.ts`; staging inherits it rather than
+re-deriving it.
+
+**THE REASON-RESOLUTION LADDER** (desk wording, ruled 2026-08-22 downstream of the signature above):
+
+| rung | what it is | renders as |
+|---|---|---|
+| ① | a co-temporal **qualifying** action (a kind whose `creates_lead` is true) | the action, with its venue |
+| ② | a co-temporal **non-qualifying** source event with SUBSTANCE | its honest family — "a FUB automation note", "a Zillow insight" |
+| ③ | manual | a person pulled this lead in |
+| ④ | **unexplained = a filed defect** | drawn, never hidden — `unrecorded`, in warning colour |
+
+Four mechanics the staging build must carry, not re-invent:
+
+- **The window is MEASURED, not chosen:** 3 days back, 10 minutes of forward grace. 33 of 50 stamped
+  lags land within 89 minutes, then hours, then 2.4 days — and the next one is 30 days. The gap is a
+  factor of twelve, which is what makes 3 days a boundary rather than a preference.
+- **Rung ② prefers SUBSTANCE over NEAREST.** Nearest-wins on Wisner picks a contentless
+  `virtually_toured` and renders "took a virtual tour"; substance picks the insight and renders the
+  card Zach actually signed.
+- **Candidates are source-side only** (an `archived_from` stamp or a `fub.*` source table). Without
+  that fence, rows written three minutes AFTER the pull get cited as its cause.
+- **The qualifying set is read live from `hl_event_mapping.creates_lead`** — never a list in code
+  (Bedrock D5: the toggles are DATA).
+
+The defect this cures, measured 8/22: the earlier correction pass searched only qualifying kinds and
+reached backwards, so Wisner's 2026-06-30 pull cited an `sms_received` from 2026-04-25 — **65 days
+stale**. Nine real leads carried that shape, up to 351 days.
+
+### 2. THE FILING-SIDE GENERATION PREFERENCE — desk ruling 2026-08-22 ⚠ GATES the cohort rehearsal
+
+When one `(person, body, timestamp)` fact exists in both generations, **the API row files and the
+scraped twin never does.** The scraped generation disagrees with the API generation on message
+DIRECTION in **19,764 of 58,854 twin pairs**; on the API generation the actor is trustworthy.
+
+⛔ **This must be LIVE BEFORE any cohort rehearsal.** Importing 49k through a reader that believes
+111k lying rows replays the disease at scale — the cleanup is not a substitute for the rule, because
+the next pull mints the twins again.
+
+### 3. THE MACHINE-NOTE ACTOR RULE — ordered by Zach 2026-08-22 (verbatim), shipped
+
+Zach, on finding his own name on a Zillow sync note:
+
+> *"Zach Spradling created a note, wants to view a property, wants to be contacted by text.
+> **I DIDNT DO THAT.**"*
+
+(and on 8/21: *"it says zach spradling created a note… THAT IS A FUCKING ZILLOW SYNC NOTE FROM FUB"*)
+
+**The discriminator is BODY GRAMMAR** — `lib/integrations/machine-note-grammar.ts`, validated on the
+154,199-body corpus. Two cheaper discriminators were tested and REJECTED: `system_id`, and
+`user_id IS NULL` (which is *inverted* — 2.5% vs 8.0%). 36 rows re-actored; the rule sits at rung
+ZERO of `fub-authorship.ts`, above `tape_author_trusted`.
+
+⚠ **Scale for staging: 1,155 machine notes are latent on the tape across 36 agent names** (largest
+single name: 526). Staging must apply this rule at derivation time, or the pour re-dresses a
+thousand robot notes in human clothes. Note the arithmetic drift in the record — the day card queues
+"38 reclassify", the builder shipped **36**; a fixture trap silently rejected 17 rows before it was
+fixed. Cite 36.
+
+### 4. THE VENUE RIDES WITH THE VERB — signed by Zach 2026-08-22 (verbatim, iterated live)
+
+The action sentence names **where the action happened**, never the pipe: *"made a general inquiry on
+Zillow."* This is Bedrock **D2 in a single field** — Zillow is a SOURCE, Follow Up Boss is a PIPE.
+Passing the carrier here would put *"made a general inquiry on Follow Up Boss"* on a card, which
+asserts that somebody browsed our CRM vendor.
+
+The hero card Zach signed, in his words (20:04Z): *"bottom left badge should be follow up boss icon
+and the right of it should be the source… zachary bell, imported via follow up boss integration, no
+fub signal [up top], we keep the fub signal at the bottom left, and the rest of the card stays the
+same."* And on timeline events (19:58Z): *"the fub logo rides the EVENT."*
+
+The three grammar lines live as DATA in `hl_settings.arrival_grammar`, drafted by Zach at 13:24Z:
+
+```
+Lead created in HouseLoop [via the Follow Up Boss integration]
+Lead source: <bucket>
+Action: <signal> — <payload>
+```
+
+Staging supplies the venue and the payload as COLUMNS. It never hands the renderer a carrier name.
+⚠ Open, not shipped: the venue-logo law on timeline event cards (parked as its own measured pass —
+`avatarFor` precedence touches every legacy card).
+
+### 5. THE SOURCE COMES FROM FUB'S SOURCE FIELD — Zach 2026-08-22 (verbatim)
+
+> *"you get the source from the source field in follow up boss, follow up boss is the integration."*
+
+The lead source is a staged column read from the tape's source field, never inferred from a feed
+name or a tag. ⚠ **The Google bucket is still an open product call** (Zach, 12:50Z: the Google bucket
+arrives through either integration and FUB carries `source Google PPC` / `Google AdWords` tags) —
+staging must carry the raw source verbatim so the bucketing decision stays reversible.
+
+### 6. `created_at` IS THE HOUSELOOP PULL DATE — law 2026-08-22
+
+Zach: *"don't we record it when they got pulled in"* → *"Renita Ford's actual pulling date was July
+14th."* Her 7/14 date was CORRECT and the planned 50-lead restamp was **KILLED**. A staged lead's
+CRM `created_at` is the moment HouseLoop pulled it; the FUB-side dates live in their own staged
+columns and never overwrite it.
+
+⚠ If you find a doc still listing "restamp-50" as live work, it is stale — that job is dead.
+
+### 7. THE RECIPIENT-FABRICATION REVERT — retired 2026-08-22, falsified by Zach against FUB's screen
+
+The `new_era_assigned_agent` override rewrote a message's recipient to the assigned agent. Zach
+disproved it on Zairanett Hernandez: **FUB's own screen shows the message went to the person FUB
+named.** 70 rows were reverted to FUB's claim.
+
+⚠ **The lesson staging must internalize:** the rule was pure, fixture-tested and GREEN — because its
+test asserted that the override FIRED. A derivation whose test asserts its own mechanism ran can be
+green and wrong forever. Every staged derived column needs an assertion against the SOURCE, not
+against the deriver. (The `RecipientSource` enum keeps the retired member so historical staging rows
+stay readable.)
+
+### 8. `is_backfill` NEVER RINGS A BELL — Bedrock D4, and a live violation is still open
+
+Three independent gates enforce it on the seat-filing backfill, and replays (`road=catch_up`) never
+notify. ⛔ **Not settled:** an agent-alert text fired to Ana on 2026-07-27 announcing a tour request
+made 2025-12-18 — **221 days late** — because a FUB history replayed at import. The backfill fired a
+real send and the replay path is presumably still armed. **A staging→import pass at cohort scale is
+exactly the event that would fire it again.** Prove this closed before the first cohort import, not
+after.
+
+### 9. THE MINT LAW — 9 action-needed triggers, signed by Zach 2026-08-22 (verbatim)
+
+> *"Property inquiry, Phone call, **I need all leads that need a freaking action taken.** A seller
+> inquiry is different from a high intent seller signal and if somebody inquires to sell their home
+> I need that, a text, an inbound email, an in app message, any type of tour request, contact
+> request, should mint a lead."*
+
+ON (9): `tour_request` · `in_app_message` · `text_message` · `property_inquiry` · `phone_call` ·
+`seller_inquiry` · `contact_request` · `email_received` · `general_inquired`.
+OFF (4): `registration` · `pre_approval` · `fub_zhl_preapproval_disguised` · **`fub_person_created`**
+(the random-import cause). A seller INQUIRY mints; a high-intent-seller SIGNAL never does. It is
+`hl_event_mapping` DATA controlled from the automation-triggers surface — **nothing hardcoded**.
+
+⚠ Open, ordered but unconfirmed: calls/texts/emails must mint **INBOUND-only**.
+
+## What staging must NOT reintroduce — the six named diseases
+
+The 8/21–8/22 inventory run reduced the whole episode to six causes. Every one of them is a
+staging-layer failure mode, which is why this PRD exists:
+
+1. **Contaminated stamps** — a backfill dressing re-imports in campaign clothes.
+2. **False-legacy masking, in BOTH directions** — native rows masked as legacy, legacy rows unmasked.
+3. **The twin generation** — the scraper's direction-blind second copies (rule 2 above).
+4. **Fabricated participants** — the assigned-agent recipient rule; FUB auto-notes wearing human
+   actors (rules 3 and 7).
+5. **Unwired truth** — grammar and reasons built with zero render callers. A staged column nothing
+   reads is not progress.
+6. **Mint floodgates** — cured by rule 9.
+
+## The revised order of work
+
+The five steps above still stand. These come first, because each one is a gate on the next:
+
+1. **Rule 2 (filing-side preference) goes live.** It gates the cohort rehearsal; nothing that
+   imports at scale may run before it.
+2. **DDL for the staging person table**, now carrying the trigger columns R3 needs: the true-trigger
+   event id, its rung (①-④), its kind, its venue, and its timestamp — with provenance.
+3. **The derivation jobs** as registered Inngest functions (Inngest or it doesn't exist), each one
+   applying the rules above at DERIVATION time: machine-note actor, venue, source-field, generation
+   preference.
+4. **Prove rule 8** (`is_backfill` fires nothing) red-first against a replay, before any cohort pass.
+5. **The readable surface**, then the pour repoint, then the ratchet — unchanged from above.
+
+## Open, and deliberately not decided here
+
+- **The qualifying-window date disagrees across two live records:** the day card says the executed
+  population law was "pull-card **July 1**+ with a real action reason, OR Zach/Ana communication";
+  Lee's handoff says the qualifying window starts **July 7** (superseding an earlier 7/15). One of
+  them is wrong and it is not this PRD's call to pick. Resolve at the desk before it is written into
+  a staging predicate.
+- **The Google source bucket** (rule 5) — a product decision, still Zach's.
+- **Inbound-only minting** for calls/texts/emails (rule 9) — ordered, not confirmed live.
+
+---
+
 *Nothing in this PRD imports anyone. The 48k bulk import is dead (ledger 314); this layer exists
 so that whatever IS imported — the past-client pour, a hand-picked beta lead — copies answers that
 were already derived, structured, and visible.*

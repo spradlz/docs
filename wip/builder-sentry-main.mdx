@@ -1,0 +1,81 @@
+---
+title: "Builder-sentry (builder-sentry — HANDOFF (2026-08-22, lane complete, stood down))"
+description: "Work-in-progress dossier — Builder-sentry. builder-sentry — HANDOFF (2026-08-22, lane complete, stood down)."
+---
+
+<Info>Live dossier — auto-generated from `.claude/state/wip/builder-sentry.md` on every push. **Progress: checklist pending.**</Info>
+
+**Owner:** Builder-sentry
+
+## Checklist
+
+Stage 5 (the sentries) + Zach's canary law. All work is COMMITTED LOCALLY; the desk pushed/deployed.
+
+### WHAT IS LIVE
+
+| thing | commit | state |
+|---|---|---|
+| Sentries: `writerVerdict` + `coverageVerdict`, the generation lie deleted | `2849fb2165` | deployed; proof = the `*/10` scan tick carrying `meta.writers` + `meta.coverage`, and NO `texts` row in `meta.feeds` |
+| The canary + the evidence-class split on the pager | `0f7bd5946b` | deployed, PUT-synced; proof = the first `:17` run-log row for `fn='fub-canary-webhook'` with `arrived:true` |
+| `scraper-health.mjs` rebuilt (3 defects) | bytes `2d480fb2c1`, reasoning `a8e56c2f10` | live on BOTH hosts (desk made the paths per-host — see the lesson below) |
+| Registry data: `thresholds.writers`, `thresholds.canary`, road notes | data only, no DDL | live; reversal dumps in `~/hl-reversals/captain-sentry/` |
+
+**The doctrine, in one line (the desk's wording for THE BOOK):** *silence alarms for dense arms, writer
+assertions for sparse arms, facts on every verdict, no color without a mechanism behind it.* And:
+**"DOWN" may only be asserted from a failed canary or a dead writer — never from quiet traffic.**
+
+### FOR STAGE 6 (quarantine) — three named things, none touched by me
+
+1. **`fub.scraper_heartbeat` — THE FOSSIL.** Last beat 2026-08-10 15:23:46Z, pid 41527, status
+   `complete`, belonging to the retired `fub-parallel-scraper` (unregistered from pm2, 8/21 autopsy).
+   It sits beside the LIVE `fub.webhook_scraper_heartbeat` with a near-identical schema and an adjacent
+   name — `scraper-health.mjs` had them exactly backwards for months. It is now DECLARED a fossil in
+   two places (the `chrome_scrape` registry note carries `⛔ DO NOT WIRE`, and the health script prints
+   it by name with the reason) so nobody re-wires it. **Quarantine it, never delete it** — and dump first.
+2. **The scraper-SMS scope cut.** Zach: *"the api gives us perfect text data; the only thing that is
+   hard to get is the in-app message poller."* So the SCRAPED generation of `fub.text_messages` is
+   legitimate **only** for `message_type='zillow_inapp'` — Zillow in-app has no API, which is the entire
+   reason that road exists. Scraped SMS was always duplication of perfect API data (the 111k twin
+   generation, 96,171 `group_sms` + the rest). Recorded verbatim in the `chrome_scrape` row's note.
+   Stopping the SMS scrape is stage-6 work at the desk, not mine.
+3. **`fub_scraper_status`'s remaining surface.** The MCP tool itself is fine — it correctly delegates to
+   the one law. The three defects were all in `scraper-health.mjs` and are fixed.
+
+### FOR STAGE 7 (THE BOOK) — what this lane earned
+
+- **Before setting a silence window, measure the arm's OWN largest healthy gaps.** The API text arm was
+  77h silent, and its four biggest gaps in the prior 120 days were 176.5h / 116.3h / 107.3h / 96.8h.
+  The "outage" was shorter than four healthy Tuesdays. A window that fires on it cries wolf four times
+  in six weeks.
+- **A max() over a union reports its liveliest member.** Found three times now, at three grains: road
+  (`FUB_SCRAPE_ROADS`), direction (`inappArms`), and now GENERATION. `zillow_home_activity`'s ~60k
+  rows/2h kept the whole health check green forever.
+- **Fix a union-max by SCOPING or DELETING, never by adding a second scoped row** — that is a twin.
+- **A volume gate is what makes a per-road alarm safe.** The union max existed for a real reason
+  (sparse comms tables cried wolf, 7/30); the cure was wrong, not the diagnosis. Keep the protection.
+- **The canary's stale branch is the one people forget.** If the prover stops, its last green certifies
+  every road it watches, forever. Stale ⇒ amber ⇒ "UNWATCHED, not healthy".
+- **A per-run nonce, not a constant marker** — or the canary certifies today using its own history.
+
+### ⚠ THE LESSON I OWE THIS LANE (desk-caught, worth putting in THE BOOK)
+
+**`scraper-health.mjs` hardcoded the dev Mac's absolute paths** — `createRequire('/Users/zachspradling/…')`
+and the `.env` read — so "the ONE health law" had only ever been runnable on the dev machine. The Camp
+David deploy crashed on first run. I inherited the pattern from the original's own lines and did not
+question it, **even though the whole point of my lane was that this script runs on Camp David.** The
+desk made resolution per-host and verified identical output on both.
+
+The general form: **a tool that is supposed to run on another host is not verified until it has been run
+ON that host.** Reading the code cannot reveal an absolute path that happens to exist where you are
+standing. Every one of my proofs was run on the dev Mac and every one of them passed.
+
+### OPEN / NOT MINE
+
+- The 8/19 coincidence (`fub.people` 15:45Z + texts 14:19Z, both webhook road, notes/emails flowing) —
+  **the desk took it.** Its read so far: BENIGN — people updates still land (272/24h; only
+  `max(fub_created)` went quiet = no NEW contacts since the floodgates closed) and FUB texting simply
+  ended when texting moved to our lines. The canary + writer assertions are the permanent answer either way.
+- In-app injection canary (v2 candidate, NOT built): needs the Zillow test account to send a real in-app
+  message; the walk machinery + the `admin@bossloop.ai` Zillow session exist. Noted in the registry.
+- `hl_leads.is_test` as a real column instead of a name pattern — raised in `lib/leads/test-leads.ts`,
+  still DDL, still the desk's signature. The canary depends on that predicate.

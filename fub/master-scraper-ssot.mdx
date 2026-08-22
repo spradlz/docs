@@ -2068,6 +2068,114 @@ lied is **fresh data landing in `fub.*`**. The heartbeat is CONTEXT — it may n
 fresh-data verdict (the canonical script enforces this in code).
 </Warning>
 
+## 🔁 THE RESTORE DRILL — proving the backups are backups (FUB-17, live 2026-08-22)
+
+**One sentence: a backup nobody has restored is a rumour.** The nightly job
+(`~/houseloop-backups/run-backup.sh`, 03:30 daily) proves a dump was *written* and is big enough.
+The drill proves the dump *restores* — into a real database, with the rows counted.
+
+<Warning>
+**`pg_restore --list` CANNOT tell you a dump is complete.** A custom-format dump keeps its table of
+contents at the FRONT of the file, so a dump truncated halfway through still lists perfectly. Four
+truncated dumps survived that way on Camp David 2026-08-15..17 when the disk filled mid-write; each
+one looked like a backup and would have restored like a lie. Size plus a real restore are the only
+honest evidence. That is why this drill exists.
+</Warning>
+
+### Running it
+
+```bash
+# on Camp David
+bash ~/houseloop-backups/restore-drill.sh                 # the drill — takes about a minute
+bash ~/houseloop-backups/restore-drill.sh --keep          # leave the scratch DB to poke at
+bash ~/houseloop-backups/restore-drill.sh --dump <path>   # drill a specific (e.g. older) dump
+```
+
+Source of truth for the script: `tools/houseloop-backups/restore-drill.sh` in the repo. Camp David
+runs a deployed copy at `~/houseloop-backups/restore-drill.sh` — edit the repo, redeploy, never
+hand-edit the copy. Exit 0 = PASS, exit 1 = FAIL. Every run appends one line to
+`~/houseloop-backups/restore-drill.log`; a failed restore leaves its full stderr at
+`~/houseloop-backups/restore-drill-last-errors.log`.
+
+### What it checks, in order
+
+| # | Gate | Fails when | Why it is a gate and not a warning |
+|---|---|---|---|
+| 1 | **the file** | no `houseloop_crm-*.pgdump`, or the newest is a `.partial` | a failed dump is renamed `.partial` on purpose; restoring one would launder a corpse into a receipt |
+| 2 | **freshness** | newest dump older than 36h | the nightly runs at 03:30 — 36h means it is broken, and a drill that passes on a stale dump is a green light for a dead backup |
+| 3 | **size** | under 200 MB (measured 370,915,150 B on 8/22) | the shrink guard; a near-empty dump is the 2026-07-18 failure mode (it dumped an empty LOCAL database nightly and logged "complete") |
+| 4 | **disk** | under 12 GB free | the restored CRM is ~2.7 GB; an ENOSPC mid-restore is how Camp David lost four dumps in August |
+| 5 | **the restore** | any `pg_restore: error:` that is not known version noise | see the version-skew note below |
+| 6 | **the sentinels** | any of five tables under its floor | the actual proof — the only check that a dump which restored also CONTAINS the estate |
+
+**The five sentinels** — five different estates, so a partial restore cannot hide behind one healthy
+table. Floors are SHRINK guards (these tables only grow; trash is a flag, never a delete), set well
+under the live counts measured 2026-08-22:
+
+| sentinel | estate | floor | live 8/22 | in the 8/22 dump |
+|---|---|---|---|---|
+| `hl_leads` | people | 100 | 216 | 229 |
+| `hl_activity_log` | THE activity log | 30,000 | 65,802 | 70,265 |
+| `hl_messages` | comms | 15,000 | 16,719 | 16,897 |
+| `hl_srg_past_clients` | the past-client SSOT | 1,700 | 1,779 | 1,779 |
+| `hl_user` | website users | 200,000 | 210,221 | 210,234 |
+
+Raise a floor only when it has gone uselessly low, and say why in the commit. **Never lower one to
+make a drill go green** — that turns the drill into decoration.
+
+### The two safety properties
+
+- **THE NAME GUARD.** Every `createdb`/`dropdb` goes through one function that refuses any name not
+  matching `^hl_crm_drill_[0-9_]+$`. `houseloop_crm`, `bossloop`, and the kept snapshots
+  (`hl_crm_0818_snapshot`) are unreachable from this script by construction, not by carefulness.
+- **NO RESIDUE.** The scratch database is dropped on the way out — on success, on failure, and on
+  Ctrl-C — unless you asked for `--keep`, which says so loudly.
+
+<Warning>
+**VERSION SKEW: the dumps are PostgreSQL 18, Camp David's local server is PostgreSQL 16.13.** Every
+PG18 dump opens each section with `SET transaction_timeout = 0;` — a parameter that did not exist
+before PG17 — so a *perfectly clean* restore here still exits 1 with a handful of those lines and a
+`errors ignored on restore: 2` summary. The drill classifies exactly that pattern as benign and lets
+the row counts decide. It works today because nothing in the schema uses PG17+ syntax; the day
+something does, the restore breaks HERE first, which is the point. **Do not widen the benign list to
+make a future error go away.**
+</Warning>
+
+### The record
+
+| date | dump | verdict | restore | evidence |
+|---|---|---|---|---|
+| **2026-08-18** | `houseloop_crm-2026-08-18.pgdump` (11:10 snapshot) | **PASS — the inaugural, and it was not a drill** | — | Restored live as `hl_crm_0818_snapshot` (2,480 MB, still on Camp David beside `hl_crm_0814_snapshot`). It carried **155 rows in `hl_leads`**, and those 155 leads are what the 8/22 triage was run against — the pre-fiasco record that let 50 false-dated leads, 14 shrunken histories and the trash candidates be told apart from the real book. A restore that did real work is the strongest proof this estate has. |
+| **2026-08-22 16:18** | `houseloop_crm-2026-08-22.pgdump` | **PASS** | 46s | First run of the scripted drill. 5/5 sentinels over floor, 0 real restore errors (12 benign version-noise lines), scratch dropped, no residue. |
+
+**Commissioning (2026-08-22 16:15–16:20) — every gate was proven to go RED before the PASS was
+believed**, because a gate that has never failed is not a gate:
+
+- **name guard** — planted the scratch name as `houseloop_crm`: refused before `createdb`, and
+  refused again in the cleanup path. The live database was never touched.
+- **freshness** — pointed at the real 14-day-old `houseloop_crm-2026-08-08.pgdump`: `348h old` → FAIL.
+- **sentinel floor** — planted `hl_leads` floor at 999,999: `actual 229 — SHORT` → FAIL, with the
+  other four still green (so the failure was the floor, not a broken restore).
+- Residue after all three failures: zero drill databases, no stale lock.
+
+Those four commissioning rows are the first entries in `restore-drill.log` and are deliberately left
+there. Two defects in the script itself were found by these runs and fixed: a run that exited
+*because* the lock was held used to release that lock on its way out (the loser unlocking the door
+for the winner), and `pg_restore`'s own `errors ignored on restore: N` summary line was being counted
+as an error, failing a dump that had restored perfectly.
+
+### The gap this does not close
+
+The drill covers the **CRM** database only. The WEB database (`houseloop_web-*.pgdump`, ~600 MB), the
+**live FUB mirror** (`fub_mirror-*.pgdump` — the tape, which RULE #0 v2 names an absolute survivor)
+and Camp David's own `campdavid_bossloop-*.pgdump` are dumped nightly and pushed off-box, but nothing
+has restored them. Extending the drill to them is the same script with a different dump prefix and
+its own sentinels — it is not done, and this page will not pretend otherwise.
+
+Two related findings, filed rather than fixed here: `run-backup.sh`'s CRM size floor is **20,000
+bytes** against a real 370 MB dump — four orders of magnitude too low to catch anything — and the
+off-box R2 copies have never been restore-tested at all.
+
 ## Audit of record — Fable-5 end-to-end (2026-07-09)
 
 Ordered by Zach before the notifications/triggers/FUB-update build. Every claim carries evidence: a `file:line`, a
