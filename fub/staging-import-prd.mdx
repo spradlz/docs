@@ -420,6 +420,416 @@ The five steps above still stand. These come first, because each one is a gate o
 
 ---
 
+# ⭐ THE PER-FIELD MAP (R4, deliverable #1) — added 2026-08-22 by lane builder-staging
+
+R4 says the mapping IS the contract, and that the per-field level "is NOT done". This section is that
+level. **Every column of every in-scope `fub.*` table is either MAPPED or explicitly marked NOT-STAGED
+with a reason** — Zach's R1, applied to the map itself: there cannot be holes in anything, including
+in the document that promises there are none.
+
+**Everything below was read from the live tape and the live CRM on 2026-08-22** (`\d` against
+`FUB_RAILWAY_DATABASE_URL` and `HL_CRM_DATABASE_URL`), never from memory. Where this map states a
+population number, it is a `count()` run that day. Where it states how a value is derived, it is read
+off the file that derives it, cited by path.
+
+## What already exists, and what this map is actually adding
+
+The honest headline: **the EVENT half of this PRD is already built and running.** `hl_staging_event`
+(migration 0726, Bedrock item 21) holds **995,173 classified rows across six lanes**, and it already
+carries `actor_source` (R2), `occurred_at` + `occurred_at_source` + `classified_at` + `imported_at`
+(R3), and `verdict` + `verdict_reason` + `review_status` (R1). The shape this PRD asks for at the
+event grain exists.
+
+What does not exist is the **PERSON** row. So Part A below is a map of a built thing (its value is
+that it is now written down, and that writing it down surfaced three defects), and Part B is the
+specification of the thing to build.
+
+| lane | staged rows | imported |
+|---|---:|---:|
+| `fub.text_messages` | 398,622 | 161 |
+| `fub.emails` | 210,102 | 234 |
+| `fub.notes` | 150,862 | 2,190 |
+| `fub.events` | 146,425 | 36 |
+| `fub.people` | 49,245 | 39 |
+| `fub.calls` | 39,917 | 6 |
+
+## The naming convention — FOUND, not invented
+
+The question "what prefix does a FUB staging table take" was already argued and signed in migration
+`0726_staging_event.sql`, and its four reasons transfer to the person grain unchanged: the shelf is
+carried by the **noun** (`staging`), a human reads the review queue so `ONE_ANSWER_TABLE` test 4
+answers PRODUCT `hl_*`, it is a standing conveyor rather than a one-pour scaffold, and there is no
+`srg_`-style name collision needing the prefix trick. **The integration is a COLUMN** — there is no
+`hl_fub_staging_event` and there must be no `hl_fub_staging_person`.
+
+So: **`hl_staging_person`**, keyed `(integration_key, fub_person_id)`. The draft DDL is
+`apps/houseloop-crm/db/migrations/DRAFT_fub_staging_person.sql` — `DRAFT_` is outside the boot
+runner's `^\d{4}_` pattern, so it structurally cannot self-apply, the same protection `HOLD_` gives.
+
+## ⛔ THREE CONTRADICTIONS BETWEEN THIS PRD AND THE LIVE CODE
+
+Building the map surfaced three places where this document and the running system disagree. **None of
+them is resolved here** — each is recorded with its measurement for the desk.
+
+### C1 — R2's rung ② names an instrument Zach RETIRED, and quotes the RETIRED rule's scores
+
+R2's ladder says rung ② is `assignment_derived`, reading **`fub.assignment_history`** for "who held
+this person AT THE MESSAGE'S TIME", and the Warning block presents **88.3% exact / 4.13% wrong-person**
+as "the price of the rung… a KNOWN price".
+
+`apps/houseloop-crm/scripts/legacy-actor-rung2.ts` records that **Zach corrected that instrument on
+2026-08-22**, and the corrected rule is the one that shipped. Both were scored the same honest way —
+against the outbound rows the tape witnesses, so rung ① can grade them:
+
+| rung ② instrument | exact | wrong person | status |
+|---|---:|---:|---|
+| `fub.assignment_history` chain — **what R2 describes** | 88.3% | 4.13% | ⛔ **retired by Zach** |
+| the agent ON THE LEAD — `collaborators` / `communication_agent` / `team_leaders` | **96.5%** | 3.5% | ✅ **shipped** |
+
+His words, in that file: *"Outbound Legacy Actors resolve to the agent that was assigned to them… You
+use the Team Exit agent name or an agent name that's other than Ana Spradling or Ben Froeschl."*
+
+Three measurements make the correction stick, all re-run 2026-08-22:
+
+- **`fub.assignment_history.changed_at` is NULL on all 22,449 rows.** R2 demands "rung ② is time-aware
+  or it is wrong" — the table cannot be made time-aware. The PRD's own caveat concedes this, then keeps
+  the rung anyway.
+- **`fub.people.assigned_to` identifies nobody**: 49,237 non-null values, **three distinct**, reading
+  "Zach Spradling" on **49,230 of 49,250 people**. It is a migration artifact.
+- **The corrected rule's material is present**: `collaborators` non-empty on 49,237 people,
+  `communication_agent` on 16,544 (81 distinct), `team_leaders` on 7,513, an `Agent:` tag on 49,214.
+
+⚠ **And the shipped token is a fossil that will mislead the next reader.** The 58 corrected ledger rows
+are stamped `actor_source='fub_assignment_derived'` — a name minted for the first cut and kept after
+the instrument beneath it was replaced. **The token names `assignment_history`; the code reads the
+person record.** Anyone resolving that token back to that table will reintroduce the retired rule.
+
+**For the desk:** either R2 is amended to name the shipped instrument, or the shipped instrument is
+wrong and 58 ledger rows need re-deriving. This lane did not pick, and the DDL keeps the material for
+both readings.
+
+### C2 — rule 3 requires the machine-note rule in STAGING; staging does not run it
+
+Rule 3 says: *"Staging must apply this rule at derivation time, or the pour re-dresses a thousand
+robot notes in human clothes."*
+
+`isMachineIntakeNote` is called by `fub-authorship.ts` (`resolveTapeAuthorship`, rung ZERO),
+`backfill-fn.ts`, `backfill-fub-comms.ts` and the one-shot reactor script. **It is not called by
+`fub-adapter.ts`** — the file that writes `hl_staging_event`. The correction happens at IMPORT time,
+inside `decideActor` in `fub-merge-import.ts`, which is the layer this PRD exists to empty.
+
+Measured by running the **production discriminator itself** over the live tape and joining its ids to
+staging (not by a re-implementation of the grammar):
+
+```
+fub.notes total                     : 154,207
+machine intake notes (prod grammar) :     709   — carrying a non-blank user_name: 709 (33 distinct names)
+
+HOW STAGING ACTORS THOSE SAME 709 ROWS TODAY:
+  roster_no_seat   by_kind=user   504
+  roster_exit      by_kind=user   107
+  roster_seat      by_kind=user    84    ← resolved to a REAL HouseLoop seat
+  name_only        by_kind=user    11
+```
+
+**All 709 robot notes are staged wearing a human actor. None is `machine_name` or `system`.** Eighty-four
+carry a real `by_user_id`. This is precisely *"Zach Spradling created a note… I DIDNT DO THAT"*, sitting
+in the staging table right now, corrected only downstream.
+
+⚠ **A number in rule 3 also disagrees with its own source.** Rule 3 says *"1,155 machine notes are latent
+on the tape across 36 agent names"* and instructs "Cite 36". The production grammar measures **709 across
+33 names** today, and `machine-note-grammar.ts`'s own header independently states **"709 match"** on the
+154,199-body corpus. The 1,155/36 figure matches neither. It is not this lane's call which is right —
+but a rule that instructs a count to be cited should cite the one its own detector produces.
+
+### C3 — the calls lane drops a column that is populated on every row
+
+`fub.calls.recording_url` is **non-null on all 39,924 rows** and `ai_summary` on 31,632. Neither is in
+the lane's `SELECT`, so neither reaches staging. R4's own table promises `fub.calls → calls → duration,
+outcome, **recording**`. Under R1 that is a hole: the destination field exists, the tape has the value
+on every row, and staging cannot supply it.
+
+⚠ Related, smaller, and a documentation defect rather than a data one: the emails lane comment states
+*"The mirror has no `sentByPerson` column"*. **It does** — `fub.emails.sent_by_person`. It is populated
+on only 462 of 210,374 rows, all `false`, and it **never disagrees with `is_incoming`** (0 rows), so no
+verdict changes today. The comment is still wrong, and the `or` matcher's first branch is permanently
+blank for a reason that is not the stated one.
+
+## The tape census — 30 tables, and what is out of scope
+
+`\dt fub.*` returns 30 tables. Six are in the live staging scope. The rest are ruled out below, each
+with its reason, so "out of scope" is never a silence.
+
+| table | rows | in scope? | why |
+|---|---:|---|---|
+| `people` | 49,250 | ✅ **both** | the person row (Part B) **and** an event lane (the `peopleCreated` signal) |
+| `text_messages` | 399,840 | ✅ lane | |
+| `emails` | 210,374 | ✅ lane | |
+| `notes` | 154,207 | ✅ lane | |
+| `events` | 146,473 | ✅ lane | |
+| `calls` | 39,924 | ✅ lane | |
+| `saved_searches` | 7,239 | ✅ lane | its `hl_event_mapping` rule was live before its reader existed |
+| `team_members` | 136 | ✅ **evidence** | THE roster. Not a destination — it resolves actors. `team_exit=true` + negative id = a KNOWN departed actor |
+| `assignment_history` | 22,449 | ⚠ **evidence, degraded** | `changed_at` NULL on all 22,449 rows. See **C1** — the instrument Zach retired |
+| `zillow_home_activity` | 976,504 | ⛔ **blocked, filed** | the LARGEST slice, and `hl_event_mapping` has **no rule for it at all**. Adding one is a mapping-catalog product decision (item 20's table), not something an adapter may paper over. Still classified by a code literal today |
+| `zillow_insights` | 354,702 | ⚠ arrives as NOTES | reaches staging through `fub.notes`; `decideActor` rung 0 re-authors it to the machine by catalog LENS. Under this PRD that derivation moves into staging |
+| `deals` | 4,555 | ⛔ frozen | no writer since the 2026-07-09 webhook shutoff. Replaying it would present May-July data as current |
+| `appointments` | 3,098 | ⛔ frozen | same |
+| `tasks` | 7,178 | ⛔ frozen | same |
+| `stage_history` | 15,948 | ⛔ frozen | same |
+| `closed_deals_master` | 1,914 | ⛔ not a spine | SISU is the canonical closing truth (`ONE_ANSWER_TABLE` spine rule). This is a match table, enrichment only |
+| `sync_log` | 214,319 | ⛔ **retired** | table comment: NO WRITER EXISTS since 2026-07-09. Its frozen `max(created_at)` was once quoted as a 41-day P0 on a feed that never stopped |
+| `webhook_event_log` | 224,867 | ⛔ **retired** | same — no writer since the receiver was repointed |
+| `rehydration_queue` | 49,334 | ⛔ **deprecated** | table comment: graveyard, explicitly "NOT a scraper health signal" |
+| `rehydration_log` / `_v4` | 49,252 / 0 | ⛔ ops | scraper bookkeeping about US, never a fact about a person |
+| `job_queue` | 654 | ⛔ ops | |
+| `scraper_log` | 0 | ⛔ ops, empty | |
+| `poll_state` | 4 | ⛔ ops | |
+| `scraper_heartbeat` · `webhook_scraper_heartbeat` · `body_recovery_heartbeat` | 1 each | ⛔ ops | liveness, not content |
+| `zillow_inapp_ghost_quarantine` | 9,884 | ⛔ **quarantine** | already ruled out of the ledger. A quarantine that gets imported is not a quarantine |
+| `houseloop_lead` | 86 | ⛔ pointer | a link list, no fields of its own |
+| `users` | **0** | ⛔ **empty** | ⚠ the obvious roster table is EMPTY. `team_members` is the roster. Recorded because every reader checks here first |
+
+## PART A — the EVENT lanes, per field (LIVE)
+
+**Source of truth for this part:** `apps/houseloop-crm/lib/integrations/fub-adapter.ts` — each lane's
+`sql` is exactly what staging can see, and `toProvider` is exactly what survives into `payload`. A
+column absent from the `SELECT` cannot reach staging no matter how well anything else is stamped.
+
+**Shared destination for every lane:** `hl_staging_event`, then `hl_activity_log` via `logActivity`
+(the one door — `applyInsert` is the only writer, and nothing else in the import writes).
+**Shared clocks (R3):** `occurred_at` + `occurred_at_source` ① · `classified_at` ② · `imported_at` ③.
+**Shared actor:** the ladder in `resolveActor`, stamped into `actor_source` (R2).
+
+### The staging actor ladder AS BUILT — and it is not the ladder R2 describes
+
+R2 names five rungs (`witnessed` / `assignment_derived` / `tag_derived` / `content_inferred` /
+`degraded`). **None of those five strings exists in the code or the data.** The live ladder has
+thirteen outcomes. Live census of `hl_staging_event.actor_source`, 2026-08-22:
+
+| live `actor_source` | rows | R2 rung it corresponds to | what decided it |
+|---|---:|---|---|
+| `lead_unlinked` | 428,152 | ① the lead's own act | inbound, but no `hl_leads` row yet |
+| `roster_no_seat` | 288,357 | ① witnessed | roster name, no HouseLoop seat |
+| `roster_exit` | 90,417 | ① witnessed | `team_members.team_exit=true` — a KNOWN answer, not a fallback |
+| `tape_directory` | 62,806 | *(no R2 rung — the strongest instrument, and R2 omits it)* | `user_id` named by a sibling lane |
+| `machine_name` | 47,806 | *(no R2 rung)* | `Follow Up Boss` / `Imports User` / `N- Playbook:` |
+| `name_only` | 34,047 | ③-ish | a real name the roster does not hold |
+| `roster_seat` | 17,640 | ① witnessed | resolved to a real `by_user_id` |
+| `unresolved` | 17,175 | ⑤ degraded | the honest blank |
+| `line_or_pool` | 6,332 | *(no R2 rung)* | a phone line or `Past Agents` pool with a roster seat |
+| `lead` | 2,441 | ① | inbound, lead linked |
+| `signature_in_body` · `signature_corroborated_by_tag` · `lead_agent_corroborated` | remainder | ④ content_inferred | Zach's two-signal rule (#245) |
+
+⚠ **The gap that matters is `tape_directory` (62,806 rows).** It has no rung in R2 at all, and it is
+the rung that beat the tags **74,286 times out of 74,286** — where the tags said "Ben Froeschl" on
+71,244. If R2's five-rung ladder were implemented literally, it would replace the best instrument in
+the system with one that is wrong on nine-tenths of that class.
+
+### `fub.text_messages` — 24 columns: 13 staged, 11 not
+
+| tape column | staging | destination | transform | ladder | R# |
+|---|---|---|---|---|---|
+| `id` | `mirror_id` | `source_id` | verbatim (as text) | — | D3 |
+| `person_id` | `external_person_id` | → `lead_id` | verbatim; lookup only | — | R1 |
+| `is_incoming` | `direction` | `direction` | `true`→inbound | — | rule 2 |
+| `message` | `payload.message` | `body` | chrome-stripped at import | — | R5 |
+| `message_type` | `payload.messageType` | thread key | verbatim (`sms` · `group_sms` · `zillow_inapp`) | — | — |
+| `from_number` / `to_number` | `payload` | `hl_comm_seat` | verbatim | — | SEAT |
+| `actor` **then** `user_name` | `by_name` | `by_name` | measured: `actor` 324,265 vs `user_name` 263,756, union 326,639 — reading only `user_name` blinds staging to **62,883 real actors** | R2 ① | R2 |
+| `user_id` | `external_user_id` | seat attach | verbatim | R2 ① | R2 |
+| `recipient_name` / `recipient_source` | same | recipient | `newEraRecipient()`; CHECK ties them | — | rule 7 |
+| `fub_created` | `occurred_at` (`_source='fub_created'`) | `occurred_at` | verbatim | — | R3 ① |
+| **NOT STAGED** — `status`, `delivery_status` | — | — | provider delivery state, no destination field | — | — |
+| **NOT STAGED** — `action_plan_id`, `system_id` | — | — | FUB-internal ids; `system_id` **tested and rejected** as an authorship discriminator (rule 3) | — | rule 3 |
+| **NOT STAGED** — `synced_at` | — | — | when WE looked, not when it happened | — | R3 |
+| **NOT STAGED** — `content_status` | — | — | scraper hygiene flag about the MIRROR | — | — |
+| **NOT STAGED** — `notified_at`, `notify_requested_at` | — | — | our notification bookkeeping, written back onto the tape | — | D4 |
+| **NOT STAGED** — `participants`, `numbers_source`, `source_message_id` | — | — | ⚠ `participants` is the **group-SMS seat material** and has no staged home. Blocked behind the seat-model rollout (`SEAT_MODEL_LAW`), not overlooked | — | SEAT |
+
+### `fub.calls` — 29 columns: 13 staged, 16 not
+
+| tape column | staging | destination | transform | ladder | R# |
+|---|---|---|---|---|---|
+| `id` · `person_id` · `is_incoming` | as above | | verbatim | — | |
+| `started_at` **else** `fub_created` | `occurred_at` + `occurred_at_source` | `occurred_at` | ⚠ **13,692 of 39,917 calls have no `started_at`** and every one has `fub_created`. `occurred_at_source` records which was used — a condition you can only honour is one you cannot verify | — | R3 ① |
+| `user_name` · `user_id` | `by_name` · `external_user_id` | actor | verbatim | R2 ① | R2 |
+| `duration` · `outcome` · `note` · `phone` · `from_number` · `to_number` | `payload` | body/meta | verbatim | — | |
+| **NOT STAGED** ⛔ `recording_url` | — | `hl_calls.recording_url` | **populated on ALL 39,924 rows.** See **C3** — a live R1 hole | — | **C3** |
+| **NOT STAGED** ⛔ `ai_summary` | — | | populated on 31,632 rows; the import instead reaches through to `hl_calls` for a summary at run time | — | **C3** |
+| **NOT STAGED** — `transcript` | — | | **0 rows populated** — genuinely absent, and that is a KNOWN answer | — | R1 |
+| **NOT STAGED** — `name`, `first_name`, `last_name` | — | — | the PERSON's name duplicated onto the call; the person row owns it | — | ONE_ANSWER |
+| **NOT STAGED** — `system_id`, `system_name`, `shared_inbox_id`, `conference_call_id`, `forward_number`, `ring_duration` | — | — | provider routing internals, no destination | — | — |
+| **NOT STAGED** — `suggested_tasks` | — | — | FUB's AI suggestion — their product's output, not a fact about the call | — | — |
+| **NOT STAGED** — `fub_updated`, `synced_at`, `content_status` | — | — | bookkeeping | — | R3 |
+
+### `fub.emails` — 13 columns: 9 staged, 4 not
+
+| tape column | staging | destination | transform | ladder | R# |
+|---|---|---|---|---|---|
+| `id` · `person_id` · `is_incoming` | as above | | verbatim | — | |
+| `subject` · `body` | `payload` | `title` · `body` | HTML-stripped at import | — | R5 |
+| `status` | `payload.status` | — | verbatim (matcher input) | — | — |
+| `user_id` | `external_user_id` | actor | ⚠ **`user_name` is NULL on ALL 210,374 rows** — `user_id` is the lane's ONLY actor material. 74,288 outbound carry an id the roster cannot answer; the tape directory answers **74,286**, and 2 stay honestly unresolved | R2 ① → `tape_directory` | R2 |
+| `user_name` | `by_name` | | always NULL here — read, never present | — | R1 |
+| `fub_created` | `occurred_at` | | verbatim | — | R3 ① |
+| **NOT STAGED** ⚠ `sent_by_person` | — | — | **the column EXISTS** though the adapter comment says it does not (see **C2** note). 462 of 210,374 populated, all `false`, **0 disagreements with `is_incoming`** — harmless today, wrong in the comment | — | **C3** |
+| **NOT STAGED** — `action_plan_id`, `synced_at`, `content_status` | — | — | bookkeeping | — | — |
+
+### `fub.notes` — 9 columns: 7 staged, 1 read-not-staged, 1 not
+
+| tape column | staging | destination | transform | ladder | R# |
+|---|---|---|---|---|---|
+| `id` · `person_id` | as above | | verbatim | — | |
+| `subject` · `body` | `payload` | `title` · `body` | HTML-stripped at import | — | R5 |
+| `user_name` · `user_id` | `by_name` · `external_user_id` | actor | ⚠ **59,797 rows say "Ben Froeschl" and 9,672 "Ana Spradling"** — the bulk-import stamp. Two in five notes credited to one man is the fingerprint of an importer, not an author | R2 ① *(distrusted)* | rule 3 |
+| `fub_created` | `occurred_at` | | verbatim | — | R3 ① |
+| ⛔ **the BODY, as an actor signal** | **MISSING** | rung ZERO | **`isMachineIntakeNote(body)` is NOT called by the adapter.** 709 robot notes are staged wearing human actors, 84 with a real seat. See **C2** | R2 rung 0 | **rule 3** |
+| **READ, NOT STAGED** — `system_id` | in the `SELECT`, dropped by `toProvider` | — | deliberately: **tested and REJECTED** as a discriminator — `system_id=5` holds 34,470 rows including plainly human notes | — | rule 3 |
+| **NOT STAGED** — `synced_at` | — | — | bookkeeping | — | R3 |
+
+### `fub.events` — 10 columns: 9 staged, 1 not
+
+| tape column | staging | destination | transform | ladder | R# |
+|---|---|---|---|---|---|
+| `id` · `person_id` | as above | | verbatim | — | |
+| `type` | `raw_type` input | `canonical_kind` | **`hl_event_mapping` DATA, never a code map** | — | D5 |
+| `message` | `payload.message` | `body` | verbatim | — | R5 |
+| `source` | `source_name_raw` → `source_name` | `source_name` | ⭐ the **only** lane carrying its own brand; every other lane takes the PERSON's. ⚠ **RealScout is 123,591 of 146,425 events and `hl_lead_sources` has no `realscout` row** — the key stays NULL, the raw spelling is kept, the row goes to review. A blank beats a guess | — | rule 5 |
+| `page_url` · `property` | `payload` | meta / venue | verbatim — the **venue** material for rule 4 | — | rule 4 |
+| `occurred` **else** `created` | `occurred_at` + `_source` | `occurred_at` | which one was used is recorded | — | R3 ① |
+| **NOT STAGED** — `synced_at` | — | — | bookkeeping | — | R3 |
+
+### `fub.saved_searches` — 14 columns: 13 staged, 1 not
+
+Every criteria column is staged verbatim (`search_key`, `search_url`, `property_types`, `price_min`,
+`price_max`, `beds_min`, `baths_min`, `for_rent`, `location`, `criteria_raw`) plus `id`, `person_id`
+and `created_date` → `occurred_at`. Destination: `hl_saved_search`.
+
+⛔ **`scraped_at` is NOT a timestamp fallback, deliberately.** It looks like one — never null on any
+row — but it is the moment WE LOOKED and it is **rewritten on every re-scrape**: a search created
+2025-09-08 carries `scraped_at` 2026-08-11. Using it would date a year-old search to this morning.
+**The 45 undated rows stay undated and say so.** This is R1's absence-verdict in its cleanest form.
+
+### `fub.people` AS AN EVENT LANE — 6 of 68 columns
+
+The `peopleCreated` signal stages `id`, `name`, `source`, `created_via`, `fub_created` only.
+⚠ Its mapping is **`fub_person_created`, and rule 9 turns it OFF** — it is the random-import cause.
+The other 62 columns are Part B's subject; they are not holes in this lane, because this lane is one
+event, not the person.
+
+## PART B — the PERSON row, per field (TO BUILD)
+
+`fub.people` has **68 columns: 43 staged, 25 not-staged with a reason.** Destination throughout:
+`hl_staging_person`, then `hl_leads` + children via the sanctioned writers.
+
+### B1 — identity and the verbatim slice (25 columns, all verbatim copy)
+
+`id` → `fub_person_id` (the key; **no surrogate** — a second id space is a second place to be wrong).
+Then straight copies, each `verbatim copy`, absence verdict `absent_on_tape` when the tape is blank:
+`first_name`, `last_name`, `name`, `stage`, `stage_id`, `type`, `created_via`, `lead_flow_id`,
+`source_url`, `contacted`, `website_visits`, `last_activity`, `price`, `picture`, `social_data`,
+`timeframe_status`, `timeframe_id`, `timeframe_updated`, `deal_name`, `deal_stage`, `deal_price`,
+`deal_close_date`, `assigned_lender_id`, `assigned_lender_name`, `content_status`.
+
+⚠ **`custom_fields` carries a shape hazard**: it is a jsonb **ARRAY on 49,229 rows and an OBJECT on
+21**. A reader assuming one shape silently drops the other. Staged verbatim with
+`fub_custom_fields_shape` recording which, so the hazard is visible rather than latent.
+
+### B2 — the three clocks (R3)
+
+| tape column | staging | clock |
+|---|---|---|
+| `fub_created` | `fub_created_at` | ① the event's own time — 49,250/49,250 populated |
+| `fub_updated` | `fub_updated_at` | ① |
+| `synced_at` | `tape_captured_at` | ⓘ when the MIRROR looked. Named apart so it can never be read as ① |
+| *(the job's own clock)* | `staged_at` + `stager_version` | ② the staging fill |
+| *(from `hl_leads`)* | `lead_pulled_at` | ③ ⛔ **`hl_leads.created_at` IS the pull date** (rule 6). Renita Ford's 7/14 was correct; the 50-lead restamp was killed over this. This column mirrors it and never competes with it |
+
+### B3 — the contact census
+
+`emails` (46,281 people, max 4) · `phones` (47,316, max 15) · `addresses` (19,987, max 7), each entry
+tagged per `SEAT_MODEL_LAW`: **an email names a PERSON, a phone names a HOUSEHOLD** — decided once at
+staging so no downstream resolver re-decides it. Verdict `contact_census_verdict`; a person with
+neither is `absent_on_tape`, which is an answer, not a failure.
+
+### B4 — the agent relationship history (the R2 rung ② material) ⛔ read C1 first
+
+| tape column | populated | role |
+|---|---:|---|
+| `collaborators` | 49,237 | the agent seats. **`role` distinguishes LENDERS** — the naive read put lenders John Nelson (600 leads) and Steve Parks (254) on messages agents wrote |
+| `communication_agent` | 16,544 (81 distinct) | **the preferred rung** — the seat that actually talked to them |
+| `team_leaders` | 7,513 | |
+| `tags` | 49,232 | `Agent:` on 49,214 · `Team Exit -` on 14,043. `Agent:` outranks `Team Exit -` (it healed Lucy Hartman's "Ssesmambo" typo and separated Zairanett's two exit tags) |
+| `assigned_user_id` | 49,237 (35 distinct) | usable |
+| ⛔ `assigned_to` | 49,237 but **3 distinct** | **EVIDENCE ONLY, NEVER AN ANSWER.** "Zach Spradling" on 49,230 of 49,250 |
+
+Derived into `agent_current` + `agent_history` + `agent_source` + `agent_verdict`. **"Broker" is the
+HOUSE seat** — Ana Spradling appears as Broker on 40,782 people — so house names lose to any real
+agent name and win only when they are all there is, which is Zach's rule verbatim.
+
+### B5 — source, identity, household, relationship, compliance, trigger, readiness
+
+- **source** — `source` (44 distinct) → `source_raw` **VERBATIM**, plus a bucketed `source_key` and a
+  `source_bucketer_version`. ⭐ Keeping the raw is what makes the **open Google decision reversible**
+  rather than historical (rule 5).
+- **identity** — `identity_verdict` (`household-resolved` / `identity-confirmed` / `wrong-human` /
+  `unresolved`) + `identity_evidence`, seeded from the 31 triangulation verdicts.
+- **household** — `household_edges`, one edge per relation with its source.
+- **relationship class** — `relationship_class` + `closing_evidence`. ⭐ **SISU is the spine**; dotloop
+  and MLS may only enrich a row SISU already blessed (`ONE_ANSWER_TABLE`).
+- **compliance** — `is_dnc`, the **named set only** (Harrisons · Burdett · Radke · Suzana Lewman),
+  never derived from a tag or a stage. This is the one column that needs no verdict: `false` means
+  "not on the named list", which is a known answer.
+- **the true trigger (R6, rule 1)** — `trigger_rung` ①-④ + `trigger_staging_event_id` +
+  `trigger_kind` + `trigger_venue` + `trigger_payload` + `trigger_occurred_at` + `trigger_window_spec`.
+  ⭐ **The venue is CHECK-constrained never to be the pipe** — a card may not read "made a general
+  inquiry on Follow Up Boss", which asserts somebody browsed our CRM vendor (rule 4 / Bedrock D2).
+- **readiness** — `readiness` + `readiness_blockers`, with a CHECK that anything not `ready` must say
+  why. A blocker-less block is the silent failure this whole document exists to stop.
+
+### B6 — the 25 NOT-STAGED columns, each with its reason
+
+| columns | reason |
+|---|---|
+| `timeframe_range`, `last_human_touch`, `dossier_generated_at`, `stage_override_source`, `stage_override_at`, `deal_close_date_override` | **0 rows populated.** Genuinely empty on the tape |
+| `source_cohort`, `is_stale`, `lead_type`, `webhook_source`, `stage_locked`, `delayed`, `first_to_claim`, `pond_id`, `assigned_pond_id`, `deal_status` | **exactly ONE distinct value across all 49,250 rows** — they carry no information. Staging a constant is a hole dressed as a field |
+| `text_count`, `email_count`, `call_count`, `note_count`, `deal_count`, `house_count` | **recomputable counters.** The lanes are the truth; a stored count is a second answer that drifts |
+| `lead_uuid` | a **mirror-local** uuid FUB has never heard of. Not an external id |
+| `ai_summary` (2 rows), `api_synced_at` (70 rows) | OUR output / OUR bookkeeping written back onto the tape, not FUB's facts |
+| `pond_members` (28,839) | routing membership. ⚠ Not-staged **as a decision, not an oversight** — `pond_id` alongside it has one distinct value, so the pond estate carries no usable signal today |
+
+## The absence-verdict vocabulary (R1, typed out)
+
+Every derived group on `hl_staging_person` carries a verdict from **one** closed set, and a CHECK
+makes a NULL-without-a-verdict unrepresentable:
+
+| verdict | means | R1 reading |
+|---|---|---|
+| `resolved` | a value was derived, and `*_source` names the rung that did it | the answer |
+| `absent_on_tape` | the tape genuinely carries none | **a KNOWN answer, not a failure** |
+| `unresolvable` | we could not decide; the reason is in `review_reasons` | never dressed up |
+
+That distinction is the whole of R1: *"a NULL that means 'we could not derive this' and a NULL that
+means 'this person genuinely has none' are different facts, and a column that cannot tell them apart
+is a hole."* The pattern is not invented here — `hl_staging_event` already ships it as
+`CHECK ((recipient_source = 'none') = (recipient_name IS NULL))`.
+
+## What this map does NOT decide
+
+The two open decisions from this PRD stand, unresolved, and the DDL carries **both as parameters**:
+
+1. **The qualifying window, July 1 vs July 7.** Never a baked predicate — it travels as
+   `trigger_window_spec` text on every row, so a re-run under the other answer is a visible
+   re-derivation and rows from the two runs are distinguishable.
+2. **The Google source bucket.** `source_raw` holds the tape's spelling verbatim; `source_key` holds
+   only the bucketed answer, versioned. Re-bucketing changes one column and touches nothing else.
+
+⛔ **Neither a source allow-list nor a date literal belongs in the DDL.** Either one converts an open
+product decision into schema, which is exactly what makes it expensive to reverse.
+
+---
+
 *Nothing in this PRD imports anyone. The 48k bulk import is dead (ledger 314); this layer exists
 so that whatever IS imported — the past-client pour, a hand-picked beta lead — copies answers that
 were already derived, structured, and visible.*
