@@ -1,0 +1,101 @@
+---
+title: "The Captain Manual — how the FUB pipeline runs NOW"
+description: "The operator's manual for the captain-era FUB pipeline: the live roster, the one queue, the in-app road, fixture law, deploy, and health. Everything here was proven live on 2026-08-22 with receipts. If a statement here disagrees with the legacy chapter 8, THIS page is right."
+---
+
+> **THIS PAGE IS THE CAPTAIN ERA.** Born 2026-08-22 night, when Zach ordered the enterprise rebuild
+> ("no fucking patching") and the desk signed the gates. The gate ledger + build diagram:
+> [the captain PRD §THE 8/22 NIGHT BUILD](/fub/fub-captain-prd). The legacy operator's manual
+> ([chapter 8](/fub/master-scraper-ssot)) remains the law for lead import/mint and history — but for
+> **processes, queues, and roads**, anything there that contradicts this page is a fossil.
+
+## The proof this page stands on
+
+2026-08-22 22:02:01Z — Zach sent "Hey is this house available." from the Jake Smith-test Zillow
+account. Detected in **9 seconds**, card + bell at **1m56s**, SMS received **on his own handset**
+("got it!"). Every link below is the road that carried it.
+
+## The roster — what runs, where, and how you know it's alive
+
+| process | host | what it does | its liveness (the column IT writes) |
+|---|---|---|---|
+| `fub-inapp-detector` | Camp David pm2 | polls FUB's REST people-sort every 45s for new in-app messages; enqueues capture | `fub.inapp_detector_heartbeat.last_beat` (pid must match pm2) |
+| `fub-webhook-scraper` | Camp David pm2 | claims queue jobs, scrapes the person page, writes capture + syncs the tape direct | `fub.webhook_scraper_heartbeat.last_beat` |
+| `fub-body-recovery` | Camp David pm2 | drains `fub.job_queue` body-recovery jobs | its queue drains; job rows move |
+| `fub-chrome-guard` | Camp David pm2 | keeps the CDP Chrome session alive (port 18800) | `curl localhost:18800/json/version` on the box |
+| `fub-home-refresh` | Camp David pm2 | home-activity refresh + per-person mirror sync | its own heartbeat/log cadence |
+| `fub-canary-webhook` | CRM Inngest, hourly :17 | injects a real FUB note and asserts it ARRIVES — the standing proof of the webhook road | `hl_run_log` fn=`fub-canary-webhook`, `payload.arrived=true` |
+| in-app sweep tick | CRM Inngest, ~3 min | files captured in-app rows → cards → notifications | its tick rows + the cards it mints |
+
+**⛔ `fub-relay` is DEAD (quarantined 8/22, stays dead).** Its cargo moved to per-person direct
+writes — the text family via `syncPersonTextsToMirror` (UPSERT by id, never touches
+`notified_at`), insights/searches/home-activity via `syncPersonTableToMirror`. Reversal + ledger:
+`.claude/reports/fub-captain/QUARANTINE.md`. Never restart it to "fix" a sync — find the writer.
+
+## How a Zillow in-app message arrives
+
+The eight-step SOP with measured latencies lives in
+[the one manual's SOP section](/fub/master-scraper-ssot#-the-sop--how-a-zillow-in-app-message-arrives-zach-ordered-2026-08-22-written-from-a-live-trace)
+— it is the arrival law. The captain-era short form: **no webhook exists for in-app**; the detector
+polls FUB's own API (`sort=-lastInboxAppMessage`), enqueues the person, the scraper captures, the
+direct sync writes the ONE tape, filing + the D4 evaluation do the rest. Target ≤3 minutes
+send→phone; measured 1m56s.
+
+## The queue — one, honest
+
+`fub.rehydration_queue` on the capture store, claimed with `FOR UPDATE SKIP LOCKED`.
+**`priority='high'` means "a recent real-time trigger" and nothing else** — the 47,866-row legacy
+backlog was re-baselined to `low` on 8/22 (two rounds, reversal CSVs in
+`~/hl-reversals/queue-rebaseline-0822/`). A writer that stamps `high` on non-real-time work is
+recreating the fake-priority disease. The detector logs `lane=fast` / `lane=BACKLOG` on every
+enqueue so starvation can never hide again. (The fold into `fub.job_queue` is a signed follow-on.)
+
+The detector's cursor is **two facts, never one**: `last_inapp_at` (what we SAW — always advances)
+and `settled_at` (the message was DEALT WITH — written only when WE enqueued it or an exists-check
+proves it on the tape). Unsettled rows are re-checked every poll outside the recency walk; rows
+older than the 24h repair window are HELD and reported loudly, never auto-fired (a months-old gap
+is a desk backfill decision).
+
+## Fixture law (Zach, 8/22, after the carrier ate three "delivered" messages)
+
+- **Fixture accounts carry REALISTIC names.** "Jake Smith-test" passes carriers; "Boss Test Lead
+  205" was silently eaten on three Twilio-`delivered` sends.
+- **Message bodies are normal human sentences.** No nonces, no codes, no "test/QA/proof" language —
+  the carrier reads the body, and its spam ML filters what looks synthetic *after* reporting
+  delivered. **Markers live in timestamps and metadata, never in carrier-read text.**
+- **A send is proven only by a fresh page load or the counterparty surface** (FUB's
+  `lastInboxAppMessage` advancing). A cleared compose box is an optimistic echo, not a send.
+- ⛔ Never fire at a live lead. Test identities + owned Twilio lines only.
+
+## Deploy — cattle, not pets
+
+Canonical source: `tools/fub-scraper/` in the repo. Deploy = scp + **md5 verified on both sides** +
+`pm2 restart <app> --update-env` + `pm2 save`, via the deploy script (G6 lane's receipt names it).
+A process not in the repo, not in the ecosystem config, or without a heartbeat **does not exist** —
+the in-app sweep sat unscheduled for months with everyone believing it ran; that class of lie is
+what this rule kills. CRM-side functions are Inngest: registered in `serve()`, PUT-synced after
+deploy, and **proven only by a run in `hl_run_log`** — an event id or `modified:true` proves
+nothing.
+
+## Health — DOWN only on proof
+
+- **The canary** (hourly :17) is the webhook road's proof: `arrived:true` = the road works;
+  `injected:false` with a reason = an honest refusal to investigate (that is how the missing prod
+  env vars were caught on its very first run).
+- **Heartbeats testify about the process that writes them**, nothing more. A heartbeat with a
+  non-draining queue is a live process failing at its job — read both.
+- **Silence is AMBER-with-facts, never DOWN.** DOWN requires a failed active proof or a dead writer
+  assertion.
+- **`synced_at` on tape rows does NOT date tape arrival** — it is the capture-store stamp carried
+  verbatim. Latency claims come from direct observation (run-log, polling for existence), never
+  from that column.
+- Instrument warning: `.env` carries `FUB_TAPE_DATABASE_URL` as an ALIAS of
+  `FUB_RAILWAY_DATABASE_URL` (same database) while `FUB_CAPTURE_DATABASE_URL` is Camp David.
+  "Diffing the tape against the mirror" with the two Railway names reads one store twice. The G6
+  receipt owns the rename.
+
+## Condemned (quarantined, never deleted — ledger has every reversal)
+
+`fub-relay` (the two-hop) · the fake-priority backlog stamps · `fub.scraper_heartbeat` (fossil,
+beaten last 8/10 — DO NOT WIRE) · fixture-speak in message bodies · the `FUB_TAPE_*` env alias
+(retirement in flight) · any process on Camp David not in the roster above.
