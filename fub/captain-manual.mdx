@@ -15,17 +15,47 @@ description: "The operator's manual for the captain-era FUB pipeline: the live r
 account. Detected in **9 seconds**, card + bell at **1m56s**, SMS received **on his own handset**
 ("got it!"). Every link below is the road that carried it.
 
-## The roster — what runs, where, and how you know it's alive
+## THE ROSTER — what runs, where, and how you know it's alive
+
+> **This table is THE one human roster** (item 199 ②, consolidated 2026-08-23). The machine claim is
+> `LIVE_ROSTER` in `tools/fub-scraper/ecosystem.config.cjs`; the fact is `pm2 jlist`;
+> `deploy.sh --verify` reconciles them. Chapter 8's old roster sections are pointers here now —
+> restating a roster in a second place is how two verdicts survived three days after they stopped
+> being true. Re-measured 2026-08-23 against pm2 + every liveness column below.
 
 | process | host | what it does | its liveness (the column IT writes) |
 |---|---|---|---|
-| `fub-inapp-detector` | Camp David pm2 | polls FUB's REST people-sort every 45s for new in-app messages; enqueues capture | `fub.inapp_detector_heartbeat.last_beat` (pid must match pm2) |
-| `fub-webhook-scraper` | Camp David pm2 | claims queue jobs, scrapes the person page, writes capture + syncs the tape direct | `fub.webhook_scraper_heartbeat.last_beat` |
-| `fub-body-recovery` | Camp David pm2 | drains `fub.job_queue` body-recovery jobs | its queue drains; job rows move |
-| `fub-chrome-guard` | Camp David pm2 | keeps the CDP Chrome session alive (port 18800) | `curl localhost:18800/json/version` on the box |
-| `fub-home-refresh` | Camp David pm2 | home-activity refresh + per-person mirror sync | its own heartbeat/log cadence |
+| `fub-inapp-detector` | **CRM Inngest** (~45s) | polls FUB's REST people-sort for new in-app messages; enqueues capture. ⚡ ELECTED OFF the pm2 daemon 2026-08-23 03:33Z (QUARANTINE §6): elected by DATA (`hl_settings.inapp_detector_source`), the daemon stopped + out of `LIVE_ROSTER` — two detectors on one road is two writers on one cursor | `hl_run_log` fn=`fub-inapp-detector` — the run IS the beat (846 runs/24h measured 8/23). The old `fub.inapp_detector_heartbeat` ages forever BY DESIGN (tombstoned) |
+| `fub-webhook-scraper` | Camp David pm2 | claims queue jobs, scrapes the person page, writes capture + syncs the tape direct | `fub.webhook_scraper_heartbeat.last_beat` **on the TAPE** (the capture-store copy is a tombstoned fossil, dead since 8/21) |
+| `fub-body-recovery` | Camp David pm2 | drains body-recovery jobs + spawns the 3-min in-app sweep | `fub.body_recovery_heartbeat.last_beat` on the TAPE (beating 4s-fresh when measured 8/23 — the old "its queue drains" line was supervisor testimony and is retired) |
+| `fub-chrome-guard` | Camp David pm2 | keeps the CDP Chrome session alive (port 18800) | `fub.poll_state['chrome_guard_verdict'].updated_at` on the TAPE — its own per-pass verdict (the curl-the-port inference is retired). ⚠ 8/22-23: a forever-latch left this row 38h dark while the guard ran; now a 30m retry cooldown |
+| `fub-home-refresh` | Camp David pm2 | home-activity refresh + per-person mirror sync | `fub.poll_state['home_refresh_beat'].updated_at` on the TAPE, written after every cycle (armed 8/23 — it previously had NO beat and "beat through the webhook-scraper row", a sibling's testimony) |
 | `fub-canary-webhook` | CRM Inngest, hourly :17 | injects a real FUB note and asserts it ARRIVES — the standing proof of the webhook road | `hl_run_log` fn=`fub-canary-webhook`, `payload.arrived=true` |
-| in-app sweep tick | CRM Inngest, ~3 min | files captured in-app rows → cards → notifications | its tick rows + the cards it mints |
+| in-app sweep tick | CRM Inngest, ~3 min | files captured in-app rows → cards → notifications | `hl_run_log` fn=`fub-inapp-sweep-tick` + the cards it mints |
+
+## THE ONE RUN LOG (item 199 ①, the law)
+
+**Runs land in `hl_run_log`; a daemon's liveness is a beat it writes ITSELF on the ONE tape store
+the probes read; the probes are the single reading surface. No second ledger.**
+
+- **Run-shaped work** (a start and an end) is a registered Inngest fn → `hl_run_log` via capture-fn
+  (INNGEST_OR_IT_DOESNT_EXIST). The detector election moved the last run-shaped Camp David job here.
+- **Loop-shaped daemons** (the 4 pm2 residents above) each write their OWN liveness row **on the
+  tape** — never the capture store (write-where-read: the CRM's `fubQuery` cannot reach Camp David's
+  LAN postgres). Two sanctioned shapes, both existing: a single-row heartbeat table, or a
+  `fub.poll_state` key (a beat that fits in a row must not cost a migration). A process with no
+  liveness column **does not exist** — and "its queue drains" / "curl the port" are supervisor
+  testimony, banned as liveness.
+- **The bridge is data:** `hl_signal_channel.thresholds.writers` declares, per family, who writes it
+  and where that writer's beat is read (`heartbeat` | `pollstate` | `runlog` | `siblings` | `none`).
+  `writerLiveness` in the CRM probes reads the declarations; a **live family with no declared
+  writers is named UNARMED** (yellow, by name — never folded into a green), and a family is exempt
+  only by an explicit `retired: true` on its row. All 5 live families (webhook, chrome_scrape,
+  native_gmail, note_parse, tag_parse) are armed as of 2026-08-23; `email_scrape` is retired-as-data.
+- **Fossils are declared, never readable-as-truth:** the capture-store copies of
+  `webhook_scraper_heartbeat` / `scraper_heartbeat` / `inapp_detector_heartbeat` carry
+  `COMMENT ON TABLE` tombstones (QUARANTINE §7). Reading a same-named table on the wrong store is
+  how a working process gets a death certificate.
 
 **⛔ `fub-relay` is DEAD (quarantined 8/22, stays dead).** Its cargo moved to per-person direct
 writes — the text family via `syncPersonTextsToMirror` (UPSERT by id, never touches
