@@ -1,0 +1,172 @@
+---
+title: "Mobile — The Group Thread MVP (DRAFT)"
+description: "The group-text mobile MVP: one thread with Trish, Ana and Myli in it, user detail pages for team members, and the seat model underneath. DRAFT — the wireframe is not locked and nothing builds from this page yet."
+---
+
+> ## ⚠ DRAFT — wireframe unlocked, nothing builds from this page yet
+>
+> This page describes work that has **not been designed to lock and has not been built**. The
+> wireframe it derives from is `docs/wireframes/mobile-groupthread-DRAFT-2026-08-23.html`,
+> marked **DRAFT 2026-08-23 — NOT LOCKED**. Under
+> [`UI_ITERATION_HTML_FIRST`](/claude-process/overview) the wireframe is the build spec, and it
+> is only a build spec **after Zach says "locked"**. Until then: no app code, no schema, no
+> migrations. Every requirement below traces to
+> `.claude/reports/mobile-mvp/ZACH_GROUP_TEXT_VISION_SOURCE.md` — Zach's near-verbatim vision,
+> captured 2026-08-23. Where this page and that document disagree, **the source document wins**.
+
+**[← The Mobile App overview](/guides/mobile-app)** · the shipped app this extends.
+
+## The vision, in one paragraph
+
+The team already works in a group text. A lead asks to tour a house, Zach texts the thread that
+has Trish (the showing partner) and Ana (his wife, who writes the offers) in it, Trish says yes or
+no, the showing gets scheduled, and afterwards Trish drops her feedback into that same thread —
+what the client liked, what they didn't, whether they want a saved search. The MVP is to **move
+that thread into the HouseLoop app and put Myli inside it**, so the coordination that already
+happens produces CRM records as a side effect instead of as a chore. In Zach's words: *"Whenever I
+open the HouseLoop mobile app it basically looks like my text threads,"* and *"Myli's in the text
+thread, Myli's listening, Myli's extracting all of the facts, updating Lucy's facts, setting next
+follow-up tasks."* The app is his threads; Myli is a participant in them, not a panel beside them.
+
+## The MVP cut, in Zach's own words
+
+These five lines are the whole scope. Anything not on this list is a later slice.
+
+| # | The cut | Zach, verbatim |
+|---|---|---|
+| 1 | **One group thread: Zach · Trish · Ana · Myli** | "a group text happening between my wife, Trish, Myli and myself" |
+| 2 | **Trish texts through the app — no phone number for her** | "**Trish doesn't even need a Twilio number** — for the minimum viable product, Trish just texts through the mobile app, and Myli is in the text thread." |
+| 3 | **A user detail page for Trish, and one for Zach** | "I need a Trish profile where I can see all of Trish's texts and appointments, and I need my own personal user detail page." |
+| 4 | **Myli in the thread: extracting facts, asking after a showing** | "I need to be able to give feedback in that thread, schedule in that thread, talk back and forth — and Myli's there to extract facts, communicate anything coming up, and ask questions after a showing." |
+| 5 | **A direct thread with Myli, per user** | "I can have a text thread specifically with Myli: 'hey, what's going on with Lucy Hartman? Did Trish get the offer written?'" |
+
+The point of cut 2 is worth saying plainly, because it decides the build: **for the MVP the
+teammate channel is in-app only.** No SMS to Trish, no number to provision, no carrier
+registration. Client threads keep going out over Twilio exactly as they do today.
+
+## The architecture it rides
+
+Nothing here needs a new architecture. Every piece has already been signed; this MVP is the first
+product that consumes them together.
+
+### The seat model is the engine
+
+[The seat model](/schema-lock/overview) (signed 2026-08-14) says: **every event is one FACT
+with one ACTOR and a SEAT for every person it touched, and every surface reads the seats instead of
+re-deriving who did what.** That is exactly what Zach asked for as a test outcome:
+
+> "all of that shows up in one group text message in the mobile app — **and it shows up in the
+> thread of the three user profiles attached to that**" [and the lead].
+
+One message posted to the group thread produces **one fact** and a seat for each party it touched:
+the thread, the lead it is about, and Zach, Trish, Ana and Myli individually. The thread screen,
+the lead's activity log, and all three user detail pages then render **the same rows** — so they
+cannot disagree. This is the fix for the 8/14 defect the law was written from, where a group email
+was filed on one lead through one foreign key and every surface lied about it.
+
+Two consequences the build has to honour:
+
+- **The FROM seat is the actor, forever.** In a four-person thread the sender is never re-derived
+  from thread ownership or lead ownership. Myli's messages are Myli's; Trish's are Trish's.
+- **A group thread about two leads files on both.** Conner and Jasmeet are one thread and two lead
+  records; one message lands on both, idempotently, through `logActivity` — the one door.
+
+### The in-app channel arrives DENY-BY-DEFAULT for AI
+
+The MVP adds a **new send channel** (in-app messages between HouseLoop users).
+[`AI_CONTAINMENT_LAW`](/command-center/ai-containment-law) is unambiguous about what that means:
+
+> "A NEW send channel is DENY-BY-DEFAULT for AI. It must be structurally impossible to add a
+> transport an AI can reach without routing through the gate."
+
+So the in-app channel is built as a transport behind the **one** `deliver()` facade, and Myli's
+posts into the group thread pass the same central authorization gate every other AI send passes —
+master switch, AI comms enabled, the specific AI enabled, the channel enabled, a real
+`playbook_execution_id`, a real visible `step_id`, business hours, suppressions. A failed check is
+a **REJECT**, never a downgrade-and-send.
+
+And per the same law's 8/12 amendment, **an AI message to a team member is still an AI message**:
+Myli asking Trish for her availability is AI communication and is killable by the comms master
+switch, even though Trish is on the team and not a client. The discriminator is `composed_by`, not
+recipient.
+
+### NEGOTIATOR is a new fact
+
+> "Group text between anyone that's attached to a lead — think showing partner, agent, and
+> NEGOTIATOR, which my wife would be — **a negotiator on a lead, that's a new role we don't have**."
+
+Showing partner, lender and TC already exist as lead collaborator roles. **Negotiator does not.**
+It is a new role row, and it is the role that decides who gets seated on an offer conversation
+later. Adding it is a schema change and therefore a desk-signed step, not a drive-by.
+
+### The user-profile estate reuses the lead detail page
+
+> "I would have a **Trish profile that looks just like a lead's profile**. We've got lead profiles
+> and we've got user profiles — lead detail pages and user detail pages."
+
+Under [`REUSE_NOT_RECREATE`](/claude-process/overview) that sentence is a build instruction, not a
+metaphor. The user detail page is **the lead detail page in a user mode** — the same three lanes,
+the same `LeadLane` / `CenterLane` / `MyliLane` components, the same section headers and lane
+chrome. There is no `UserLane`, no `UserDetail`, no lookalike. Left lane: name, cell, email, role,
+upcoming appointments top to bottom, tasks top to bottom. Middle: the communication view, newest
+first, with the team group thread present. Right: Myli.
+
+## The MVP test script
+
+This is Zach's own test, written as steps. It is the acceptance criteria: if this runs clean end to
+end, the MVP is real; if any one line fails, it isn't.
+
+1. **Myli posts to the group thread** asking Trish for availability on a real tour request —
+   "Hey Trish! My client Dana Whitfield would love to see 8133 W 93rd St in Overland Park on
+   Saturday at 11:00 — does that work for you to show it?"
+2. **Trish replies in the app** — no SMS, no Twilio number involved.
+3. **The reply appears in the group thread** for Zach and Ana, in order, attributed to Trish.
+4. **The same message appears on the lead's record** — the activity log for Dana Whitfield.
+5. **The same message appears on all three user detail pages** — Zach's, Trish's, and Ana's
+   communication view.
+6. **Myli's post carries its authorization** — a real execution id and a real visible step; with
+   the AI comms master switched off, step 1 does not send at all.
+7. **After the showing, Trish's feedback produces records** — Myli extracts the facts onto the
+   lead, creates the saved search she was asked for, and sets the follow-up task, each one visible
+   as a receipt in the thread.
+
+Steps 3–5 are one assertion in three places on purpose: they are the seat model's whole claim, and
+they are the thing that was broken on 8/14.
+
+## What is deliberately NOT in the MVP
+
+| Not in it | Why | Where it goes |
+|---|---|---|
+| **Offers / the negotiator flow** | Zach cut it. Ana is in the thread; her back-and-forth with Trish about offer details, and her call to the client, are a later slice. | After the group thread proves out |
+| **Lender and TC user profiles** | "If we have a lender, the lender would have its own user detail page" — same estate, later rows. Building the estate once for Trish and Zach is the test. | Once the user-profile estate is proven |
+| **Myli scheduling autonomously** | "Eventually Myli will be able to do anything — write offers, schedule showings." Eventually. In the MVP she asks, a human answers, and she records. | Playbook slices, each with a visible canvas step |
+| **A Twilio number for Trish** | Explicitly cut: "Trish doesn't even need a Twilio number." | Only if teammates ever need SMS off-app |
+| **iPhone push notifications** | "It pops up on my iPhone notification whenever they text" is a fourth notification channel, and it is **designed but unsigned and unbuilt** — the design is `.claude/reports/notify-config/APP-PUSH-DESIGN.md`, its migrations are `HOLD_`-prefixed so they cannot self-apply, `hl_push_subscription` does not exist, and there is no service worker, no `web-push` dependency and no VAPID key in the app. Unread state inside the app is in scope; OS push is not. | Master Plan week 1, item 25 — its own signed decision, not a screen |
+
+## Open decisions — these block the lock
+
+The wireframe names these; they are repeated here so they don't get lost in a picture.
+
+1. **Is the team group thread one standing thread, or one per lead?** The source says both:
+   *"Every lead would have its own thread"* and *"a group text happening between my wife, Trish,
+   Myli and myself."* The draft wireframe shows **one standing team thread** carrying an @lead band
+   that changes with the subject. A thread-per-lead is an equally faithful reading and a materially
+   different app. **This answer comes first; most of the rest depends on it.**
+2. **Threads or Inbox?** The shipped app lands on **Inbox** (locked 7/26). The draft names the
+   landing tab **Threads**, from Zach's words. Both cannot be the name.
+3. **Do teammate and client rows look identical in the list?** They are different transports
+   (in-app vs Twilio SMS). The draft deliberately makes them look the same, because that is what
+   "it looks like my text threads" means — but it is a choice worth confirming.
+4. **Trish's real user record** — surname, cell, email are placeholders in the wireframe on
+   purpose; no invented contact details get ported onto a real person's profile.
+
+## The design record
+
+- **The wireframe (DRAFT, unlocked):** `docs/wireframes/mobile-groupthread-DRAFT-2026-08-23.html`
+- **The source vision:** `.claude/reports/mobile-mvp/ZACH_GROUP_TEXT_VISION_SOURCE.md`
+- **The family it must match:** `docs/wireframes/mobile-inbox-LOCKED-2026-07-26.html` and
+  `docs/wireframes/mobile-comms-LOCKED-2026-07-25.html` — the two locked mobile wireframes whose
+  device chrome, tokens and row rhythm this draft reuses.
+
+Edits go **into the wireframe first**, then this page follows. When Zach locks the wireframe, the
+spec gets derived from it node by node and this banner comes off.
