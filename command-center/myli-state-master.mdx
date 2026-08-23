@@ -1,0 +1,436 @@
+---
+title: "Myli's State Engine — the master document"
+sidebarTitle: "Myli State Master"
+description: "THE master state document: what state Myli holds about a person, how it changes, and how she remembers. The state stack (pivot to a new goal and return to the hard line), tasks as her clock, cooling and habit as derived signals, the reverse-engineering research, and the brick-by-brick build order — consolidating the signed record and naming which page owns what."
+---
+
+> 🕐 **2026-08-23 night** — written to Zach's order: *"There's no state engine master document. I need
+> a state engine master document… about everything we described — the full closed-loop follow-up, her
+> entire architecture."* Lane `builder-state-engine`. Source of record:
+> `.claude/reports/myli-state/STATE_STACK_ARCHITECTURE.md` + the dictation capture beside it.
+>
+> **Status: the signed record is LAW; tonight's extensions are DESIGN awaiting Zach's redline.**
+> Every section says which it is. Nothing here has been built — no code, no schema change, no send.
+
+---
+
+## What this page is
+
+This is the one page that answers **"what does Myli know about a person, and how does she decide
+what to do next."** Everything else about her is a companion, and each companion owns exactly one
+thing:
+
+| the page | it owns | go there for |
+|---|---|---|
+| **This page** | **the GOAL** — what she is driving toward for this person, how it changes, how she remembers | the state stack · tasks as her clock · cooling and habit · the build order |
+| [Myli's Closed Loop](/command-center/myli-closed-loop) | **the RELATIONSHIP** — the G0→G7 stage ladder, cadence, compliance, temperature | how often she may speak · the stage a lead is on · the compliance spine |
+| [Myli Playbooks — the signed spec](/command-center/myli-playbooks-spec) | **GOVERNANCE** — workflow vs playbook, the move set, the authorization chain | what a playbook is · which three ship first · the gates to live |
+| [AI Programming](/legacy/guides/ai-programming) | **the LANGUAGE** — the prompt registry, per-lane prompt assembly, the working memory composer | where a prompt lives · how the voice/text/email prompt is built |
+| [The state-engine board](/master-plan/myli-state-engine) | **the WORK** — the 20-item checklist and its live status | what is built, wired, walked |
+
+**The boundary between this page and AI Programming is Zach's own doctrine, and that page quotes it
+verbatim:** ⭐ ***code owns the GOAL, the LLM owns the LANGUAGE.*** This page is the goal side. That
+page is the language side. Nothing is written twice. (Where they overlap today, §9 says so and
+proposes the fix rather than adding to it.)
+
+---
+
+## 1 · The one-page answer
+
+Myli decides in one direction, every time, and each arrow is a real thing you can open:
+
+```
+WHO IS THIS         →  the person's facts and history        (the activity tape)
+WHAT IS THE GOAL    →  the goal FRAME, now a STACK           (§3 — new tonight)
+WHO IS DECIDING     →  the playbook RUN (exactly one, ever)  (the playbooks spec)
+WHAT MAY SHE DO     →  the DRAWN MOVES on that playbook      (the playbooks spec)
+WHEN                →  presence, a reply, or HER OWN TASK    (§4 — new tonight)
+WHAT DOES SHE SAY   →  the composer, per lane                (AI Programming)
+```
+
+**Two properties make this different from a chat assistant, and they are the whole product:**
+
+1. **She holds an explicit goal, not an implied one.** A chat assistant's goal lives in the transcript
+   and survives only as long as the transcript does. Myli's lives in a row.
+2. **She has a clock, and the clock is her own commitments.** A chat assistant acts when spoken to.
+   Myli acts when something she promised comes due.
+
+§7 shows that both of these are genuinely absent from every shipped assistant we could verify — not
+because they are hard, but because nobody selling a general chatbot needs them.
+
+---
+
+## 2 · The four things "state" means (they are not the same thing)
+
+The word "state" is used for four different facts in this system. They live in four places on purpose,
+and collapsing any two of them is how a goal gets lost.
+
+| the fact | the question it answers | where it lives |
+|---|---|---|
+| **The rung** | *where is this person in their journey?* | the 11-rung ladder, derived — [closed loop](/command-center/myli-closed-loop) G0→G7 |
+| **The goal frame** | *what is she trying to achieve right now?* | `hl_lead_convo_state.ledger` — **becomes a stack in §3** |
+| **The run** | *which playbook is deciding for this person?* | `hl_playbook_runs`, exactly one open, enforced by the database |
+| **The run's state** | *how far into this playbook did she get?* | `hl_playbook_runs.state` — **this is "the hard line"** |
+
+---
+
+## 3 · ⭐ THE STATE STACK — pivot, and come back
+
+> **Zach, 2026-08-23:** *"The person pivoted to financing — so Myli CHANGES STATE into financing, and
+> in financing: what are my goals? … Then we pivot BACK. She knows the previous goal was the showing.
+> She has to know where the hard line was: 'I got to this stage in the playbook before they pivoted.'"*
+
+**Status: DESIGN, awaiting redline.**
+
+### The problem, stated exactly
+
+Today "what is Myli driving toward" is a **single value**. So when a person changes the subject
+mid-goal, there are only two things the system can do, and both are wrong:
+
+- **Refuse to move** — she finishes the showing conversation before acknowledging the question.
+  Zach ruled this out by name: *"If I'm talking to ChatGPT, it doesn't tell me 'let's finish this
+  topic so I can start another topic.'"*
+- **Overwrite the goal** — she switches to financing, and **the showing goal silently ceases to
+  exist.** There is no row anywhere recording that it was interrupted rather than achieved.
+
+⛔ **That second one is the dangerous one, because it looks fine.** A pivot written into a single
+value is byte-identical to a legitimate goal advancement. The ledger reads "Financing," progress
+re-derives against financing's checklist, and a tour that was two answers away from booked simply
+stops being anything anyone is driving toward. **Nothing downstream could ever detect it.**
+
+### The fix: the goal is a stack
+
+```
+BEFORE the pivot        [ Book the showing ]                     ← she is here
+THEY ASK ABOUT MONEY    [ Financing, Book the showing ]          ← pushed; the showing is bookmarked
+FINANCING RESOLVES      [ Book the showing ]                     ← popped; she picks up where she left off
+```
+
+**Four rules govern it:**
+
+1. **A pivot PUSHES; an achievement ADVANCES.** Two different futures that must never look the same.
+   An advancement means the goal was met and is gone. A push means the goal is unmet and is waiting.
+2. **The bookmark is a position, never a photograph.** The stack stores *where she was standing* —
+   the frame, the run, the hard line, the question she was working. It does **not** store what she
+   knew. ⭐ **That is deliberate and it is the better answer:** what she knows is derived from the
+   facts, so if the person mentions their budget while talking about financing, **the showing goal is
+   further along when she returns than when she left.** A saved snapshot would restore her to a
+   position that was already out of date.
+3. **The stack is short.** One active goal, one waiting. A third subject does not lose the first — it
+   converts to a task (§4). A conversation juggling three suspended goals is one where a person would
+   write something down, and so does she.
+4. **She does not always come back.** Sometimes the new subject is the more important one, and §3.2
+   decides that from data we already have.
+
+### 3.1 When the playbook changes too
+
+Most pivots are just a change of subject — she answers in the same conversation, on the same channel,
+and nothing about who is governing needs to move.
+
+**But sometimes the new goal needs an action the current playbook cannot take.** Then governance moves,
+and it moves visibly: a drawn step that **suspends** the current playbook rather than ending it, with
+a return address on it. The suspended one is frozen — it cannot speak, cannot advance, cannot be seen
+by anything looking for the active playbook — until she comes back to it.
+
+⭐ **The rule for which happens is mechanical, not a judgement call:** *does the current playbook
+already have a step that serves the new goal?* If yes, only the goal moves. If no, governance moves.
+This matters because a change of governor writes cards onto the lead's record, and a system that did
+it on every change of subject would bury the record in noise.
+
+⭐ **And this does not weaken the one-playbook-per-lead rule at all.** That rule exists to stop *two
+playbooks texting one person* — measured, in blood, on real clients. **A suspended playbook texts
+nobody**, and it is prevented from doing so by the same five guards that already exist, not by a new
+one. That is why this is an extension of the design rather than an exception to it.
+
+### 3.2 Which goal wins
+
+The weighting already exists and is already signed — six tiers, in order:
+**a live human · an opt-out · an offer · a tour · a recovery · a nurture.** Nothing new is invented.
+The resume rule reads, in order:
+
+1. **A live human in the conversation pauses everything.** The stack survives; she just stops.
+2. **The person returns to the old subject → she returns with them.** They are the authority on what
+   this conversation is about, and this needs no weighting at all.
+3. **The new goal completes → she goes back to the old one**, at its bookmark.
+4. **The run is closing and the goal is still unmet → it becomes a task** (§4).
+5. **The new goal is genuinely the more important one → she stays.** ⭐ In the flagship case this
+   answers itself: **financing is the gate AFTER the showing on the ladder Zach already signed.** So a
+   financing pivot that completes is not a detour — it is the next gate, arrived at early.
+
+⛔ **No new score, no new weight, no new number is proposed here.** The temperature and momentum
+weights on the [closed-loop page](/command-center/myli-closed-loop) are explicitly **not yet reviewed
+by Zach**, and inventing a second set of weights on this page would smuggle them in through a side
+door. The five rules above are decidable from things already signed.
+
+---
+
+## 4 · ⭐ TASKS ARE HER CLOCK
+
+> **Zach, 2026-08-23:** *"If Myli finishes the playbook for scheduling a showing, Myli SETS A PHYSICAL
+> TASK IN THE CRM to follow up on the showing feedback. That task is VISIBLE, ASSIGNED TO MYLI, and
+> Myli ACTUALLY READS that task — tasks are triggering her to follow up. Myli's operating just like a
+> human would."*
+
+**Status: DESIGN — and see the finding below, because he asked for this once already.**
+
+### The loop
+
+```
+A GOAL ENDS  →  she writes herself a task     assigned to Myli · due when she said · on the lead
+                (and anything still on the stack becomes a task here too)
+                       ↓
+THE TASK COMES DUE  →  she looks at it, looks at the person, and DECIDES what to do now
+                       ↓
+SHE ACTS  →  through the same governed, drawn, authorized path as every other message
+```
+
+### Why a task and not a timer
+
+There is already a timer in the CRM, so this has to be argued rather than assumed. The two are not
+duplicates, and the difference is the founding distinction of the whole playbook engine:
+
+|  | a scheduled action | **a task** |
+|---|---|---|
+| decides **when** | at write time | at write time |
+| decides **what** | **at write time** — the message is already chosen | **when it comes due** — she looks at the situation and chooses |
+| is | a plan made in advance | **a decision deliberately postponed** |
+
+⭐ **A scheduled action is a pre-baked instruction. A task is an obligation she reasons about when she
+gets there.** That is exactly what *"operating just like a human would"* means, and it is why the
+answer is a task even though a timer exists. Both stay: the timer keeps its job (fire this exact
+message at this exact minute), and the task owns *I owe this person something by this date.*
+
+### Why this is not a "staleness window"
+
+Zach has already ruled — **no staleness tiers, no reset, one continuous relationship.** A due date is
+time-based, so the question is fair. The difference is structural:
+
+| a staleness window | a task |
+|---|---|
+| the **system** decides a category from elapsed time | **she** made a commitment and set the date |
+| a verdict about **the person** — *"this lead is cold"* | a fact about **the obligation** — *"I owe this Thursday"* |
+| **resets** the relationship | ⛔ **nothing resets** |
+| invisible policy | a **visible row** a human can open, change, or cancel |
+| fires because time passed | fires because **a promise came due** |
+
+The ruling's own second clause licenses it: *elapsed time is a **fact she speaks to***. A due date is
+exactly such a fact, and it is the only kind of time-awareness that is honest, because it traces to
+something **she** said rather than to a decay curve someone chose.
+
+⛔ **Two guardrails so it cannot drift back into a window:** a task never changes how she *treats*
+someone, and **an overdue task is a signal about US, never about them** — if it ever feeds the cooling
+math in §5, the window has come back in disguise.
+
+### ⭐ THE FINDING — he asked for this on July 6, it was built, and it has never run
+
+The code already exists, and it carries the dated order in its own comment: *"TASK-FIRST (Zach
+2026-07-06): the scheduled follow-up MUST surface as a first-class TASK Myli reads — her 'next action'
+is a visible task row, not a hidden scheduled-action reason."* It assigns to Myli's real CRM seat. It
+cancels stale tasks first so they cannot pile up.
+
+**It has written zero rows in production.** It sits behind a switch that was never turned on, and its
+backstop job was never scheduled.
+
+**So tonight's order is the second time it has been given.** This is the same pattern the playbook
+spec already names — a shape specified repeatedly and shipped never. The response is to **finish what
+is there**, not to write another version of it. Three things it is missing, all of which are live
+defects today independent of this design:
+
+1. **There is no single front door for creating a task.** Five places create them their own way; four
+   of those never file the activity, and two write a status the rest of the system does not use.
+2. **A task Myli creates would be recorded as made by a human.** The one good path hardcodes it.
+3. **Nothing anywhere reads task due dates on a schedule.** The database index for it exists and has
+   never been used.
+
+⚠ **And the sweep that reads them has a trap in its shape:** on a day with nothing due it does nothing,
+which looks identical to a job that is dead. It has to report *"I ran, nothing was due"* — otherwise
+the first silent failure is invisible for as long as it lasts.
+
+---
+
+## 5 · Cooling, warming, and habit
+
+> **Zach:** *"Is this person cooling down, do they do this habitually, was this the first time they
+> canceled."*
+
+**Status: SHAPE designed. ⛔ Every NUMBER is Zach's, and the existing weight proposal on the
+[closed-loop page](/command-center/myli-closed-loop) is explicitly not yet reviewed by him.**
+
+### Three questions, and two of them are the same measurement
+
+| the question | what it actually is |
+|---|---|
+| *was this the first time they canceled* | a count, read at one |
+| *do they do this habitually* | **the same count, with a denominator** |
+| *are they cooling down* | a **trend** — their engagement against their own earlier rate |
+
+⭐ **So this is one tally and one trend, not three detectors.** "First time" and "habitual" are the
+same number read at different points, and merging the tally with the trend is how a single mystery
+"temperature" number gets born — which the CRM has already retired once, for exactly this reason.
+
+⚠ **A habit claim without its denominator is not a finding.** Two cancellations out of two showings is
+a habit. Two out of twenty is a person with a life. And a cooling claim measured against other people
+rather than against **this person's own** normal is a staleness window wearing a lab coat.
+
+### Two rules that keep it honest
+
+1. **Nothing here is a stored score.** Every answer is derived from what actually happened, and it
+   carries its reasoning, so a human can click it and see why. The system already retired a score
+   column that no one ever wrote and that silently broke every rule pointed at it.
+2. **Cooling is a signal, not a status.** It changes what she *says* and what she looks at first. It
+   never expires anyone, never resets a relationship, and never files a person into a tier.
+
+⚠ **Honest dependency:** the table that would let these be saved, named, and subscribed to does not
+exist yet. Until it does, these are computed when a decision is made and cited in the record.
+Recommendation: **compute first, save later** — a saved signal with nothing to own it is precisely the
+dead column above.
+
+---
+
+## 6 · The transitions Zach ruled on tonight
+
+| ruling | what it settles |
+|---|---|
+| **Showing coordination ends at the booking** | The scheduling playbook closes when the showing is scheduled. Getting feedback afterwards is a **separate playbook**, entered by a visible transition. This overrides the desk's earlier reading, and it moves two planned steps onto a new playbook before they are drawn. |
+| **Off-topic gets answered inline** | She never tells a person to finish one subject before starting another. This is what §3 exists to make safe. |
+| **Turning coordination on** | *"It needs to absolutely be able to happen"* — the flip stays Zach's decision at the two-sided proof. |
+
+⛔ **AND ONE COLLISION THAT NEEDS ZACH.** The signed addendum from the same afternoon makes
+**lending and financing advice a hard handoff to a human**. Tonight's ruling makes financing a goal
+Myli works. Both cannot be executed as written.
+
+**Proposed line — advice versus logistics:**
+
+| Myli owns | Myli hands off |
+|---|---|
+| "here's our lender — want an introduction?" | "should I put five percent down or twenty?" |
+| "here's what they'll ask you for" | "can I afford this house?" |
+| chasing the pre-approval letter until it lands | "is this a good rate?" |
+| recording that they are pre-approved | any recommendation about money |
+
+The three handoff triggers he signed — legal, lending, negotiation — are all **licensed-advice**
+boundaries. They are about opinions, not about a subject being unmentionable. And the financing goal's
+own mission, written weeks before he asked the question, is already routing rather than counsel: *get
+them pre-approved and connected to our lender.* **But this draws a legal line, so it is his signature
+and not ours.** ⭐ **Until he rules, the financing pivot is designed and not armed.**
+
+---
+
+## 7 · What we found reverse-engineering the chat assistants
+
+> **Zach's order:** *"Reverse engineer how any AI lead conversion works — how ChatGPT works, how
+> Anthropic works: what state are you using on the back end?"*
+
+**The honest headline: no major chat assistant publicly documents anything like this.** We searched
+OpenAI's, Anthropic's, Google's and Microsoft's own documentation. They all publish **memory,
+retrieval, and summarization**. **None publishes a mechanism for suspending a goal and returning to
+it.** Detailed accounts of these internals do circulate online; they are outsiders guessing, and
+nothing here rests on them.
+
+**So the real answer to the question is:** the pivoting you notice in ChatGPT is real, and it is **not
+a machine we can copy.** It happens because the whole conversation is handed to the model every time
+and the model infers what matters. That is a capability — and it is also the liability, because:
+
+- ⭐ **A study of exactly our situation** — a task spread across a natural, wandering multi-turn
+  conversation — measured an **average 39% drop in performance**, in every leading model tested. Its
+  conclusion is the sentence to remember: ***"When LLMs take a wrong turn in a conversation, they get
+  lost and do not recover."***
+- **Models attend best to the beginning and end of what they are given and worst to the middle.** A
+  goal stated once and then buried under a digression **is** the middle.
+- **When a conversation gets long, the tools that shorten it cut the middle** — OpenAI's own
+  documentation says its automatic truncation drops items from the middle of the conversation, and
+  Anthropic's own guidance warns that summarizing can lose *"subtle but critical context whose
+  importance only becomes apparent later."*
+
+**And the structure Zach described is real — it is just 40 years old and lives somewhere else.**
+Academic work from 1986 formalized conversation as a **stack of attention** that is pushed on a
+digression and popped when it ends. It ships today in enterprise bot builders: Google's Dialogflow
+documents preserving the call stack and resuming with already-answered steps skipped.
+
+### ⭐ The two deltas — and they are exactly §3 and §4
+
+1. **They are implicit; we are explicit.** Every documented assistant keeps conversation state as a
+   flat list of messages. There is no field anywhere for a suspended goal. So the "coming back"
+   behavior cannot be reading one — and it depends on the goal still being in the window, which is
+   the thing that gets cut first. **A goal that survives only by staying in view will eventually not
+   be there. §3 puts it in a row.**
+2. **Every shipped scheduler is a human writing a cron.** ChatGPT's scheduled tasks, Gemini's
+   scheduled actions, Anthropic's scheduled agents — all real, all documented, and in all of them **a
+   person writes the schedule.** ⭐ **In none of them does the assistant derive a commitment from
+   something it said in a conversation.** *"She said she'd follow up after the showing, therefore she
+   owes a follow-up"* is not a documented capability anywhere. **§4 is that missing piece.**
+
+### One free win it hands us
+
+Because models attend worst to the middle: **when she returns to a suspended goal, restate it at the
+END of what the model is given, not somewhere in the history.** Same for anything that summarizes a
+long conversation — the active goal and its answers are **pinned and never summarized away.**
+Anthropic's own warning is that a summarizer cannot know what will matter later. **Our stack knows.**
+
+---
+
+## 8 · The build, brick by brick
+
+> *"We're gonna have to build it brick by brick — but that's what I need you for."*
+
+Every brick: proven broken before it is proven fixed, nothing outside the test leads, and no playbook
+goes live without Zach flipping it. Live status is tracked on
+[the state-engine board](/master-plan/myli-state-engine) — this is the order, not a second checklist.
+
+| # | the brick | why it is here |
+|---|---|---|
+| **0** | **Fix the queued step list** so the two post-showing follow-ups move to the feedback playbook | §6 — otherwise the first thing built after Zach's ruling contradicts it |
+| **1** | **The goal becomes a stack** | Free today: the single value it replaces is **set on zero records live**. That stops being true the first day a real lead is enrolled. |
+| **2** | **The bookmark and the return** | The hard line, and re-deriving progress rather than restoring a snapshot |
+| **3** | **Suspending a playbook** | Only needed for the rarer case in §3.1, so it is built after the common one — never speculatively |
+| **A** | **One front door for creating a task** | Fixes three live defects on its own, and is worth doing even if the rest were cancelled |
+| **B** | **A closing goal writes Myli her task** | Finishes the July code instead of writing a fifth version of it |
+| **C** | **She reads her own due tasks** | Ships **unscheduled** first — ⭐ **Zach turns the clock on**, and only a real watched run counts as proof it works |
+| **D** | **The tally and the trend** | After she has a goal to prioritize and a clock to act on — cooling changes nothing until then |
+
+---
+
+## 9 · The docs boundary — and one consolidation to approve
+
+**This page and [AI Programming](/legacy/guides/ai-programming) split on Zach's own doctrine —
+*code owns the goal, the LLM owns the language*** — and that page quotes the doctrine itself, so
+nothing new has to be agreed to. This page never says how a prompt is built; that page never decides
+what she is trying to achieve.
+
+⚠ **But the AI Programming page has drifted, and it should be fixed rather than worked around.** It
+carries a **legacy / unverified** banner, its last update is **July 23**, and:
+
+1. **It describes a second journey ladder** (its Phases 1–4) beside the G0→G7 ladder on the
+   [closed-loop page](/command-center/myli-closed-loop). **Two ladders for one journey, on two pages,
+   one of them a month stale.** *Proposed:* the G-ladder is canonical; that section folds into it and
+   AI Programming keeps only the per-rung wording guidance, which is genuinely its own.
+2. **It still prescribes a 0-to-100 lead score stored on the lead record** — the exact column that was
+   **retired**, because nothing ever wrote it while filters and automations quietly pointed at it.
+   *Proposed:* strike it and point at signals instead.
+3. **It says the goal-tracking half of the Director is "future."** It shipped since.
+4. ⛔ **Its journey map is a claude.ai artifact link** — which is precisely what Zach said tonight he
+   cannot open: *"I can't read it because it's an artifact… when I change user profiles it doesn't
+   let me see it."* Same defect as the artifact link still sitting on the state-engine board page.
+   *Proposed:* both become hard pages under our own URL.
+
+⭐ **None of that was created here — this page deliberately did not restate the ladder, the
+temperature weights, or the cadence, precisely so the overlap is not made worse while it is being
+resolved.**
+
+---
+
+## 10 · What Zach decides
+
+1. ⛔ **The financing line (§6)** — does Myli own the pre-approval goal while handing off the money
+   advice? **The flagship's financing pivot waits on this.**
+2. **The cooling numbers (§5)** — the shape is designed; the weights are still unreviewed.
+3. **Turning her clock on (§8, brick C)** — building it is ours, scheduling it is his.
+4. **Flipping any playbook live** — unchanged: a decision, never a deploy.
+5. **Approving the consolidation in §9** — fold the duplicate ladder, strike the retired score, and
+   move the two artifact links onto real pages.
+
+---
+
+*Record of this design, with every measurement and file reference:
+`.claude/reports/myli-state/STATE_STACK_ARCHITECTURE.md`. Zach's dictation, near-verbatim:
+`.claude/reports/myli-state/ZACH_STATE_DICTATION_2026-08-23.md`.*
