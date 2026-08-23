@@ -95,11 +95,10 @@ FUB  ──webhook──►  crm.houseloop.ai/api/fub/webhook        (RAILWAY �
                         │  Camp David POLLS that Railway queue
                         ▼
               CAMP DAVID scraper  ── does the job (reads the one hidden body / sweeps the inbox)
-                        │  writes fub.*  (Camp David = ground truth, where the scraper WRITES)
-                        │
-                   fub-relay  ──30s cursor loop, upsert-only, NEVER deletes──►
+                        │  writes fub.* locally AND
+                        │  per-person DIRECT sync (syncPerson*ToMirror — the relay is DEAD, 8/22)
                         ▼
-              RAILWAY MIRROR fub.*   ── THE ONLY THING THE CRM READS
+              RAILWAY TAPE fub.*   ── THE ONLY THING THE CRM READS
 ```
 
 **Why this matters:** the scraper is a **dumb helper**. It never decides what's new. It takes a job and does
@@ -163,7 +162,7 @@ read (the TAPE; every capture-store heartbeat copy is a tombstoned fossil).**
 |---|---|---|
 | **`fub.webhook_event_log`** | 224,867 rows, newest **2026-07-09 19:36**, nothing since. Reads as *"webhooks died 3 weeks ago."* | **RETIRED TABLE.** It belonged to the old dashboard receiver + the 4 mirror-reading pollers, which were **ripped 2026-07-09** — the same hour it stopped. `fub-notes-poll` / `fub-inapp-poll` / `fub-comms-poll` / `fub-events-poll` all last ran `07-09 19:04`. The live arrival record is **`hl_run_log` in the CRM DB where `fn='fub-webhook-router'`** — one row per webhook resource, FACT column `started_at`. **Do not read this table for health.** |
 | **`fub.sync_log`** | 214,319 rows, newest **2026-07-09 19:36:25**, nothing since — the same second as its twin above. Reads as *"the sync died."* | **RETIRED TABLE, same cause.** 214,309 of its rows are `sync_type='webhook'`, written by the same old dashboard receiver (`apps/dashboard/server/fub-webhooks.ts:1287` and `:1725`). It has never had another live writer. Read `hl_run_log` `fn='fub-webhook-router'` instead. Both tables now carry a `COMMENT ON TABLE` tombstone saying so — `SELECT obj_description('fub.sync_log'::regclass)`. |
-| **`fub.scraper_heartbeat`** | `last_beat = 2026-05-30` (two months stale), `persons_pending = -6461` (nonsense) | Stale/abandoned row while the scraper demonstrably works (4,978 home-activity rows landed in 2h the day this was measured). This is audit finding **F4**, still unfixed. **The heartbeat can be stale while data pours in** — never downgrade a healthy fresh-data verdict because of it. |
+| **`fub.scraper_heartbeat`** | Stale beats on BOTH stores (tape 8/10, capture 8/21), `persons_pending = -6461` (nonsense) | **DECLARED FOSSIL** of the retired fub-parallel-scraper — tombstoned with `COMMENT ON TABLE` on both stores 2026-08-23 (QUARANTINE §2 + §7). ⛔ DO NOT WIRE. **A heartbeat can be stale while data pours in** — never downgrade a healthy fresh-data verdict because of it. |
 | **"texts in the last 2 hours = 0"** | Reads as a dead pipeline | **Inbound text baseline is 1-16 per DAY** (measured over 10 days: 07-29=16, 07-28=2, 07-27=3, 07-25=2, 07-22=1). Zero texts in a 2h window is the *normal resting state*. Judge on the whole fresh-data set — `zillow_home_activity` alone runs **4,000-5,700 rows/hour**. |
 | **pm2 status / restart counts** | `fub-backfill-b` showing 2,388 restarts | The **designed** empty-queue exit + relaunch self-heal (F6). 🚫 **BANNED VOCABULARY:** never say the scraper "crashed" or is "crash-looping." |
 | **`fub.rehydration_queue` depth** | ~49k pending forever | Deprecated graveyard (retired ~2026-05). The ACTIVE queue is `fub.body_recovery_queue`. |
@@ -223,6 +222,16 @@ re-edits the body to current truth — no stacked superseded blocks, ever (git h
 
 ## Update log
 
+- **2026-08-23** — **THE ROSTER MOVED OUT + the self-contradiction struck (builder-onetruth lane, item 199 ②).**
+  This page carried two rosters that disagreed with each other (the 8/19 FACT-column table said
+  `fub-webhook-scraper` "✅ up" while the signals-lie list called the same process "correctly STOPPED"),
+  and both were stale against the live box (relay quarantined 8/22, detector elected to Inngest 8/23).
+  Consolidation per DOCS_SECTION_DISCIPLINE: **the roster now lives ONLY in
+  [the Captain Manual](/fub/captain-manual)** (regenerated 8/23 from `pm2 jlist` + each process's own
+  liveness column); every roster section/anchor here is a pointer; the watchdog/sink warnings moved to
+  the captain manual's Condemned section. Also: the capture-store heartbeat copies are tombstoned
+  fossils (QUARANTINE §7), the relay rows in the cargo map / architecture diagram re-edited to the
+  direct-sync truth, and the 8/22-night CURRENT STATE red list re-measured to its resolved state.
 - **2026-07-30** — **READ THIS FIRST section added + the health check fixed (Adam; Zach: *"anytime an agent goes
   to check the FUB scraper I say read that doc"*).** A live end-to-end verification found the pipeline **healthy**
   (webhook-router 57 runs/2h, the 3-min in-app tick cycling, all 6 canonical procs online, `zillow_home_activity`
