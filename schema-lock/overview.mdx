@@ -856,7 +856,33 @@ on the web `Listing` (keyed by HLID), the CRM points at it by `website_hlid` and
 
 Reference: SureSend and Follow Up Boss both use **"people"** with a simple sequential per-account number (`/people/view/5768`); a "lead" is a status, not the person.
 
-## 🔖 SIGNED RULING — SAVED SEARCH IS A CRM OBJECT (8/7 · `hl_saved_search` · BUILD PENDING)
+## 🔖 SIGNED RULING — SAVED SEARCH (8/7 · `hl_saved_search`) — ⚠️ **AMENDED AND REVERSED 2026-08-25**
+
+### ⚠️ THE 8/25 AMENDMENT — THE WEBSITE'S TABLE IS THE ONE TRUTH; THE CRM TABLE RETIRES
+
+**Signed by Zach 2026-08-25 as Phase 6 of THE SCHEMA VERDICT. This reverses the 8/7 ruling recorded below.** The ruling below is kept in full, not deleted — it is the position that was reversed, and a reversal that erases what it reversed leaves nobody able to check the reasoning.
+
+**What changed, measured:** `hl_saved_search` was signed and built, and **twelve days later it held 0 rows** while all **20** live saved searches sat in the website database. Every real surface had already migrated there on its own — the lead-detail tab, the Myli desk trail (R12), the watch-state reader, and the CRM's own create path, which writes to `web."SavedSearch"` and stamps `sourceTable='web.SavedSearch'` on the card. The card had been telling the truth the whole time; only the schema disagreed.
+
+**The reasoning Zach signed — the search LIVES where it RUNS.** The matching engine, the alerts, and the lead's own dashboard edits all execute against the website's listing inventory. That is the same pattern already signed for home values (`HOUSELOOP_DATA_DOCTRINE` law 6: the CRM pulls values from the website by the lead link and never stores a copy — no copy, no drift). Moving a matching engine onto an empty table for taxonomy's sake is the expensive way to get a worse answer.
+
+**"Tied to a lead" is preserved.** Every search still belongs to a person, shows on their record, and is created and controlled from the CRM (one door: the CRM API writes them, the confirm-before-edit rule stands, the cards file on the lead). The only thing that changed is which database holds the row.
+
+**What executes:** `hl_saved_search` is dropped (`HOLD_0890_retire_saved_search.sql`). The drop is scoped to that one table by name — `hl_home_list`, born in the same migration (0748), is untouched. Reversal captured before authoring: `~/hl-reversals/schemaphases-2026-08-25/` holds the row dump (0 rows), the 30-column schema, all 18 constraints and all 4 indexes, so the table is rebuildable exactly. Its verdict moves to a `_retired_*` tombstone in `tools/schema/target-verdicts.json` rather than being deleted, so the historical `CREATE TABLE` in migration 0748 keeps compiling.
+
+**Code that must come off the table BEFORE the drop applies** — removing a read while the table exists is always safe; dropping a table while a reader exists is not:
+
+| # | Site | Why it must move first |
+|---|---|---|
+| 1 | `lib/ai/user-ask-context.ts:199-206` | The one reader. Already wrapped in a `.catch()` returning `[]`, so after the drop it would swallow a real error and report 0 saved searches for every lead while logging a phantom failure on every ask. Today's zero is correct; tomorrow's would be a swallowed error wearing the same face. |
+| 2 | `app/api/inngest/route.ts:72` + `:93` | The one writer, `savedSearchWebBackfill`, is **registered live** and has never run. Left registered, a manual trigger produces a red run against a table that no longer exists. Unregister it, delete the function, remove its `lib/run-log/inngest-registry.ts` entry. |
+| 3 | `lib/leads/saved-search-criteria-key.ts` | Exists only to compute `criteria_key` and the structured columns for this table. Dead code **after** the drop, not before — check its remaining consumers first. |
+
+**The catalog kinds below are unaffected.** They describe what a person did, not where the row lives, and they keep rendering against `web."SavedSearch"`.
+
+---
+
+### The original 8/7 ruling (REVERSED — kept for the record)
 
 **A saved search belongs to a PERSON and is a CRM object — not a website row.** You can't have a saved search unless you're a person in the CRM. Follow Up Boss (a CRM) proves it — Zillow saved searches live in `fub.saved_searches`. **Alerts are sent OUT of the CRM.**
 
