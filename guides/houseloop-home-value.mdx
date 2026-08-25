@@ -126,6 +126,57 @@ output straight to `Listing` (the table is the truth), single-threaded + human-p
 price-per-sqft mis-grab) is dropped, not written. Coverage gaps (Redfin has no estimate for a home) are stamped and
 skipped, not retried every run.
 
+## The seller report's number — the two-rung ladder (shipped 2026-08-25)
+
+The `/sell` **Home Valuation &amp; Demand Report** (`components/sell/DemandReportModal.tsx` →
+`app/api/demand-report/route.ts`) carries the home's own number. It does **not** call `getListing`'s
+fork, because that fork can return a MARKET-derived value and Zach's
+**Seller value-source ruling (8/24)** removed exactly that from this surface. Two rungs:
+
+| Rung | Source | When | `source` |
+|---|---|---|---|
+| **1** | **Live Zillow** via Open Web Ninja, × 1.005 | we have street + ZIP (the Zillow search key) | `zillow_live` |
+| **2** | The **Zestimate-derived value we already hold** (`lib/valuation/stored-home-value.ts`) | rung 1 returned nothing, but the address resolves to a home | `zillow_cached` |
+
+**Rung 2 is not a softening of the ruling — it is the same law reading a cached copy.** The gate keys on
+the raw **`zestimate`** column, never on `hlEstimateSource` (that column is free text and has drifted to
+36 distinct values including per-home strings like `zillow-zpid-80876319-reenrich`; a guard on a string
+that open-ended silently narrows as new writers invent spellings). Anything ZHVI / sold-price /
+list-price derived is **refused** and the report renders its honest no-number state. Measured yield on
+the 2,102-home watch list: **2,016 pass** on the raw Zestimate, 1 on a stored Zestimate-sourced value,
+**85 correctly refuse**.
+
+<Warning>**A cached number must never say "updated today".** The response carries `asOf`, and the
+header renders "as of {'{'}Month Year{'}'}" for a `zillow_cached` value. 1,976 of the 2,102 watch-list homes
+were last stamped a full month ago, so this is not a rounding error in the copy.</Warning>
+
+**The door that was losing the number:** the listing-page "Is this your home?" CTA
+(`ClaimHomeCta.tsx`) sent `hlid` + city/state/zip and **no `street`**, so the old first line
+(`if (!street || !zip) return null`) refused before it ever looked at the home — a seller standing on
+their own listing page, whose Zestimate we had cached, was told we had no value. Fixed by passing the
+part it already had. The `AddressAutocomplete` **Enter race** (submitting inside the 120 ms debounce, so
+the suggestion list was still empty and the address travelled with no parts) now re-asks Places once
+before falling back.
+
+### The demand half — Google Search Console (`lib/demand/gsc-area-demand.ts`)
+
+Answers Zach's E29 *"+ Google Search Console demand"*. Reads `searchAnalytics/query` on
+`sc-domain:houseloop.ai` for queries **containing the city name**, 90-day window, and returns
+impressions + distinct-query count. Auth takes the service-account road on prod
+(`HOUSELOOP_GCP_SA_KEY_JSON`, Railway-only) and falls back to `GSC_REFRESH_TOKEN` locally, so the
+feature is verifiable in dev instead of 503-ing into a silence that looks like "no demand".
+
+- **CITY grain only, by measurement.** 90-day totals: Kansas City 703 · Overland Park 383 · Leawood 302
+  · Shawnee 272 · Olathe 249 · Prairie Village 53 — but **ZIP 66224 is 8 and ZIP 66212 is 14.** A
+  ZIP-grain number is noise, so `MIN_IMPRESSIONS = 25` refuses anything below the floor and the line
+  simply does not render.
+- **The wording is load-bearing.** An impression is *a search that surfaced a HouseLoop page* — not a
+  person and not a visit. City-level **clicks are 0–1** over 90 days, so any copy saying "N buyers
+  looked at your area" would be false by orders of magnitude.
+- Best-effort throughout: no credentials, a failed call, and a below-floor measurement are
+  indistinguishable to the caller, and all three mean "no demand line". It never costs the seller
+  their valuation.
+
 ## Disposition — no sold home renders flat (hardened 2026-07-03)
 
 A sold home only gets its value **minted** (and its AI overview written) when the `listing-sold` Inngest function

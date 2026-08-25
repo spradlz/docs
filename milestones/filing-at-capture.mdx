@@ -1,0 +1,99 @@
+---
+title: "Filing at Capture"
+sidebarTitle: "Filing at Capture"
+description: "A card lands on the person's record the moment the signal is captured, instead of waiting on a relay that was measured running nearly nine minutes behind."
+---
+
+# ⭐ Filing at Capture
+
+**Milestone completed August 19, 2026.** [Floor 4 on the board](/master-plan/floor-4)
+
+---
+
+## What this is
+
+When a buyer messages you on Zillow, two things have to happen: we have to be told, and the message
+has to actually show up on that person's record so you can read it.
+
+Those used to be two different moments, and the gap between them was not small. The notice that a
+message existed arrived quickly. The *words* of the message travelled a separate road - captured on
+one machine, then carried across to another by a relay running on its own schedule. Until the words
+arrived, there was nothing to put on a card, so nothing was filed. The waiting side would sit for up
+to **90 seconds** before it even tried, and if the words still were not there, it gave up and tried
+again later.
+
+That relay was measured running as much as **8 minutes 43 seconds** behind. Which means there was no
+upper bound on how late a card could be - not a slow card, an *unbounded* one. However late it got,
+nothing in the system was in a position to say so.
+
+Now the words travel with the signal, at the moment of capture. Nothing waits for a second machine.
+The card files immediately.
+
+## The written detail
+
+There is no separate written specification for this change - it is a plumbing fix behind a screen you
+already use, and the honest thing is to say so rather than point you at a page that does not cover
+it. The nearest context is [the captain's manual](/fub/captain-manual), which explains how a message
+reaches us and how the waiting queue works.
+
+## The walkthrough
+
+### Before: the card was timed by something else entirely
+
+A message came in. We knew about it. But the readable part of it was still on another machine, and
+the card could not be written without it. So the card's arrival time was really the relay's arrival
+time - and the relay was carrying a backlog measured at nearly nine minutes on a real client's
+message in late July.
+
+Worse, the waiting was blind. Nothing about the delay was visible to you. A message you needed to
+answer could simply not be on the record yet, and the record gave you no reason to suspect it.
+
+### After: the words ride along
+
+The change is one sentence long to describe: when the message is captured, its text is carried
+forward with it, rather than left behind to be fetched later. There is no second machine in the
+path anymore.
+
+Measured live on the real production system on August 19: **the card was filed 5.4 seconds after the
+signal arrived.** Inside the test harness, where there is no network in the way, it was **506
+milliseconds**.
+
+### The second fix in the same pass: no more twins
+
+Some facts reach us by more than one road. A buyer viewing a home, for example, can arrive both from
+the automatic sweep of their Zillow activity and from a note written about them - two roads, one real
+event.
+
+The old duplicate check only remembered what it had already seen **inside a single run**. When the
+two roads landed minutes apart, as they routinely do, the second one had no memory of the first, and
+you got the same card twice on the same person's record.
+
+Each road now checks what is already on that person's record before it files, and when it decides to
+skip a twin it says so out loud rather than going quiet. The measurement behind this was forty real
+duplicated cards.
+
+### How we know it is fixed
+
+The proof was written to fail first, on purpose. The same event with the message text deliberately
+withheld throws an error and files nothing - which is the old world, reproduced deliberately so we
+could watch it break. The same event with the text carried along files the card. That pair is the
+whole claim, and it is the difference between "the tests pass" and "the tests would have caught
+this."
+
+Twenty of twenty checks came back green, and the whole thing was then run once more against the real
+production system with a test person, and cleaned up afterwards.
+
+## What you can do with it
+
+| What happens | What you get |
+|---|---|
+| A buyer messages you on Zillow | The card is on their record in seconds, not on a relay's schedule |
+| The relay behind the scenes falls behind | It no longer matters - nothing in the filing path waits on it |
+| The same event arrives by two different roads | One card, and the road that skipped says which twin it saw |
+| The message text genuinely cannot be read | It raises a loud error and retries, instead of quietly filing nothing |
+
+## The record
+
+- The build and the proof - `.claude/reports/floor4-capture/RECEIPT.md`
+- The design it was built to - `.claude/reports/fub-board/floor-4-design.md`
+- The red-first harness - `apps/houseloop-crm/lib/activity/inapp-filing-capture.test.ts`
