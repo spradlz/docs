@@ -43,6 +43,22 @@ The `houseloop/listing.sold` event runs a single Inngest function (`lib/inngest/
 
 Every POST to `/api/repliers/webhook` is recorded in **`hl_webhook_inbound_log`** before any decision: `received_at`, `user_agent` (e.g. `Repliers-Webhook/687`), `source_ip`, the full `raw_body`, and the `previous`/`data` status diff. This is the permanent proof of *who* hit us and *what* they sent — cross-reference it against the `listing-sold` runs in the Run Log. Real Repliers traffic shows the `Repliers-Webhook/*` user-agent and AWS IPs.
 
+## The displayed price — ON-MARKET reads the `listPrice` COLUMN (shipped 2026-08-26)
+
+**An on-market home's displayed price comes from the `Listing.listPrice` column — never derived
+from `priceHistory`.** The 8/26 audit measured 2,803 of 16,804 on-market homes (16.7%) rendering a
+non-asking price on the detail page, 2,604 of them **hiding a price drop** — because `priceHistory`
+is written ONCE at intake (its "Listed for sale" event is a photograph of the arrival price) while
+the MLS feed rewrites the `listPrice` column every sync. Same-day event picks were even decided by
+array order. The law that governs the split:
+
+- **On-market** → `listPrice` (the same column the search filters and the results grid read, so a
+  home returned by "under $700k" can never render a contradicting number).
+- **Sold / off-market** → still derived from `priceHistory` (the 2026-07-02 anti-whack-a-mole law
+  is untouched where its cited cases actually live — all three are sold/off-market cycle-reach bugs).
+
+Fixed in `getListing()`; verified live post-deploy (a $395k→$365k cut renders $365,000 only).
+
 ## Price history (prior sales) — live per listing
 
 Independent of the sold pipeline: every Repliers single-listing GET returns a `history[]` array (every prior MLS record for the address). Rendered live, newest-first.
