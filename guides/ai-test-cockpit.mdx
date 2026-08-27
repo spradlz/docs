@@ -1,0 +1,173 @@
+---
+title: "🧪 THE AI TEST COCKPIT — the visual testing ground"
+sidebarTitle: "🧪 The AI Test Cockpit"
+description: "Pick a person for Myli to talk to, pick what starts the conversation, press go, and watch her whole mind work — then correct her in place and run it again. The signed requirement, what is already built, and the gap between them."
+---
+
+> **Zach, 2026-08-27, ruling #50:** *"**THE AI TEST COCKPIT LIVES OUTSIDE THE MYLI OS** (changed
+> from the earlier section map — it is its own canonical doc/initiative)."*
+
+This is that document. It is the canonical home for everything about the cockpit; the deep design
+lives in its PRD and this page is the developer-facing index over it.
+
+**The boundary that makes it a separate document — ruling #34:**
+
+> **REVIEW QUEUE ≠ TEST COCKPIT.** The review queue is the LIVE surface — *"I actually review it on
+> a lead,"* runs on real and test leads. **It is NOT the editing/testing place.**
+
+So: [**Myli's Desk (the review queue)**](/guides/myli-os) is where a human approves what Myli is
+about to say to a real person. **The cockpit is where you find out what she would do before anyone
+is on the other end.** Two surfaces, two jobs, two documents.
+
+## The one sentence
+
+**Zach picks a person for Myli to talk to, picks what starts the conversation, presses go, and
+watches her whole mind work in real time — and when she says something wrong, he corrects her in
+place, changes the step that produced it, and runs it again.**
+
+Almost everything under that sentence already exists. **The build is a windshield over a built
+engine, plus one genuinely new capability: TEACH MODE THAT PERSISTS.**
+
+## The signed requirement (Addendum 3, 2026-08-23)
+
+> *"Otherwise there's an infinite amount of stuff that can happen — we need to see what Myli would
+> actually do."*
+
+1. **AI-vs-AI scenario runs.** An AI plays the PERSON — typing, replying, going quiet, raising
+   curveballs — against **Myli's REAL engine**: the real state assembler, the real playbook run, the
+   real gate chain, the real composer. Never a mock brain; the point is to see what she *would
+   actually do*.
+2. **On a TEST lead.** The scenario runs against a test identity, so every move the engine wants to
+   make is exercised for real inside the standing test-leads-only gate — **the containment that
+   governs live never bends for the simulator.**
+3. **Time-compressed.** The simulator compresses the clock so a two-week arc plays out in minutes —
+   otherwise a scenario that includes "she waits until the nudge clock expires" takes a real day to
+   watch.
+4. **Myli's full thinking visible in real time.** Every turn shows **which playbook** is governing ·
+   **the move** she chose (or held) · **the BECAUSE** (the state facts and gate verdict that drove
+   it) · **what she is waiting for** (the held moves and their clocks).
+
+**Why it is signed law and not a tooling nice-to-have:** an infinite space of conversations cannot be
+walked by hand. The simulator is how a playbook's behaviour is SEEN before a real person ever
+receives a word. It composes with the harness — **the harness proves the gates refuse; the cockpit
+shows what she does when the gates allow.**
+
+## The vision, widened — ruling #35 (2026-08-27)
+
+> *"A VISUAL testing ground for everything that today runs as backend TypeScript."*
+
+Four things the addendum did not have:
+
+1. **Choose the AVATAR.** You pick the persona on the other side — **and Myli has no clue who she is
+   being tested against.** That blindness is the design: a scenario where the engine knows it is a
+   test proves nothing about the engine.
+2. **Set up the scenario, select the TRIGGER, watch it run.** The trigger is the real automation
+   trigger, not a special test door. **Ruling #41** specifies the selector: a dropdown with SECTIONS
+   mirroring the trigger catalog (Property Inquiries · High Intent · HouseLoop), where you pick the
+   trigger *and* the LEAD SOURCE, hit enter, and the cockpit runs **the related PLAYBOOKS and the
+   WORKFLOWS both**, per the enrollment mapping.
+3. **TWO MODES — final shape, ruling #49.** **AUTO MODE:** it just runs, you watch it as-is.
+   **TEACH MODE:** it **stops at every step**, one step at a time, exactly like the review queue's
+   rhythm — approve · or *"tell Myli what to say instead"* · or add a new playbook step. Each stop
+   shows the review-queue-style panel: **why** she is about to do what she is doing, what she will do
+   **next**, what **facts** she captured.
+4. **FAST-FORWARD speed modes** — 1 hour = 1 second, 1 day = 1 or 10 seconds. The existing time
+   compression, made visual.
+
+**Teach Mode's loop, simplified by ruling #48** (this supersedes any dry/live split — there are not
+two teach variants): at any turn, *"what should Myli say instead"* → Zach **types the line** → the
+scenario **plays on with his line in place** → at the end the cockpit asks *"this changed — update
+the prompt, or run again?"* And **ruling #43** fixes the order: **see the results first, then update
+the prompt.** Corrections target the playbook's prompt, applied after the run is reviewed.
+
+**Scope note, ruling #45:** group text is **not** the cockpit's v1 focus. The cockpit is for
+playbooks and workflows driven by **automation triggers**; group-text scenarios come later.
+
+## What is already built — and it is more than the ruling assumes
+
+Four facts that set the scope. Every one is a `file:line` you can open.
+
+**① The page already ships.** "Test Cockpit" is in the sidebar (`Sidebar.tsx:66`) and carries **12
+components / 3,273 lines** behind one blue tab bar with three mode tabs
+(`components/settings/test-cockpit/TestCockpitShell.tsx:17-20`):
+
+| tab | component | lines |
+|---|---|---|
+| Trigger Events & Workflows | `TestCockpit.tsx` | 558 |
+| AI Voice | `VoiceCockpit.tsx` | 579 |
+| Lead Follow-Up | `LeadFollowupCockpit.tsx` + `FollowUpMission.tsx` | 330 + 398 |
+
+Plus the newer instrumentation: `TurnTraceBoard.tsx` and `ScenarioTraceBoard.tsx` (the per-turn
+decision trail), `DirectorRail.tsx` (the Director's packet rendered live), and
+`PromptEditorModal.tsx`. **Zach's vision is a FOURTH MODE in that frame, not a new page.**
+
+**② The simulator is BUILT and more capable than the ruling assumes.**
+`lib/playbooks/simulator/` is roughly **5,300 lines**: **25 live scenarios + 2 pending**, a two-sided
+AI-vs-AI runner driving Myli's real engine (`runner.ts:863`), a two-road clock (`clock.ts`), a
+1,383-line verdict grader and a judge model. **It cannot be fired from a screen** — today it runs
+only as `RIG_CONFIRM=yes … tsx run-scenarios.manual.ts`. That is the gap: the engine exists, the
+windshield does not.
+
+**③ The Conversation Director is built and wired into the production reply path** — see
+[THE MYLI OS §3](/guides/myli-os). **Ruling #40 ratified it ON for the test band**, and the cockpit's
+A/B is what measures her with and without steering; the world flips on that evidence.
+
+**④ A no-send roleplay seam already exists** — `app/api/test/lead-followup-roleplay/route.ts`. Its
+header, verbatim:
+
+> *"you type as the lead, Myli composes a reply against the lead's REAL memory/context, and NOTHING
+> is sent or written to the lead. Runs the exact production brain via composeAiMessage (send/mutate
+> tools stripped — it returns the draft), so preview == what she'd send. … **HARD no-send /
+> no-mutate** … This is the 'real leads are production' law — a test can't pollute a lead."*
+
+### ⚠ The one instrument pointing the wrong way
+
+The scenario trace reader merges four lanes and **does not read `hl_tool_fire` at all** (verified:
+`grep -c hl_tool_fire trace-read.ts` → **0**). Zach asked to see *"the TOOLS being called"* by name,
+and the tool-call witness is exactly the table it does not read. The runner already knows why
+(`runner.ts:682-686`):
+
+> *"THE WITNESS IS `hl_tool_fire`, NEVER `hl_activity_log` … The activity log DEDUPES repeat lookups
+> by design … so a transcript built from it under-reports: 8 real lookups of one address render as 1
+> frozen row, and **'she never looked' gets manufactured by the instrument**."*
+
+**That is a vacuous-green generator sitting inside the instrument that is supposed to prove
+behaviour**, and it is the first thing the build fixes.
+
+## ⛔ What the legacy Test Harness doc was, and why it was retired
+
+**This is Zach's 8/27 complaint, and it was verified true.** The only Test Cockpit documentation in
+the estate was `legacy/guides/test-harness` — titled *"fire trigger events and workflows for real,"*
+carrying a `LEGACY — UNVERIFIED` banner, last touched **8/11**, and still nav-live. It mentioned
+**workflow 18 times and playbook 5 times**, because it predates the entire playbook estate.
+
+**The complaint is structural, not editorial.** The three shipped tabs above are not stale
+documentation of a good product — they are an accurate description of a product built *before* the
+thing it now needs to test. The doc was right about the cockpit; the cockpit is the part that is
+behind. `legacy/guides/test-harness` now redirects here.
+
+## Where the deep design lives
+
+**The PRD is the source of record:** `.claude/reports/test-cockpit/PRD.md` (v2, 2026-08-27) — the
+flow forward and backward, the Director's honest live status, the component-by-component gap table,
+the screen map and the two teach roads, the AI-containment rung analysis, **the STRUCTURE_GATE
+interview for Teach Mode's storage**, the ranked open decisions, and the four build slices each with
+its red-first gate.
+
+**The build slices, in order:** ① the windshield (read-only) → ② the run road (autonomous) →
+③ Teach Mode + the Director A/B → ④ the clock and the trigger.
+
+**The persona cast, the real inboxes and the phone lines it runs against are not repeated here** —
+they live in [The Test Town](/command-center/test-town), which stays the fixture registry. Link it;
+never copy it.
+
+**Standing law this build inherits:** every scenario runs test-band only, inside the same
+[AI Containment](/command-center/ai-containment-law) gate that governs live — the containment never
+bends for the simulator, and the cockpit **must never mint a grant that reaches a real person.**
+
+---
+
+*Created 2026-08-27 under Zach's ruling #50, which moved this out of the Myli OS into its own
+canonical document. The "what exists today" half was folded out of the retired
+`legacy/guides/test-harness`; the signed requirement was folded out of `myli-playbooks-spec`'s
+Addendum 3. Where anything here disagrees with a Zach verbatim, the signature wins.*
