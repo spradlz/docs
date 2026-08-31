@@ -1495,23 +1495,28 @@ What survives from rev 2 unchanged, now scoped to the four hard triggers:
 
 #### ② Temperature + momentum
 
-<Warning>
-**PROPOSAL — Zach has NOT reviewed these weights, half-lives, or thresholds (Addendum 3 §4).**
-The two-instrument SHAPE (level + derivative, projections with provenance) follows the standing
-no-bare-score ruling, but every number below is unsigned v1 data.
-</Warning>
+<Info>
+**⭐ SIGNED v2 — ruling #100.1 (Zach, 2026-08-31: "SCORING V2: SIGNED AS DRAFTED").** The v1
+uncapped sum below this section's earlier drafts was falsified by the book (27 of 60 real leads
+parked at exactly 100 — the scoring audit, ruling #99.3) and replaced by the impulse register.
+The doctrine, verbatim: *"the only 100 is a tour request or a brand-new lead; from there they are
+steady-state or cooling, and our job is to bring them back up to 100."* Model + autopsy:
+`.claude/reports/scoring-audit-2026-08-31/REPORT.md`. Implementation: `computeScore` in
+`lib/ai/scenario-reader/dials.ts` (the ONE reader); the table: `THE_IMPULSES` in
+`lib/ai/scenario-reader/constants.ts`.
+</Info>
 
 One score cannot express the mandate, because "how engaged are they" and "which direction are they
 moving" are different questions. A lead can be WARM and falling (a tour last week, silence since)
 or COOL and surging (three months quiet, then five property views tonight). The first gets **less**
 contact; the second is the single most valuable moment in the funnel. So: two derived measures.
 
-**🌡 TEMPERATURE — the level.** A 0–100 engagement level over the one activity stream,
-exponentially decayed. Answers: *how alive is this relationship right now?*
-T = the sum over signals of (weight-per-kind × 0.5 to the power of age/half-life), capped 100,
-computed over the lead's `hl_lead_activity` rows (the one reader — never a parallel event store).
-Behavioral half-life **7 days**; conversational half-life **14 days** (a reply matters longer than
-a page view). Bands: HOT at 70 and above · WARM 40–69 · COOL 15–39 · COLD below 15.
+**🌡 TEMPERATURE — the level, as an IMPULSE REGISTER.** Answers: *how alive is this relationship
+right now?* Each event fires an impulse (peak × 0.5^(age/half-life)); the score is the **MAX of
+the live impulses** — impulses never stack, so no amount of noise sums past its class. Decay
+glides toward a lifecycle **resting floor** (active ≤30d: 30 · nurture 30–90d: 15 · dormant: 5 —
+never zero while the relationship lives); the five **negative states** push down or freeze.
+Bands: HOT at 70 and above · WARM 40–69 · COOL 15–39 · COLD below 15.
 
 **⚡ MOMENTUM — the derivative.** The direction and speed of change. Answers: *heating up or
 cooling off?* M = EMA over 72h minus EMA over 14d of daily engagement mass, normalized against the
@@ -1519,20 +1524,36 @@ lead's **own baseline** — a lead who visits weekly is not "cooling" on day 3, 
 who misses two days is. (Measure the arm's own gap distribution before setting a silence alarm —
 the desk's standing lesson.) Bands: SURGING · RISING · STEADY · FALLING · GONE QUIET.
 
-##### The input weights (v1 proposal — tuned by evidence, never by vibe)
+##### The impulse table (SIGNED v2, #100.1 — only two events read 100)
 
-| Signal (catalog kind) | Weight | Why |
+| Event (catalog kind) | Peak | Half-life | Why |
+|---|---|---|---|
+| **Tour requested (lead-asked)** | **100** | 7d | The apex hand-raise. Refreshes, never stacks; a classified cancellation **revokes** it. The 24h HOT band floor still rides it. |
+| **Brand-new lead (born / registered)** | **100** | **3d** | The other ruled 100. New leads cool FAST without engagement — the speed-to-lead clock rides this slope. |
+| Inbound reply (text / call / Zillow message / email), content positive or neutral | 85 | 7d | A human speaking outranks every model — but every inbound is **classified first** (§ the Bradley rule below); a pause/objection/cancellation pays nothing. The 72h HOT band floor is unchanged. |
+| Appointment created (we asked) | 80 | 7d | Strong, but it is not their hand raised. |
+| Home saved · saved search created | 60 | 7d | Declared intent — a pure browser tops out WARM; HOT requires a conversation or a hand-raise. |
+| Inquiry · share · like | 55 | 7d | Preference facts with evidence attached. |
+| **A browsing day** (views, searches, virtual tours) | 45 | 5d | ONE impulse per calendar day, whatever the volume — a binge is one day (absorbs v1's daily cap). |
+| Email click | 40 (opens: 0) | 5d | Opens are corrupted — Apple MPP prefetches ~49% of them. |
+| `is_backfill` rows | 0, always | — | Backfill never fires anything — D4, applied to scoring too. |
+
+##### The five negative states (#100.1 — what the v1 sum was structurally blind to)
+
+| State | Trigger | Effect |
 |---|---|---|
-| **Inbound text / call from the lead** | +40 **and an instant HOT override** | A human speaking outranks every model. The floor already interrupts on it. |
-| **Tour requested / scheduled** | +35, HOT floor **with a TTL** | The north-star event. The HOT floor holds until disposition **or tour-time + 24h, whichever first** — dispositions are agent-entered and agents don't report (that gap is why G5 exists), so an unrecorded disposition must not pin HOT forever. The floor's expiry itself FIRES the disposition chase: the gap becomes the trigger (gauntlet F6). |
-| Reply to Myli (text/email/chat turn) | +25 | Two-way conversation is the strongest recoverable signal. |
-| **Registration completed** | +20 | The founding event scores — a day-0 lead is WARM by definition, not near-COLD during the most valuable 30 minutes in the funnel (gauntlet F6). |
-| Saved search created / tuned · home saved | +15 | Declared intent — provenance "stated." |
-| Home liked / shared · dashboard verdict given | +10 | Verdicts are preference facts with evidence attached. |
-| Property viewed · search session · dashboard login | +3 each, capped +15/day | Observed behavior (~72 percent provenance). The cap stops a binge from impersonating a relationship. |
-| Email click on a Myli send | +6 (opens: 0) | Opens are a corrupted signal — Apple MPP auto-prefetches roughly half of all "opens" (~49 percent), so an open can warm a lead who never saw the email. Clicks, replies, and site visits are the honest tier (gauntlet F6). |
-| **STOP · mute · unsubscribe** | **FROZEN** | Not "cold" — ungoverned-for-outbound. Suppression is a wall, not a score. |
-| `is_backfill` rows | 0, always | Backfill never fires anything — D4, applied to scoring too. |
+| **PAUSED** | A stated pause classified from the lead's own words ("taking a break", "wait a bit") — live speech or the quoted speech inside an `ai_fact_captured` fact | Snaps to the nurture floor; behavior since lifts them to at most **50**; their quoted words render on the panel. Clears on a new hand-raise or a classified "we're back". |
+| **FINANCING-BLOCKED** | Credit/lender evidence in notes | **Ceiling 45** (the one knob left tunable at signing) until a clearing note or the desk's 90-day review. |
+| **TOUR CANCELLED** | The classified cancellation message | Revokes the tour impulse; never a positive beat. |
+| **SUPPRESSED** | STOP / unsubscribe | The wall stands (band FROZEN) **and the score is 0**. |
+| **CLOSED** | A terminal disposition (Trashed, Has Other Agent, …) | 0 until explicit reactivation (a re-disposition to Active). |
+
+**The Bradley rule (conversation content is a signal).** Every inbound is classified before it
+scores — cancellation · pause · positive · objection · neutral, by the declared vocabularies —
+so "we're taking a break" finally moves the score **down** instead of paying +40 for arriving.
+Uncertain classification fails toward neutral (toward scoring), and the same message never pays
+both. Proof suite: `npm run test:scenario-reader` (the v2 blocks carry the Bradley fixture beat
+for beat off his real record).
 
 <Info>
 **The no-bare-score law (standing ruling, restated as a rail).** `lead_score` was retired for
