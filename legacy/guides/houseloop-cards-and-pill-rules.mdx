@@ -53,6 +53,42 @@ One white pill per card. The FIRST match wins — everything below it is dropped
 
 Source: `pickOnePill(listing)` in `ListingCard.tsx`. **Never in a pill:** beds, baths — those live in the card body; acreage is a fact in the facts line, not a pill.
 
+## "Days on market" is computed from the listed DATE — never the feed's `daysOnMarket` column
+
+The days pill (priority 5 above) and the calendar line on the card both derive their number from the
+home's **MLS listed date**. Neither reads `Listing.daysOnMarket`, the value the Repliers feed ships and
+we store at ingest. That column is not a clock, and — the part that fooled us for months — it is not a
+*stale* clock either.
+
+Measured on the live web database on 2026-09-08, across 8,167 Residential active listings, grouped by
+how recently each row was re-synced from the feed:
+
+| last re-synced | rows | off by >30 days | column reads 0 |
+|---|---|---|---|
+| under 2 days ago | 7,967 | 3,162 | 1,428 |
+| over 30 days ago | 102 | 102 | 28 |
+
+Almost the whole estate is rewritten **daily** and still wrong, so syncing more often fixes nothing.
+The clearest case: 8013 Millridge Street was re-synced that morning, had been listed 812 days earlier,
+and its column read **0**. The value tracks no date we hold — it lands within two days of `mlsListedAt`
+on 544 rows out of ~8,150, and on sold homes it usually turns out to be days-to-offer rather than
+days-to-close.
+
+**The rule.** One function owns the column: `daysOnMarketForRow` in `lib/listings/derive.ts`. It reads
+the stored value, replaces it with a date-derived number, and every mapper that builds a `Listing`
+(`dbRowToListing`, `historyRowToListing`, `readFromCache`) already runs through it. So
+`listing.details.daysOnMarket` is the *derived* figure, and reading it is correct. What no surface may
+do is reach past that function to the raw column — in SQL, or off a Prisma row.
+
+The date it derives from, in order: `mlsListedAt`, then `listDate`, then nothing. A home with neither
+renders **no** days figure at all; zero is never used as a stand-in for "unknown", because zero is a
+sentence about the house and "we don't know" is not. On a sold or pending home the number freezes at
+the list-to-sold (or list-to-offer) span rather than ticking forever.
+
+Ingest still writes the column — the feed's own field stays on the tape for later audits. It simply
+stops being read. `tools/vocab/dom-reader-census.mjs` is the ratchet that keeps it that way: it fails
+the push if a new surface reads the raw column, and its floor only shrinks.
+
 ## The three surfaces, one pill
 
 | Surface | Renders | Note |
