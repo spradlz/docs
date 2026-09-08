@@ -222,6 +222,99 @@ structured data) · [The Myli OS](/guides/myli-os) (the listing-page Myli bar an
 
 ---
 
+## The right rail, the one word, the activity row and the two timestamps (shipped 2026-09-08)
+
+Zach ruling #257.344 and its amendment #257.344a, from his own screenshots of the live page.
+
+### The right rail's order is the lock's order
+
+The rail on desktop reads, top to bottom: **Request a tour** (with the coming-soon sentence above it
+and the "as early as ..." line inside it) → **Ask a question** → mortgage calculator → the "Already
+own a home?" /sell card → Offer Insights → HouseLoop Value. Two signed wireframes draw this and they
+agree: the 2026-08-27 engagement lock states "the rail holds the tour CTA and Offer Insights only —
+as drawn", and the 2026-09-08 website wireframe states the stack "under Request a tour / Ask a
+question".
+
+A desk ruling on 2026-09-04 had moved the tour button out of the rail because three tour controls
+were visible in one fold. That is **superseded** for the desktop rail by #257.344; the concern it
+raised is honoured a different way, by there being exactly **one tour button per width** — the
+rail's on desktop, the sticky bar's on the phone. Both read the same `comingSoonBandCopy`,
+`tourTimeCopy` and `isTourable` values, so the two widths cannot drift apart.
+
+### One action, one word
+
+Every control that opens the agent-question form says **"Ask a question"** — the rail button, the
+secondary button under the tour booker, the phone's sticky bar, and the modal's own heading. It
+previously said three different things on one page ("Contact agent", "Contact a buyer's agent",
+"Ask a question"), which is the label law's exact defect: a control is named for what the user
+wants, never for the plumbing. The file and prop names still say `ContactAgentModal`, which no user
+reads.
+
+<Note>
+  **Known divergence, not yet resolved.** On the phone, "Ask a question" opens Myli with the lead's
+  own words (ruling #257.337c). On desktop, the two buttons still open the lead-capture form. One
+  word now covers two behaviours across widths; the desktop road was left intact rather than
+  silently removing a lead-capture entrance.
+</Note>
+
+### The HouseLoop user activity row
+
+The crowd line — views, saves, likes, shares — renders on the detail page again, in both trees,
+directly under the price/beds/baths/sqft headline and above the description. It is the **same
+component the house cards render** (`components/listing/HouseLoopUserActivity.tsx`), fed the same
+single `listing.engagement` object; it is read-only and nothing in it is tappable.
+
+It had been missing since 2026-09-07, when a cut list naming "the pill row under Myli's bar — What
+should I offer, What's the payment, HouseLoop user activity" was read as one block and the row was
+removed along with Myli's bar and her pills. The row is its own read-only section in the lock, not
+part of her pill row.
+
+### Two timestamps, two facts, two sources
+
+The attribution block at the foot of the page carries both, and never conflates them:
+
+| Line | Source | Shape |
+|---|---|---|
+| **HouseLoop last checked** | the last successful `listing-cache-sync` Inngest run | relative, ticking on the client |
+| **Listing updated** | `Listing.mlsUpdatedAt`, the MLS modification clock | absolute, Central |
+
+**"HouseLoop last checked" deliberately does not read `Listing.cachedAt`,** the column that looks
+like this fact. Two measured reasons, both recorded in `lib/listings/last-checked.ts`. First, the
+only cron that writes it is a delta sync that upserts only listings that actually changed, so on a
+home polled hourly that has not moved in three weeks it would read "3 weeks ago". Second, the page's
+own read path writes it after a TTL-lapsed refresh, which makes it a page-render time — the one
+thing #257.344a bans by name. The line the page shipped before this change was that banned line.
+
+The honest source is the sync's watermark row in `hl_app_config`, and specifically **the row's
+`updatedAt`, not its stored value**: the sync deliberately stores the watermark as its run start
+minus a ten-minute overlap so the next scan re-reads a few already-seen minutes. Measured on the
+live web database on 2026-09-08, the row's `updatedAt` was 41.4 minutes old while its value was
+51.4 minutes old — exactly that offset. The offset is right for scanning and wrong for reporting.
+
+A missing row or a read error renders **nothing**. There is no fallback and no "just now".
+
+### The page's one heading is visible
+
+The `<h1>` is the address, and it is the phone peek's own visible address line rather than a
+screen-reader-only element. The bottom sheet renders its peek before its children, so the heading is
+still the first in the document and the SEO cage's heading-order rule still passes. At desktop
+widths that heading belongs to the phone rendition and the breakpoint hides it; it says exactly what
+the visible desktop address says. A heading visible at both widths would mean moving the address out
+of two locked layouts, which the desk declined.
+
+### Files
+
+| File | Role |
+|---|---|
+| `lib/listings/last-checked.ts` | reads the sync watermark row; the only source of "last checked" |
+| `lib/listings/updated-ago.ts` | the one relative-time formatter; null in, nothing out |
+| `components/listing/HomeDetailView.tsx` | server component, resolves `lastCheckedAt` |
+| `components/listing/listing-detail.test.ts` | the ratchet, six arms, each with a plant and a control |
+
+Run the ratchet with `npm run test:listing-detail` from `apps/houseloop-web`.
+
+---
+
 ## Key files
 
 | File | Role |
