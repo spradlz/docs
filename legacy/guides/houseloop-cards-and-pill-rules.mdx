@@ -132,6 +132,56 @@ Documented in [Engagement Stats](/guides/engagement-stats): social engagement ca
 - **Still open** (board): wire StatusPill into the card + detail, set cap=2 + always-fill, kill the New/Coming-Soon stack, acreage → gray feature, map changes, the engagement #418 regression.
 - **Verdict:** design signed; search dropdown wired; card/detail/map build in progress.
 
+### 2026-09-08 · lane-compact-card — #257.350: the compact card's top line, its address, and its width
+
+**Zach walked production on his phone at 2:03pm and filed the card's layout as one ruling.** Verbatim:
+*"On production, some of the houses have 2 days on HouseLoop to the right of the price, and some of
+them have it under the price. On the compact card, it has to be to the right of the price."* ·
+*"On mobile, the address is getting truncated."* · *"We can't even see 'house for sale' on the compact
+cards."* · *"Our cards are way too tall. They need to be wider."*
+
+- **Found — the two layouts were ONE layout.** The census that opened this lane confirmed
+  `HOME_RENDER_LAW`'s premise: there is exactly one horizontal-card renderer,
+  `components/listing/ListingCard.tsx`. The divergence Zach saw came from a single word on the price
+  row — `flex-wrap`. Measured on prod at 390 (iPhone 14 emulation): the same markup rendered the row
+  **31px tall** on the 358px search card (price, days and kebab on one line) and **63px tall** on the
+  250px shelf card, where the days span wrapped and dragged the `ml-auto` kebab down with it. Nobody
+  wrote a second layout; CSS wrote it whenever the content did not fit.
+- **Also measured on prod, same run:** the address was truncated on **6 of 6** shelf cards (the street
+  needed 222px and was given 101, because the `, City, ST` tail was `shrink-0` and ate the box first);
+  "House for sale" was invisible at 390 by two mechanisms at once (a `hidden sm:inline` **viewport**
+  breakpoint, and the short word that replaced it rendering at x=245 inside a body ending at x=237);
+  cards were 250×399 on the phone and 295×433 on the desktop.
+- **Built.** The top line is now one non-wrapping row — **price · 📅 time · ⋯ kebab** — at every
+  width, with `shrink-0` on the price and the kebab so the only thing that can give is the copy,
+  which gives by swapping rendition, never by truncating. The words are `4 days active` /
+  `Active on 9/12` (`cardTimeLabel` in `lib/listings/card-labels.ts`); `lifecycleTimeMetric` still
+  supplies the number, so it remains one fact from one deriver — **and the detail page keeps
+  "43 days on HouseLoop", which Zach signed off by name.** It is a bare icon and text, never a pill.
+  The address is one line that steps to 12px rather than truncating. The shelf card is **340px** on
+  the phone and **360px** from `lg`.
+- **The three thresholds are container queries on the card body, and each is its own measured
+  number** — `@[304px]` for the time rendition, `@[348px]` for the address's type step, `@[420px]`
+  for the facts row's. Keying them all to one tidy value shipped a truncated address at 358 and a
+  clipped facts row at 340; the facts row's number in particular was bought by a real listing
+  (`2 beds | 3.5 baths | 1,201 sqft | Townhome for sale`), because a half-bath is two characters no
+  fixture had.
+- **Proven.** `components/listing/card-350-pixels.test.mjs` reads pixels in a real browser at both
+  `QA_VIEWPORT_MATRIX` configs — **RED against production** (24 failures naming the split row, the
+  old words, 141/180 truncated addresses and the missing label), **GREEN against the fixed tree**
+  (125 assertions). The overflow case Zach named himself — `$13,000,000` + `231 days active` + the
+  kebab — is a real render at `/dev/card-overflow`, at every shipped width, with a sub-threshold
+  control that proves the ellipsis backstop actually fires.
+- **Measured after, both configs:** top row **63px → 31px**; shelf card **250×399 → 340×424** on the
+  phone and **295×433 → 360×439** on the desktop (the aspect goes 1.60 → 1.25 and 1.47 → 1.22 — the
+  cards are much wider and proportionally much shorter, though the 4:3 photo grows with the width);
+  search card **358×448 → 358×438**; **zero** truncated addresses and **zero** split rows across 204
+  cards per config.
+- **Verdict:** shipped. The one rendition still narrower than this ruling governs is the Myli band's
+  own scaled carousel card (~200px of layout width), which passes `compact` and is named — not
+  skipped — by the ratchet.
+
+
 ## Related
 
 | Doc | Covers |
