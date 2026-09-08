@@ -259,3 +259,50 @@ three-car garage" became "457". A source that owns no frozen number needs no rec
 The stamp under the bank is `max(mlsUpdatedAt)` **for that place**, printed in Central. The site-wide
 compliance footer answers "when did we last hear from the feed at all"; this answers "when did anything
 in this city last change", which is the only version of the question a per-place page can answer.
+
+## Public statistics — Census ACS + Building Permits Survey (2026-09-08)
+
+Ruling #257.342/#257.343: the geo data bank gains a second, free-data block — **"About the people of
+{Place}"** — built from two federal sources instead of our own MLS feed: US Census Bureau ACS 5-Year
+demographics (population, median age, households, median household income, owner-occupied share,
+median home value, median gross rent, bachelor's-or-higher share, mean commute) and the Census
+Building Permits Survey's new-construction signal (single-family and total permits, latest month).
+Both are free, no vendor, cited by name on the page (public-domain federal data; the Census Bureau
+asks only for attribution — see `DATA-SOURCES-2026-09-08.md` §5 for the verified endpoints and
+license lines).
+
+### The table
+
+`hl_geo_public_stat` (WEB db, migration `tools/houseloop/migrations/20260908_hl_geo_public_stat.sql`,
+DDL module `lib/geo/public-stats-ddl.ts`) — one row per **(place_key, source, period)**. `place_key`
+reuses the SAME grammar `lib/geo/geo-key-path.ts`'s `locationGeoKey()` already produces for the weekly
+report layer (`county:johnson-county:KS` / `city:overland-park:KS` / `zip:66213:KS`), so the table
+joins the existing taxonomy without a second key scheme. Two sources share the table, disjoint
+columns: `census_acs5` fills the demographic columns, `census_bps` fills `permits_1unit` /
+`permits_total`; a row never mixes both, so a reader always knows which fields to expect NULL.
+
+### The writer
+
+`lib/inngest/functions/geo-public-stats-monthly.ts` — the ONE writer, monthly cron (3rd, 5:00am CT) +
+manual event `geo-public-stats/manual.run`, **dry by default** (writes only on `{"dryRun": false}`).
+Two sources, two failure modes: Building Permits needs no key and runs (and writes) first; ACS needs
+`CENSUS_API_KEY` and, per Zach's 2026-09-08 instruction, **throws loudly** (`census_key_not_activated`)
+rather than writing zeros if Census has not yet activated the key — the BPS rows already written are
+unaffected, because Inngest step results are durable once returned.
+
+The FIPS match happens once: the Building Permits step resolves every county/city's Census FIPS code
+from the free BPS county/place files (hand-verified 2026-09-08 against Overland Park's known place
+FIPS 53775), and the ACS step reuses those same codes directly — it never re-derives the same fact a
+second time. ZCTAs (zip codes) are queried directly against ACS in chunks of 40; Building Permits has
+no zip grain, so zip rows carry demographics only.
+
+### The reader + the block
+
+`lib/geo/public-stats.ts::getMergedPublicStats(placeKey)` returns the latest row per source, merged.
+`components/geo/GeoPageBody/PublicStats.tsx` paints it — same division of labor as `DataBank.tsx`
+reading `facet-bank.ts`. **Not yet mounted**: it is a new, standalone file beside the existing
+`GeoPageBody` modules (`index.tsx` untouched); mounting is one line —
+`<PublicStats placeKey={placeKey} place={place} />` inside `GeoPageBody()`, passing the same
+`wkGeoKey` `LocationSeo.tsx` already computes via `locationGeoKey(location)`. Same tile-law as
+`ListingOverview`: a stat with no number does not render, and the whole section returns null if
+neither source has ever landed a row for the place.
