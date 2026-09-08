@@ -308,6 +308,60 @@ widths that heading belongs to the phone rendition and the breakpoint hides it; 
 the visible desktop address says. A heading visible at both widths would mean moving the address out
 of two locked layouts, which the desk declined.
 
+### The sold rendition — no close price anywhere, ever (#257.348f)
+
+Kansas and Missouri are non-disclosure states, and Heartland §12.3(b) forbids publishing a
+per-address close price. The sold rendition is built entirely on facts that are **not** the price:
+
+- **Title / description say sold and when.** `listingPageTitle()` (`lib/listings/format-address.ts`)
+  titles a genuinely closed listing with a recorded sale date `"<addr>, <city>, <state> <zip> —
+  Sold <M/D/YY> | HouseLoop"` — a compact numeric date, deliberately not the site's usual verbose
+  format, so it survives the existing 60-character ladder. A sold row with no recorded close date,
+  and every off-market/withdrawn row, keeps the pre-existing "Property History" fallback. The page's
+  `generateMetadata` builds a matching description naming the sale date, never a price.
+- **RealEstateListing JSON-LD drops the price, carries the date.** For a closed listing, the
+  `offers` block omits `price` entirely (the last ASKING price is a stale number a crawler could
+  read as "what it sold for") and reads `availability: OutOfStock` +
+  `validThrough: <soldDate>` — schema.org's own "the offer ceased to be valid on this date," the
+  closest standard field to "when it sold."
+- **The FAQ's status answer** (`lib/seo/listing-faq.ts`, item 13's `closed` case) states the sale
+  date, then folds in two facts that are not the price: **days list-to-contract** (computed from a
+  REAL `pendingDate` only — omitted, never guessed, when the row carries none) and the
+  **neighborhood's recent-sales context** (`stats.soldCount12mo` / `stats.scopeLabel` — an area
+  aggregate, never this home's own close number).
+- **Two questions retired for a sold home.** "Can I negotiate the asking price" and "How long has
+  it been on the market … N days and counting as of today" both used to fire for `status ===
+  "closed"`, which reads as nonsense beside the same page's "sold and no longer available." Both
+  now skip entirely once a home is sold ("What is a good offer" is gated the same way).
+- **The team line is a named gap, not built.** `lib/seo/team-record.ts` exports only PLACE-level
+  facts (`teamPlaceFacts`, `soldByPlace`, `recentTeamSales`) — nothing that answers "did the team
+  represent a side on THIS home." Matching this listing's own MLS number against
+  `recentTeamSales()`'s recent-N list would risk a false negative on any team sale outside that
+  window, which is not a risk worth taking on a compliance-adjacent claim. Flagged, not guessed.
+- **FAQ coverage is by design, not a backfill target.** 311 of 347,014 sold rows carry a generated
+  FAQ (0.09%) against 100% of active/pending/coming_soon — the refresh job's own declared priority
+  order (`lib/inngest/functions/listing-faq-refresh.ts`). The road is on-demand generation for the
+  specific sold HLIDs the team's latest-sales block links to, via the existing
+  `houseloop/listing-faq.refresh` event's `hlid` parameter — never a 347k sweep.
+
+<Note>
+  **A stored FAQ does not regenerate itself when a listing's status changes.** The FAQ shown on a
+  page is whatever `Listing.faq` held at last write — a listing generated while ACTIVE and later
+  sold will keep saying "is active" until it is regenerated (`houseloop/listing-faq.refresh`,
+  `{dryRun:false, hlid:"..."}`). The composer's `closed`-branch logic above is correct and tested;
+  seeing it on a specific address requires that address's FAQ to have been (re)written after it sold.
+</Note>
+
+<Note>
+  **The SEO page-structure cage's census does not yet declare a sold-state row.** Measured directly
+  against the cage's own `evaluate()`: the probe sold URL passes every rule except `LINK_TAIL` — its
+  geo tail carries 6 crawlable links against the declared minimum of 12, a pre-existing thin-market
+  gap in `GeoSearchTail.tsx`, unrelated to this build. Adding the row requires bumping the shared,
+  shrink-only `listing` floor from 0 to 1 in `tools/seo/page-structure.floor` — a call left to the
+  desk given the floor gates every lane's push. The ready-to-apply census entry is in
+  `.claude/reports/grinder/website-home-rows/RECEIPT-listing-detail-2026-09-08.md` Part 6.
+</Note>
+
 ### Files
 
 | File | Role |
@@ -315,9 +369,14 @@ of two locked layouts, which the desk declined.
 | `lib/listings/last-checked.ts` | reads the sync watermark row; the only source of "last checked" |
 | `lib/listings/updated-ago.ts` | the one relative-time formatter; null in, nothing out |
 | `components/listing/HomeDetailView.tsx` | server component, resolves `lastCheckedAt` |
-| `components/listing/listing-detail.test.ts` | the ratchet, six arms, each with a plant and a control |
+| `lib/listings/format-address.ts` | `listingPageTitle()` — the sold/active/off-market title ladder |
+| `lib/listings/structured-data.ts` | `realEstateListingJsonLd()` — price-vs-`validThrough` split by status |
+| `lib/seo/listing-faq.ts` | the per-listing FAQ composer, including the closed-status branch |
+| `components/listing/listing-detail.test.ts` | the ratchet, ten arms (A-G), each with a plant and a control |
+| `lib/seo/listing-faq.test.ts` | the FAQ composer's own ratchet, including the §9 sold-rendition arms |
 
-Run the ratchet with `npm run test:listing-detail` from `apps/houseloop-web`.
+Run the ratchets with `npm run test:listing-detail` and `npm run test:listing-faq` from
+`apps/houseloop-web`.
 
 ---
 
