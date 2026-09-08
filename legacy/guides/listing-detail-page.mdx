@@ -178,6 +178,50 @@ in the CRM Run Log under the "Geo / SEO" category.
 
 ---
 
+## FAQ, Similar Listings & the geo tail (shipped 2026-09-08)
+
+Every listing now carries a stored FAQ, rendered as an accordion below the Tax/Schools/HOA cards,
+followed by a run of related content before the page's closing "what's your home worth" and Myli
+sections. Live order (both mobile and desktop trees): photos/sticky bar → features/HOA/schools/tax →
+[mortgage calculator slot] → **FAQ** → **Similar Listings** → **city paragraph** → **geo directory +
+popular searches** → "what's your home worth" → HouseLoop value + Offer Insights → Myli's bar
+(trimmed, no pill row) → sources.
+
+- **The FAQ is composed once and stored, never generated at request time.** `Listing.faq` (jsonb) +
+  `faqSource` + `faqGeneratedAt` hold up to 13 question/answer pairs, written by
+  `lib/seo/listing-faq.ts` — a pure, deterministic function (no LLM, $0) that reuses the page's own
+  readers (tour slots, tourability, status). A question with no underlying data (no HOA fee, no tax
+  figure, an implausible list date) is **omitted**, never guessed or padded.
+- **Every answer follows one standard** (ruling #257.317, the desk's read of a competitor's FAQ depth):
+  two short paragraphs, 45-90 words — paragraph one states the listing's own numbers plus the market
+  number beside them (median $/sqft in the zip, sell-to-list %, days to offer) where we have it;
+  paragraph two says what the number means for this buyer and names the one control to use next
+  ("Tap Request a tour", "Ask Myli", "Tap Talk to a lender"). A sold price is never named (Heartland
+  MLS rule §12.3(b) — a "still for sale, now sold" answer states only the sale date). Attribution
+  ("Listing data: Heartland MLS, distributed by MLS GRID… Market numbers: HouseLoop analysis…") rides
+  once under the whole FAQ, not per answer.
+- **The refresh runs on Inngest** (`lib/inngest/functions/listing-faq-refresh.ts`, registered in
+  `app/api/inngest/route.ts`): a nightly cron (dry-run by default, priority order
+  active → pending → coming_soon → sold → off_market, never-generated-first) and a real-write path
+  that fires on the `houseloop/listing.catalog` event so a newly synced listing gets its FAQ the same
+  night. A manual `houseloop/listing-faq.refresh` event exists for a targeted dry-run-then-apply. As
+  of the 2026-09-08 build, 0 of 17,006 active/pending listings were missing an FAQ.
+- **`FAQPage` JSON-LD** is emitted once per page (in `HomeDetailView.tsx`, not inside
+  `ListingDetail`, which renders twice in the DOM for the mobile/desktop trees).
+- **Similar Listings** (`components/listing/SimilarListings.tsx`) reuses `ListingRow` — the site's
+  one horizontal card component (`HOME_RENDER_LAW`), never a bespoke card.
+- **The city paragraph** (`components/listing/CityParagraph.tsx`) and the **geo directory + popular
+  searches** tail read the same nightly-cached `hl_geo_market_stats` table the geo landing pages
+  already use — no new queries.
+- **Not built in this pass:** the on-page mortgage calculator and lender modal for mobile/desktop —
+  a marked slot sits between the Tax card and the FAQ for that work; a per-listing city-average
+  $/sqft comparison clause in the FAQ is wired to accept the data but nothing computes it yet.
+
+Related: [Home Page](/legacy/website/home-page) (the FAQ engine's sibling SEO work — sitemap +
+structured data) · [The Myli OS](/guides/myli-os) (the listing-page Myli bar and its chat tools).
+
+---
+
 ## Key files
 
 | File | Role |

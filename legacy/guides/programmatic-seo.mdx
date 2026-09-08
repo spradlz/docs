@@ -39,6 +39,10 @@ This page is the map. Two companion pages go deeper:
 | Sitemap + robots | `/sitemap.xml`, `/robots.txt` | **Live** - chunked, every active listing + the full geo tree |
 | GSC data in CRM | CRM → Settings → Website → SEO | **Live** - clicks, impressions, avg position via DWD SA |
 | Schema.org JSON-LD | Site-wide `@graph` in root layout | **Live** - WebSite + SearchAction + SiteNavigationElement |
+| Listing FAQ (stored, per-listing) | `Listing.faq` jsonb, `/home/{slug}/{hlid}` | **Live (2026-09-08)** - `FAQPage` JSON-LD, refreshed by Inngest, 0 of 17,006 active/pending listings missing one |
+| MCP server for AI agents (ChatGPT etc.) | `houseloop.ai/api/mcp` | **Live (2026-09-08)** - see "The MCP server" below |
+| `llms.txt` | `houseloop.ai/llms.txt` | **Live (2026-09-08)** - site summary + MCP pointer for LLM crawlers |
+| Blog author identity (E-E-A-T) | `/blog/{slug}` | **Live (2026-09-08)** - JSON-LD `author` is a named Person, not the org; visible byline on every post |
 
 The `/n/` prefix on neighborhoods is deliberate — it avoids colliding with the `[zip]`
 segment one level up.
@@ -169,6 +173,35 @@ those articles — `/settings/website/seo/run-log?level=<level>&week=<YYYY-MM-DD
 (`SeoArtifactBrowser`) reads `level` + `week` from the URL, shows a "week of …" chip with a
 clear button, and the artifacts endpoint's `week` filter buckets by `createdAt` week so the
 filtered row count matches the bar segment (e.g. neighborhood / week of Jun 8 → 1,888 rows).
+
+## The MCP server — how ChatGPT and other AI agents read HouseLoop (shipped 2026-09-08)
+
+`houseloop.ai/api/mcp` is a Streamable HTTP [Model Context Protocol](https://modelcontextprotocol.io)
+server (`apps/houseloop-web/lib/mcp/houseloop-mcp-server.ts` + `app/api/mcp/route.ts`) — a second,
+purpose-built server alongside the existing internal STDIO one (`tools/mcp/houseloop-search-server.mjs`,
+used by agents in this repo, not reachable by ChatGPT). It exposes four read-only tools, each reusing
+an existing reader rather than recomputing anything:
+
+| Tool | Reads | Returns |
+|---|---|---|
+| `search_homes` | `searchListings` / `parseSearchParams` | matching listings |
+| `home_facts` | `getListing` | beds/baths/sqft, price, status dates (coming-soon/pending/sold), the FAQ |
+| `market_stats` | `resolveListingMarketStats` | sell-to-list %, sold count, median $/sqft for the area |
+| `home_value` | `Listing.houseLoopValue` | the HouseLoop estimate + range |
+
+Every result carries `source: "HouseLoop · Heartland MLS"`, a `dataSource` attribution string
+("Heartland MLS data distributed by MLS GRID"), a `brokerage` field, and an absolute URL back to the
+canonical `/home/{slug}/{hlid}` page — nothing is returned that isn't already public on that page. The
+server calls itself "Myli by HouseLoop" to ChatGPT. `robots.txt` explicitly allows the AI crawlers
+(`OAI-SearchBot`, `GPTBot`, `ChatGPT-User`, `ClaudeBot`, `PerplexityBot`, `Google-Extended`) as a
+recorded decision rather than an accident of the wildcard allow.
+
+Proof: `node tools/seo/mcp-smoke.mjs <url>` — a real MCP client that calls all four tools and asserts
+each result carries an item + source + URL.
+
+⚠ **Open, Zach's own action item:** get MLS GRID's written answer on displaying our data inside
+ChatGPT under their AI Use Addendum before this goes beyond our own accounts — the exact question to
+send is written out in `apps/houseloop-web/app/api/mcp/README.md`.
 
 ## Roadmap (not yet shipped)
 
