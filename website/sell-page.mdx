@@ -1,0 +1,60 @@
+---
+title: "The /sell page — the seller entrance"
+description: "How the demand report reads the market: the two days-on-market statistics and why they differ, and the rule that decides whether a place is called high, steady or low demand."
+---
+
+The `/sell` page is where an owner asks what their home is worth and how quickly it would move. The
+value half is documented in [HouseLoop Home Value](/guides/houseloop-home-value). This page covers
+the market half — the demand report — because the numbers it prints are easy to confuse with each
+other and were, until 2026-09-08, wrong.
+
+## The two "days" statistics are different facts
+
+Geo pages and the demand report both show a "days" figure, and they are not the same number. Naming
+them apart matters, because the site used to print one under a sentence that described the other.
+
+| | what it measures | where it appears |
+|---|---|---|
+| **Median days on market** | how long the homes listed *right now* have been sitting | the geo stat row |
+| **Median days to contract** | how long homes that actually *sold* in the last 12 months took to go under contract | the geo FAQ, the demand report |
+
+The first describes what has **not** happened yet, and it runs high because the homes still sitting
+are the ones that have sat longest. The second is what a seller means by "how long will this take".
+Expect them to be far apart on the same page: Overland Park reads **72 days on market** and **16 days
+to contract**. Both are true.
+
+The metro median days to contract is **22**. A place with fewer than **5** sales in 12 months gets no
+figure at all and the sentence is omitted, because a median over four homes ranges from 0 to 1,058
+days across the board.
+
+## The demand verdict is relative to the metro
+
+| | old rule | new rule (2026-09-08) |
+|---|---|---|
+| input | average of the feed's `daysOnMarket` over **active** inventory | median days to contract over homes **sold** in 12 months |
+| high demand | under 15 days, absolute | at least 25% faster than the metro |
+| low demand | over 45 days, absolute | at least 25% slower than the metro |
+| steady | — | between the two |
+
+Both halves of the old rule were wrong, and they hid each other. The feed's column reads
+systematically low, so the absolute thresholds had been quietly calibrated to it and the page leaned
+toward "high demand". Correcting only the number would have swung every market to "low" instead,
+because no honest absolute threshold exists — 22 days is fast in one metro and slow in another.
+
+Measured across the board the day this shipped, the relative rule gives **33 high, 71 steady, 176
+low**. That spread is the point: a verdict that returns the same answer everywhere is not a verdict.
+
+When a place has no honest days-to-contract figure, the days signal **abstains** and sell-to-list
+price is the only voice. It never falls back to "high".
+
+## Where the numbers come from
+
+`getGeoStats` computes all three figures and gates the thin-sample rule in one place, so every
+consumer inherits it. Days on market is derived from the MLS listed date and never from the feed's
+`daysOnMarket` column — the reasoning, and the measurement behind it, is in
+[Cards & pill rules](/guides/houseloop-cards-and-pill-rules).
+
+`lib/geo/geo-stats.probe.ts` is the check that keeps these honest: it compares every rendered figure
+against an independent query of the same fact. It exists because all three of these surfaces agreed
+with each other before the fix and all three were wrong — they agreed by sharing one bad column, and
+no consistency check can see that.
