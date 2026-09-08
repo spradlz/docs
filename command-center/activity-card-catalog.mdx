@@ -151,3 +151,37 @@ logo, chosen by SOURCE] + [a WHITE CIRCLE top-LEFT badge holding the small BLUE 
 registered-person-+ / tour / etc.)] + the structured facts. This is now the registration + search + saved-search shape.
 
 STATUS: Zach says the catalog is ALMOST SIGNED OFF — just these edits remain.
+
+## MYLI'S REACTION COLUMN (`myli_reaction`, mig 1312, Zach #257.301 on 2026-09-07)
+
+Zach: "myli needs to be present on every activity card, myli should be doing something on the right … doing
+something for every single row in the activity catalog, because she knows everything."
+
+Every catalog row carries **`myli_reaction`**, the DETERMINISTIC thing Myli files beside a row of that kind
+(data on the catalog, never a code map). The closed set, held by a CHECK:
+
+| value | kinds seeded | what she files beside the card (zero model calls) |
+|---|---|---|
+| `note_home_viewed` | property_viewed | a right-rail note "noted: viewed 17329 Larsen St" + the LIST-SHAPED summary fact **Search Criteria · Homes viewed** ("12 homes viewed · latest …", deduped per home) |
+| `fact_home_saved` | property_saved · property_liked · property_unsaved | "noted: saved … (houseloop.ai saved homes / Zillow favorites)" with the HLID and where, + **Search Criteria · Homes saved** (the current saved set, an unsave recomputes it) |
+| `fact_search` | property_searched · saved_search_created · saved_search_edited · ai_searched (the lead's own) | "noted: searched Overland Park · 4+ bd · up to $550,000" + **Search Criteria · Recent searches** |
+| `fact_stage_move` | stage_changed (any actor) | "noted: stage moved from New Lead to Appointment Set" + **Logistics & Process · Pipeline stage** ("Appointment Set (from New Lead)", superseded on every move) |
+| `memory_pass` | sms_received · imessage_received · email_received · zillow_message_received · website_chat_received · phone_call_received · voicemail_received | the model memory pass (`myli-memory-pipeline`) is the reaction, as before |
+| `none` | everything else (292 rows), explicitly | nothing deterministic; a decision, never a gap |
+
+**How it runs.** `logActivity` (the one activity writer) calls `lib/ai/myli-reactions.ts` after the row commits,
+fire-and-forget: the fact goes through the one fact writer as source `derived` with provenance = the card
+(`evidence_activity_id`), and ONE `ai_fact_captured` act is filed per card (actor Myli, `actor_type ai_agent`,
+`reason_evidence_id` = the card, `tool` = the reaction key, `run_id` when a run is open). The trace reader
+admits it by the stamp and the dual lane folds it into the card's own cell; nothing lands in the middle
+column (rail law #257.300). A refused reaction is a `myli_reaction_drop` run-log row, never silence.
+
+**What it deliberately does not do.** Rows older than seven days are history (the FUB Zillow tape pours
+months-old rows) and wait for a backfill; the lead-act reactions fire only on the lead's own rows (Myli's own
+search is already her act); the four derived slots are invisible to the extraction prompt (`derivedSlots` in
+`fact-taxonomy.ts`) so a model can never overwrite a count with prose.
+
+**The cage.** `node tools/one-brain/myli-reaction-census.mjs --cage` (pre-push): a catalog row with
+`myli_reaction` NULL is RED against a shrink-only floor born at 0. `--selftest` red-proves it; the bare run
+measures rows vs anchored acts, 30 days, live. Harness: `npm run test:myli-reactions` (38 assertions, real
+writer, the Zach Test lead). Receipt: `.claude/reports/grinder/myli-reacts-to-every-row/RECEIPT.md`.
