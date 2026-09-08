@@ -432,6 +432,97 @@ refuses a regression. The three new types were born at **zero violations** each.
 | The page-type vocabulary | `lib/seo/page-type.ts` (+ `page-type.test.ts`) |
 | The routes | `app/kansas-city/`, `app/[state]/[county]/[city]/`, `app/[state]/[county]/[city]/[zip]/` |
 
+## 5. How fast these pages answer — the render path (measured 2026-09-08)
+
+Every surface above is server-rendered per request, so "how fast is search" is a question about the
+render path, not about the browser. The numbers below are prod, warm, three consecutive reads.
+
+### The finding: the slow part was never the SQL
+
+| measurement | value |
+|---|---|
+| `EXPLAIN ANALYZE`, the Overland Park active-listing count, on the database | **2.36 ms** |
+| the endpoint that runs that count (`/api/listings/count`) on prod | **~710 ms** |
+| `/api/health` — the same route machinery, zero database | **~180 ms** |
+| a single-row primary-key read (`/api/listings/<hlid>`) | **~900 ms** |
+| `/kansas/johnson-county/overland-park` | **2.80 – 2.95 s** |
+| `/` | **2.63 – 3.36 s** |
+
+A 2 ms query answering in 710 ms is not computation. **The cost is per-round-trip**: production
+connects to Postgres over Railway's public TCP proxy rather than the private network, so every
+query leaves the datacenter and comes back. Measured against that proxy: **165 ms to open a
+connection, 40 ms per warm round trip.** No index would have helped, and none was added.
+
+Two consequences worth knowing before optimising anything on this page:
+
+- **Count round trips, not query cost.** A Prisma `$transaction([findMany, count])` is
+  `BEGIN` + two statements + `COMMIT` — four round trips, not one.
+- **A parallel fan-out is capped by the pool.** `lib/prisma.ts` sizes the pool explicitly (and
+  documents why each number is what it is); a page that fires more parallel reads than the pool
+  holds queues against itself.
+
+### What is cached, and the ceiling that decides
+
+None of these routes can stop being dynamic — three of the four read `searchParams` — so the
+caching lives in the **loaders**, not in a `revalidate` on the route.
+
+| what | where | window | why that window |
+|---|---|---|---|
+| Home shelf **ids** | `lib/home/composer.ts` | 180 s | the expensive fan-out that decides which homes qualify |
+| Home shelf **cards** (hydrate) | `lib/home/composer.ts` | 30 s | only for shelves ≤ 24 ids — see the ceiling below |
+| The pinned hero frame | `lib/home/hero-composer.ts` | 60 s | site config on the hottest page |
+| The geo tail's 12 category counts | `components/listing/GeoSearchTail.tsx` | 600 s | one cached read replacing ~48 round trips |
+| The lean deep nav scan | `components/listings/SearchResultsPage.tsx` | 300 s | the second read every multi-page result takes |
+
+⚠ **`unstable_cache` silently refuses entries over 2 MB.** It does not retry and does not fall back
+— it logs once and every later attempt fails identically, so a cache over the limit reads as
+enabled while doing nothing. Measured against the live table:
+
+| payload | size |
+|---|---|
+| 12 hydrated listings (a city shelf) | 381 KB |
+| 100 hydrated listings (the `popular-homes` shelf) | **3.16 MB — over the limit** |
+| 500 lean nav rows (the deep scan) | 295 KB |
+
+That is why the shelf hydrate is cached only at or below 24 ids, and why `popular-homes` (100),
+`coming-soon` (60) and `hero` (50) are deliberately left reading live rather than cached into a
+silent no-op. The honest fix for those three is a **card-shaped projection** instead of every
+column, which is also what would cut the home page's HTML weight (below).
+
+### The longer windows are about hit rate, not staleness tolerance
+
+Each city keys its own cache entry and there are ~100 city pages plus the filtered long tail, so a
+30–60 s window would miss on nearly every visit to exactly the pages this section exists to rank.
+The 600 s and 300 s windows above are chosen for that reason. Both are bustable on demand —
+`revalidateTag("geo-tail")` and `revalidateTag("deep-nav")`.
+
+### Two things that render as cards are deliberately NOT cached
+
+- **The pin-resolver's deep scan** (`deepItems`) renders as listing cards. A stale price or photo on
+  a card is a silent wrong answer, which is worse than a slow correct one. Only the **lean nav**
+  path — hlids and URL parts — is cached.
+- **Anything behind `auth()`.** The signed-in fork reads per-visitor rows and stays outside every
+  cache above.
+
+### The results page takes a second read, on purpose
+
+`needsDeepScan` in `SearchResultsPage.tsx` fires whenever a query returns more homes than fit one
+page, and takes a second scan capped at `NAV_CONTEXT_CAP` (500). It feeds the detail page's
+prev/next context and the pin resolver's "ranked deep vs stopped matching" question. On a city like
+Overland Park (371 active against a ~24-card page) it is true on every request — which is why it is
+cached rather than removed. The header count and the results grid share one read and never disagree.
+
+### HTML weight is a separate problem from response time
+
+| page | gzip on the wire | raw | listings serialized |
+|---|---|---|---|
+| `/` | 474 KB | 4.13 MB | 178 |
+| `/kansas/johnson-county/overland-park` | 278 KB | 1.52 MB | 469 |
+
+That mass is the React flight payload: full listing objects inlined into the document. Even at a
+fast server response, 474 KB of HTML loses LCP on a phone. The fix is the card-shaped projection
+named above, not more caching.
+
 ## Endpoints (public website read APIs)
 
 Served from `https://houseloop.ai/api` (prod) / `http://localhost:3001/api` (dev). Read-only `GET` unless noted.
