@@ -3147,6 +3147,190 @@ rediscover or rebuild.
 
 ---
 
+## Shipped 2026-09-08 — the website chat, the back office, and what's still open
+
+Live on prod (web deploy `1572683e00`, CRM deployed the same push). This section is written from
+the night's lane receipts (`.claude/reports/grinder/webchat-blueprint/`,
+`.claude/reports/grinder/myli-os/`, `.claude/reports/one-brain/`,
+`.claude/reports/grinder/whole-loop/`, `.claude/reports/grinder/qa-bench/`) — read those for the
+full measurement detail; this is what changed and why.
+
+### The website chat now streams, acknowledges, and shows its work (rulings #257.322-.324)
+
+Before this pass, prod was quietly serving the OLD chat modal against the NEW engine (a Railway
+Docker build-arg for the client feature flags was never declared, so the flags always read
+`undefined` in the browser bundle) — the screen sat on "Thinking…" for 5-7 seconds with no
+indication anything was happening. Fixed by declaring the missing Dockerfile ARGs. With the real
+modal live:
+
+- **She streams.** First token in under a second; an acknowledgment line (her own words, one
+  sentence, at most 15 words — never a scripted line) appears within about a second of a tap;
+  named work-in-progress lines follow ("Checking what 10214 Conser Street is worth", "Comparing
+  recent sales near 10214 Conser Street") drawn from the real tool call in progress, never
+  composed; her answer then **streams as a draft** under those lines so the screen moves from the
+  first token instead of sitting idle for 20-40 seconds.
+- **The thread opens in the lead's own words.** A pill tap used to send only the pill's label as
+  the chat bubble ("What can I afford?"); it now sends a first-person sentence ("Hey Myli, what
+  can I afford?") as the actual message content, because the CRM files a lead's chat turns
+  verbatim as their inbound message — the pill label was never something a person actually said.
+- **Her replies render in paragraphs, bullets, and numbered lists**, not one 100-word wall of
+  text. Two root causes, both fixed: the renderer only drew bold text before, and a repair pass
+  that fixes double/compound questions was rejoining every sentence with a single space on every
+  turn, flattening paragraph breaks even on replies that never needed repair.
+- **One conversation thread per browser tab**, not a new one on every pill tap (see the home page
+  doc's note on the same fix).
+- **A refused turn no longer shows the scripted line "I lost the thread on that one for a
+  second."** It ships a named reason (`floor: "guard-refused"`) and the screen draws a plain
+  notice — "That one didn't come through." plus an **Ask again** button that resends the buyer's
+  own last line — never invented copy standing in for her words.
+- **Sign-in gained a phone-code entrance.** The sign-in sheet (desktop header and the mobile
+  menu) offered only "Continue with Google" or an email code — a returning buyer who remembered
+  only their mobile number had no door in. It now offers "Text me a code" on the same underlying
+  phone-OTP road the chat already used, reusing the existing sign-in ticket flow (no new code
+  road, no new table). "Get pre-approved" on the listing calculator now correctly signs a guest in
+  with the same texted code once they submit their phone number (the code box had been silently
+  dropped by the modal before this fix).
+
+### Her numbers are her tools' numbers (the "numbers truth" pass)
+
+Four classes of wrong or unsourced numbers, each traced to a tool that either didn't exist or
+wasn't being trusted, and fixed at the tool:
+
+- **Affordability now applies a cash law, not just an income rule.** The old calculator only
+  asked what the buyer's INCOME could carry and treated a stated savings amount as "the down
+  payment on whatever price falls out" — which could mean a 2.5% down payment on a loan no
+  program writes, and no mortgage insurance in the payment. The new calculator holds two
+  ceilings (what the income carries, what the cash — after closing costs — actually funds) and
+  names which one is binding (`limiter: income | debts | cash`), with mortgage insurance folded
+  into the payment above 80% loan-to-value. Example: $16,750/mo income, $0 debt, $20,000 saved
+  used to price out at $630K-$815K; it now reads about **$365,000** (the cash ceiling), with the
+  income-only ceiling ($746,623) and the savings needed to reach it named alongside.
+- **A real commute tool.** She used to state a distance and drive time with no tool backing them
+  (a number-truth guard let any number 60-or-under straight through). A new `commute` tool calls
+  the same Google Routes API the geo pages already use, returns miles, minutes without traffic and
+  minutes right now, and the guard now convicts any distance/time pairing that didn't come from a
+  tool call.
+- **Schools by name.** A market-analysis reader was filtering the listing's school fields for
+  the wrong shape and always got back nothing, so she guessed a nearby school's name from
+  general knowledge. A new `home_schools` tool reads the real per-listing assignment.
+- **Days-on-market and tour-slot times now agree with the page.** Her sentence used to read a
+  stale ingest-time snapshot while the card on screen computed live from the list date; both now
+  read the same live figure. Tour slot times were computed on the server's clock (UTC on
+  Railway) while the on-page calendar computes in the buyer's browser (Central) — the tool now
+  builds its calendar on Central time explicitly.
+- **Beds and the weekend are honored as constraints, not ignored.** A "3 bedroom" ask was being
+  treated as a minimum and the first home shown could still be a 5-bedroom; results are now
+  ranked at the named count first. "This weekend" now maps to the tool's day filter instead of
+  being silently dropped in favor of the next three open days.
+- **Her stated estimate now lands on the lead's CRM record.** The estimate tool used to file a
+  number only when the website already had a signed-in `leadId` — so an anonymous buyer who
+  answered all four money questions had their number computed and shown, but nothing was ever
+  saved, and the CRM kept showing a stale pre-conversation figure after they registered. The
+  estimate from the buyer's own committed answers (same cash-law calculator) now files at the
+  moment their conversation adopts onto a lead.
+
+### The CRM back office — what she writes down, and where two defects lived
+
+- **A fabricated fact is now refused before it's written.** A cited row must actually hold the
+  claim it's cited for — a chat message with no dollar figure in it can no longer become a fact
+  reading "Under $500k preferred (stated)." The check compares MONEY amounts specifically (not
+  bare numbers, so "three" vs. "3" doesn't misfire) and refuses by name when the cited text
+  doesn't hold at least one of the amounts.
+- **A recap question is no longer filed as a search.** The website fires a `ai_search` pixel on
+  every chat turn, including plain replies like "yes, book it, whatever time works" — that
+  pixel used to fall back to filing the raw sentence as a "recent search" fact. It's now filed
+  only when the turn actually carries a search criterion, a saved search, or a real result count.
+  Measured before the fix: 52% of all "Recent searches" facts ever written came from a typed
+  question, not an actual search.
+- **Chat cards now carry which run they came from** (`run_id`, promoted out of a JSON blob into
+  its own column) so a card can be traced back to the conversation that produced it. Still open:
+  the website-chat turns themselves (as opposed to playbook-driven turns) don't yet carry this,
+  because the route logs the words before it resolves the run — named as a seam for whichever
+  lane touches that ordering next.
+- **Raw `**bold**` markdown was showing up literally in the CRM's chat card** (asterisks and
+  all) — traced to the fact that there is no markdown renderer anywhere in the CRM (only two
+  markdown-STRIPPING functions, used for outbound SMS/email hygiene). Not yet fixed — flagged for
+  whichever lane builds the shared renderer this needs.
+
+### Myli moves the stage
+
+Zach's ruling #257.320: when a lender introduction or a tour booking completes inside the chat,
+Myli should move the lead's pipeline stage to Appointment Set the same way a human would. Built:
+`advanceStageOnMyliMoment()` resolves the lead's own pipeline (Buyer vs. Seller name their
+"appointment set" stage differently) and its configured stage from the same setting
+`advanceStageOnAppointment` already reads, then calls the one stage writer with Myli as the
+actor, forward-only (a lead already further along never gets moved backward). One collision was
+found and fixed in the same pass: a registration workflow's own opening step was resetting the
+lead back to New Lead a couple of seconds after Myli moved it forward — workflow-driven stage
+moves are now forward-only everywhere, measured against every `update_stage` step drawn in the
+whole workflow estate (50 nodes, none of which ever meant to move a lead backward).
+
+### Silence is now a card
+
+When Myli deliberately holds off — she has a reason to wait rather than reach out — the feed now
+files a quiet card naming the reason and the next scheduled touch, instead of leaving no trace at
+all that a decision was made. New catalog kind `ai_touch_held` (data only, no new table). The
+"watch" move kind on a playbook has existed in the schema since May but had zero production
+writers before this pass; it's now wired through the playbook engine's fourth executor (send /
+handoff / action / **watch** — one function per kind, never a branch inside another) and through
+the scheduled-action road that releases a beat with no move to make.
+
+### The memory pipeline's coverage gauge (a real fix, not a wider net)
+
+The hourly gauge that checks "did every kind of thing that happened to a lead in the last 7 days
+get read by a memory pass" was reading 41% coverage with 18 kinds never seen. The kind list
+wasn't the problem — every one of those kinds was already in scope. The problem was the LEAD
+picker: a guard added days earlier (correctly, for a different bug) refused to pick any lead
+whose TOTAL unprocessed debt exceeded 400 rows, even though the pass only ever reads the newest
+400 rows per lead — so a lead that crossed 400 rows of debt once could never be picked again, and
+by the time this was caught every lead in the estate with any debt at all had crossed that line.
+The fix moves the guarantee to what the pass can actually read (is there an unprocessed row
+inside the reader's own window) rather than the lead's total debt. Coverage moved from 41.4% to
+45.6% after processing a single test lead; the estate-wide sweep clears the rest once the CRM
+deploys, and 38 leads/~40,000 rows of debt older than any pass can reach are now counted by name
+on every receipt rather than hidden behind a blanket refusal.
+
+### Logged-out browsing stays on the lead, and reads as its own band
+
+Ruling #257.320: a registered lead who logs out of houseloop.ai and keeps browsing should still
+have that browsing attached to their record, visibly marked as happening while signed out. The
+website's visitor cookie already survives logout (nothing ever cleared it) and already carried a
+`signed_in` flag on every pixel event — the CRM's own writer was the gap: it only attached an
+event to a lead when `signed_in === true`, so every logged-out view was written with no lead at
+all. Fixed: the lead stays attached regardless of sign-in state, and a new `signed_out` flag on
+the pixel-event tape (one column, read through the existing `source_id` lookup — no new join, no
+copy of the fact) drives a blue **"Logged out history"** band in the activity feed, the same
+chrome as the existing "Before they registered" and Follow Up Boss legacy bands. It **groups
+each contiguous logged-out stretch where it happened**, rather than hoisting all logged-out
+activity to one place — a person can sign out, browse, and sign back in more than once, and the
+feed's chronological order is never disturbed to make that fit a single block.
+
+### The Playbook Shelf rebuild — still RED on the QA judge
+
+The condemned old playbooks settings page was replaced with a real gallery (21 cards) + per-
+playbook canvas (small prompt, example bank, tool-grant cards, an Academy certification chip,
+limits). Several defects from the first judge pass were fixed — a status pill that read the
+opposite of what the engine actually does, an editor that pointed at a second, never-read prompt
+slot for six of the canvases, a "0 tools" reading that actually meant "every tool," a "no edits
+yet" chip shown over 885 characters of real prompt text. **The second judge pass still failed**
+on: a strapline claiming certain tools are "granted, never listed" sitting two inches from cards
+that say the opposite about the same six tools; three sentences that don't match their own data
+(a prompt-edit history chip claiming an edit that isn't in the history; "she is refused the
+moment she reaches for it" over 13 tools that in fact work); and copy-desk-level issues (a
+harvester's changelog leaking into user-facing text, code fences rendering literally on screen).
+Not ready to call done — the next round is a copy and strapline-accuracy pass, not a rebuild.
+
+### What is built but not yet on prod, as of this writing
+
+A same-night follow-up round (walk-3 fixes) landed several more defects — a "Get pre-approved"
+button on mobile covered by the page's own sticky bar (a stacking-context bug, fixed with a
+portal), a React hydration error on every listing load (a tour-time widget computing from
+`new Date()` on the server instead of the visitor's own clock), and a real cut to turn latency
+(a redundant "repackage the words you already wrote" model round, worth 16-19 seconds on turns
+that end in plain prose) — but as of this section being written, those commits are **built and
+tested, not yet pushed**. Check `git log origin/houseloop-app` or `houseloop.ai/api/health` before
+treating any of that as live.
+
 ## Where this document came from
 
 **Consolidated 2026-08-27** under Zach's ruling #37, by the docs-consolidate lane at Lee's desk,
