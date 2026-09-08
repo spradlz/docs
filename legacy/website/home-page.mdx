@@ -22,9 +22,43 @@ its display knobs (`displayOptions`), its order (`sortOrder`), and its on/off (`
 row. **Adding a shelf = INSERT a row** (edit `prisma/seed/home-shelves.ts`, `npm run db:seed`) — you never
 edit `HomeRows.tsx`.
 
-Current live set (13 rows, all active): `hero` · `all-kc-metro` · 10 city shelves (Overland Park, Leawood,
-Olathe, Lenexa, Shawnee, Kansas City, Lee's Summit, Liberty, Independence, Blue Springs) · `acreage`.
-(The old `featured` shelf is retired.)
+Current live set (14 rows, all active): `hero` · `popular-homes` (see below) · `all-kc-metro` · 10 city
+shelves (Overland Park, Leawood, Olathe, Lenexa, Shawnee, Kansas City, Lee's Summit, Liberty, Independence,
+Blue Springs) · `acreage`. (The old `featured` shelf is retired.)
+
+## Shipped 2026-09-08 — the row order, the lead shelf, and the Myli band
+
+Live on prod. Row order top to bottom: hero → **Popular homes** (the lead row) → the Myli band →
+Overland Park → Coming soon → Prairie Village → Olathe → Leawood → Parkville → the rest of the city
+shelves → the geo/inspiration tail. "Homes near you" (`all-kc-metro`) is no longer in the row list —
+Popular homes leads instead; the shelf itself stays in `prisma/seed/home-shelves.ts`, unreferenced.
+
+- **The subline is city-agnostic:** "Every home for sale, in one place." (was "Every home for sale in
+  Kansas City" — no city name, no Myli name, one line at both mobile and desktop widths).
+- **`popular-homes` is a real shelf, not a hand-picked list** — `sortOrder 8` in `hl_home_shelf`,
+  `sort: "homesForYou"` (photo-richness + freshness), 100-deep bench, then
+  `lib/home/area-rows.ts`'s `selectPriceSpread()` guarantees at least 3 of the final 12 price above the
+  metro's live 80th-percentile list price and at least 3 below the live median (queried fresh on every
+  render, never hardcoded). **It does NOT sort by view/save counts** — those columns
+  (`ListingStats.totalViewsCount`/`savesCount`) turned out to be one-time seeded baselines, not organic
+  traffic (measured: 85% of rows share the exact same view count). Ranking by them would have been a
+  fabricated "popularity" number, so the shelf sorts on real signals instead. Flagged for later: re-point
+  the sort at genuine view counts once a cross-database read of the CRM's first-party pixel exists.
+- **The Myli band** (`components/home/MyliShowcaseCard.tsx`, the ez-shaped showcase card) — one full-width
+  panel: headline "Let Myli find your next home.", the four "she understands you / sees more / stays with
+  you / finds what fits" props (a horizontal strip on desktop, a titles-only chip row on phone), a
+  KC-metro map tile + the lead row's own first listing photo + Myli's portrait as a composite on the
+  right, and the button **"Get started with Myli. Search homes near you."** (the exact wording, in both
+  the anonymous and returning-visitor renditions). A "What Myli knows about you" strip and a "See my
+  activity" button were built, then cancelled by Zach the same night ("wireframe up some ideas and be
+  ready in the morning") — the code was removed, not hidden; that idea is parked for a future wireframe
+  pass, not shipped.
+- **One thread per browser tab.** Before this pass, three taps of the same pill in one tab opened three
+  separate conversations (`HomeExperience` minted a fresh Myli-chat instance on every entry). Now the
+  modal keeps the same conversation id across repeated opens in the same tab; a brand-new tab or window
+  still opens a clean thread (no sessionStorage carried over — the second-window law).
+
+Related: [The Myli OS](/guides/myli-os) (the chat engine every pill opens into) · [Listing Detail Page](/guides/listing-detail-page).
 
 ## Composition pipeline
 
