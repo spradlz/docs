@@ -360,6 +360,78 @@ different dataset → every count wrong.)
 
 `GET /api/geo/place-boundary` draws the Census TIGER outline around a searched city.
 
+## 4. The geo facet pages — a search that lives at a path (shipped 2026-09-08)
+
+A filter can reach a buyer two ways: as a **query** (`/listings?pool=1&city=Overland Park`) or as a
+**path** (`/kansas/johnson-county/overland-park/homes-with-pools`). Both run the engine above; the
+difference is what a crawler does with them. A query string is a parameter to be de-duplicated. A path
+is a page that can rank. Ruling #257.338 turned the popular searches and the property types into paths.
+
+**The URL grammar** (the nested geo tree is unchanged — R1):
+
+| URL | Page type | What it is |
+|---|---|---|
+| `/kansas-city` | `geo_metro` | The metro hub — the whole Heartland board, the parent of the long-tail pages |
+| `/kansas-city/homes-with-pools` | `geo_metro` | One of the twenty-four metro long-tail searches |
+| `/kansas/johnson-county/condos` | `geo_proptype` | A property type under a county |
+| `/kansas/johnson-county/overland-park/condos` | `geo_proptype` | A property type under a city |
+| `/kansas/johnson-county/overland-park/homes-with-pools` | `geo_facet` | A popular search under a city |
+| `/kansas/johnson-county/overland-park/66213` | `geo_zip` | Unchanged — a five-digit leaf is still the ZIP page |
+
+### One registry, no second slug list
+
+Every facet is one row in **`lib/seo/facet-registry.ts`** — slug, label, prose noun, the search params
+it expands to, which place levels may carry it, and whether it is one of the twenty-four metro searches.
+Adding a search is **one row**: the routes, the sitemap, the titles and the descriptions all read the
+registry, and no route file knows a slug the registry doesn't. The params are the estate's existing ones
+(`pool=1`, `minAcres=1`, `style=Condominium`, `feature=new_construction`), never a new spelling.
+
+### The shape discriminator
+
+Next matches `[zip]` for any fourth segment, so the leaf routes resolve the shape themselves, in this
+order: **a real place first, then a registry facet, then 404.** A city or ZIP that ever shared a name with
+a facet keeps its own page. `lib/seo/page-type.test.ts` carries a collision guard that reports the day one
+appears. Sibling static folders were rejected: twenty-six folders maintained by hand is a second slug list
+that drifts from the first.
+
+### Thin pages are `noindex`, never missing
+
+A facet × place page below **three homes** renders `<meta name="robots" content="noindex, follow">` and
+canonicalises to the plain place page. It still renders — a person can reach it from a chip, and hiding it
+would break the chip. Measured 2026-09-08 across 134 cities: **589 of 1,742** city facet pages clear the
+threshold. The sitemap lists only pages proven indexable, which today is the hub plus its twenty-four
+metro pages; the city-level ones join it when a cached facet count exists.
+
+### The description carries the live count
+
+Every facet page's meta description opens with the count the page renders — *"20 homes with a pool for
+sale in Overland Park, KS."* — from the **same** `searchListingsPaginated` call the grid runs, so the
+snippet and the screen cannot disagree. The push cage checks it: `DESC_LIVE_COUNT` compares the
+description's leading integer to the `data-hl-result-count` attribute on the `<h1>`.
+
+### A query facet URL points at its path page
+
+`/listings?pool=1&city=Overland+Park&state=KS` canonicalises to
+`/kansas/johnson-county/overland-park/homes-with-pools`, so the two stop competing. It refuses to do so
+in three cases, each for its own reason: the URL carries an extra filter (it is a different set of
+homes), the place has no facet page (a ZIP or a neighborhood), or the target would be thin (a canonical
+must never point at a `noindex` page).
+
+### Where it is enforced
+
+`node tools/seo/page-structure-cage.mjs --cage` renders one real URL per page type on every push and
+refuses a regression. The three new types were born at **zero violations** each. The law is
+`.claude/rules/SEO_PAGE_STRUCTURE.md`.
+
+| Piece | File |
+|---|---|
+| The facet registry (the one file) | `lib/seo/facet-registry.ts` (+ `facet-registry.test.ts`) |
+| Titles, descriptions, thin/`noindex`, canonicals | `lib/seo/facet-page.ts` |
+| The metro hub's constants and envelope | `lib/seo/metro-hub.ts` |
+| Query → path canonical | `lib/seo/facet-canonical.ts` |
+| The page-type vocabulary | `lib/seo/page-type.ts` (+ `page-type.test.ts`) |
+| The routes | `app/kansas-city/`, `app/[state]/[county]/[city]/`, `app/[state]/[county]/[city]/[zip]/` |
+
 ## Endpoints (public website read APIs)
 
 Served from `https://houseloop.ai/api` (prod) / `http://localhost:3001/api` (dev). Read-only `GET` unless noted.
