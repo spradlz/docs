@@ -3,7 +3,7 @@ title: "The Client Experience"
 description: "THE one aggregate home for every client-facing view — the user dashboard (buyer + owner lenses), the Home Value Report, and every surface Myli appears on. Other sections point HERE."
 ---
 
-**🕐 Last updated 2026-08-12 · dashboard_unify.**
+**🕐 Last updated 2026-09-08 · myli-mvp (#257.346 root cause + #257.347 defect 10).**
 
 **This page is the single place to see the whole client experience.** Every client-facing design lives
 as a hosted CRM page (the Command Center protocol — artifacts are account-locked scratch; the CRM HTML
@@ -135,7 +135,39 @@ Zach's affordability walk on prod (ruling #257.346) found nine defects in one ch
 | **Numbers keep their meaning.** A credit band is "a 700–739 credit score", never a price range; the credit chips carry the calculator's own bands (excellent 740+ · good 700–739 · fair 640–699 · building under 640). | Judge rows `NUMBERS_NAME_THEIR_CONCEPT` · `CREDIT_CHIPS_ARE_THE_ESTIMATORS`. |
 | **No lender is ever named.** She says she can connect you with one of our local lending partners who can lock in your real rate and get you pre-approved; the lender introduces themselves. | RESPA, Zach verbatim: "we don't mention John Nelson and we don't say he's a teammate." The roster name is stripped from every model-facing string (the lender facts block, the tool notes, the charter, the SEO FAQ); judge row `RESPA_NO_NAMED_LENDER`. |
 | **New chat is clean** — no ack, no funnel state, no stale "Worked for Ns". | New chat resets the wait state with the thread. |
-| **QA records the stream.** Every walk of this window carries a video and a 100 ms text timeline of the chat column, because these defects live between frames. | `THE_GOAL_WALK` amendment; the walker lives with the lane's receipt. |
+| **QA records the stream.** Every walk of this window carries a video and a 100 ms text timeline of the chat column, because these defects live between frames. | `THE_GOAL_WALK` amendment; the walker lives with the lane's receipt. The API-bench half is `tools/whole-loop/turn-recorder.mjs` — it drives the SAME road the window calls, streaming, and writes every frame with its wall-clock offset, the pills as registry ids, and the back-office read. |
+| **New chat opens a NEW chat, even for a pill you have used before.** Pressing New chat and then tapping [What can I afford?] starts fresh; the old chat is one tap away in the rail. | New chat is an explicit intent to start over, so it sets a one-shot flag the next entry consumes. Closing the window is NOT that gesture: a visitor who comes back should be resumed, which is why the two cannot share a flag. |
+
+### The root under "Question 1 of 4 — and it just says Keep chatting" (2026-09-08)
+
+Zach's third defect had a mechanical cause, and it was ours. The one-question repair split her reply into
+sentences on a rule that splits **inside a markdown span**, so her heading `🏡 **What Can I Afford? — Question
+1 of 4**` became a fragment ending in a question mark, was counted as her first question, and her REAL
+question was deleted as the second. The buyer got a heading with an unclosed `**`, no question, no slider, no
+chips and four off-funnel pills — and the wire said `funnel: false` with no control, because every reader
+downstream looks for her question sentence and there wasn't one.
+
+Fixed at the splitter, so both repairs inherit it: a part with unbalanced `**`/backticks joins forward until
+it balances, a terminator may wear its closing emphasis, and a question inside a whole-line heading is a
+title rather than an ask. Measured on the thirteen real replies of that day's three recorded drives: eleven
+byte-identical, and the two that change are the deleted question and a double ask that had been shipping
+past the repair. Ratcheted by the judge row `HER_MARKDOWN_IS_CLOSED`.
+
+Two more from the same drives. **Units:** `750` typed under the debts question came back in the very next
+line as "listings in the $750K range" on three of three runs, so each funnel field now carries its unit
+beside the figure (dollars per month · a lump sum · a three-digit score band), held by `FIGURE_KEEPS_ITS_FIELD`.
+**No work is narrated on a question turn:** the work lines are dropped in code, not asked for in words,
+because a turn that runs nothing has nothing to narrate.
+
+### The anonymous dashboard greeting (#257.347 defect 10)
+
+`/my-houseloop` for a signed-out visitor no longer carries one hardcoded sentence for a first visit and a
+fifth. Myli is handed the state — the landing count, this browser's own prior chats with her, which of the
+six profile cells (must-haves · budget · homes viewed · homes saved · saved search · tours) are empty, and
+the one next step the page's own ladder puts first — and writes the line herself. Five landings from one
+browser produced five different sentences: a welcome, then "You've been here before", then "You've been here
+a few times". Held by `GREETING_KNOWS_THE_RETURN`: a return is acknowledged from the second landing, never
+claimed on the first, the next step is named in her words, and an anonymous visitor is never sent to a login.
 
 ## The design laws (locked 8/11 — apply to every client view)
 
