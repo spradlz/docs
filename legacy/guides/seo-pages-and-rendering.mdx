@@ -175,3 +175,87 @@ straight to the 8-card hero instead of dumping the user at the top:
 
 The constant lives in `lib/listings/resolve-market-stats.ts` (`MARKET_TRENDS_ANCHOR`). The
 section has `scroll-mt-32` so the heading is visible below the sticky header.
+
+## The geo page body and the data bank (shipped 2026-09-08)
+
+Ruling #257.342 added a **data bank** to the bottom of every non-listing collection page: an overview
+paragraph, the counted facet bank, the listing-overview tiles, and the feed's own Last Updated stamp.
+It renders on the city, county and zip pages through `components/geo/GeoPageBody/`, mounted by one
+line inside `LocationSeo` — which is already the shell's single geo block, so no route and no shared
+shell file changed.
+
+### One read, one predicate
+
+`lib/geo/facet-bank.ts` is the whole data layer. It runs **two scans**, not one per module: a single
+row of `count(*) FILTER (…)` expressions unpivoted with `jsonb_each`, plus one `VALUES`-driven
+`LATERAL` covering every JSON feature column at once. The first build wrote one `UNION ALL` arm per
+value and cost 1,055 ms warm for Overland Park; the two-scan shape costs 279 ms cold and 56-70 ms
+warm. **The arm count, not the row count, was the bill.** No per-place stats table was created.
+
+The bank counts the same set the grid above it shows, reproducing all six clamps `searchFromDb`
+applies — `deletedAt IS NULL`, `quarantinedAt IS NULL`, `status IN (active, coming_soon)`,
+`photoCount >= 1 OR coming_soon`, `propertyType IN CONSUMER_PROPERTY_TYPES`, and
+`(county,state) IN CORE_HEARTLAND_COUNTIES` — drawing the two list-shaped ones from the same
+constants that file imports. Measured against prod: Overland Park 457, Johnson County 1,905,
+66213 32, each equal to the page's own rendered count.
+
+### What each module reads
+
+| module | source | linkable? |
+|---|---|---|
+| Construction dates | `yearBuilt` | yes — `minYearBuilt` / `maxYearBuilt` |
+| Square footage | `sqftAboveGrade` | yes — `minSqft` / `maxSqft` |
+| Lot sizes | `lotSizeAcres` | yes — `minAcres` / `maxAcres` |
+| Stories | `hasSingleStory` | single story only — `story=1` |
+| HOA fees | `hasHoa`, `hoaMonthly` | yes — `maxHoa` (ceilings, since there is no `minHoa`) |
+| Bedrooms | `bedrooms` | yes — `minBeds` / `maxBeds` |
+| Bathrooms | `bathroomsFull` | yes — `minBaths`, cumulative (gte-only) |
+| Garage | `garageSpaces` | yes — `minGarage`, cumulative |
+| Pool, waterfront, 55+ | `hasPool`, `hasWaterfront`, `isSeniorCommunity` | yes — `pool=1`, `wf=1`, `senior=1` |
+| Flooring, Basement, Community features, Patio, Parking, Interior, Lot features, Rooms, Security, Water source, Sewer | the matching JSON feature array | **no** — counted text |
+
+**Square footage groups `sqftAboveGrade`, not `sqftTotal`,** because that is the column the search
+filters. Grouping the other one would have shipped a chip whose count no page could ever show.
+
+**The feature arrays carry no links, deliberately.** `?feature=finished_basement` is a vision-tag
+predicate, not the MLS `basementFeatures` array the module groups. They are different facts sharing a
+word, so linking them would put a wrong number under a right-looking chip.
+
+**Roof, view, furnishing and ADA do not render.** They are not columns, and probing all four feature
+arrays across Overland Park's whole active set returned zero rows. A module lights up on its own the
+day the feed carries it.
+
+### The rules that keep the numbers honest
+
+- A value describing fewer than three homes is omitted; a module whose every value is omitted does not
+  render. Verified with a real control: Lake Quivira (5 homes) drops the pool/waterfront/55+ module
+  entirely while Overland Park renders it.
+- Every linked value's SQL predicate is the literal twin of the URL params in its `href`
+  (`>= lo AND <= hi` on both sides). Eight sampled links were probed against the page they open and
+  all eight counts matched exactly.
+- `lotFeatures` is keyed `lotfeat`, never `lot`. Heartland's feature array carries the literal strings
+  `"1/4 to 1/2 acre"` — the same labels the scalar lot-size buckets use — so a shared key silently
+  overwrote the typed column's counts with the array's. It passed the link probe anyway, because the
+  two agree in Overland Park today.
+
+### The sixteen FAQs
+
+`lib/geo/geo-faq-16.ts` builds up to sixteen questions from the page's own live count, its market
+report, and the bank. They are handed to the existing FAQ block in `GeoSeoContent` — never rendered as
+a second section, because two FAQ sections would put two `FAQPage` JSON-LD scripts on one URL.
+
+Eighteen questions are written and the first sixteen that have their numbers are kept: a question whose
+number the feed does not carry for this place is dropped rather than padded, so a thin zip honestly
+renders fewer.
+
+**These sixteen are exempt from `reconcileSegments`.** That reconciler re-seats any homes-count-shaped
+number onto the page's one live count, because every other prose road carries a number that was true
+when it was written. These are computed at render, and half of them state a legitimate subset — run
+through the reconciler, "117 homes were built in 2020 or later" became "457", and "242 homes have a
+three-car garage" became "457". A source that owns no frozen number needs no reconciliation.
+
+### Last Updated
+
+The stamp under the bank is `max(mlsUpdatedAt)` **for that place**, printed in Central. The site-wide
+compliance footer answers "when did we last hear from the feed at all"; this answers "when did anything
+in this city last change", which is the only version of the question a per-place page can answer.
