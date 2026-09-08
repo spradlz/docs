@@ -1,0 +1,105 @@
+---
+title: "The one geo page shape"
+description: "What every city, county, zip and neighborhood page renders, in order — and what was retired from it."
+---
+
+Every geo page on houseloop.ai renders from **one component stack**, not per-route JSX. This page is the
+canonical description of that shape and of the September 2026 retirement of its previous generation.
+
+## Where this fits among the SEO docs
+
+Four pages cover SEO and they own different things. Start here for **what a geo page renders**; go
+elsewhere for how it is built and served.
+
+| Page | Owns |
+|---|---|
+| **This page** | The section order of a geo page, what each section is, what was retired |
+| `legacy/guides/seo-pages-and-rendering` | Rendering strategy, the sitemap, the geo taxonomy, `lastmod`, how to create a new SEO page |
+| `legacy/guides/programmatic-seo` | The Monday pipeline, coverage, schema.org, IDX compliance, the MCP server |
+| `legacy/guides/seo-background-jobs` | The Inngest jobs behind the caches — `geo-neighborhood-stats`, the page builder |
+
+## The stack
+
+A geo route is a thin shell over the shared `SearchResultsPage`. The SEO block below the results is
+`components/geo/LocationSeo.tsx`, which resolves the location once and composes:
+
+1. **Breadcrumb** — `BreadcrumbList` JSON-LD alongside it.
+2. **`GeoSeoContent`** — market trends · the welcome article · schools · the sixteen live-number FAQs
+   (`FAQPage` JSON-LD, rendered expanded).
+3. **`GeoPageBody`** — the overview prose · the counted facet bank · the listing-overview tiles.
+4. **`WeeklyMovers`** — under contract and newly listed, when the geo has them.
+5. **`GeoDirectory`** — the two market tables (below).
+
+Sections render in **push order**. There is no re-sorting step.
+
+## The two market tables
+
+`GeoDirectory` renders labelled sections. Two survive, both as rich market tables reading
+`hl_geo_market_stats`:
+
+- **Property types in {Place}** — one row per home type that has homes for sale.
+- **Neighborhood Market Statistics in {Place}** — one row per subdivision in the nightly cache.
+
+### The 12-row cap
+
+The neighbourhood table is capped at **12 rows** with a `Show all N ▾` pill
+(`components/geo/MarketTableShelf.tsx`). Overland Park has 249 qualifying subdivisions.
+
+The cap is a **real server-side slice**, not a CSS hide, and that distinction is the whole point:
+
+| | before the cap | after |
+|---|---|---|
+| Anchors on the Overland Park page | 1,567 | **242** |
+| From this one table | 1,225 (78%) | 60 |
+| `?status=` parameter URLs | 735 | **36** |
+
+Those `?status=closed\|pending\|comingSoon` variants self-canonicalise to the clean neighbourhood URL,
+so they were never a duplicate-indexing problem — they were a **crawl-budget** problem. A canonical
+stops indexing; it does not stop fetching.
+
+<Note>
+The home page's `ShowMoreGrid` shelf looks identical and does the **opposite**: it renders every item
+and hides the overflow, because that tail's job is to put all 134 city links in the HTML for a crawler.
+Do not copy one to the other. The rows past this cap still ship as inert JSON in the RSC payload (that
+is how the pill expands without a round trip) — what the slice removes is the **anchors**.
+</Note>
+
+## Titles are built from the geo's own level
+
+A section title is never concatenated onto a bare place name. `${place}` resolves to
+`neighborhood ?? city ?? county ?? state`, which produced **"Property Types in Johnson"** on a county
+page and **"Leawood Estates Neighborhood Homes"** on a neighbourhood page.
+
+Titles now use `locationLabel()` and branch on level:
+
+| Level | Neighbourhood table title |
+|---|---|
+| City | `Neighborhood Market Statistics in Overland Park, KS` |
+| County | `Neighborhood Market Statistics in Johnson County, KS` |
+| Zip | `Neighborhood Market Statistics in Overland Park, KS` — the **city**, because the rows are the city's subdivisions and the feed has no neighbourhood↔zip map |
+| Neighbourhood | `Nearby Neighborhood Market Statistics` |
+
+## What was retired
+
+Six sections were rendering **below** the current shape rather than being replaced by it, so every geo
+page shipped two generations at once — 15 `<h2>`s where the shape draws 9. All are gone:
+
+- Find a Home You'll Love in {Place}
+- Popular Searches in {Place}
+- More to Explore in {Place}
+- Explore Nearby Cities
+- {Place} Homes by Zip Code
+- Estimate Your Home Sale Proceeds
+
+Their successors are the property-type, feature and nearby chip rows. `orderSections()` and the
+`SECTION_ORDER` array went with them.
+
+## Verifying a change
+
+```bash
+curl -s http://localhost:3001/kansas/johnson-county/overland-park \
+  | grep -o '<h2[^>]*>' | wc -l          # 9 on a city page
+npx tsc --noEmit -p apps/houseloop-web    # per-route builds hide type errors behind a 200
+```
+
+A 200 on the home page does not prove the tree type-checks — Next compiles per route.
