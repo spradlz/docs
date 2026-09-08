@@ -71,7 +71,56 @@ Related: [The Myli OS](/guides/myli-os) (the chat engine every pill opens into) 
 | Hero slide count | `displayOptions.slideCount` on the `hero` row | DB-first (wired 2026-07-06): explicit caller override (mobile passes 1) > the hero row's `slideCount` > 5. No more hardcoded constant. |
 | Inspiration links | `components/communities/InspirationLinks.tsx` ← `hl_inspiration_city` (24 rows) + `hl_inspiration_category` (5 rows), seed `prisma/seed/inspiration.ts` | City + category tabs. Category hrefs MUST use real `url-to-query` params — an unknown param silently drops and the tab renders the whole grid (fixed 2026-07-06: `minYearBuilt`, `oh=1`, `sort=viewsDesc`). |
 | Market band | `components/market/LiveHousingDataSection.tsx` ← `MarketSnapshot` | County market snapshots. |
-| Header / Footer | `components/site/Header.tsx` / `Footer.tsx` | 3-region desktop header + mobile variants; footer carries the MLS GRID / Heartland IDX disclosure + DMCA. |
+| Header / Footer | `components/site/Header.tsx` / `Footer.tsx` | 3-region desktop header + mobile variants; the footer is the recurring blue band (below) over the MLS GRID / Heartland IDX disclosure. |
+| SEO tail | `components/home/HomeSeoTail.tsx` ← `lib/home/seo-tail.ts` | The five link shelves below the Myli band (below). Replaced the "Explore areas" tile row 2026-09-08. |
+
+## The SEO tail — five link shelves (#257.338 §3, #257.339, #257.340)
+
+The bottom of the home page is a link surface, not a widget: **every anchor is in the served HTML at
+all times** so a crawler sees the whole set, and the overflow is hidden with `hidden` rather than
+sliced out of the array. That single difference is what makes it an SEO tail. Measured on the served
+page, 2026-09-08:
+
+| Block | Links | Destination | Source |
+|---|---|---|---|
+| Popular home searches | 24 | `/kansas-city/<facet>` | `metroFacets()` — lane A's `lib/seo/facet-registry.ts`, never a second slug list |
+| By city | 134 | `/{state}/{county}/{city}` | the geo directory (`lib/geo/geo.ts`) |
+| In popular markets | 52 | `/{state}/{county}/{city}/n/{sub}` | the most-listed neighborhoods JOINED to the city's curated subdivisions, so every link resolves by construction |
+| In nearby postal codes | 172 | `/{state}/{county}/{city}/{zip}` | the geo directory's zip records |
+| By county | 8 | `/{state}/{county}` | all shown, no shelf, the last block |
+
+- **The shelf pill prints `items.length`, never a number from a spec.** A label naming a count the
+  list does not contain is the first thing a reader counts. (The spec said 205 zips; the geo source
+  holds 172, so the pill says 172.)
+- **The headings are two-tone** (`components/home/SectionHeading.tsx`): a small brand-blue kicker
+  over a big `--hl-blue-dark` (#1B3A8A) phrase. Zach's redline: *"too blue — a pop of blue, not the
+  whole thing."* Never black.
+- **The facet links use "in Kansas City", not "Kansas City Metro"** — the link text must equal the
+  `<h1>` of the page it opens (the drawing's ruling #1, and the cage's `TITLE_ECHOES_H1` one level up).
+- **`popular markets` cannot be curated by hand today.** The neighborhood route resolves a slug only
+  against a city's curated subdivisions or a `hl_geo_weekly_report` row, and there are ZERO of the
+  latter; only 2 of the 8 KC districts are curated subdivisions, and only 4 of the wireframe's 12
+  drawn names exist anywhere (one of them resolving to a different town's identically-named
+  subdivision). Hence the derived list. Curating a real shortlist is a data job.
+
+## The recurring footer (#257.338 §4)
+
+`components/site/Footer.tsx`, on every page. The blue band is `--hl-blue-dark` (#1B3A8A — the
+lighter navy, explicitly *not* `--hl-navy` #0A1128), carrying the logo mark + wordmark, "The smarter
+way home", a big centered search bar that is **the same `SearchAutocomplete` the hero renders** (one
+submit road per page, never a second bar), four `<h4>`-labelled columns, and the legal line
+"HouseLoop · Kansas City, Missouri · MLS GRID". The required Heartland / MLS GRID disclosure block
+renders below it, unchanged, and keeps its `showSoldPriceDisclaimer` opt-out.
+
+- **Featured locations are DERIVED** from `topCitiesMetro`, not typed. A hardcoded menu list fails
+  `npm run drift-check` by design — which cities we feature is a product decision, not a literal.
+- **Six drawn links are deliberately absent** because they have no page: About us · Refinance
+  calculator · Accessibility · DMCA notice · Real estate licenses · Fair housing. A dead nav item is
+  worse than an absent one, and in a recurring footer it is dead on every page of the site. DMCA
+  instead points at the MLS GRID notice address the disclosure already carries. **Fair housing and
+  Real estate licenses are flagged to the desk as possible required disclosures rather than dropped
+  silently**; the same flag covers the brokerage name still present in the IDX block, which
+  #257.339 asks to remove and the license may require.
 
 ## Global constants — `hl_app_config`
 
