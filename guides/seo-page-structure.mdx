@@ -1,6 +1,6 @@
 ---
 title: "The one geo page shape"
-description: "What every city, county, zip and neighborhood page renders, in order — and what was retired from it."
+description: "What every city, county, zip, neighborhood and facet page renders, in the locked order — the tail's thirteen shelves, and what was retired."
 ---
 
 Every geo page on houseloop.ai renders from **one component stack**, not per-route JSX. This page is the
@@ -18,87 +18,87 @@ elsewhere for how it is built and served.
 | `legacy/guides/programmatic-seo` | The Monday pipeline, coverage, schema.org, IDX compliance, the MCP server |
 | `legacy/guides/seo-background-jobs` | The Inngest jobs behind the caches — `geo-neighborhood-stats`, the page builder |
 
-## The stack
+## The stack (the geo lock, 2026-09-09)
 
-A geo route is a thin shell over the shared `SearchResultsPage`. The SEO block below the results is
-`components/geo/LocationSeo.tsx`, which resolves the location once and composes:
+The wireframe is the truth: `docs/wireframes/geo-page-LOCKED-2026-09-09.html`, pinned from the seo-revamp
+board §6. "The home page, county, city, zip, neighborhood and every facet page are the same page. Only the
+H1, the counts and the tail's scope change."
 
-1. **Breadcrumb** — `BreadcrumbList` JSON-LD alongside it.
-2. **`GeoSeoContent`** — market trends · the welcome article · schools · the sixteen live-number FAQs
-   (`FAQPage` JSON-LD, rendered expanded).
-3. **`GeoPageBody`** — the overview prose · the counted facet bank · the listing-overview tiles.
-4. **`WeeklyMovers`** — under contract and newly listed, when the geo has them.
-5. **`GeoDirectory`** — the two market tables (below).
+A geo route is a thin shell over the shared `SearchResultsPage`. Below the grid and the pagination,
+`components/geo/LocationSeo.tsx` resolves the location once and composes, in this order:
 
-Sections render in **push order**. There is no re-sorting step.
+1. **The four tools** — "Start with the numbers that matter to you": Mortgage calculator · What can I afford? ·
+   My home value · Ask Myli (`GeoToolsRow`). Tools first, above the article.
+2. **"Real estate in {Place}"** — the census-fed welcome article (or the curated / weekly fallback), then a
+   **Sources** line naming the Census Bureau (when a census figure was used), Heartland MLS with its as-of
+   date, and HouseLoop. When no welcome article has reached a place, the ACS row becomes the first paragraph.
+3. **"Housing market trends in {Place}"** — ONE section: four tiles (Homes for sale · Median list price ·
+   Median days to offer · Months of supply) and the trend table underneath, read from `hl_market_stat`
+   by `lib/geo/market-trend.ts` (latest complete period · the period before · a year ago · change). The
+   column heads name the period ("Aug 2026"), never "This month" — the current month is partial. Zips carry
+   trailing three-month windows because that is the only period the table holds for them.
+4. **"Real estate FAQs about {Place}"** — the sixteen live-number questions, expanded, one `FAQPage` block.
+5. **The tail** — thirteen shelves in four groups, ONE shelf component (`GeoTail` → `TailShelf` → `ShelfTable`),
+   built as data by `lib/geo/geo-tail.ts`.
 
-## The two market tables
+All four upper headings and every shelf heading are the two-tone `SectionHeading` at its 19/26 size.
+`GeoSeoContent` renders 1–4; `GeoTail` renders 5. Sections render in this order and nothing re-sorts them.
 
-`GeoDirectory` renders labelled sections. Two survive, both as rich market tables reading
-`hl_geo_market_stats`:
+## The tail — thirteen shelves, one component
 
-- **Property types in {Place}** — one row per home type that has homes for sale.
-- **Neighborhood Market Statistics in {Place}** — one row per subdivision in the nightly cache.
+| group | shelf id | heading | rows | the pill |
+|---|---|---|---|---|
+| ① the place itself | `schools` | Schools serving {Place} | districts · high · middle · elementary, counted from `Listing`'s school columns under the facet bank's predicate, with median list price | toggles |
+| | `newly-listed` | Newly listed in {Place}, ST | listed inside the just-listed window (the registry's `maxDom`) | links to `/…/just-listed` when that page clears the gate; N is that page's count |
+| | `under-contract` | Recently went under contract in {Place}, ST | most recent pendings | links to `/…/under-contract` (new registry row) when it clears the gate |
+| | `popular` | Popular home searches in {Place} | market-state facets (just listed · price reduced · open houses · coming soon · new construction · luxury · 55+ · under contract) with the count each facet page renders | — |
+| | `price` | Homes by price in {Place} | the price-band facets (nine new registry rows plus the three that existed), one axis only | — |
+| | `feature` | Homes by feature in {Place} | every counted value of the facet bank plus the registry's attribute facets, most common first; linked only when its page clears the gate, plain grey otherwise | toggles |
+| | `proptype` | Search by property type in {Place} | the per-type market profile (city and county only) | toggles |
+| ② its neighborhoods | `neighborhoods` | Nearby neighborhoods to {Place} | the nightly neighborhood cache | toggles |
+| ③ nearby cities | `cities` | Search homes nearby {Place} (county: Search homes in {County}) | the county's cities, market columns | toggles |
+| ④ wider | `zips` | Nearby ZIP codes | the city's (or county's) zips | toggles |
+| | `every-city` | Search homes for sale in every city we cover | every city, deduped, every anchor in the HTML (`crawlAll`) | toggles |
+| | `markets` | Search for homes in popular markets | the KC districts with a count | toggles |
+| | `wider` | Or go wider still — county, metro and state | the eight counties and the metro | — |
 
-### The 12-row cap
+The rules every shelf obeys, from the lock:
 
-The neighbourhood table is capped at **12 rows** with a `Show all N ▾` pill
-(`components/geo/MarketTableShelf.tsx`). Overland Park has 249 qualifying subdivisions.
+- **12 visible.** The cap is a real slice (the crawl-budget argument in `MarketTableShelf`'s docblock still
+  stands); only the hub shelves flagged `crawlAll` ship their overflow rows with `hidden`.
+- **Show all N ▾ on the bottom edge.** A linked pill's N is the count on the page it opens — the cage
+  fetches that page and compares (`SHOW_ALL_PARITY`). A toggle pill's N is the row count, never a constant.
+- **Only the first cell is a link.** The old market table linked every count cell to a `?status=` search —
+  735 parameter URLs on one page. Gone by construction.
+- **Zero coloured pills.** Market type is plain text in its cell.
+- **On the phone, a table never scrolls sideways.** Every column but the first and the one flagged `phone`
+  collapses below `lg`; one DOM for both widths, so the crawler reads the same anchors in either frame.
 
-The cap is a **real server-side slice**, not a CSS hide, and that distinction is the whole point:
+## What was retired on 2026-09-09
 
-| | before the cap | after |
-|---|---|---|
-| Anchors on the Overland Park page | 1,567 | **242** |
-| From this one table | 1,225 (78%) | 60 |
-| `?status=` parameter URLs | 735 | **36** |
+Retired by the call site no longer rendering them (the files stay on disk): the data bank ("{Place} by the
+numbers" and its pill chips), the overview prose, the listing-overview tiles, the public-data tiles,
+`WeeklyMovers`, `GeoDirectory`'s two market tables, the schools strip above the FAQ, the nine-tile stat grid,
+and `HomeSeoTail`'s five shelves on the home page (the home page and `/kansas-city` now render the same
+`GeoTail`, metro-scoped). Their facts moved, not vanished: the bank's counted values are the feature shelf,
+the census row is the article's first paragraph, the movers are the newly-listed and under-contract shelves.
 
-Those `?status=closed\|pending\|comingSoon` variants self-canonicalise to the clean neighbourhood URL,
-so they were never a duplicate-indexing problem — they were a **crawl-budget** problem. A canonical
-stops indexing; it does not stop fetching.
+## The cage
 
-<Note>
-The home page's `ShowMoreGrid` shelf looks identical and does the **opposite**: it renders every item
-and hides the overflow, because that tail's job is to put all 134 city links in the HTML for a crawler.
-Do not copy one to the other. The rows past this cap still ship as inert JSON in the RSC payload (that
-is how the pill expands without a round trip) — what the slice removes is the **anchors**.
-</Note>
-
-## Titles are built from the geo's own level
-
-A section title is never concatenated onto a bare place name. `${place}` resolves to
-`neighborhood ?? city ?? county ?? state`, which produced **"Property Types in Johnson"** on a county
-page and **"Leawood Estates Neighborhood Homes"** on a neighbourhood page.
-
-Titles now use `locationLabel()` and branch on level:
-
-| Level | Neighbourhood table title |
-|---|---|
-| City | `Neighborhood Market Statistics in Overland Park, KS` |
-| County | `Neighborhood Market Statistics in Johnson County, KS` |
-| Zip | `Neighborhood Market Statistics in Overland Park, KS` — the **city**, because the rows are the city's subdivisions and the feed has no neighbourhood↔zip map |
-| Neighbourhood | `Nearby Neighborhood Market Statistics` |
-
-## What was retired
-
-Six sections were rendering **below** the current shape rather than being replaced by it, so every geo
-page shipped two generations at once — 15 `<h2>`s where the shape draws 9. All are gone:
-
-- Find a Home You'll Love in {Place}
-- Popular Searches in {Place}
-- More to Explore in {Place}
-- Explore Nearby Cities
-- {Place} Homes by Zip Code
-- Estimate Your Home Sale Proceeds
-
-Their successors are the property-type, feature and nearby chip rows. `orderSections()` and the
-`SECTION_ORDER` array went with them.
+`node tools/seo/page-structure-cage.mjs --cage` renders every geo type (county · city · zip · neighborhood ·
+metro · property-type · facet · the home page) and refuses, by name: `GEO_LOCK_ORDER` (tools → article →
+trends → FAQs), `DATA_BANK_RETIRED`, `ONE_SCHOOLS_SECTION`, `EVERY_LIST_IS_A_SHELF` (an `<h2>` below the FAQs
+that no shelf owns), `TAIL_SHELVES` (present, in the builder's own `TAIL_SHELF_ORDER`), `SHELF_CAP`,
+`SHOW_ALL_PILL`, `SHOW_ALL_PARITY`, `ZERO_PILLS`. Red-proven against production on 2026-09-09 before the fix
+landed: 42 geo-lock refusals across the geo types, each one of Zach's findings by name. `--selftest` plants
+the desk's pre-lock measurement and each single defect with its control.
 
 ## Verifying a change
 
 ```bash
 curl -s http://localhost:3001/kansas/johnson-county/overland-park \
-  | grep -o '<h2[^>]*>' | wc -l          # 9 on a city page
+  | grep -o 'data-shelf="[^"]*"'         # the thirteen shelf ids, in order
+node tools/seo/page-structure-cage.mjs --list
 npx tsc --noEmit -p apps/houseloop-web    # per-route builds hide type errors behind a 200
 ```
 
