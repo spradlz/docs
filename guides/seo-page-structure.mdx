@@ -64,15 +64,49 @@ All four upper headings and every shelf heading are the two-tone `SectionHeading
 
 The rules every shelf obeys, from the lock:
 
-- **12 visible.** The cap is a real slice (the crawl-budget argument in `MarketTableShelf`'s docblock still
-  stands); only the hub shelves flagged `crawlAll` ship their overflow rows with `hidden`.
+- **6 or 12 visible, by shelf.** The long place-list shelves (`every-city`, `markets`, `cities`,
+  `neighborhoods`, `zips`) cap at 6 (`SHELF_CAP_WIDE`, `lib/geo/shelf-types.ts`) — the density ruling
+  (#257.378 §5.9/§7.5, 2026-09-09): they read as a wall at 12 (111 cities, ~60 markets). Every other
+  shelf (schools, newly-listed, under-contract, price, feature, proptype — the page's OWN facts) stays
+  at the default 12. Either way the cap is a real slice; only the hub shelves flagged `crawlAll` ship
+  their overflow rows with `hidden`, so a crawler reads the same anchor count regardless of the visible cap.
 - **Show all N ▾ on the bottom edge.** A linked pill's N is the count on the page it opens — the cage
   fetches that page and compares (`SHOW_ALL_PARITY`). A toggle pill's N is the row count, never a constant.
-- **Only the first cell is a link.** The old market table linked every count cell to a `?status=` search —
-  735 parameter URLs on one page. Gone by construction.
+- **⭐ Every populated cell links (#257.378, 2026-09-09 — supersedes "only the first cell is a link").**
+  Every stat cell in a row links to the SAME target as the row's own first cell — the place/facet page
+  that number describes (`lib/geo/geo-tail.ts`'s `linked()` helper). A "—" is a DATA GAP, never a link,
+  and carries `title="not yet computed"` (`ShelfTable.tsx`); a real "0" is a fact and links like any
+  other number. The KPI tiles and the trend table under "Housing market trends" follow the same rule
+  (`GeoSeoContent.tsx`): Homes for sale → the grid; Median list price / the trend table's rate rows →
+  `/sold`; Median days to offer / "Went under contract" → `/under-contract`; "New listings" →
+  `/just-listed`.
 - **Zero coloured pills.** Market type is plain text in its cell.
 - **On the phone, a table never scrolls sideways.** Every column but the first and the one flagged `phone`
   collapses below `lg`; one DOM for both widths, so the crawler reads the same anchors in either frame.
+
+### The four facet families (#257.378 §5.7/§5.8, 2026-09-09)
+
+Zach's own named examples ("no-hoa", "2-bedroom-homes", "lot-size-under-quarter-acre", "homes built before
+1960", "Kentucky Trail Elementary School") now resolve to real indexed pages instead of a raw `/listings?…`
+search:
+
+- **HOA / bedroom count / lot size / year built** — `lib/seo/facet-registry.ts`'s `HAND_FACETS`, wired into
+  `lib/geo/facet-bank.ts`'s bucket→href composer (`BUCKET_FACET_OVERRIDE` for the open-ended and
+  non-exact-bound buckets; the closed 2/3/4-bedroom buckets already match the registry's own strict
+  `facetFromParams` unassisted).
+- **Schools and districts** — generated, one row per (city column, normalized school/district), by
+  `apps/houseloop-web/scripts/generate-school-facets.ts` (`npx tsx scripts/generate-school-facets.ts`,
+  run from `apps/houseloop-web/`) into `lib/seo/generated-school-facets.json`, wired by
+  `facet-registry.ts`'s `buildGeneratedSchoolFacets()`. Slug shape: `{school-name}-{level}-school` /
+  `{district-name}-school-district` (e.g. `kentucky-trail-elementary-school`). ⚠ The alias list travels
+  WITH every generated row — `url-to-query.ts` filters a school by its raw MLS spellings, never by the
+  slug alone (`lib/schools/resolve-school.ts`'s own docblock: "a slug with no aliases matches nothing to
+  OR against"). The minting floor is 3 metro-wide (`SLUG_MIN_HOMES`), not the usual facet floor of 20 —
+  a school zone is inherently local, so the PAGE always exists; `hasEnoughHomes` still gates whether any
+  given place's rendering of it indexes.
+- **Every minted facet page EXISTS below the indexing gate too** (desk §7.3): under the gate it renders
+  `<meta name="robots" content="noindex,follow">` and stays out of the sitemap; at or above it, it
+  indexes normally. This keeps "every number is clickable" and the sitemap's crawl budget both true.
 
 ## What was retired on 2026-09-09
 
