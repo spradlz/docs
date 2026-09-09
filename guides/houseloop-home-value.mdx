@@ -285,3 +285,18 @@ Every enriched field carries a `*_source` tag so we always know where a value ca
 - **home value** = OpenWeb Ninja Zestimate × 1.005 → fallback ZHVI → fallback the monthly algo.
 
 The `*_source` column records which one ACTUALLY filled each field.
+
+## The off-market front of the engine (2026-09-08 night)
+
+The value engine values every rooftop, but only a home that exists as a `Listing` row can be valued. Two things
+closed that gap: (1) `/api/demand-report` derives `street` from a comma-separated `address` when the caller sends
+`address` + `zip` without a split street — before this, that shape skipped resolution entirely and answered with the
+ZIP's market stats and `home: null`, even for a past client's own home with a real Zestimate; (2) a never-seen
+address minted by `/sell` fires `listing-mint/enrich`, and the Inngest function `listing-mint-enrich` fills the
+row from Open Web Ninja (structure, photos, Zestimate) and then from Repliers by structured address (streetNumber +
+streetName + city, status A+U) for whatever is still null — Ninja wins on overlap, a Street View still is not a
+photo, and `enrichmentSource` is appended per outcome (`zillow_ninja`, `ninja_not_found+repliers_absent`, …). The
+sitemap gate (`lib/seo/offmarket-sitemap-gate.ts`) keeps a bare mint out of the sitemap until it carries beds, sqft
+and one real photo. Measured on the night: past-client addresses are all already in `Listing` (the off-market
+population is the /sell stranger), Ninja found 2 of 5 real stranger addresses, and Repliers cannot retrieve
+closings older than roughly two to three years (a coverage gap, not a query-shape bug).
