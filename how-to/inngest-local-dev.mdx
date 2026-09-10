@@ -83,30 +83,41 @@ covers the root `.env`, for the same reason, in `apps/houseloop-crm/lib/inngest/
 in the file every driver loads arms every driver with a live production key.
 </Warning>
 
-## The hazard: stop it when you are done
+## The hazard that used to exist, and why it doesn't now
 
-Syncing the apps registers **all 231 of their functions** on the dev server, cron triggers included,
-and **the dev server fires crons**. There is no flag to turn that off.
+The dev server **fires crons**, and there is no flag to turn that off. So syncing the apps used to
+register all 231 of their functions here *including their schedules* — and because localhost points
+at the **same production databases**, every minute the dev server was up, this tree's scheduled
+functions ran against production data a second time, alongside prod's own. Measured in one
+nine-minute session: **26 runs**, among them `sla-failover-sweep`, `fub-inapp-detector`,
+`missed-call-sweep`, `integration-health-check`, `system-health-scan` and `saved-search-instant-check`.
 
-Because localhost points at the **same production databases**, every minute the dev server is up,
-this tree's scheduled functions run against production data — a *second* time, alongside prod's own.
-Measured in one six-minute window: 26 function runs, among them `sla-failover-sweep`,
-`fub-inapp-detector`, `missed-call-sweep`, `integration-health-check`, `system-health-scan` and
-`saved-search-instant-check`.
+**`serve()` now drops CRON triggers when the client is in dev mode** (commit `f453347527`,
+`lib/inngest/dev-guard.ts`), so a dev sync registers event-triggered functions only.
 
-That is duplicate execution of this tree's code, not production being contaminated by it — but they
-are real writes on a real database.
+<Note>
+**It strips the trigger, not the function.** Many functions carry both a cron and an event trigger,
+and dropping those wholesale would make the event road untestable locally — which is what local dev
+is *for*. A function left with no triggers after the strip was cron-only, and is withheld. Measured
+at sync time: 51 cron triggers stripped, 5 cron-only functions withheld, across the two apps.
+
+It is a **no-op in cloud mode**, keyed on the same `mode` the SDK itself uses, so production is
+untouched by construction.
+</Note>
+
+Re-taken with the same instrument that found the 26 — a six-minute window carrying **71 real events
+and 41 function runs**, so the machine was demonstrably busy:
+
+| | before | after |
+|---|---|---|
+| functions registered with a cron trigger | many | **0 of 226** |
+| `inngest/scheduled.timer` events | every minute | **0** |
+| cron-triggered function runs | **26** | **0** |
 
 <Check>
-**Start it for a walk, stop it after** — and today, do not start it at all without the override
-above. This is why `tools/inngest/dev.sh` runs in the foreground by default: so a human is looking
-at it.
-
-The structural fix is **approved and building**: `serve()` drops cron triggers when the client is in
-dev mode, so a dev sync registers only event-triggered functions. Its proof is the same measurement
-that found the 26 — sync, confirm the crons are absent from the function list, then a five-minute
-window with zero cron runs. When it lands, set `CRON_FIX_COMMIT` in `tools/inngest/dev.sh` to its sha
-and both the gate and this warning go away.
+**Still: start it for a walk, stop it after.** This is why `tools/inngest/dev.sh` runs in the
+foreground by default — so a human is looking at it. The dev server is in-memory and forgets
+everything when it stops, which is the point.
 </Check>
 
 ## When the dev server is down
