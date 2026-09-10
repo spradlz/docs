@@ -10,6 +10,23 @@ the SDK's default. Read [Why this page exists](#why-this-page-exists) before you
 apply to you.
 </Warning>
 
+<Warning>
+**⛔ STANDING ORDER, 2026-09-10: the dev server stays DOWN.** Until `serve()` drops cron triggers in
+dev mode, a sync registers all 231 functions **including their schedules**, and the dev server fires
+them **against the production databases**. Measured: 26 runs in one nine-minute session.
+
+`tools/inngest/dev.sh` **refuses to start** while this is true — it is a gate, not a note. If you
+genuinely need a walk before the fix lands, that is an informed choice:
+
+```bash
+HL_INNGEST_DEV_ACCEPT_CRON_WRITES=yes bash tools/inngest/dev.sh
+```
+
+Keep the window short and stop it the moment you are done. The gate lifts by setting
+`CRON_FIX_COMMIT` at the top of the script to the sha that landed the fix. See
+[the hazard](#the-hazard-stop-it-when-you-are-done).
+</Warning>
+
 ## What to actually do
 
 <Steps>
@@ -17,6 +34,7 @@ apply to you.
 ```bash
 bash tools/inngest/dev.sh
 ```
+Read the standing order above first — today this refuses unless you pass the override.
 It runs in the foreground and prints the dashboard at `http://localhost:8288`. Leave the terminal
 open; ctrl-C stops it. Add `--bg` to background it, `--status` to check it, `--stop` to end it.
 </Step>
@@ -98,9 +116,15 @@ That is duplicate execution of this tree's code, not production being contaminat
 are real writes on a real database.
 
 <Check>
-**Start it for a walk, stop it after.** This is why `tools/inngest/dev.sh` runs in the foreground by
-default: so a human is looking at it. The structural fix — having `serve()` drop cron triggers when
-the client is in dev mode, so a dev sync registers only event-triggered functions — is carded.
+**Start it for a walk, stop it after** — and today, do not start it at all without the override
+above. This is why `tools/inngest/dev.sh` runs in the foreground by default: so a human is looking
+at it.
+
+The structural fix is **approved and building**: `serve()` drops cron triggers when the client is in
+dev mode, so a dev sync registers only event-triggered functions. Its proof is the same measurement
+that found the 26 — sync, confirm the crons are absent from the function list, then a five-minute
+window with zero cron runs. When it lands, set `CRON_FIX_COMMIT` in `tools/inngest/dev.sh` to its sha
+and both the gate and this warning go away.
 </Check>
 
 ## When the dev server is down
