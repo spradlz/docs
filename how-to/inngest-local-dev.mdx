@@ -1,0 +1,125 @@
+---
+title: "Running Inngest locally (and never against prod)"
+description: "How a walker drives localhost without firing production's Inngest functions at the shared database. The dev server, the two env vars, and the one hazard to respect."
+---
+
+<Warning>
+**The one-line version:** localhost fires **production's** Inngest functions unless `INNGEST_DEV=1`
+is in that app's `.env.local`. This is not a misconfiguration you can avoid by being careful — it is
+the SDK's default. Read [Why this page exists](#why-this-page-exists) before you decide it does not
+apply to you.
+</Warning>
+
+## What to actually do
+
+<Steps>
+<Step title="Start the dev server">
+```bash
+bash tools/inngest/dev.sh
+```
+It runs in the foreground and prints the dashboard at `http://localhost:8288`. Leave the terminal
+open; ctrl-C stops it. Add `--bg` to background it, `--status` to check it, `--stop` to end it.
+</Step>
+
+<Step title="Check that both apps connected">
+```bash
+bash tools/inngest/dev.sh --status
+```
+You want a ✓ against both `http://localhost:3001/api/inngest` and `http://localhost:3020/api/inngest`.
+A ✗ carrying `Expected server kind cloud, got dev` means that app is **still talking to production** —
+its `.env.local` is missing `INNGEST_DEV=1`.
+</Step>
+
+<Step title="Drive your walk">
+Every event your localhost turn emits now lands on the dev server, and the function that runs is the
+one in **this tree**. Watch it happen on the Runs tab at `http://localhost:8288`.
+</Step>
+
+<Step title="Stop it when you are done">
+```bash
+bash tools/inngest/dev.sh --stop
+```
+Not optional. See [The hazard](#the-hazard-stop-it-when-you-are-done).
+</Step>
+</Steps>
+
+## Why this page exists
+
+On 2026-09-10 a single turn driven on `localhost:3001` emitted `myli/memory.process`. Inngest Cloud
+ran **production's** copy of that function — prod code, none of this tree's fact guards — against the
+**shared database**. Sixty-seven seconds later, eight facts landed on a QA persona, re-minting two
+slots the desk had just quarantined.
+
+The cause is not carelessness. In the Inngest SDK (`components/Inngest.js`, `get mode()`), the client's
+mode is decided by exactly two things: the `isDev` constructor option, and the `INNGEST_DEV` env var.
+
+<Note>
+**There is no `NODE_ENV` arm.** A client with neither set is in **cloud** mode on your laptop exactly
+as it is in production. The production keys that used to sit in `apps/*/.env.local` did not *cause*
+this — they made the default **succeed** instead of erroring.
+</Note>
+
+This is why deleting the keys is not by itself the fix: without them, a localhost send still aims at
+Inngest Cloud, it just fails there. `INNGEST_DEV=1` is what changes where it aims.
+
+## The two environment variables
+
+Both live in `apps/houseloop-crm/.env.local` and `apps/houseloop-web/.env.local`. Neither file
+carries an Inngest event key or signing key any more, and neither should ever carry one again.
+
+| Variable | What it does | If it goes missing |
+|---|---|---|
+| `INNGEST_DEV=1` | Sets the client's **mode** to dev | Mode falls back to **cloud** — the app refuses to sync with the dev server, and its functions never register locally |
+| `INNGEST_BASE_URL=http://127.0.0.1:8288` | Overrides the **destination URL**, in either mode | Events go wherever the mode points, which in cloud mode is production |
+
+They are deliberately **two independent nets**. Measured: with `INNGEST_DEV` removed but the base URL
+kept, the client is in cloud mode yet still cannot leave the machine. With both removed, the
+destination is `https://inn.gs/` — the public internet, and the defect above.
+
+<Warning>
+**Never put `INNGEST_EVENT_KEY` or `INNGEST_SIGNING_KEY` in a local env file.** The keys that were
+there were the production credentials, byte-identical to what prod runs on. The same rule already
+covers the root `.env`, for the same reason, in `apps/houseloop-crm/lib/inngest/arm.ts`: a bare key
+in the file every driver loads arms every driver with a live production key.
+</Warning>
+
+## The hazard: stop it when you are done
+
+Syncing the apps registers **all 231 of their functions** on the dev server, cron triggers included,
+and **the dev server fires crons**. There is no flag to turn that off.
+
+Because localhost points at the **same production databases**, every minute the dev server is up,
+this tree's scheduled functions run against production data — a *second* time, alongside prod's own.
+Measured in one six-minute window: 26 function runs, among them `sla-failover-sweep`,
+`fub-inapp-detector`, `missed-call-sweep`, `integration-health-check`, `system-health-scan` and
+`saved-search-instant-check`.
+
+That is duplicate execution of this tree's code, not production being contaminated by it — but they
+are real writes on a real database.
+
+<Check>
+**Start it for a walk, stop it after.** This is why `tools/inngest/dev.sh` runs in the foreground by
+default: so a human is looking at it. The structural fix — having `serve()` drop cron triggers when
+the client is in dev mode, so a dev sync registers only event-triggered functions — is carded.
+</Check>
+
+## When the dev server is down
+
+A localhost `inngest.send()` **fails to connect**. That is the correct, loud failure, and it is
+**not** a reason to paste a key back into `.env.local`. Start the dev server instead.
+
+## Proving it, per INNGEST OR IT DOESN'T EXIST
+
+The law is unchanged: the run is the only proof. Locally that means the run appearing on the dev
+server's Runs tab — not an accepted event, not a 200 from a `PUT`.
+
+The negative half matters just as much, and it is the whole point of the exercise: **nothing you
+drive from localhost should appear in Inngest Cloud.** The cheapest check that it cannot is
+structural — the client's destination is a loopback address, so the request physically cannot leave
+the machine, and the event id you get back was minted by the local server.
+
+<Note>
+Cloud's `/v1/events/<id>` and `/v1/events/<id>/runs` were returning `500` inside a `200` on
+2026-09-10. If you use them for the negative half, **run a control against an event id you know
+exists first** — otherwise a broken query and an empty result are the same colour.
+</Note>
