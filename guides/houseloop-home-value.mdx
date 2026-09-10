@@ -177,6 +177,263 @@ feature is verifiable in dev instead of 503-ing into a silence that looks like "
   indistinguishable to the caller, and all three mean "no demand line". It never costs the seller
   their valuation.
 
+### The seller road
+
+**How a home value gets built, from a typed address to a valued home. The mechanism as shipped
+2026-09-10 (Zach #257.478: "i need the actual mechanism for how this gets built").**
+
+Everything in this section is **live on prod at push #23** (`3d44ab4a7a`). Measured before writing:
+`git diff 3d44ab4a7a HEAD` over the seven files named below returns zero lines, and none carries an
+uncommitted edit, so there is no "in HEAD, awaiting a push" paragraph here. The build record behind
+every number is the lane receipt
+`.claude/reports/grinder/home-value-report/RECEIPT-sell-home-value-2026-09-10.md` (cited below by
+round, e.g. R29.3). The "off-market front" section further down this page describes the ladder as it
+stood on 2026-09-08 (Ninja first); the order in THIS section is the one that runs today.
+
+#### 1. The entrance
+
+`/sell` has ONE door: the address bar (`components/sell/SellerAddressInput.tsx`), fed by Google Places
+through `AddressAutocomplete.tsx`, which hands over structured parts (street · unit · city · state ·
+zip · lat · lng), never a free-text string. Picking a suggestion opens `DemandReportModal.tsx`
+straight onto its loading state and calls `GET /api/demand-report` with those parts. The second door
+is the dashboard's **+ Add a property / Update address** (`POST /api/home/address`), which runs the
+same resolve → mint → enrol functions and returns a destination, never a number. The listing-page
+"Is this your home?" CTA is the third, arriving with an `hlid` and no street.
+
+#### 2. The resolver, and the address veto
+
+`resolveHome()` (`lib/listings/resolve-home.ts`) answers "which home is this?" before any value
+question is asked. Three rungs, cheapest first:
+
+1. **The identity key** — `canonicalStreet + unit + zip5`, city excluded. `canonicalStreet` already
+   normalises suffix (St/Street), directional spelling (W/West), case, punctuation and spacing, so
+   nine of ten spelling drifts adopt here and never see a coordinate.
+2. **Coordinate CANDIDATES, then an address DECISION** (Zach #257.399, built 2026-09-10). The lat/lng
+   box (about 25 m) only narrows the catalog to the rows this address might be related to, up to 50
+   of them. `sameAddress()` then compares the complete house number as a STRING (`123`, `123A` and
+   `123 1/2` are three addresses), the unit, and the remaining street tokens with a directional set
+   aside. Any mismatch is a **veto**, and the verdict carries its named reason
+   (`house_number_mismatch` · `unit_mismatch` · `street_mismatch` · `no_house_number`). Geometry lost
+   its authority because six rooftops sit inside one box on W 95th Street and four different houses
+   on River Hills Drive share one exact lat/lng; the old `LIMIT 1` adopted whichever neighbour recency
+   surfaced first.
+3. **Mint** — nothing owned matches, so this is a new home.
+
+The trade is deliberate: a false split leaves two rows somebody can merge later; a false merge
+commingles valuations, owners, photos and history and cannot be unpicked. One shape got worse on
+purpose: a genuinely re-numbered corner lot now mints a second row instead of adopting.
+
+<Warning>**The veto also CORRECTS old contamination.** `10009 W 95th St` carried the identical
+Zestimate as `10011` (a coordinate-collision artifact) until a seller re-submitted it; the new road
+resolved its own zpid and wrote its own number (R29.6). Do not "clean up" stale duplicate values by
+hand; the next enrich does it with provenance.</Warning>
+
+#### 3. The mint
+
+`mintHomeForAddress()` (`lib/listings/mint-home.ts`, Zach-signed 2026-08-24) creates the `Listing`
+row only when four guards pass: resolve first (a match adopts, never forks) · a verified Places
+result of premise type with a street number and a postal code (a street, city or ZIP centroid never
+mints) · a plausible Heartland coordinate · mint-once via `ON CONFLICT (identity_key)` with a
+sequence-backed HLID. A refusal is logged by reason and the report still renders its market half. On
+a successful mint the SAME function fires the enrich event (`mint-home.ts:274`), which is why the
+report route must not fire it again for a fresh mint (section 5).
+
+#### 4. The number on the report: held value first, live only when we hold nothing
+
+`resolveHomeValue()` in `app/api/demand-report/route.ts` runs in this order (R32.2, measured
+before and after):
+
+| Rung | What | Source label | Outbound value calls |
+|---|---|---|---|
+| resolve | `resolveHlidFromAddress` → the hlid, and whether it was just minted | | 0 |
+| **1** | `fetchStoredHomeValue(hlid)` — the Zestimate-derived value already on the row | `zillow_cached` | **0** |
+| **2** | `fetchLiveZestimate(parts)` — reached ONLY when rung 1 holds nothing | `zillow_live` | 1 |
+| tail | no number: the honest no-value state, the HOME still resolved, still claimable | | 0 |
+
+Until 2026-09-10 the live call was the function's FIRST statement, so a fully built home paid a
+2 s provider call on every view (cold 3,989 ms, warm 4,008 ms: a 19 ms difference). Reversed, a held
+home renders in about 1.4 s with zero value calls, and a valueless home pays once ever, because rung
+2 persists what it found and the next view hits rung 1 (R32.3, the "road heals" arm).
+
+**The provider switch.** Rung 2 no longer names a vendor. `lib/valuation/live-zestimate.ts` owns the
+choice through `LIVE_VALUE_PROVIDER` (`"ninja"` or `"apify_address"`, env override
+`HL_LIVE_VALUE_PROVIDER` for proofs only). **Today it is Ninja.** Zach #257.438 retires Ninja from
+the seller road; the Apify ADDRESS leg replaces it once the coverage proof
+(`lib/valuation/apify-address-coverage.proof.ts`, ten frozen off-market KC homes) reads **at least
+7 of 10** carrying a Zestimate. The run on 2026-09-10 was INCONCLUSIVE because the daily run cap was
+already spent (ten refusals, zero measurements, and a refusal is never counted as a miss); the
+adoption run is scheduled after the 00:00 UTC reset, and flipping the constant is a desk act with the
+number in the commit message. So #257.438 is satisfied on the enrich ladder (section 5) and NOT yet
+on the report's live rung. Each provider builds its own key: Apify takes
+`street, city, ST zip`; Ninja takes street + ZIP with the city deliberately left out.
+
+<Warning>**The Apify address leg returns a point estimate and no band.** `zestimateLow` and
+`zestimateHigh` are written as NULL when it answers, never coalesced over a stale band on the row,
+and the surface already has a no-range rendition. A missing band beats a fabricated one.</Warning>
+
+**What rung 1 costs, named.** A held value is not refreshed by opening the report; the monthly
+writer owns that cadence. On the one home measured, the stored Zestimate was 15.4% below the live
+read (R32.2). The Zillow columns carry no timestamp by construction, so `asOf` on a `zillow_cached`
+value is the best honesty the row can offer.
+
+#### 5. The enrich ladder: Inngest `listing-mint-enrich`
+
+The report renders FIRST; the house is built BEHIND it by one Inngest function
+(`lib/inngest/functions/listing-mint-enrich.ts`, id `listing-mint-enrich`, Run Log slug
+`houseloop-listing-mint-enrich`, concurrency 5, retries 2, event `listing-mint/enrich` with an
+`hlid`). It has exactly two dispatchers, and which one fires is decided by the `minted` flag:
+
+- **A fresh mint** — `mint-home.ts` fires it. The report route sees `minted: true` and stays silent
+  (R31.3: a fresh mint dispatches exactly once; before the dedupe, two runs raced the read-then-write
+  guards and one house cost $0.2062 instead of $0.1031).
+- **An existing thin row** — `route.ts:524`: when the home resolved without minting and its record
+  is missing a photo, a Redfin estimate, or a value, the report route fires it. This is the common
+  case and it landed 2026-09-10 (`b6f82d7c56`): most KC sellers who type their address are already
+  one of the ~354k `Listing` rows, and until that commit the ladder fired ONLY on a mint, so a home
+  we held as an MLS listing got the facts we happened to have and nothing the ladder would find
+  (R19, `11504 Noland St`: zestimate NULL, Redfin NULL, photos 0). ⚠ The dashboard door
+  (`POST /api/home/address`) mints and enrols but has no existing-row dispatch of its own; a thin home
+  added there is enriched only if the /sell report is later opened on it.
+
+The four steps, in order, every one fill-only (`COALESCE`, never an overwrite) and each guarded by
+its OWN token in the run ledger so a re-fire costs one Inngest run and zero dollars:
+
+| Step | Function | Actor / provider | Fills | Ledger token |
+|---|---|---|---|---|
+| 1 | `zillowApifyFill` | `one-api~zillow-scrape-address-url-zpid` (address → zpid), then `delicious_zebu~zillow-property-details-scraper` (zpid → details) | `zpid` (persisted the moment it is known, so future calls skip the address leg), `zestimate` + low/high, `photos` when empty | `apify_zillow` · `apify_zillow_absent` · `apify_zillow_failed` |
+| 2 | `repliersFill` | our MLS, by structured address (streetNumber + streetName + city) | whatever step 1 left null: beds, full/half baths, sqft, lot, year, type, lat/lng, MLS photos | `repliers` · `repliers_absent` · `repliers_failed` |
+| 3 | `apifyFill` | `one-api~realtor-property-scraper`, then `sian.agency~redfin-property-detail-scraper` | facts + per-field `*Source` stamps, the Realtor AVM into `avmEstimate`/`avmSource`/`avmAt`, Realtor photos when still empty, `redfinEstimate` + url + at | `apify_realtor` · `apify_absent` · `apify_failed`, each `+apify_redfin` when Redfin answered |
+| 4 | `writeListingPriceHistory` | Repliers, MLS number resolved BY ADDRESS when `mlsId` is null | `priceHistory` (section 7) | its own column, idempotent |
+
+Then, if any step filled photos, the function sends `houseloop/photos.cache` so the R2 copy travels
+the same road real listings use.
+
+**Two provenance vocabularies live on one row, deliberately.** `enrichmentSource` is a RUN LEDGER
+keyed on the transport (`apify_zillow+repliers_failed+apify_realtor+apify_redfin` reads as one
+history), appended through the ONE writer `appendSourceOnce()`, at most once per token. The seven
+`*Source` columns (`bedroomsSource` … `photosSource`, migration `ee75cdce20`) answer "who knows this
+fact" and are PROVIDER-named (`realtor`, `zillow`), never vendor-named. A `*Source` stamp fires only
+when the column was NULL before the statement AND the incoming value is not NULL.
+
+**Redfin is not gated on Realtor** (desk ruling 2026-09-10). A Realtor-absent home still asks Redfin
+and stamps `apify_absent+apify_redfin`. Redfin declines active listings (`isAvailable:false`), which
+suits a /sell home, and batches five addresses per run. It is a point estimate with no band.
+
+**The Realtor AVM is captured and displayed nowhere.** THE ONE VALUE LAW (Zestimate × 1.005, index
+and sold price the only fallbacks) does not contemplate a third-party AVM; whether it may feed a
+displayed value is Zach's open ruling, and the harness asserts `avmEstimate` has zero readers as a
+tripwire.
+
+**Photo hygiene.** A Zillow record with no gallery substitutes a Google satellite tile; the client
+filters those out (R24.2, proven with a 24-photo control), so an empty gallery and a map tile never
+read the same. `photoCount` is `@default(0)` and never NULL, so the ladder's `COALESCE` on it never
+fires: a row with 33 photos can read `photoCount = 0` (R29.5). Read `photos`, not the count.
+
+**The spend guard** (`lib/enrich/apify.ts`, the ONE Apify client). Every actor call passes
+`spendGuard()`, which reads month-to-date USD and today's run count from Apify's own API, never a
+local counter. Defaults: **$4 a month** (`APIFY_MONTHLY_USD_CEILING`) and **40 runs a day**
+(`APIFY_DAILY_RUN_CAP`), both env-overridable, both set below the account's platform cap so our
+refusal fires first and says why. A refusal is LOUD and UNSTAMPED: the log line reads
+`[apify] REFUSED reason=daily_run_cap actor=… observed=41 limit=40`, the run's return carries the
+reason and numbers, and the row is left untouched so "we ran out of budget" and "this address has no
+data" never share a trace (R31.2). The ledger fix is a ledger fix only: two truly concurrent runs can
+still both call an actor, and the authority on what was paid is Apify's `/v2/actor-runs`, not the
+`enrichmentSource` string.
+
+#### 6. What each source contributes (R29.2, measured on the acceptance homes)
+
+| Fact | Apify (leg) | Repliers, our MLS |
+|---|---|---|
+| photos | Zillow details leg (24 to 33 on the walked homes, satellite tiles filtered); Realtor gallery as a second try | only if the home was ever listed |
+| beds, sqft, year, lot | Realtor | yes |
+| baths | `bathroomsTotal` ONLY (Realtor `bathsTotal`, Zillow one `bathrooms`); the full/half split is the whole cost of retiring Ninja | full + half |
+| Zestimate + range | both Zillow legs agree; the range comes from the details leg | never |
+| Redfin estimate | Redfin leg, point only | never |
+| Realtor AVM | Realtor `estimates.current_values[]`, `isBest` kept, stamped `realtor:<provider>` | never |
+| zpid | the address leg, the link that made retiring Ninja possible | never |
+| MLS number, status, list/pending/sold dates | never | the only source, and the only free one |
+
+Ninja's `priceHistory` write is gone with it, which removes a second writer from a column
+`price-history-store.ts` declares itself the sole owner of.
+
+#### 7. The sold history
+
+`writeListingPriceHistory()` (`lib/listings/price-history-store.ts`) is the ONE writer for
+`priceHistory` and runs as step 4 of the ladder. It used to be a guaranteed no-op on every minted home
+because its Repliers leg was gated on `Listing.mlsId`, which is NULL on every `hl_seller_*` row; it
+now finds an MLS number by structured address when it has none, uses it, and never writes it back to
+`mlsId`. The home page's history rail and the sold-side value read this column; see
+[Sold data & price history](/guides/sold-data-and-price-history).
+
+#### 8. The monthly watch list
+
+Every path through `resolveHomeValue` enrols the home in `hl_past_client_homes` with
+`enrolled_via = 'value_check'` (band 2), through the shared writer `enrolInWatchList()` in
+`lib/valuation/worklist.ts`, `ON CONFLICT (hlid) DO NOTHING` so a past client who checks their own
+value stays band 1. This includes the **no-value tail** (`route.ts:210`, landed 2026-09-10): a fresh
+mint that Zillow and Repliers both missed was the one home that fell past both enrolments, which
+made its blank permanent by construction, and it is the home that most needs the 26th/27th crons to
+fill it in. The dashboard door enrols through the same function. Both value rungs also call
+`persistComputedValue(hlid)` so `Listing.hlEstimate` is written when the number is computed, not on
+the 27th.
+
+#### 9. The HLID page, the report, and the sitemap
+
+The response carries `homeHlid` (the rooftop, present whenever a home resolved, even with no value)
+and `homeRecord` (facts, first photo, Redfin estimate, and `url` = `/home/<canonicalSlug>/<HLID>`).
+The modal renders the house card with **See your home's HouseLoop page →** and the "What it's worth"
+block: Zillow Zestimate · Redfin Estimate (dated) · HouseLoop Estimate, with the disagreement named
+and the HouseLoop number never an average of the two. The /sell claim reads `homeHlid`, not the
+value's hlid, so a valueless fresh address still claims (desk ruling 2026-09-09). After the claim,
+the phone-code sign-in beat opens with the phone prefilled and lands on `/my-houseloop` with the
+claimed home (R30.6, 8 of 8 at 390 px).
+
+A self-minted `hl_seller_*` / `hl_pastclient_*` row enters the sitemap only once it carries beds,
+sqft and one real photo (`lib/seo/offmarket-sitemap-gate.ts`); a real MLS row is untouched by the
+gate.
+
+#### 10. Timings and cost (R29.3, R31.1, R32.1, R32.4; phone width, real Chromium, the prod DB)
+
+| Measurement | Value |
+|---|---|
+| Submit → modal on screen | 191 ms |
+| Submit → the number, home we hold (rung 1) | about 1.4 s, zero value calls (was 4.0 s cold and warm) |
+| Live value call, Ninja (rung 2 today) | 1.5 to 2.2 s per call |
+| Apify address → zpid leg | 2.4 s median (the candidate for rung 2) |
+| Apify zpid → details leg | about 7.6 s (stays on the async ladder) |
+| Submit → first actor run starts | 4.35 s (route dispatch + Inngest scheduling) |
+| zpid on the row | 6.6 to 7.1 s |
+| photos on the row (cold, 0 → 33) | 13.7 s |
+| facts on the row (`bathroomsTotal`) | 17.2 to 18.0 s |
+| Redfin on the row | 22.6 to 23.3 s |
+| Actor runs for one complete home | 4 |
+| Cost for one complete home | $0.1031: Redfin $0.0800 (77.6%) · Realtor $0.0201 · Zillow $0.0020 + $0.0011 |
+
+Read `Listing` timestamps as `::text`: `createdAt`/`updatedAt`/`cachedAt` are `timestamp WITHOUT
+time zone` while `enrichedAt`/`avmAt`/`redfinEstimateAt` are `WITH`, and the `pg` driver shifts the
+naive ones by the client's zone (R29.0).
+
+#### 11. What is not built
+
+- **The report does not re-render when the ladder lands.** Photos, facts and Redfin arrive 13 to 23 s
+  after the seller is already reading; the first view of a cold home has none of them and the modal
+  stays as first painted. Card `6db38f6c` (parked): the card paints at once and fills in place.
+- **The Google sign-in road cannot reach the phone-code step.** `googleSignIn()` never appends
+  `claim=1`, so the claim branch of `/auth/complete-profile` is unreachable, and the other branches
+  land on the global gate at `"profile"` (session-gated, 401 without one), never `"phone-id"` (R30.4).
+  Reported, not built around; the phone-code road is the working one.
+- **Rung 2 is still Ninja** until the coverage proof reads at least 7 of 10 (section 4).
+- **The Redfin gallery is dropped.** `parseRedfinRecords` returns only `{address, value, url}`, so
+  Redfin photos cannot reach the ladder without a parser change (R32.8; carded).
+- **The Apify address-leg parse has no offline test.** `zillowZpidByAddress` parses `PropertyZPID`
+  inline, evidenced only by live runs (R32.6; carded).
+- **Spend caps are constants, not `hl_app_config`** (carded in `apify.ts`).
+- **The past-client SELLER REPORT, the emailed one, has never been drawn or built.** What exists is
+  the monthly email's structure in prose, the shipped `HomeValuationReport.tsx`, and the Inngest
+  function `hvrMonthlySend` (event-only, no cron, dry-run by default, gated pending sign-off). The SRG
+  past-client estate, `hl_srg_canonical` and its ladder, lives in
+  [Seller engine](/guides/seller-engine).
+
 ### Myli's greeting on the owner dashboard (shipped 2026-09-10, Zach #257.441)
 
 On `/my-houseloop` an owner (a resolved home claim or a closing with us) meets Myli under the photo
