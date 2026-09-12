@@ -39,12 +39,57 @@ builder as every other TC config surface. The LOOPS column counts live transacti
 the delete guard refuses to remove one while transactions still point at it. `is_terminal` marks the
 statuses that end a transaction's life.
 
+**Only an ENDING can be pinned onto a loop.** A non-terminal status is a position the pipeline moves
+*through*; writing one freezes the loop out of the pipeline for good. Since 2026-09-12 that rule is ONE
+predicate — `checkLoopStatusSettable()` — called by the human road **and** the automation (see the
+run log entry below).
+
 ## 🔗 The board
 
 **[TC Loop Contract Engine](https://claude.ai/code/artifact/cd761514-1600-4e12-aaf1-2af99c1ae98f)** —
 133 items · **78 done** · 0 active · 55 to do.
 
 ## 📋 Run log
+
+### 2026-09-12 · lane-deal-status-predicate — #257.617: ONE predicate, both roads
+
+**The rule that decides whether a status may be written onto a loop lived only on the HUMAN road.**
+`setLoopStatus` refused a mid-pipeline status inline; the **automatic** road — the one that runs
+unattended — asked a weaker question. Measured that day: driving `applyLoopStatusAutomation` over a
+real-shaped purchase loop with a config row pointing at `pre_contract` **wrote `pre_contract`**, the exact
+value `setLoopStatus` refuses with *"the lead's stage owns it"*.
+
+Why that is worse than it looks: a non-terminal status is a position the pipeline moves **through**.
+Pinning one **freezes the loop out of the pipeline permanently** — it stops following the lead and nobody
+knows why. And because the automation only writes when the field is empty (`onlyIfUnset`), it then locked
+itself out of ever moving that loop again.
+
+**Built:** `checkLoopStatusSettable(transactionId, key)` in
+`apps/houseloop-crm/lib/tc/transaction-status-automation.ts` — the **only** copy of the rule, called by
+both roads (`lib/tc/loop-engine.ts` for the human road, `applyLoopStatusAutomation` for the automatic
+one). A status may be written only when it **exists**, is **active**, is **in scope for that loop's side**
+(`transaction_type_key`, NULL = both), and is **terminal**.
+
+- **It returns a verdict; it does not throw.** The two roads need the same ANSWER and opposite behaviour
+  on refusal — the human road must surface the error to the person who typed it, the automatic road must
+  never throw into a change that has already committed. A shared throw would have forced one of them to
+  catch-and-guess. The verdict names its reason once: `unknown_status_for_side` or
+  `active_status_not_settable`.
+- **A refusal is logged with its named reason**, never swallowed: *"nothing happened"* and *"the guard
+  stopped something"* must never share a colour, which is the whole reason this defect was invisible.
+- It reads the **same table the picker reads** — when the validator and the picker read different tables
+  the rule inverts and the UI offers a status the API then rejects (which is what happened for ~40 minutes
+  on 2026-08-04).
+- A second copy of the rule in `loop-engine.ts` would be the same disease one layer up, so it lives here
+  purely for the import graph: `loop-engine` already imports from this file, so this direction adds no
+  cycle and the reverse one would.
+
+<Warning>
+**The 8 deals sitting on a frozen mid-pipeline status are NOT an automation bug.** Migration
+`0668_fold_milestone_into_transaction_status.sql` wrote them deliberately — all 8 stamps match
+`created_at` to the microsecond, and there are **zero automation config rows estate-wide**. Do not file
+them against this defect.
+</Warning>
 
 ### 2026-08-05 · benji
 **THE GREAT RENAME — the status confusion ends.** Zach ruled it: *"the loop status is really the

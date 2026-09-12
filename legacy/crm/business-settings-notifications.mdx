@@ -49,6 +49,60 @@ notified" now goes RED in pre-push the moment the weld stops firing. (See the 8/
 written six months ago and built today is exactly what people come here to find.
 </Info>
 
+### 2026-09-12 · lane-arrival-bell — #257.608: a Zillow lead could arrive and ring NOTHING
+
+**The delegation pointed at a function that had been a no-op for 28 days.** The FUB arrival card
+(`apps/houseloop-crm/lib/fub-import/import-fub-lead.ts`) was filed with `notifiable: false`, carrying a
+comment that said the bell for this very arrival *"is already routed by the wrapper"*. The wrapper is
+`routeFubNotification` — **neutered to `{fired:false, reason:'retired: notify-on-render'}` by the
+2026-08-08 pass below.** The `notifiable:false` was written **2026-09-05**, 28 days into that function
+being a no-op. The delegation compiled, ran, and reported success while delegating to nothing.
+
+⭐ **The lesson worth keeping: a retired function that is still callable and returns a successful-looking
+no-op is counterfeit success.** The comment was true when written and false when read, and the cost was
+six real leads.
+
+**Measured 2026-09-12** over 21 days of real (non-test) leads: every **non-Zillow** source reached a
+channel on 100% of arrivals; **Zillow reached a channel on 7 of 13.** And the seven were not healthy —
+they belled under `new_message`, which fires when the person **writes to us**, never when they arrive. A
+Zillow lead who typed nothing was invisible. Zach's own "David" lead (09-12 16:07) carried `task_created`
+· `contact_request` · `task_created` and **not one arrival class**.
+
+**The fix is data, not code, and the flag only stopped lying to it.** `hl_activity_catalog` is the one
+decider of the notify binding: `lead_created` already carries `notify=true`,
+`notify_class='lead_created'`, and the owner's per-seat rule (`hl_notification_rule`, D4) already reads
+bell + SMS + scope=all. The only thing standing between a Zillow arrival and Zach's phone was this flag
+**declaring the row a record rather than an act**. So:
+
+```
+notifiable: road === 'live_signal'
+```
+
+- **Why `live_signal` and nothing wider — it is the FUB toggle, expressed as a road.** `mintVerdict`
+  (`mint-gate.ts`) refuses a live-road mint unless the signal's `hl_event_mapping` row carries
+  `creates_lead = true` — Zach's own trigger-board toggle, stored as DATA per D5. So reaching that line on
+  `live_signal` inside the `created` branch **is**, exactly, *"the `creates_lead` toggle fired AND this
+  person was previously absent."*
+- **Every other road is deliberately excluded.** Backfill roads replay history (D4 — `is_backfill` never
+  fires), and `bulk_wizard` / `human_pull_in` are operators already looking at the screen: a wizard run of
+  100 would page Zach 100 times for work he started himself.
+- **Only on `created`.** The enrich branch links an EXISTING lead — that person already arrived once.
+- **Exactly one alert, enforced by the index, not by care.** The idempotency key is
+  (`source_table='hl_leads'`, `source_id=leadId`) against the partial unique
+  `hl_activity_log_lead_source_uniq`; `logActivity` fires the weld only inside its INSERTED branch, so a
+  retry, a re-import or a duplicate webhook **cannot** mint a second alert.
+- **No class resolver was widened.** `general_inquired` is NOT re-pointed (it is shared by inquiries from
+  people who are already leads, and re-pointing it would text the owner for every one of those), and the
+  retired router is NOT revived.
+
+<Note>
+**The phone road keeps its own `notifiable:false`, and that is correct.** On `mint-phone-lead.ts` the call
+rings its own bell a beat later, so suppressing the arrival there takes TWO → ONE. On the FUB live road
+there was no second bell, so the same suppression took ONE → **ZERO**. The invariant was never "the mint
+must never ring" — it is **"one arrival, exactly one owner alert."** Going from zero to one restores the
+#204/#74 dedup rulings; it does not reverse them.
+</Note>
+
 ### 2026-08-08 · adam — NOTIFY-ON-RENDER: the 8 notifiers become one weld on the activity log
 
 **The bug (5th of its kind).** Ubah Mindingall In's Zillow in-app message rendered to the feed
