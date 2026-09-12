@@ -44,6 +44,43 @@ A geo route is a thin shell over the shared `SearchResultsPage`. Below the grid 
 All four upper headings and every shelf heading are the two-tone `SectionHeading` at its 19/26 size.
 `GeoSeoContent` renders 1–4; `GeoTail` renders 5. Sections render in this order and nothing re-sorts them.
 
+## The window is part of the answer (#257.620, shipped 2026-09-12)
+
+**A sentence names its period from the row's own dates, never from a word typed beside it.**
+
+One of the live-number FAQ answers read *"Homes that actually closed in **the last 30 days** did so at a
+median of …"* over `row.medianSoldPrice` — which `composeSeoRow` fills from the **sold clock**: the latest
+complete `trailing_3mo` row, the field its own vocabulary defines as *"the middle price among homes that
+closed in the last 90 days."* One field, one render, two windows — and the **label** was the half that was
+wrong. Measured 2026-09-12: the metro row was **$370,000 over 2026-06-01 → 2026-09-01 (92 days)**, while
+the true last-thirty-days metro median (the August `month` row) was **$374,302**. A reader who checked
+would find a real number attached to a window nobody computed.
+
+⭐ **The general rule worth keeping: a number whose period is implicit is a true number wearing a false
+window.** And the row was already carrying the answer — `soldPeriodStart` / `soldPeriodEnd` have been on
+`SeoMarketRow` since it was born, stamped by the resolver from `hl_market_stat` itself. The period was
+never missing; it was merely **optional for the caller**, and an optional window is one a hurried sentence
+will re-type from memory. So the remedy is not a comment telling authors to check:
+
+- `soldWindowPhrase(row)` — `apps/houseloop-web/lib/market/seo-row-vocab.ts` (re-exported from
+  `seo-market-row.ts`). It spells the window from the row's dates and **cannot spell one the data did not
+  measure**.
+- The period is **half-open `[start, end)`** — `2026-06-01 → 2026-09-01` is June, July and August, so the
+  last named month is `end` minus one month. Doing that once here, rather than at three call sites, is
+  what keeps an off-by-one-month lie out of the prose.
+- It returns **null** when the row has no sold side at all, and the three call sites in
+  `lib/home/metro-seo.ts` (median sold price · months of supply · median days to contract) then **drop the
+  sentence rather than guess a window.** A hardcoded fallback literal would be the same defect relocated
+  to an else-branch — wrong the day `SOLD_CLOCK_PERIOD` changes, and nobody would find it.
+
+<Note>
+**A deliberate second spelling, named so it is not mistaken for a fork.** `lib/geo/market-trend.ts` has a
+private `windowLabel()` producing the abbreviated `"Jun–Aug 2026"` for a table **column head**, where width
+is the constraint. `soldWindowPhrase` spells months in full because it lands mid-sentence in prose. Same
+window, same dates, same source row — two renditions of one fact, which is what a vocabulary file is for.
+It is not a second computation, and there is no third.
+</Note>
+
 ## The tail — thirteen shelves, one component
 
 | group | shelf id | heading | rows | the pill |

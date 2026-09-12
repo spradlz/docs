@@ -968,6 +968,47 @@ the New Lead — Saved Search door). `{{search.matches}}` = the new-since-last h
 template `apps/houseloop-web/lib/email/saved-search-alert.ts` backs the legacy manual
 `/api/saved-searches/alert` HTTP path only.
 
+### One email home card, one bath number (#257.618, shipped 2026-09-12)
+
+**Two roads were rendering two different home cards into the same lead's inbox.** The saved-search road
+already mapped listings through `renderHomeCardEmail`
+(`apps/houseloop-crm/lib/shared-web/home-card-email.ts`, HOME_RENDER_LAW rule 3 — the email rendition is
+the same renderer's output). The workflow road went through the old block-engine item mapper,
+`listingItem()`, which reads `details.baths` **directly**.
+
+`details.baths` is **full baths only**. `details.bathsDisplay` is the website's one derived total — full
+baths plus half baths × 0.5 (`apps/houseloop-web/lib/listings/derive.ts`, `bathsDisplayFor`). So every
+home with an **odd number of half-baths** printed one fewer half-bath in one email than on every other
+surface: **4,424 live homes, 26.5% of the inventory.**
+
+Both card roads now call the one renderer, via one facts mapper (`emailCardFacts` in
+`lib/saved-search/match-cards.ts`):
+
+| Function | Used by | Renders through |
+|---|---|---|
+| `renderMatchCards(spec)` | the digest / welcome "a few that fit your search" | `renderHomeCardEmail` |
+| `renderListingCard(listing)` | the workflow road's per-home cards (`execute-step.ts` → `fillSearchMatches`, `subject-scope.ts`) | `renderHomeCardEmail` |
+
+`emailCardFacts` reads `bathsDisplay` first and `baths` only as the last-resort fallback for an older
+payload that never carried it. A non-positive or absent value renders **null, never `0`** — a home
+cannot have zero baths, so a printed 0 is missing data wearing a number. A missing **photo** now renders
+the renderer's own grey placeholder rather than dropping the card, which is the reference behaviour: a
+coming-soon home legitimately has no photo yet.
+
+<Note>
+**The rendered-card count is threaded, not counted from markup.** `shown` is the real number of cards
+rendered. The old counter counted `table` tags, which assumed one table per card — true of the block
+markup, false of `renderHomeCardEmail`'s multi-table card (photo / pill / MLS each nest their own), so
+it would have over-reported "Showing N of total" the moment the renderer changed.
+</Note>
+
+<Warning>
+**Still on the old road: `renderHeroCard`.** The "here is the home you just saved / liked" hero card
+(`listing_hero_card` block row, mig 0319) is rendered by `renderHeroCard`, which still uses
+`listingItem()` and therefore still prints the **full-baths-only** number. Only the match-card and
+per-listing-card roads are folded. Do not describe the hero card as converged.
+</Warning>
+
 ## Reference
 
 - `apps/houseloop-web/app/api/saved-searches/route.ts` — create / list (explicit save; accepts `createdBy`)
