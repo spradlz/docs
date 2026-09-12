@@ -78,6 +78,49 @@ listing, because we lack display authority from that source MLS. The empty IDX f
 fresh Ninja Zestimate, `× 1.005` just inflates the wrong number (e.g. a $215k old sale shows $216,075 even though
 Zillow says $333k). The fix is a **Ninja refresh** for that home (the 26th job below) — not a code change.
 
+## ⭐ THE ONE VALUE ROAD — every other surface ASKS, it never computes (shipped 2026-09-12)
+
+The columns above are **evidence**. The **answer** is whatever `getListing`
+(`apps/houseloop-web/lib/listings/get.ts`) decides, walking the one ladder in this order:
+
+```
+list_price → close_price → zestimate → zhvi_appreciation → the stored hlEstimate column (LAST)
+```
+
+**The stored column is the bottom rung, not the top one.** Any surface that reads
+`hlEstimate ?? zestimate × 1.005` has inverted the ladder: it puts a projection written last month
+*above* a live Zillow number.
+
+**How another app asks.** `getListing` is `server-only` and lives in the website process, so the CRM
+cannot call it. It asks over HTTP instead:
+
+| Piece | Where |
+|---|---|
+| The route | `GET /api/internal/home-value?hlid=…` (website) → `resolveHomeValueByHlid` → `getListing` |
+| The CRM's one client | `apps/houseloop-crm/lib/hvr/website-home-value.ts` — `fetchWebsiteHomeValue` (one home) · `fetchWebsiteHomeValues` (a batch, concurrency 8) |
+| Auth | the `x-hl-internal-secret` header from `HL_INTERNAL_SECRET` |
+| The answer | `estimate` · `low` · `high` · `rent` · `appreciationPct` · `source` (which rung answered) · `asOf` |
+
+<Warning>
+**The key is `Listing."hlPropertyId"` — the `HLID…` string — never the provider `hlid`
+(`hl_heartlandmls_…`).** A provider key returns 404, and a 404 read as "the website holds no value"
+is a false refusal — which is exactly how a caller talks itself back into a local fallback.
+Measured 2026-09-12: `hl_heartlandmls_2600782` → 404; `HLID100612` → $190,648.
+</Warning>
+
+**A refusal is an answer.** `ok:false` means the authority declines to value this rooftop, and the
+caller renders "—". There is no local substitute to reach for, and a missing `HL_INTERNAL_SECRET`
+fails loudly rather than silently re-opening the old ladder. This is
+[HOUSELOOP_DATA_DOCTRINE](/guides/property-data-and-address-identity) law 6 made mechanical: **the CRM
+pulls home values from the website by HLID — it never stores, computes or copies them.**
+
+**The first surface folded in** is the CRM past-client dashboard
+(`apps/houseloop-crm/app/(crm)/settings/seller-report/page.tsx`). Its query **no longer SELECTs the
+value columns at all** — it reads `hlid`, `canonicalSlug`, `identityKey` and `hlPropertyId`, which is
+identity, never worth — so it is structurally unable to re-derive a number. It resolves which rooftop
+answers for each pin first, then asks the authority in one fan-out (~5.3s at 51 rendered homes).
+See [The Seller Engine](/guides/seller-engine#the-crm-asks-the-website-it-never-computes-shipped-2026-09-12).
+
 ## The refresh jobs — three monthly + one daily backstop
 
 Four registered Inngest functions keep the value fresh. Three run on a staggered **monthly** cron (each feeds a
