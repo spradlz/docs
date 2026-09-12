@@ -1310,6 +1310,53 @@ Zach walked prod again (sha `631471b5ef`) eight hours after the 06:16 ET rulings
 
 **Z2 — the ack's warmth is a judge row, not a code change.** "You're looking at what you can afford, and you're bringing in about $8,000 a month" read flat. Per THE_UNHOBBLING (context, never a script), this is not fixed by writing her a sentence — it is a matrix row, `ACK-ACKNOWLEDGES-THE-ANSWER-NOT-THE-GOAL`, added to `tools/flow-judge/journeys/myli-consumer.journey.json`, which fails on an ack that restates the funnel's GOAL instead of acknowledging the number and moving on. The ack's own context lives in `lib/myli/ack-call.ts`, owned by a different lane at the time of this pass — routed to the desk rather than edited out of scope.
 
+### The webchat → CRM projector, and the ordering that stopped starving it (#257.611, shipped 2026-09-12)
+
+Every webchat turn is appended to the ledger (`hl_chat_events`, written only by `appendChatEvent()` in
+`lib/myli/chat-ledger.ts` — the one authority for *"what happened in this conversation"*) and, in the
+same beat, an **outbox row** is committed to `hl_chat_outbox`. One projector drains that outbox into
+the CRM's `hl_messages`. The outbox row is the durable record; the `myli/chat-outbox.enqueued` event is
+only a nudge, so a lost event costs latency, never a turn.
+
+- **The drain:** `lib/myli/chat-outbox-drain.ts` (`drainChatOutbox`), dispatched by the
+  `chat-outbox-drain` Inngest function — a one-minute cron plus the nudge event.
+- A drained row is **never deleted**: `projected_at` is stamped, and that stamp is the receipt.
+
+<Warning>
+**THE INCIDENT — a fixed order over a fixed set is not a queue, it is a window.** The selection was
+`WHERE projected_at IS NULL ORDER BY conversation_id, sequence_no LIMIT 200`: a bound on **rows**,
+ordered by a key that never changes. 424 pending rows sat on anonymous conversations whose ids happen
+to sort early and correctly refuse to project (`NO_LEAD` — there is no person to file them under), and
+they filled all 200 slots of every pass. **120 consecutive runs returned `pending: 200, projected: 0`
+with a byte-identical list, while 275 real turns across 31 conversations — five carrying a resolvable
+lead — sat at position 201 and were never once looked at. 20 hours 19 minutes, with a green job and a
+green cron.**
+</Warning>
+
+**The fix: bound the pass by CONVERSATION, and reserve part of the budget.** A conversation is the unit
+that costs something (one identity resolution, one ledger read, one POST), and the order over
+conversations has to move:
+
+| Lane | Slots | Order | Why |
+|---|---|---|---|
+| **Fresh** | 30 | conversations holding a never-attempted row, **oldest first** | oldest-first is self-correcting — waiting can only improve your position |
+| **Rotation** | 10, **reserved** | everything the fresh lane did not take, **fewest attempts first** | guarantees a parked conversation is served within roughly `pending_conversations / 10` passes |
+
+⭐ **The first version of this fix was the same defect with a new head of line, and its own control
+caught it.** That version ordered conversations `has_fresh DESC, min_attempts ASC` — an *absolute*
+priority for conversations holding a never-attempted row. Simulated against a queue where fresh traffic
+never lets up, it served only 67 of 106 conversations, because 31 permanently-fresh conversations held
+31 of the 40 slots. **An absolute priority is a starvation bug that has not met its workload yet.**
+Replacing a fixed order with a priority order does not remove head-of-line blocking; it renames the
+head. Only a **reserved** budget creates the bound.
+
+<Note>
+**`NO_LEAD` is a standing condition, not a permanent one.** Those rows are anonymous visitors we cannot
+yet file under a person; they drain the moment that visitor registers. Dead-lettering them would look
+like a tidy fix and would silently drop real conversations. The `NO_LEAD` path now bumps `attempts`
+(where it deliberately did not before) precisely so the rotation lane can order by it.
+</Note>
+
 ### §5 · Playbook ③ — dashboard presence
 
 **What exists today (measured):** the dashboard Myli is LIVE and fully deterministic — the

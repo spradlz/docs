@@ -284,6 +284,50 @@ model SEES a pool in the home's own yard; community/HOA pools are tagged `"commu
 private-pool query. The `private_pool` feature **also** triggers the single-family privacy rule, so
 community-pool condos never leak into a "homes with a pool" search.
 
+### Attribute precedence — one buyer word, one declared authority (#257.615, shipped 2026-09-12)
+
+**One buyer word can reach two attributes.** "fireplace" is declared as a synonym by BOTH
+`feature.fireplace` (source kind `mls`, a column locator on `Listing.hasFireplace`) and
+`vision.fireplace` (source kind `vision`, a photo-model observation). Both roads are populated —
+measured 2026-09-12 on the live WEB db: `Listing.hasFireplace` is TRUE on 184,357 rows (4,801 of them
+ACTIVE) and `vision.fireplace` carries 4,620 observations (4,306 ACTIVE).
+
+Before this, `loadCatalog` had **no `ORDER BY`** and nothing read `source_kind`, so every scan took the
+first hit and an ambiguous word resolved **by arrival order** — a different answer on a different day
+with no plausible explanation.
+
+The ordering is now declared once, in `apps/houseloop-web/lib/attributes/precedence.ts`:
+
+- `AUTHORITY_ORDER = ["mls", "vision"]` — most authoritative first. A source **absent** from the list
+  ranks LAST, never first: an unknown authority must not outrank a known one just by being new.
+- `compareAuthority` gives a **total** order (authority, then key) so the result is stable regardless of
+  the order rows arrived in — the key tiebreak matters because two attributes of the same source can
+  share a synonym (`features` is declared by eleven of them).
+- `pickAuthority` returns the winner **and the losers it overruled**, on purpose: a resolution that
+  silently discards a rival authority cannot be audited, and "which road answered this buyer?" is
+  exactly the question that has to stay traceable. `loadCatalog` now also reads `ORDER BY key` and sorts
+  the mapped rows through `compareAuthority` — the `ORDER BY` makes the read deterministic, the sort
+  makes it authoritative.
+
+⭐ **The declaration is `source_kind`, which `hl_attribute_catalog` already carries.** No new column, no
+migration, no second vocabulary — the field was already being loaded into `CatalogAttribute.sourceKind`
+and read by nothing. Adding a `precedence` column beside a field that already answers the question is
+the twin ONE_ANSWER_TABLE exists to stop. (This is **not** `lib/listings/home-precedence.ts`, which
+ranks *rows of one table* for "which listing represents this home". Same shape, different question.)
+
+<Warning>
+**This widens no search, and `mayFillBlank()` is OFF.** The safe default is that the MLS decides and the
+photo model may only fill a BLANK, never contradict. `mayFillBlank()` is built as that mechanism and
+**nothing calls it** — whether a buyer's "fireplace" filter should show a model-only match is an open
+decision for Zach. The compiled SQL's behaviour is byte-for-byte unchanged by this file.
+
+**And the measurement that decision needs:** `hasFireplace` has **zero NULLs** — every active home is an
+explicit true or false. So on the founding key there is no blank to fill and a "model fills blanks only"
+rule would move exactly **zero** homes. The 401 ACTIVE homes where the model says fireplace and the MLS
+says FALSE are not blanks; they are **contradictions**, and admitting them is a different decision with
+a different risk.
+</Warning>
+
 ## 3. The Details filters (+ results & map)
 
 The Details modal is the human filter surface: status, price, beds/baths, style, lot size, and **20 detail

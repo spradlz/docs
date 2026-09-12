@@ -781,6 +781,24 @@ ours is visibly a copy reads as padding, not an advantage.
 
 Branch 3 must run before 4 — reversing them caused a "flat forever" bug.
 
+### The CRM asks the website, it never computes (shipped 2026-09-12)
+
+The past-client dashboard (`app/(crm)/settings/seller-report/page.tsx`) used to walk its own ladder
+right here — `hlEstimate ?? houseloopValueFrom(zestimate)` — which is the fork above **inverted**: the
+stored projection on top, the live Zestimate underneath. Sharing the `× 1.005` multiplier while
+re-deciding the ORDER is not one derivation; it is two ladders that agree on arithmetic.
+
+It now calls **one authority** per rendered page — `fetchWebsiteHomeValues`
+(`lib/hvr/website-home-value.ts`) → `GET /api/internal/home-value` → `getListing` — and its own SQL
+**no longer selects `zestimate` / `hlEstimate` / `hlEstimateLow` / `hlEstimateHigh` at all.** The query
+resolves *which rooftop and which link*; the value comes back over the wire keyed by
+`Listing."hlPropertyId"`. A rooftop the website refuses to value renders "—" rather than a locally
+invented number.
+
+Measured on the 1,693 current homes this dashboard values: **1,674 agree**, 17 disagree (worst
+$133,766), 1 refusal, and 1 home stopped being blank. The mechanism, the HLID key and the
+refusal contract: [The one value road](/guides/houseloop-home-value#-the-one-value-road--every-other-surface-asks-it-never-computes-shipped-2026-09-12).
+
 ### The value-history floor law (locked 2026-07-23)
 
 **The line can never start before the home existed.** The owner's line anchors on the **REAL purchase**
