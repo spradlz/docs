@@ -69,6 +69,49 @@ canonicalSlug({ street: "1230 W 31st St", city: "Independence", state: "MO", zip
 
 Same physical home → same slug, regardless of which spelling a source sent. Handles ~97% of addresses.
 
+### The one unit/lot resolver — a street that resolves to empty is a bug, not a value (#257.613, shipped 2026-09-12)
+
+"Unit fragments dropped from the street line" was implemented as *truncate the token list at the first
+unit word*. On a **LOT** listing the unit word sits at index 0 — "Lot 10 Cantrell Road" — so **the entire
+street name was discarded.** Measured on the live WEB db 2026-09-12: **2,822 rows / 184 slugs / 2,671
+physical homes** slugged to nothing but `city-state-zip`, and **`gallatin-mo-64640` covered 198 different
+homes** on one URL.
+
+Worse, the slug road and the dedup road made this decision **separately and shared no code**:
+`canonicalStreet` ran on `tidy()`, which erases `#` (so the `"#"` member of the unit vocabulary was
+unreachable and "4545 Wornall #1104 Road" kept `1104` inside its street), while `identityKey` ran its own
+`#`-aware regex and stripped it. Nothing forced them to agree.
+
+`splitStreetUnit()` in `apps/houseloop-web/lib/listings/canonical-address.ts` is now the **only** place
+that decision is made, and both roads call it (`canonicalStreet` / `canonicalAddress` for the slug,
+`lib/listings/address-identity.ts` for the key):
+
+| Field | What it carries |
+|---|---|
+| `street` / `streetTokens` | the street line with the designator fragment and feed junk removed — never `""` when the input carried a street |
+| `designator` | the bare alphanumeric (`"6"`, `"201"`, `"b"`), or `""` |
+| `kind` | **`lot`** = a parcel designator at the HEAD of the line, part of the address · **`unit`** = a subdivision of a building · **`none`** = no designator, or one the guard refused |
+| `legacySafe` / `legacyTokens` | what the shipped truncate rule produced, so the slug road can reproduce it byte-for-byte |
+
+- **The last act is a guard:** if removing the fragment leaves no street name behind, the fragment WAS the
+  street line — the removal is refused rather than returning `""`.
+- **The junk strip runs first, on every path.** The first cut applied it only after a designator was
+  found, and the dry run caught the consequence: **7,665 identity keys drifted** ("701 parkview e" → "701
+  parkview east n/a") because a line with feed junk and no unit word took the early return and never got
+  cleaned.
+- `tidyTokens()` keeps `#` as its own token and splits on parentheses, because the feed writes
+  "11030 W 192nd (Lot 7) Place" — without that, the resolver loses **117 real designators** the shipped
+  road kept.
+
+<Warning>
+**`UNIT_SLUG_CONVERGENCE` is shipped `false`, and flipping it is Zach's call, not a lane's.** At `false`
+the fix reaches **only** the rows whose street resolved to nothing; every other slug on the site is
+byte-for-byte what it was, and **no rows were re-slugged.** At `true` the slug road adopts the resolver
+everywhere, which also closes the second defect this pass measured but was not sent to fix — an embedded
+unit ("11671 S Roundtree St Unit 201") is in the identity key but **dropped from the slug**, so every unit
+in a building shares one URL. That moves thousands of URLs: it is a migration, not a code change.
+</Warning>
+
 ### The URL contract
 
 - Each home renders at **`/home/{canonicalSlug}/{HLID}`** — the address slug for humans + Google, the HLID for permanence (the Zillow/Redfin `…/<zpid>` pattern). One canonical URL per home.
